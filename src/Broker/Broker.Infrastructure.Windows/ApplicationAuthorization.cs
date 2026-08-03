@@ -97,24 +97,24 @@ public static class NamedPipeCallerIdentity
     public static CallerIdentity Capture(NamedPipeServerStream pipe)
     {
         if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle, out uint processId)) throw new BrokerException("caller_identity_unavailable", "authorization");
-        SafeProcessHandle processHandle = OpenProcess(ProcessQueryLimitedInformation | Synchronize, false, processId);
+        SafeProcessHandle? processHandle = null;
         FileStream? executable = null;
         try
         {
-            if (processHandle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot open the Named Pipe client process.");
-            DateTimeOffset startTime = GetProcessStartTimeUtc(processHandle);
-            string sid = GetPipeClientSid(pipe);
-            string path = GetProcessImagePath(processHandle);
+            (string sid, SafeProcessHandle openedProcessHandle) = OpenPipeClientProcess(pipe, processId);
+            processHandle = openedProcessHandle;
+            DateTimeOffset startTime = GetProcessStartTimeUtc(openedProcessHandle);
+            string path = GetProcessImagePath(openedProcessHandle);
             executable = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             string hash = Convert.ToHexString(SHA256.HashData(executable));
             string? publisher = AuthenticodePublisher.TryGetTrustedThumbprint(path);
-            if (!GetExitCodeProcess(processHandle, out uint exitCode) || exitCode != StillActive || GetProcessStartTimeUtc(processHandle) != startTime) throw new BrokerException("caller_process_exited", "authorization");
-            return new CallerIdentity(processId, sid, path, hash, publisher, startTime, processHandle, executable);
+            if (!GetExitCodeProcess(openedProcessHandle, out uint exitCode) || exitCode != StillActive || GetProcessStartTimeUtc(openedProcessHandle) != startTime) throw new BrokerException("caller_process_exited", "authorization");
+            return new CallerIdentity(processId, sid, path, hash, publisher, startTime, openedProcessHandle, executable);
         }
         catch (Exception exception)
         {
             executable?.Dispose();
-            processHandle.Dispose();
+            processHandle?.Dispose();
             if (exception is Win32Exception or InvalidOperationException or UnauthorizedAccessException)
             {
                 throw new BrokerException("caller_identity_unavailable", "authorization");
@@ -123,15 +123,26 @@ public static class NamedPipeCallerIdentity
         }
     }
 
-    private static string GetPipeClientSid(NamedPipeServerStream pipe)
+    private static (string Sid, SafeProcessHandle ProcessHandle) OpenPipeClientProcess(NamedPipeServerStream pipe, uint processId)
     {
         string? sid = null;
-        pipe.RunAsClient(() =>
+        SafeProcessHandle? processHandle = null;
+        try
         {
-            using WindowsIdentity? identity = WindowsIdentity.GetCurrent(true);
-            sid = identity?.User?.Value ?? throw new InvalidOperationException("Cannot identify Named Pipe client SID.");
-        });
-        return sid ?? throw new InvalidOperationException("Cannot identify Named Pipe client SID.");
+            pipe.RunAsClient(() =>
+            {
+                using WindowsIdentity? identity = WindowsIdentity.GetCurrent(true);
+                sid = identity?.User?.Value ?? throw new InvalidOperationException("Cannot identify Named Pipe client SID.");
+                processHandle = OpenProcess(ProcessQueryLimitedInformation | Synchronize, false, processId);
+                if (processHandle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot open the Named Pipe client process.");
+            });
+            return (sid ?? throw new InvalidOperationException("Cannot identify Named Pipe client SID."), processHandle ?? throw new InvalidOperationException("Cannot open the Named Pipe client process."));
+        }
+        catch
+        {
+            processHandle?.Dispose();
+            throw;
+        }
     }
 
     private static DateTimeOffset GetProcessStartTimeUtc(SafeProcessHandle processHandle)
