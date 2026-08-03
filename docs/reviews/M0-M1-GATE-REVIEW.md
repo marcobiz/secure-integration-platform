@@ -136,11 +136,11 @@ La precedente qualificazione “parziale” non è sufficiente per questo gate c
 |---|---|---|---|---|
 | Upgrade application policy | Default `SID + canonical path + trusted publisher`; hash opzionale per pinning ad alta garanzia/emergenza. Vietare publisher-only senza file handle/chain policy. | Publisher permette upgrade controllati; hash-only è fragile; path/SID limitano scope. | Chiarire ADR-0016 entro M6, validare signed positive path in M9. | No per iniziare M2. |
 | Recovery profilo virtual service identity | MVP: reinstall/re-enroll e perdita dichiarata dei soli dati locali non recuperabili; niente escrow universale della DPAPI root. Definire backup supportato solo se protegge l'intero profilo/host. | Evita una KEK globale e promesse di recovery non sostenibili. | Aggiornare ADR-0014 e ADR-0004 entro M9, prima del pilot. | No per sviluppo M2; blocca pilot/production. |
-| Provisioning Installation ID/manifest via MSI | Installation ID random univoco generato una volta; config atomica sotto ACL; manifest validato e firmato/proveniente dal control plane; repair non rigenera ID. | AC-005 e M2 identity dipendono da identità stabile e non clonata. | Proporre ADR-0017 prima dell'integrazione enrollment M2; implementazione MSI M9. | **Sì per chiudere identity integration M2**, non per iniziare codice centrale isolato. |
+| Provisioning Installation ID/manifest via MSI | Installation ID random univoco generato una volta; config atomica sotto ACL; manifest validato e firmato/proveniente dal control plane; repair non rigenera ID. | AC-005 e M2 identity dipendono da identità stabile e non clonata. | ADR-0017 Accepted; implementazione MSI M9. | Il blocker documentale è chiuso; la conformità resta obbligatoria per identity integration M2. |
 | API streaming adapter legacy | Mantenere frame Data/End sperimentali; definire backpressure, cancellation, ownership buffer e x86 limits solo dopo M2/M3. | Evita congelare ABI su assunzioni non validate end-to-end. | Aggiornare ADR-0003 durante M3, freeze in M6. | No. |
 | Key rotation operativa | Active version atomica, retention delle versioni leggibili, rotazione amministrativa auditata e migrazione lazy; mai fallback silenzioso su versioni ignote. | Mantiene decryptability e rende rollback/recovery verificabili. | Estendere ADR-0004 prima di M7/M9. | No per M2. |
 
-Nessuna ADR viene modificata in questa review: le raccomandazioni richiedono accettazione esplicita nella milestone indicata.
+ADR-0017 è stato successivamente accettato e formalizza il provisioning MSI/Installation identity senza implementare M2. Le altre raccomandazioni restano pianificate nelle milestone indicate.
 
 ## 6. Stato IPC
 
@@ -160,7 +160,8 @@ Nessun adapter M6 deve assumere ABI definitiva prima di questi gate.
 2. **AC-002 non soddisfatto:** virtual service account non osservato live.
 3. **AC-004 non soddisfatto:** separazione gestionale/service/altro utente e DPAPI cross-user non provate.
 4. **Provider Windows Event Log non verificato live** sui failure path obbligatori.
-5. Prima dell'integrazione identity M2: accettare il contratto di provisioning Installation ID/manifest (proposta ADR-0017).
+
+Il precedente blocker documentale sul provisioning è chiuso da ADR-0017. È inoltre disponibile un harness idempotente in `tools/live-matrix` con runbook `docs/operations/M0-M1-LIVE-MATRIX-RUNBOOK.md`. La sua disponibilità rende ripetibile la chiusura dei blocker 1-4, ma non li chiude senza una run PASS su VM.
 
 ## 8. Non-blocker
 

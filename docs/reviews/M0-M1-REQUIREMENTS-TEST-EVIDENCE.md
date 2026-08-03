@@ -84,12 +84,31 @@ I nomi sotto sono nomi test reali, non ID pianificati.
 
 Gli AC non elencati dipendono da M2 o milestone successive e non vengono anticipati.
 
-## Requisiti non ancora automatizzati
+## Automazione live predisposta, non ancora eseguita
 
-1. Installazione/avvio/arresto/riavvio come Windows Service su virtual account reale.
-2. Enforcement pipe/storage e fallimento DPAPI tra tre identità Windows distinte.
-3. Persistence dopo restart del vero servizio, inclusa ricostruzione del profilo account.
-4. Windows Event Log redaction con i quattro failure path richiesti.
+Il pacchetto `tools/live-matrix` chiude il precedente gap di automazione, ma **non costituisce evidenza live finché non viene eseguito con successo su una VM elevata e dopo un reboot reale**.
+
+| Matrice/requisito | Comando/probe reale | Evidenza prodotta dopo PASS |
+|---|---|---|
+| A / FR-003, FR-004, FR-005, FR-006 | `authorized-pre`, `authorized-post` sotto `SibLiveAuthorized` | status/operation grant, HMAC, Protect/Unprotect e persistence report |
+| B / NFR-002 | `unauthorized-same-user`, `storage-denied` dalla copia apphost in path non registrato | connessione DACL riuscita ma handshake policy rifiutato; storage denied |
+| C / AC-004 | `unauthorized-other-user`, `storage-denied`, `dpapi-denied` sotto `SibLiveDenied` | pipe/storage denied e CryptUnprotectData fallito |
+| D / secret boundary | `read-encrypted-database`, unknown `GetSecret`/`GetDataKey`, HMAC-only secret | DB cifrato leggibile, nessuna API key/secret material |
+| E / AC-002, AC-004 | stop/start SCM, `expected-key-failure`, task AtStartup e `authorized-post` | token service SID, tamper rejection, HMAC/envelope validi dopo reboot |
+| F / NFR-001, AC-006 | Event Log provider reale e `Invoke-PostReboot.ps1` | normal/denied/invalid/crypto/key failure presenti e canary scan PASS |
+
+<!-- LIVE-MATRIX-AUTOMATION:BEGIN -->
+## Ultima matrice live automatizzata
+
+**Nessuna run PASS registrata.** Il blocco viene sostituito automaticamente soltanto da `Update-RequirementEvidence.ps1` dopo la fase post-reboot completa.
+<!-- LIVE-MATRIX-AUTOMATION:END -->
+
+## Requisiti non ancora dimostrati live
+
+1. Esecuzione PASS del nuovo harness su una VM Windows elevata e pulita.
+2. Installazione/avvio/arresto/riavvio osservati come Windows Service su virtual account reale.
+3. Enforcement pipe/storage e fallimento DPAPI osservati tra identità Windows distinte.
+4. Persistence ed Event Log redaction osservati dopo reboot reale.
 5. PID reuse deterministico e sostituzione immagine durante capture/authorize.
 6. Authenticode positive path con eseguibile test firmato e chain policy controllata.
 7. Aggregate payload 16 MiB, streaming 64 MiB e backpressure.

@@ -51,3 +51,9 @@ Non è stato tentato un bypass UAC, non è stato aperto un prompt interattivo e 
 10. cleanup o revert snapshot.
 
 Finché questo evidence pack non esiste, AC-002 e AC-004 restano non soddisfatti e la Gate Review resta NO-GO.
+
+## Pacchetto di esecuzione predisposto
+
+Dal 2026-08-03 è disponibile `tools/live-matrix`, con orchestrazione elevata pre/post reboot, account e processi distinti, vero SCM service, ACL exact, DPAPI cross-identity, Event Log/redaction e bundle hashato. Il runbook è `docs/operations/M0-M1-LIVE-MATRIX-RUNBOOK.md`.
+
+**Questo aggiornamento non aggiunge evidenze A-F:** il pacchetto non è stato eseguito sull'host non elevato corrente e tutti gli stati `NOT RUN` sopra restano validi fino a una run VM PASS.

@@ -10,6 +10,7 @@ Aggiornato: 2026-08-03
 | M1 — Local Broker minimo | Implementato, **gate live non chiuso** | test automatici verdi; AC-002/004 live aperti |
 | Primo vertical slice E2E | Completato come harness ripetibile | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` |
 | M2 e milestone successive | Non implementate | assenza intenzionale di Gateway production, DB, Vault reale, Admin e adapter nativi |
+| Harness matrice live M0/M1 | Implementato, **non ancora eseguito su VM** | `tools/live-matrix`; runbook pre/post reboot; nessuna evidenza simulata |
 
 ## Gate Review prima di M2
 
@@ -20,6 +21,7 @@ Esito: **NO-GO per M2** fino alla chiusura della matrice live su macchina Window
 - IPC v1 è **provvisorio**, non congelato per COM/C ABI/CLI prima di M2/M3.
 - review completa: `docs/reviews/M0-M1-GATE-REVIEW.md`;
 - matrice requirement/test/evidence: `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md`.
+- pacchetto live automatizzato: `tools/live-matrix`; runbook: `docs/operations/M0-M1-LIVE-MATRIX-RUNBOOK.md`.
 
 ## Modifiche implementate
 
@@ -43,6 +45,7 @@ Esito: **NO-GO per M2** fino alla chiusura della matrice live su macchina Window
 - `ProtectData`, `UnprotectData`, `ComputeHmac`, `InvokeGateway` vincolata e status redatto;
 - SDK .NET sottile per `netstandard2.0` e `net10.0`;
 - Windows Service host e script di registrazione con virtual account `NT SERVICE\SecureIntegrationBroker`.
+- harness VM fail-closed con account/processi reali distinti, ACL exact, DPAPI cross-identity, restart/reboot, tamper, Event Log e evidence bundle SHA-256.
 
 ### Vertical slice
 
@@ -63,10 +66,15 @@ Esito: **NO-GO per M2** fino alla chiusura della matrice live su macchina Window
 | `Broker.Core.Tests` | 26 PASS | lifecycle/grant, AEAD/nonce/AAD/version, framing e hard limits |
 | `Broker.Integration.Tests` | 14 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction |
 | `VerticalSlice.Tests` | 1 PASS | vertical slice e negative/security path |
+| parsing `tools/live-matrix/*.ps1/*.psm1` | 9 PASS | sintassi PowerShell dell'intero harness |
+| prerequisite check non elevato | expected FAIL con `LIVE_MATRIX_REQUIRES_ELEVATION` | fail-closed prima di qualsiasi modifica di sistema |
+| probe command non valido | expected exit 1 con report redatto `unknown_probe_command` | contratto di errore machine-readable |
 
 In aggiunta, quattro critical test IPC/identity/cancel/redaction sono passati per 20 iterazioni consecutive (80 esecuzioni).
 
 I conteggi e gli esiti definitivi vanno aggiornati se una successiva esecuzione modifica le suite.
+
+La matrice live A-F non è stata eseguita su questo host: build e controlli statici del pacchetto non sostituiscono le evidenze VM richieste.
 
 ## Criteri di accettazione soddisfatti nel perimetro
 
@@ -99,10 +107,10 @@ I conteggi e gli esiti definitivi vanno aggiornati se una successiva esecuzione 
 
 - policy di upgrade applicativo: publisher Authenticode, hash pinning o combinazione per ciascun prodotto;
 - procedura di provisioning/backup/recovery del profilo della virtual service identity e delle data key;
-- forma definitiva dell'MSI e materializzazione sicura di Installation ID e manifest Application;
+- implementazione M9 dell'MSI conforme ad ADR-0017; il contratto architetturale di provisioning è ora accettato;
 - semantica streaming e aggregate limits da validare in M2/M3 prima del freeze IPC per M6;
 - implementazione M2 di Installation identity, trust chain, Vault e restricted egress prima di trasformare l'harness in servizio production.
 
-## Deviazioni ADR
+## ADR
 
-Nessuna ADR è stata modificata. La Gate Review raccomanda tempi e destinazioni ADR per upgrade policy, recovery, provisioning, streaming e key rotation senza anticiparne l'implementazione.
+ADR-0017 è stato aggiunto per il provisioning MSI: manifest firmato, nessun segreto/Installation ID definitivo nel package, identità e chiave CNG non esportabile generate dal Broker al primo avvio, enrollment futuro monouso e semantiche install/repair/upgrade/uninstall/reinstall. Non implementa M2. Upgrade policy, recovery, streaming e key rotation restano decisioni operative future.

@@ -45,11 +45,11 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | AC | Test/evidence |
 |---|---|
 | AC-001 | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` + secret scan |
-| AC-002 | **OPEN/BLOCKER:** static service contract passa; vera Windows Service matrix non eseguita |
-| AC-003 | automatic policy/grant suite passa; processo/utente distinti live aperti |
-| AC-004 | **OPEN/BLOCKER:** DPAPI/ACL descriptor passano; identity separation live non eseguita |
+| AC-002 | **OPEN/BLOCKER:** static service contract passa; `tools/live-matrix` predisposto ma vera Windows Service matrix non eseguita |
+| AC-003 | automatic policy/grant suite passa; probe path/SID distinti predisposti, live PASS ancora aperto |
+| AC-004 | **OPEN/BLOCKER:** DPAPI/ACL descriptor passano; `dpapi-denied` cross-identity predisposto ma non eseguito su VM |
 | AC-005 | `AC005_Installation_key_and_ciphertext_differentiation` |
-| AC-006 | wire/audit four-path redaction + vertical slice; Windows EventLog live aperto |
+| AC-006 | wire/audit four-path redaction + vertical slice; Event Log/canary scan automatizzato ma live PASS aperto |
 | AC-007 | Vertical slice response/secret-absence assertion; Gateway production aperto |
 | AC-008 | M1 project dependency boundary + vertical slice through `IGatewayInvoker` |
 | AC-009 | `InvokeGatewayRequest` API-surface assertion + fixed HTTPS BaseAddress/TLS negative test |
@@ -62,7 +62,7 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | AC-016 | JSON Schema/semantic/security validation corpus |
 | AC-017 | Draft/Validated/Retired runtime denial tests |
 | AC-018 | container smoke/health suite |
-| AC-019 | MSI install/upgrade/repair/uninstall matrix |
+| AC-019 | ADR-0017 Accepted; MSI install/upgrade/repair/uninstall/reinstall matrix prevista in M9 |
 | AC-020 | `eng/build.ps1`, pinned toolchain e istruzioni root |
 | AC-021 | `docs/testing/first-vertical-slice-report.md` |
 | AC-022 | SDK plus native/COM compatibility report |
