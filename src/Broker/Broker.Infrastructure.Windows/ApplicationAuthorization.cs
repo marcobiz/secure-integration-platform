@@ -29,7 +29,7 @@ public sealed class CallerIdentity : IDisposable
 
     /// <summary>Kernel process ID.</summary>
     public uint ProcessId { get; }
-    /// <summary>SID from the process primary token.</summary>
+    /// <summary>SID from the authenticated Named Pipe client token.</summary>
     public string UserSid { get; }
     /// <summary>Canonical executable path.</summary>
     public string ExecutablePath { get; }
@@ -103,18 +103,13 @@ public static class NamedPipeCallerIdentity
         {
             if (processHandle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot open the Named Pipe client process.");
             DateTimeOffset startTime = GetProcessStartTimeUtc(processHandle);
-            if (!OpenProcessToken(processHandle, (uint)TokenAccessLevels.Query, out SafeAccessTokenHandle accessToken)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot open the Named Pipe client process token.");
-            using (accessToken)
-            using (WindowsIdentity identity = new(accessToken.DangerousGetHandle()))
-            {
-                string sid = identity.User?.Value ?? throw new InvalidOperationException("Cannot identify Named Pipe client SID.");
-                string path = GetProcessImagePath(processHandle);
-                executable = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-                string hash = Convert.ToHexString(SHA256.HashData(executable));
-                string? publisher = AuthenticodePublisher.TryGetTrustedThumbprint(path);
-                if (!GetExitCodeProcess(processHandle, out uint exitCode) || exitCode != StillActive || GetProcessStartTimeUtc(processHandle) != startTime) throw new BrokerException("caller_process_exited", "authorization");
-                return new CallerIdentity(processId, sid, path, hash, publisher, startTime, processHandle, executable);
-            }
+            string sid = GetPipeClientSid(pipe);
+            string path = GetProcessImagePath(processHandle);
+            executable = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            string hash = Convert.ToHexString(SHA256.HashData(executable));
+            string? publisher = AuthenticodePublisher.TryGetTrustedThumbprint(path);
+            if (!GetExitCodeProcess(processHandle, out uint exitCode) || exitCode != StillActive || GetProcessStartTimeUtc(processHandle) != startTime) throw new BrokerException("caller_process_exited", "authorization");
+            return new CallerIdentity(processId, sid, path, hash, publisher, startTime, processHandle, executable);
         }
         catch (Exception exception)
         {
@@ -126,6 +121,17 @@ public static class NamedPipeCallerIdentity
             }
             throw;
         }
+    }
+
+    private static string GetPipeClientSid(NamedPipeServerStream pipe)
+    {
+        string? sid = null;
+        pipe.RunAsClient(() =>
+        {
+            using WindowsIdentity? identity = WindowsIdentity.GetCurrent(true);
+            sid = identity?.User?.Value ?? throw new InvalidOperationException("Cannot identify Named Pipe client SID.");
+        });
+        return sid ?? throw new InvalidOperationException("Cannot identify Named Pipe client SID.");
     }
 
     private static DateTimeOffset GetProcessStartTimeUtc(SafeProcessHandle processHandle)
@@ -170,11 +176,6 @@ public static class NamedPipeCallerIdentity
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetExitCodeProcess(SafeProcessHandle processHandle, out uint exitCode);
 
-#pragma warning disable SYSLIB1054 // SafeHandle signature does not require source-generated marshalling.
-    [DllImport("advapi32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool OpenProcessToken(SafeProcessHandle processHandle, uint desiredAccess, out SafeAccessTokenHandle tokenHandle);
-#pragma warning restore SYSLIB1054
 }
 
 internal static class AuthenticodePublisher

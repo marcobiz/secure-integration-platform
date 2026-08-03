@@ -24,6 +24,10 @@ public sealed class WindowsBrokerIntegrationTests
         Task accepting = server.WaitForConnectionAsync(TestContext.Current.CancellationToken);
         await client.ConnectAsync(TestContext.Current.CancellationToken);
         await accepting;
+        ValueTask writing = client.WriteAsync(new byte[] { 1 }, TestContext.Current.CancellationToken);
+        byte[] marker = new byte[1];
+        await server.ReadExactlyAsync(marker, TestContext.Current.CancellationToken);
+        await writing;
         using CallerIdentity caller = NamedPipeCallerIdentity.Capture(server);
         Assert.Equal((uint)Environment.ProcessId, caller.ProcessId);
         Assert.Equal(Environment.ProcessPath, caller.ExecutablePath, ignoreCase: true);
@@ -443,8 +447,10 @@ public sealed class WindowsBrokerIntegrationTests
         Assert.Contains("ProcessQueryLimitedInformation | Synchronize", authorizationSource, StringComparison.Ordinal);
         Assert.Contains("QueryFullProcessImageName", authorizationSource, StringComparison.Ordinal);
         Assert.Contains("GetProcessTimes", authorizationSource, StringComparison.Ordinal);
+        Assert.Contains("pipe.RunAsClient", authorizationSource, StringComparison.Ordinal);
         Assert.DoesNotContain("process.SafeHandle", authorizationSource, StringComparison.Ordinal);
         Assert.DoesNotContain("process.MainModule", authorizationSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("OpenProcessToken", authorizationSource, StringComparison.Ordinal);
     }
 
     [Fact]
