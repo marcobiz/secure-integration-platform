@@ -465,6 +465,16 @@ public sealed class WindowsBrokerIntegrationTests
         Assert.Contains("New-EventLog -LogName Application -Source SecureIntegrationBroker", installScript, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Live_matrix_accepts_the_synchronize_right_windows_adds_to_pipe_read_write()
+    {
+        string repositoryRoot = FindRepositoryRoot();
+        string preRebootScript = File.ReadAllText(System.IO.Path.Combine(repositoryRoot, "tools", "live-matrix", "Invoke-PreReboot.ps1"));
+
+        Assert.Contains("[IO.Pipes.PipeAccessRights]::ReadWrite -bor [IO.Pipes.PipeAccessRights]::Synchronize", preRebootScript, StringComparison.Ordinal);
+        Assert.DoesNotContain("= 131483", preRebootScript, StringComparison.Ordinal);
+    }
+
     private static async Task WithBrokerAsync(Func<BrokerClient, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null, IBrokerAuditSink? audit = null)
         => await WithBrokerAndPipeAsync((client, _) => test(client), invalidHash, invalidPublisher, operationTimeout, gateway, audit);
 

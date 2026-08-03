@@ -45,7 +45,10 @@ $pipeAllowed = @($pipeDescriptor.DiscretionaryAcl | Where-Object { $_.AceType -e
 $expectedPipeSid = @($serviceSid, [string]$settings.authorizedSid)
 foreach ($sid in $pipeAllowed) { if ($expectedPipeSid -notcontains $sid) { throw "LIVE_MATRIX_PIPE_ACL_TOO_PERMISSIVE: grants $sid." } }
 foreach ($sid in $expectedPipeSid) { if ($pipeAllowed -notcontains $sid) { throw "LIVE_MATRIX_PIPE_ACL_MISSING_PRINCIPAL: $sid." } }
-$expectedPipeMasks = @{ $serviceSid = 2032031; ([string]$settings.authorizedSid) = 131483 }
+$expectedPipeMasks = @{
+    $serviceSid = [int][IO.Pipes.PipeAccessRights]::FullControl
+    ([string]$settings.authorizedSid) = [int]([IO.Pipes.PipeAccessRights]::ReadWrite -bor [IO.Pipes.PipeAccessRights]::Synchronize)
+}
 foreach ($ace in $pipeDescriptor.DiscretionaryAcl | Where-Object { $_.AceType -eq [Security.AccessControl.AceType]::AccessAllowed }) {
     $expectedMask = $expectedPipeMasks[$ace.SecurityIdentifier.Value]
     if ($null -eq $expectedMask -or $ace.AccessMask -ne $expectedMask) { throw "LIVE_MATRIX_PIPE_ACL_RIGHTS_MISMATCH: $($ace.SecurityIdentifier.Value) mask $($ace.AccessMask)." }
