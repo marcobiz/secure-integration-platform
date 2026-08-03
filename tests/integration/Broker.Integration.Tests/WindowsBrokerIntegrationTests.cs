@@ -394,6 +394,19 @@ public sealed class WindowsBrokerIntegrationTests
         }
     }
 
+    [Fact]
+    public void Live_matrix_publish_restores_win_x64_assets_before_no_restore_publish()
+    {
+        string repositoryRoot = FindRepositoryRoot();
+        string installScript = File.ReadAllText(System.IO.Path.Combine(repositoryRoot, "tools", "live-matrix", "Install-LiveBroker.ps1"));
+
+        Assert.Contains("$runtimeLock = '-p:NuGetLockFilePath=obj\\live-matrix.win-x64.packages.lock.json'", installScript, StringComparison.Ordinal);
+        Assert.Contains("& $dotnet restore $project --runtime win-x64 $runtimeLock", installScript, StringComparison.Ordinal);
+        Assert.Contains("foreach ($project in $brokerProject, $probeProject)", installScript, StringComparison.Ordinal);
+        Assert.Contains("& $dotnet publish $brokerProject --configuration Release --no-restore --runtime win-x64", installScript, StringComparison.Ordinal);
+        Assert.Contains("& $dotnet publish $probeProject --configuration Release --no-restore --runtime win-x64", installScript, StringComparison.Ordinal);
+    }
+
     private static async Task WithBrokerAsync(Func<BrokerClient, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null, IBrokerAuditSink? audit = null)
         => await WithBrokerAndPipeAsync((client, _) => test(client), invalidHash, invalidPublisher, operationTimeout, gateway, audit);
 

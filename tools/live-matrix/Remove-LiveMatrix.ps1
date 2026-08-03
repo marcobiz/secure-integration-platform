@@ -21,7 +21,8 @@ else {
     $earlyService = Get-Service -Name SecureIntegrationBroker -ErrorAction SilentlyContinue
     $earlyTasks = @(Get-ScheduledTask -TaskName 'SecureIntegration-LiveMatrix-*' -ErrorAction SilentlyContinue)
     $earlyUsers = @(@('SibLiveAuthorized', 'SibLiveDenied') | ForEach-Object { Get-LocalUser -Name $_ -ErrorAction SilentlyContinue })
-    if ($null -ne $earlyService -or $earlyTasks.Count -gt 0 -or $earlyUsers.Count -gt 0 -or (Test-Path -LiteralPath $paths.Install) -or (Test-Path -LiteralPath $paths.BrokerData)) {
+    $foreignUsers = @($earlyUsers | Where-Object { $_.Description -notlike 'Secure Integration live matrix*' })
+    if ($null -ne $earlyService -or $earlyTasks.Count -gt 0 -or $foreignUsers.Count -gt 0 -or (Test-Path -LiteralPath $paths.BrokerData)) {
         throw 'Refusing early-failure cleanup because harness-managed system objects exist without run settings.'
     }
 }

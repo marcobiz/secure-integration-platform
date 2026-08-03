@@ -56,9 +56,16 @@ New-Item -ItemType Directory -Path $paths.Broker, $paths.AuthorizedProbe, $paths
 $dotnet = (Get-Command dotnet).Source
 & $dotnet restore (Join-Path $repositoryRoot 'BrokerGateway.slnx')
 if ($LASTEXITCODE -ne 0) { throw 'dotnet restore failed.' }
-& $dotnet publish (Join-Path $repositoryRoot 'src\Broker\Broker.Service\Broker.Service.csproj') --configuration Release --no-restore --runtime win-x64 --self-contained false --output $paths.Broker
+$brokerProject = Join-Path $repositoryRoot 'src\Broker\Broker.Service\Broker.Service.csproj'
+$probeProject = Join-Path $repositoryRoot 'tools\live-matrix\probe\LiveMatrix.Probe.csproj'
+$runtimeLock = '-p:NuGetLockFilePath=obj\live-matrix.win-x64.packages.lock.json'
+foreach ($project in $brokerProject, $probeProject) {
+    & $dotnet restore $project --runtime win-x64 $runtimeLock
+    if ($LASTEXITCODE -ne 0) { throw "Runtime restore failed: $project" }
+}
+& $dotnet publish $brokerProject --configuration Release --no-restore --runtime win-x64 --self-contained false --output $paths.Broker
 if ($LASTEXITCODE -ne 0) { throw 'Broker publish failed.' }
-& $dotnet publish (Join-Path $repositoryRoot 'tools\live-matrix\probe\LiveMatrix.Probe.csproj') --configuration Release --no-restore --runtime win-x64 --self-contained false --output $paths.AuthorizedProbe
+& $dotnet publish $probeProject --configuration Release --no-restore --runtime win-x64 --self-contained false --output $paths.AuthorizedProbe
 if ($LASTEXITCODE -ne 0) { throw 'Live matrix probe publish failed.' }
 Copy-Item -Path (Join-Path $paths.AuthorizedProbe '*') -Destination $paths.UnauthorizedProbe -Recurse -Force
 
