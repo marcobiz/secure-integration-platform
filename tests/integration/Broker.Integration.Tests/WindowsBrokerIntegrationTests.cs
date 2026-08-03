@@ -447,6 +447,18 @@ public sealed class WindowsBrokerIntegrationTests
         Assert.DoesNotContain("process.MainModule", authorizationSource, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Windows_service_uses_the_event_source_provisioned_by_the_installer()
+    {
+        string repositoryRoot = FindRepositoryRoot();
+        string serviceProgram = File.ReadAllText(System.IO.Path.Combine(repositoryRoot, "src", "Broker", "Broker.Service", "Program.cs"));
+        string installScript = File.ReadAllText(System.IO.Path.Combine(repositoryRoot, "tools", "live-matrix", "Install-LiveBroker.ps1"));
+
+        Assert.Contains("Configure<EventLogSettings>", serviceProgram, StringComparison.Ordinal);
+        Assert.Contains("settings.SourceName = \"SecureIntegrationBroker\"", serviceProgram, StringComparison.Ordinal);
+        Assert.Contains("New-EventLog -LogName Application -Source SecureIntegrationBroker", installScript, StringComparison.Ordinal);
+    }
+
     private static async Task WithBrokerAsync(Func<BrokerClient, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null, IBrokerAuditSink? audit = null)
         => await WithBrokerAndPipeAsync((client, _) => test(client), invalidHash, invalidPublisher, operationTimeout, gateway, audit);
 

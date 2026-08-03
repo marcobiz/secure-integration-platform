@@ -1,11 +1,17 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.EventLog;
 using SecureIntegration.Broker.Core;
 using SecureIntegration.Broker.Infrastructure.Windows;
 using SecureIntegration.Broker.Service;
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddWindowsService(options => options.ServiceName = "SecureIntegrationBroker");
+builder.Services.Configure<EventLogSettings>(settings =>
+{
+    settings.LogName = "Application";
+    settings.SourceName = "SecureIntegrationBroker";
+});
 
 BrokerOptions brokerOptions = builder.Configuration.GetSection("Broker").Get<BrokerOptions>() ?? new BrokerOptions();
 if (string.IsNullOrWhiteSpace(brokerOptions.InstallationId) || string.Equals(brokerOptions.InstallationId, "replace-during-installation", StringComparison.Ordinal))
