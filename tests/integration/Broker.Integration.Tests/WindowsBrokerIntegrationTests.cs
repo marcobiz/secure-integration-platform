@@ -422,6 +422,19 @@ public sealed class WindowsBrokerIntegrationTests
         Assert.Contains("Remove-EventLog -Source SecureIntegrationBroker", cleanupScript, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Live_matrix_stages_probe_results_in_the_account_exchange_before_preserving_raw_evidence()
+    {
+        string repositoryRoot = FindRepositoryRoot();
+        string commonModule = File.ReadAllText(System.IO.Path.Combine(repositoryRoot, "tools", "live-matrix", "LiveMatrix.Common.psm1"));
+
+        Assert.Contains("$probeOutputPath = Join-Path (Split-Path -Parent $InputPath)", commonModule, StringComparison.Ordinal);
+        Assert.Contains("-f $Command, $InputPath, $probeOutputPath", commonModule, StringComparison.Ordinal);
+        Assert.Contains("[IO.File]::ReadAllText($probeOutputPath)", commonModule, StringComparison.Ordinal);
+        Assert.Contains("[IO.File]::WriteAllText($OutputPath, $reportJson", commonModule, StringComparison.Ordinal);
+        Assert.Contains("Remove-Item -LiteralPath $probeOutputPath -Force -ErrorAction SilentlyContinue", commonModule, StringComparison.Ordinal);
+    }
+
     private static async Task WithBrokerAsync(Func<BrokerClient, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null, IBrokerAuditSink? audit = null)
         => await WithBrokerAndPipeAsync((client, _) => test(client), invalidHash, invalidPublisher, operationTimeout, gateway, audit);
 

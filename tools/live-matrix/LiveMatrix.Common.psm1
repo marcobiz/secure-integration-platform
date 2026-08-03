@@ -393,8 +393,10 @@ function Invoke-LiveMatrixScheduledProcess {
     )
 
     Remove-Item -LiteralPath $OutputPath -Force -ErrorAction SilentlyContinue
+    $probeOutputPath = Join-Path (Split-Path -Parent $InputPath) ('.live-matrix-result-' + [guid]::NewGuid().ToString('N') + '.json')
+    Remove-Item -LiteralPath $probeOutputPath -Force -ErrorAction SilentlyContinue
     $taskName = 'SecureIntegration-LiveMatrix-' + [guid]::NewGuid().ToString('N')
-    $arguments = '--command "{0}" --input "{1}" --output "{2}"' -f $Command, $InputPath, $OutputPath
+    $arguments = '--command "{0}" --input "{1}" --output "{2}"' -f $Command, $InputPath, $probeOutputPath
     $action = New-ScheduledTaskAction -Execute $Executable -Argument $arguments
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($Credential.Password)
     $plainPassword = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
@@ -412,8 +414,10 @@ function Invoke-LiveMatrixScheduledProcess {
         } while ($task.State -eq 'Running' -and [DateTime]::UtcNow -lt $deadline)
         if ($task.State -eq 'Running') { Stop-ScheduledTask -TaskName $taskName; throw "Probe timed out: $Command" }
         $result = (Get-ScheduledTaskInfo -TaskName $taskName).LastTaskResult
-        if (-not (Test-Path -LiteralPath $OutputPath)) { throw "Probe produced no result: $Command (task result $result)." }
-        $report = Get-Content -Raw -LiteralPath $OutputPath | ConvertFrom-Json
+        if (-not (Test-Path -LiteralPath $probeOutputPath)) { throw "Probe produced no result: $Command (task result $result)." }
+        $reportJson = [IO.File]::ReadAllText($probeOutputPath)
+        [IO.File]::WriteAllText($OutputPath, $reportJson, [Text.UTF8Encoding]::new($false))
+        $report = $reportJson | ConvertFrom-Json
         if ($ExpectFailure) {
             if ($result -eq 0 -or $report.passed) { throw "Probe unexpectedly succeeded: $Command" }
         }
@@ -424,6 +428,7 @@ function Invoke-LiveMatrixScheduledProcess {
     }
     finally {
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $probeOutputPath -Force -ErrorAction SilentlyContinue
         $plainPassword = $null
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
     }
