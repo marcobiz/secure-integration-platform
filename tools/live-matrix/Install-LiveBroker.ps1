@@ -27,6 +27,8 @@ if ((Test-Path -LiteralPath $paths.Install) -and -not (Test-Path -LiteralPath $o
 
 $authorized = Ensure-LiveMatrixLocalUser -Name $AuthorizedUser -CredentialPath (Join-Path $paths.State 'authorized.credential.dpapi') -Description 'Secure Integration live matrix authorized'
 $unauthorized = Ensure-LiveMatrixLocalUser -Name $UnauthorizedUser -CredentialPath (Join-Path $paths.State 'unauthorized.credential.dpapi') -Description 'Secure Integration live matrix denied'
+Grant-LiveMatrixBatchLogonRight -Sid $authorized.Sid
+Grant-LiveMatrixBatchLogonRight -Sid $unauthorized.Sid
 $administratorSids = @(Get-LocalGroupMember -SID $wellKnown.Administrators | ForEach-Object { $_.SID.Value })
 foreach ($user in $authorized, $unauthorized) {
     if ($administratorSids -contains $user.Sid) { throw "Live matrix account $($user.Name) must not be a local administrator." }
@@ -188,9 +190,9 @@ $installEvidence = [ordered]@{
     runId = $RunId
     service = $serviceEvidence
     expectedServiceSid = $serviceSid
-    authorized = [ordered]@{ name = $authorized.Name; sid = $authorized.Sid; executable = $authorizedExecutable; sha256 = $authorizedHash }
+    authorized = [ordered]@{ name = $authorized.Name; sid = $authorized.Sid; executable = $authorizedExecutable; sha256 = $authorizedHash; batchLogonRight = Test-LiveMatrixBatchLogonRight -Sid $authorized.Sid }
     unauthorizedSameUser = [ordered]@{ name = $authorized.Name; sid = $authorized.Sid; executable = $unauthorizedExecutable; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $unauthorizedExecutable).Hash }
-    unauthorizedOtherUser = [ordered]@{ name = $unauthorized.Name; sid = $unauthorized.Sid }
+    unauthorizedOtherUser = [ordered]@{ name = $unauthorized.Name; sid = $unauthorized.Sid; batchLogonRight = Test-LiveMatrixBatchLogonRight -Sid $unauthorized.Sid }
     brokerBinarySha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $serviceExecutable).Hash
     configurationSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $paths.Broker 'appsettings.json')).Hash
     completedUtc = [DateTimeOffset]::UtcNow.ToString('o')

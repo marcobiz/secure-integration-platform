@@ -407,6 +407,20 @@ public sealed class WindowsBrokerIntegrationTests
         Assert.Contains("& $dotnet publish $probeProject --configuration Release --no-restore --runtime win-x64", installScript, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Live_matrix_grants_and_revokes_batch_logon_for_synthetic_accounts()
+    {
+        string repositoryRoot = FindRepositoryRoot();
+        string commonModule = File.ReadAllText(System.IO.Path.Combine(repositoryRoot, "tools", "live-matrix", "LiveMatrix.Common.psm1"));
+        string installScript = File.ReadAllText(System.IO.Path.Combine(repositoryRoot, "tools", "live-matrix", "Install-LiveBroker.ps1"));
+        string cleanupScript = File.ReadAllText(System.IO.Path.Combine(repositoryRoot, "tools", "live-matrix", "Remove-LiveMatrix.ps1"));
+
+        Assert.Contains("SeBatchLogonRight", commonModule, StringComparison.Ordinal);
+        Assert.Contains("Grant-LiveMatrixBatchLogonRight -Sid $authorized.Sid", installScript, StringComparison.Ordinal);
+        Assert.Contains("Grant-LiveMatrixBatchLogonRight -Sid $unauthorized.Sid", installScript, StringComparison.Ordinal);
+        Assert.Contains("Revoke-LiveMatrixBatchLogonRight -Sid $user.Sid.Value", cleanupScript, StringComparison.Ordinal);
+    }
+
     private static async Task WithBrokerAsync(Func<BrokerClient, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null, IBrokerAuditSink? audit = null)
         => await WithBrokerAndPipeAsync((client, _) => test(client), invalidHash, invalidPublisher, operationTimeout, gateway, audit);
 

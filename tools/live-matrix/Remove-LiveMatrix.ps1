@@ -42,7 +42,10 @@ foreach ($task in Get-ScheduledTask -TaskName 'SecureIntegration-LiveMatrix-*' -
 }
 foreach ($name in 'SibLiveAuthorized', 'SibLiveDenied') {
     $user = Get-LocalUser -Name $name -ErrorAction SilentlyContinue
-    if ($null -ne $user -and $user.Description -like 'Secure Integration live matrix*') { Remove-LocalUser -Name $name }
+    if ($null -ne $user -and $user.Description -like 'Secure Integration live matrix*') {
+        Revoke-LiveMatrixBatchLogonRight -Sid $user.Sid.Value
+        Remove-LocalUser -Name $name
+    }
 }
 
 foreach ($target in $paths.Install, $paths.BrokerData) {

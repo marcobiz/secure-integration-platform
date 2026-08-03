@@ -58,6 +58,170 @@ function Get-WellKnownLiveMatrixSids {
     }
 }
 
+function Initialize-LiveMatrixLsaRights {
+    if ('LiveMatrix.LsaRights' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+
+namespace LiveMatrix
+{
+    public static class LsaRights
+    {
+        private const uint PolicyCreateAccount = 0x00000010;
+        private const uint PolicyLookupNames = 0x00000800;
+        private const uint StatusObjectNameNotFound = 0xC0000034;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LsaObjectAttributes
+        {
+            public int Length;
+            public IntPtr RootDirectory;
+            public IntPtr ObjectName;
+            public uint Attributes;
+            public IntPtr SecurityDescriptor;
+            public IntPtr SecurityQualityOfService;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct LsaUnicodeString
+        {
+            public ushort Length;
+            public ushort MaximumLength;
+            public IntPtr Buffer;
+        }
+
+        [DllImport("advapi32.dll", PreserveSig = true)]
+        private static extern uint LsaOpenPolicy(IntPtr systemName, ref LsaObjectAttributes attributes, uint desiredAccess, out IntPtr policyHandle);
+
+        [DllImport("advapi32.dll", PreserveSig = true)]
+        private static extern uint LsaAddAccountRights(IntPtr policyHandle, byte[] accountSid, LsaUnicodeString[] userRights, uint countOfRights);
+
+        [DllImport("advapi32.dll", PreserveSig = true)]
+        private static extern uint LsaRemoveAccountRights(IntPtr policyHandle, byte[] accountSid, bool allRights, LsaUnicodeString[] userRights, uint countOfRights);
+
+        [DllImport("advapi32.dll", PreserveSig = true)]
+        private static extern uint LsaEnumerateAccountRights(IntPtr policyHandle, byte[] accountSid, out IntPtr userRights, out uint countOfRights);
+
+        [DllImport("advapi32.dll")]
+        private static extern uint LsaNtStatusToWinError(uint status);
+
+        [DllImport("advapi32.dll")]
+        private static extern uint LsaClose(IntPtr policyHandle);
+
+        [DllImport("advapi32.dll")]
+        private static extern uint LsaFreeMemory(IntPtr buffer);
+
+        public static bool Has(string sid, string right)
+        {
+            IntPtr policy = OpenPolicy();
+            try
+            {
+                IntPtr rights;
+                uint count;
+                uint status = LsaEnumerateAccountRights(policy, GetSid(sid), out rights, out count);
+                if (status == StatusObjectNameNotFound) { return false; }
+                ThrowIfError(status);
+                try
+                {
+                    int size = Marshal.SizeOf(typeof(LsaUnicodeString));
+                    for (int index = 0; index < count; index++)
+                    {
+                        IntPtr current = new IntPtr(rights.ToInt64() + (index * size));
+                        LsaUnicodeString value = (LsaUnicodeString)Marshal.PtrToStructure(current, typeof(LsaUnicodeString));
+                        string name = Marshal.PtrToStringUni(value.Buffer, value.Length / 2);
+                        if (String.Equals(name, right, StringComparison.OrdinalIgnoreCase)) { return true; }
+                    }
+                    return false;
+                }
+                finally { LsaFreeMemory(rights); }
+            }
+            finally { LsaClose(policy); }
+        }
+
+        public static void Add(string sid, string right)
+        {
+            if (Has(sid, right)) { return; }
+            IntPtr policy = OpenPolicy();
+            LsaUnicodeString value = CreateString(right);
+            try { ThrowIfError(LsaAddAccountRights(policy, GetSid(sid), new[] { value }, 1)); }
+            finally
+            {
+                Marshal.FreeHGlobal(value.Buffer);
+                LsaClose(policy);
+            }
+        }
+
+        public static void Remove(string sid, string right)
+        {
+            if (!Has(sid, right)) { return; }
+            IntPtr policy = OpenPolicy();
+            LsaUnicodeString value = CreateString(right);
+            try { ThrowIfError(LsaRemoveAccountRights(policy, GetSid(sid), false, new[] { value }, 1)); }
+            finally
+            {
+                Marshal.FreeHGlobal(value.Buffer);
+                LsaClose(policy);
+            }
+        }
+
+        private static IntPtr OpenPolicy()
+        {
+            LsaObjectAttributes attributes = new LsaObjectAttributes();
+            attributes.Length = Marshal.SizeOf(typeof(LsaObjectAttributes));
+            IntPtr policy;
+            ThrowIfError(LsaOpenPolicy(IntPtr.Zero, ref attributes, PolicyLookupNames | PolicyCreateAccount, out policy));
+            return policy;
+        }
+
+        private static byte[] GetSid(string sid)
+        {
+            SecurityIdentifier identifier = new SecurityIdentifier(sid);
+            byte[] bytes = new byte[identifier.BinaryLength];
+            identifier.GetBinaryForm(bytes, 0);
+            return bytes;
+        }
+
+        private static LsaUnicodeString CreateString(string value)
+        {
+            LsaUnicodeString result = new LsaUnicodeString();
+            result.Buffer = Marshal.StringToHGlobalUni(value);
+            result.Length = checked((ushort)(value.Length * 2));
+            result.MaximumLength = checked((ushort)((value.Length + 1) * 2));
+            return result;
+        }
+
+        private static void ThrowIfError(uint status)
+        {
+            if (status == 0) { return; }
+            throw new Win32Exception((int)LsaNtStatusToWinError(status));
+        }
+    }
+}
+'@
+}
+
+function Test-LiveMatrixBatchLogonRight {
+    param([Parameter(Mandatory)] [string] $Sid)
+    Initialize-LiveMatrixLsaRights
+    return [LiveMatrix.LsaRights]::Has($Sid, 'SeBatchLogonRight')
+}
+
+function Grant-LiveMatrixBatchLogonRight {
+    param([Parameter(Mandatory)] [string] $Sid)
+    Initialize-LiveMatrixLsaRights
+    [LiveMatrix.LsaRights]::Add($Sid, 'SeBatchLogonRight')
+    if (-not [LiveMatrix.LsaRights]::Has($Sid, 'SeBatchLogonRight')) { throw "LIVE_MATRIX_BATCH_LOGON_GRANT_FAILED: $Sid" }
+}
+
+function Revoke-LiveMatrixBatchLogonRight {
+    param([Parameter(Mandatory)] [string] $Sid)
+    Initialize-LiveMatrixLsaRights
+    [LiveMatrix.LsaRights]::Remove($Sid, 'SeBatchLogonRight')
+}
+
 function Get-LiveMatrixErrorCode {
     param([Parameter(Mandatory)] [Management.Automation.ErrorRecord] $ErrorRecord)
 
@@ -351,4 +515,4 @@ function Get-LiveMatrixBootTimeUtc {
     return (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime()
 }
 
-Export-ModuleMember -Function Assert-LiveMatrixAdministrator, Get-LiveMatrixRepositoryRoot, Get-LiveMatrixPaths, Set-DirectoryAclExact, Get-WellKnownLiveMatrixSids, Get-LiveMatrixErrorCode, Test-LiveMatrixHarnessRuntime, Protect-LiveMatrixCredential, Unprotect-LiveMatrixCredential, New-LiveMatrixPassword, New-LiveMatrixRandomBytes, ConvertTo-LiveMatrixHex, Ensure-LiveMatrixLocalUser, Invoke-LiveMatrixScheduledProcess, Invoke-ScChecked, Wait-LiveMatrixService, Get-LiveMatrixServiceEvidence, Assert-LiveMatrixServiceIdentity, Test-FileSystemAclExact, Write-LiveMatrixJson, Get-LiveMatrixBootTimeUtc
+Export-ModuleMember -Function Assert-LiveMatrixAdministrator, Get-LiveMatrixRepositoryRoot, Get-LiveMatrixPaths, Set-DirectoryAclExact, Get-WellKnownLiveMatrixSids, Get-LiveMatrixErrorCode, Test-LiveMatrixHarnessRuntime, Test-LiveMatrixBatchLogonRight, Grant-LiveMatrixBatchLogonRight, Revoke-LiveMatrixBatchLogonRight, Protect-LiveMatrixCredential, Unprotect-LiveMatrixCredential, New-LiveMatrixPassword, New-LiveMatrixRandomBytes, ConvertTo-LiveMatrixHex, Ensure-LiveMatrixLocalUser, Invoke-LiveMatrixScheduledProcess, Invoke-ScChecked, Wait-LiveMatrixService, Get-LiveMatrixServiceEvidence, Assert-LiveMatrixServiceIdentity, Test-FileSystemAclExact, Write-LiveMatrixJson, Get-LiveMatrixBootTimeUtc
