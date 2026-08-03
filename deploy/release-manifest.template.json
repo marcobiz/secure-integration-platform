@@ -1,0 +1,12 @@
+{
+  "product": "SecureIntegrationPlatform",
+  "version": "0.0.0-replaced-by-pipeline",
+  "sourceRevision": "replaced-by-pipeline",
+  "toolchain": {
+    "dotnetSdk": "10.0.302"
+  },
+  "artifacts": [],
+  "sbom": [],
+  "signatures": []
+}
+

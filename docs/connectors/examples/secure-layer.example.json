@@ -1,0 +1,70 @@
+{
+  "schemaVersion": "1.0",
+  "connectorId": "healthcare.synthetic-secure",
+  "connectorVersion": "1.0.0",
+  "displayName": "Synthetic Secure Layer Service",
+  "description": "Synthetic example. No production endpoint or credential.",
+  "runtimeCompatibility": {
+    "minimumVersion": "1.0.0",
+    "maximumVersion": null
+  },
+  "plugin": null,
+  "endpoints": {
+    "primary": {
+      "baseUri": "https://secure-layer.example.invalid",
+      "classification": "publicExternal",
+      "allowedPorts": [443],
+      "tls": {
+        "minimumVersion": "1.2",
+        "customTrustBundleRef": null
+      }
+    }
+  },
+  "operations": [
+    {
+      "operationId": "submit-document",
+      "displayName": "Submit pre-built JSON document",
+      "mode": "secureLayer",
+      "executionStrategy": "gateway",
+      "hybridHandoff": null,
+      "managedHandler": null,
+      "request": {
+        "contentTypes": ["application/json"],
+        "maxBytes": 16777216,
+        "schemaRef": null,
+        "xml": null
+      },
+      "outbound": {
+        "endpointRef": "primary",
+        "method": "POST",
+        "pathTemplate": "/v1/documents",
+        "pathParameters": {},
+        "allowedClientHeaders": ["X-Correlation-Reference"],
+        "redirects": false
+      },
+      "authentication": {
+        "kind": "mtls",
+        "secretBindings": ["vendor-client-certificate"]
+      },
+      "response": {
+        "contentTypes": ["application/json"],
+        "maxBytes": 16777216,
+        "schemaRef": null,
+        "xml": null
+      },
+      "policy": {
+        "timeoutMs": 30000,
+        "retryCount": 0,
+        "idempotency": "required",
+        "rateLimit": {
+          "requests": 60,
+          "windowSeconds": 60
+        }
+      },
+      "audit": {
+        "metadataAllowlist": ["documentType"]
+      }
+    }
+  ]
+}
+

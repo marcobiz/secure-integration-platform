@@ -1,0 +1,82 @@
+{
+  "schemaVersion": "1.0",
+  "connectorId": "healthcare.synthetic-managed",
+  "connectorVersion": "1.0.0",
+  "displayName": "Synthetic Managed SOAP Service",
+  "description": "Synthetic SOAP Basic plus session example.",
+  "runtimeCompatibility": {
+    "minimumVersion": "1.0.0",
+    "maximumVersion": null
+  },
+  "plugin": {
+    "pluginId": "healthcare.synthetic.soap",
+    "pluginVersion": "1.0.0",
+    "contractVersion": "1.0"
+  },
+  "endpoints": {
+    "primary": {
+      "baseUri": "https://managed-soap.example.invalid",
+      "classification": "publicExternal",
+      "allowedPorts": [443],
+      "tls": {
+        "minimumVersion": "1.2",
+        "customTrustBundleRef": null
+      }
+    }
+  },
+  "operations": [
+    {
+      "operationId": "submit-prescription",
+      "displayName": "Submit synthetic prescription",
+      "mode": "managed",
+      "executionStrategy": "gateway",
+      "hybridHandoff": null,
+      "managedHandler": {
+        "kind": "plugin",
+        "handlerId": "healthcare.synthetic.soap"
+      },
+      "request": {
+        "contentTypes": ["application/json"],
+        "maxBytes": 1048576,
+        "schemaRef": "pack://schemas/synthetic-prescription-v1.json",
+        "xml": null
+      },
+      "outbound": {
+        "endpointRef": "primary",
+        "method": "POST",
+        "pathTemplate": "/soap/prescriptions",
+        "pathParameters": {},
+        "allowedClientHeaders": [],
+        "redirects": false
+      },
+      "authentication": {
+        "kind": "basic",
+        "secretBindings": ["tenant-basic-credential"]
+      },
+      "response": {
+        "contentTypes": ["application/soap+xml", "text/xml"],
+        "maxBytes": 4194304,
+        "schemaRef": null,
+        "xml": {
+          "maxDepth": 32,
+          "maxNodes": 100000,
+          "allowDtd": false,
+          "allowExternalEntities": false
+        }
+      },
+      "policy": {
+        "timeoutMs": 30000,
+        "retryCount": 0,
+        "idempotency": "required",
+        "rateLimit": {
+          "requests": 30,
+          "windowSeconds": 60
+        }
+      },
+      "audit": {
+        "metadataAllowlist": ["syntheticOperationType"]
+      }
+    }
+  ]
+}
+

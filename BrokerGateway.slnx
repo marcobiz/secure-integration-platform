@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Shared/SecureIntegration.Contracts/SecureIntegration.Contracts.csproj" />
+    <Project Path="src/Broker/Broker.Core/Broker.Core.csproj" />
+    <Project Path="src/Broker/Broker.Infrastructure.Windows/Broker.Infrastructure.Windows.csproj" />
+    <Project Path="src/Broker/Broker.Service/Broker.Service.csproj" />
+  </Folder>
+  <Folder Name="/sdk/">
+    <Project Path="sdk/dotnet/Broker.Sdk/Broker.Sdk.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/unit/Broker.Core.Tests/Broker.Core.Tests.csproj" />
+    <Project Path="tests/integration/Broker.Integration.Tests/Broker.Integration.Tests.csproj" />
+    <Project Path="tests/e2e/VerticalSlice.Tests/VerticalSlice.Tests.csproj" />
+  </Folder>
+</Solution>
+

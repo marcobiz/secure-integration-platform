@@ -1,0 +1,41 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using SecureIntegration.Broker.Core;
+using SecureIntegration.Broker.Infrastructure.Windows;
+using SecureIntegration.Broker.Service;
+
+HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
+builder.Services.AddWindowsService(options => options.ServiceName = "SecureIntegrationBroker");
+
+BrokerOptions brokerOptions = builder.Configuration.GetSection("Broker").Get<BrokerOptions>() ?? new BrokerOptions();
+if (string.IsNullOrWhiteSpace(brokerOptions.InstallationId) || string.Equals(brokerOptions.InstallationId, "replace-during-installation", StringComparison.Ordinal))
+{
+    throw new InvalidOperationException("Broker:InstallationId must be provisioned uniquely during installation.");
+}
+
+if (string.IsNullOrWhiteSpace(brokerOptions.DataDirectory))
+{
+    brokerOptions.DataDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SecureIntegration", "Broker");
+}
+
+WindowsStorageSecurity.HardenDirectory(brokerOptions.DataDirectory);
+builder.Services.AddSingleton(brokerOptions);
+builder.Services.AddSingleton<ILocalProtectionProvider, WindowsDpapiProtectionProvider>();
+builder.Services.AddSingleton<ILocalSecretRepository>(provider => new FileLocalSecretRepository(brokerOptions.DataDirectory));
+builder.Services.AddSingleton<IDataKeyRepository>(provider => new FileDataKeyRepository(brokerOptions.DataDirectory, provider.GetRequiredService<ILocalProtectionProvider>()));
+builder.Services.AddSingleton(provider => new AeadDataProtector(provider.GetRequiredService<IDataKeyRepository>(), brokerOptions.InstallationId));
+builder.Services.AddSingleton<IBrokerAuditSink, LoggerAuditSink>();
+builder.Services.AddSingleton(new ApplicationAuthorizer(brokerOptions.Applications));
+builder.Services.AddSingleton<BrokerApplicationService>(provider => new BrokerApplicationService(
+    provider.GetRequiredService<ILocalSecretRepository>(),
+    provider.GetRequiredService<ILocalProtectionProvider>(),
+    provider.GetRequiredService<AeadDataProtector>(),
+    provider.GetRequiredService<IBrokerAuditSink>(),
+    brokerOptions.InstallationId,
+    provider.GetService<IGatewayInvoker>()));
+builder.Services.AddSingleton<BrokerRequestDispatcher>();
+builder.Services.AddSingleton<NamedPipeBrokerServer>();
+builder.Services.AddHostedService<BrokerWorker>();
+
+using IHost host = builder.Build();
+await host.RunAsync().ConfigureAwait(false);

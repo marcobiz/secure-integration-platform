@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup Condition="'$(IsTestProject)' == 'true'">
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591;CA1707</NoWarn>
+  </PropertyGroup>
+</Project>

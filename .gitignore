@@ -1,0 +1,28 @@
+# Local SDK and build outputs
+.dotnet/
+.artifacts/
+**/bin/
+**/obj/
+TestResults/
+coverage/
+
+# IDE and OS
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+Thumbs.db
+.DS_Store
+
+# Local configuration and generated secrets
+appsettings.Local.json
+*.pfx
+*.p12
+*.key
+*.pem
+*.secrets.json
+
+# Reserved source material: contains sensitive assessment evidence
+input-docs/
+

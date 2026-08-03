@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    strategy:
+      matrix:
+        os: [windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+      - name: Restore tools
+        run: dotnet tool restore
+      - name: Build
+        shell: pwsh
+        run: ./eng/build.ps1
+      - name: Test
+        shell: pwsh
+        run: ./eng/test.ps1
+      - name: Validate documentation
+        shell: pwsh
+        run: ./eng/validate-docs.ps1
+      - name: Scan source for accidental secrets
+        shell: pwsh
+        run: ./eng/scan-secrets.ps1
+      - name: Vulnerable packages
+        run: dotnet list BrokerGateway.slnx package --vulnerable --include-transitive
+      - name: Generate SBOM
+        shell: pwsh
+        run: ./eng/generate-sbom.ps1
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+
