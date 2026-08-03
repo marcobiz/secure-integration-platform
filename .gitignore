@@ -1,10 +1,16 @@
 # Local SDK and build outputs
 .dotnet/
 .artifacts/
+artifacts/
 **/bin/
 **/obj/
 TestResults/
 coverage/
+BenchmarkDotNet.Artifacts/
+*.trx
+*.coverage
+*.coveragexml
+*.binlog
 
 # IDE and OS
 .vs/
@@ -16,13 +22,44 @@ Thumbs.db
 .DS_Store
 
 # Local configuration and generated secrets
+*.bundle
+*.zip
+*.evtx
+*.dmp
+*.dump
+*.mdmp
+core
+core.[0-9]*
+.env
+.env.*
+!.env.example
 appsettings.Local.json
+appsettings.Development.json
+appsettings.Production.json
+appsettings.*.Local.json
 *.pfx
 *.p12
 *.key
 *.pem
+*.der
+*.jks
+*.keystore
+*.credential
+*.credentials
+credentials.json
+*.token
+*.secret
 *.secrets.json
+*.dpapi
+*.dpapi.*
+*dpapi*.bin
+
+# Live security evidence must remain outside Git
+**/evidence/raw/
+**/raw-evidence/
+**/evidence/bundle/
+**/evidence/*.zip
+**/evidence/*.sha256
 
 # Reserved source material: contains sensitive assessment evidence
 input-docs/
-

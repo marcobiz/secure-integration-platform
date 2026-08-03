@@ -9,12 +9,29 @@ $patterns = @(
 )
 
 $hits = @()
-foreach ($relative in $trackedRoots) {
-    $path = Join-Path $root $relative
-    if (-not (Test-Path -LiteralPath $path)) { continue }
-    foreach ($pattern in $patterns) {
-        $matches = & rg -l --pcre2 $pattern $path 2>$null
-        if ($matches) { $hits += $matches }
+$ripgrep = Get-Command rg -ErrorAction SilentlyContinue
+if ($null -ne $ripgrep) {
+    foreach ($relative in $trackedRoots) {
+        $path = Join-Path $root $relative
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        foreach ($pattern in $patterns) {
+            $matches = & $ripgrep.Source -l --pcre2 $pattern $path 2>$null
+            if ($matches) { $hits += $matches }
+        }
+    }
+}
+else {
+    $trackedFiles = @(& git -C $root ls-files -- @trackedRoots)
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to enumerate tracked files for secret scanning.' }
+    foreach ($relativePath in $trackedFiles) {
+        $path = Join-Path $root $relativePath
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        foreach ($pattern in $patterns) {
+            if (Select-String -LiteralPath $path -Pattern $pattern -Quiet -ErrorAction SilentlyContinue) {
+                $hits += $path
+                break
+            }
+        }
     }
 }
 
