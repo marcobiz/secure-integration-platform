@@ -36,6 +36,9 @@ if ($null -ne $service) {
     }
     Invoke-ScChecked -Arguments @('delete', 'SecureIntegrationBroker') | Out-Null
 }
+if (Test-Path -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\SecureIntegrationBroker') {
+    Remove-EventLog -Source SecureIntegrationBroker
+}
 
 foreach ($task in Get-ScheduledTask -TaskName 'SecureIntegration-LiveMatrix-*' -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName $task.TaskName -Confirm:$false

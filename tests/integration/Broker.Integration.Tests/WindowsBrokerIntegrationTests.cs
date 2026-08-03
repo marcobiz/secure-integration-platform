@@ -419,6 +419,7 @@ public sealed class WindowsBrokerIntegrationTests
         Assert.Contains("Grant-LiveMatrixBatchLogonRight -Sid $authorized.Sid", installScript, StringComparison.Ordinal);
         Assert.Contains("Grant-LiveMatrixBatchLogonRight -Sid $unauthorized.Sid", installScript, StringComparison.Ordinal);
         Assert.Contains("Revoke-LiveMatrixBatchLogonRight -Sid $user.Sid.Value", cleanupScript, StringComparison.Ordinal);
+        Assert.Contains("Remove-EventLog -Source SecureIntegrationBroker", cleanupScript, StringComparison.Ordinal);
     }
 
     private static async Task WithBrokerAsync(Func<BrokerClient, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null, IBrokerAuditSink? audit = null)
