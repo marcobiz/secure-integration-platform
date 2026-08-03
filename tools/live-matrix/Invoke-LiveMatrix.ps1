@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('All', 'Prepare', 'PreReboot', 'PostReboot')]
+    [ValidateSet('All', 'Prepare', 'PreReboot', 'PostReboot', 'ValidateHarness')]
     [string] $Phase = 'All',
     [string] $RunId,
     [switch] $Reboot
@@ -9,13 +9,22 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'LiveMatrix.Common.psm1') -Force -DisableNameChecking
-Assert-LiveMatrixAdministrator
 
 if ([string]::IsNullOrWhiteSpace($RunId)) { $RunId = 'm0-m1-' + (Get-Date -Format 'yyyyMMdd-HHmmss') }
 if ($RunId -notmatch '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$') { throw 'RunId must contain only letters, digits, dot, underscore and dash (maximum 64 characters).' }
 $paths = Get-LiveMatrixPaths -RunId $RunId
 
 try {
+    if ($Phase -eq 'ValidateHarness') {
+        foreach ($required in 'Get-WellKnownLiveMatrixSids', 'Test-LiveMatrixHarnessRuntime') {
+            Get-Command -Name $required -CommandType Function -ErrorAction Stop | Out-Null
+        }
+        [void](Get-WellKnownLiveMatrixSids)
+        Test-LiveMatrixHarnessRuntime -RunId $RunId | ConvertTo-Json -Depth 8
+        exit 0
+    }
+
+    Assert-LiveMatrixAdministrator
     switch ($Phase) {
         'Prepare' {
             & (Join-Path $PSScriptRoot 'Test-Prerequisites.ps1') -RunId $RunId | Out-Host
@@ -65,7 +74,8 @@ catch {
         runId = $RunId
         phase = $Phase
         passed = $false
-        errorCode = if ($_.Exception.Message -match '^([A-Z0-9_]+)') { $Matches[1] } else { $_.Exception.GetType().Name }
+        overallStatus = 'Blocked'
+        errorCode = Get-LiveMatrixErrorCode -ErrorRecord $_
         failedUtc = [DateTimeOffset]::UtcNow.ToString('o')
     }
     if (Test-Path -LiteralPath $paths.Run) { Write-LiveMatrixJson -Value $failure -Path (Join-Path $paths.Raw "failure-$Phase.json") }

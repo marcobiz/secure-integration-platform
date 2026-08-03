@@ -329,6 +329,53 @@ public sealed class WindowsBrokerIntegrationTests
         });
     }
 
+    [Fact]
+    public async Task Live_matrix_entry_point_resolves_helpers_in_clean_windows_powershell()
+    {
+        string repositoryRoot = FindRepositoryRoot();
+        string powershell = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "WindowsPowerShell", "v1.0", "powershell.exe");
+        string entryPoint = System.IO.Path.Combine(repositoryRoot, "tools", "live-matrix", "Invoke-LiveMatrix.ps1");
+        Assert.True(File.Exists(powershell), $"Windows PowerShell 5.1 was not found at {powershell}.");
+        Assert.True(File.Exists(entryPoint), $"Live matrix entry point was not found at {entryPoint}.");
+
+        using Process process = new()
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = powershell,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            },
+        };
+        process.StartInfo.ArgumentList.Add("-NoProfile");
+        process.StartInfo.ArgumentList.Add("-NonInteractive");
+        process.StartInfo.ArgumentList.Add("-ExecutionPolicy");
+        process.StartInfo.ArgumentList.Add("Bypass");
+        process.StartInfo.ArgumentList.Add("-File");
+        process.StartInfo.ArgumentList.Add(entryPoint);
+        process.StartInfo.ArgumentList.Add("-Phase");
+        process.StartInfo.ArgumentList.Add("ValidateHarness");
+        process.StartInfo.ArgumentList.Add("-RunId");
+        process.StartInfo.ArgumentList.Add("test-harness-" + Guid.NewGuid().ToString("N"));
+
+        Assert.True(process.Start());
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Task<string> stderr = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        string output = await stdout;
+        string error = await stderr;
+
+        Assert.True(process.ExitCode == 0, $"Exit code {process.ExitCode}.{Environment.NewLine}STDOUT:{Environment.NewLine}{output}{Environment.NewLine}STDERR:{Environment.NewLine}{error}");
+        using JsonDocument document = JsonDocument.Parse(output);
+        JsonElement root = document.RootElement;
+        Assert.Equal("HarnessValidated", root.GetProperty("overallStatus").GetString());
+        Assert.True(root.GetProperty("helperResolutionPassed").GetBoolean());
+        Assert.True(root.GetProperty("scriptParsePassed").GetBoolean());
+        Assert.Contains(root.GetProperty("requiredExportedFunctions").EnumerateArray(), value => value.GetString() == "Get-WellKnownLiveMatrixSids");
+    }
+
     private static async Task WithBrokerAsync(Func<BrokerClient, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null, IBrokerAuditSink? audit = null)
         => await WithBrokerAndPipeAsync((client, _) => test(client), invalidHash, invalidPublisher, operationTimeout, gateway, audit);
 

@@ -58,6 +58,82 @@ function Get-WellKnownLiveMatrixSids {
     }
 }
 
+function Get-LiveMatrixErrorCode {
+    param([Parameter(Mandatory)] [Management.Automation.ErrorRecord] $ErrorRecord)
+
+    if ($ErrorRecord.Exception -is [Management.Automation.CommandNotFoundException]) {
+        return 'LIVE_MATRIX_RUNTIME_UNRESOLVED_COMMAND'
+    }
+
+    $fullyQualifiedId = [string]$ErrorRecord.FullyQualifiedErrorId
+    if ($fullyQualifiedId -match '^(LIVE_MATRIX_[A-Z0-9_]+)') { return $Matches[1] }
+
+    $message = [string]$ErrorRecord.Exception.Message
+    if ($message -match '^(LIVE_MATRIX_[A-Z0-9_]+)') { return $Matches[1] }
+
+    return $ErrorRecord.Exception.GetType().Name
+}
+
+function Test-LiveMatrixHarnessRuntime {
+    param([Parameter(Mandatory)] [string] $RunId)
+
+    $module = Get-Module -Name LiveMatrix.Common | Select-Object -First 1
+    if ($null -eq $module) { throw 'LIVE_MATRIX_COMMON_MODULE_NOT_LOADED.' }
+
+    $exported = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($name in $module.ExportedFunctions.Keys) { [void]$exported.Add($name) }
+
+    $moduleTokens = $null
+    $moduleErrors = $null
+    $moduleAst = [Management.Automation.Language.Parser]::ParseFile($PSCommandPath, [ref]$moduleTokens, [ref]$moduleErrors)
+    if ($moduleErrors.Count -gt 0) { throw "LIVE_MATRIX_PARSE_ERROR: $($moduleErrors[0].Message)" }
+    $moduleFunctions = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($definition in $moduleAst.FindAll({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] }, $true)) {
+        [void]$moduleFunctions.Add($definition.Name)
+    }
+
+    $missingExports = @()
+    foreach ($required in 'Get-WellKnownLiveMatrixSids', 'Write-LiveMatrixJson', 'Get-LiveMatrixPaths', 'Invoke-LiveMatrixScheduledProcess') {
+        if (-not $exported.Contains($required)) { $missingExports += $required }
+    }
+    if ($missingExports.Count -gt 0) { throw "LIVE_MATRIX_HELPER_NOT_EXPORTED: $($missingExports -join ', ')" }
+
+    $scriptFiles = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter '*.ps1' -File | Sort-Object Name)
+    $unresolved = @()
+    foreach ($file in $scriptFiles) {
+        $tokens = $null
+        $errors = $null
+        $ast = [Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$errors)
+        if ($errors.Count -gt 0) { throw "LIVE_MATRIX_PARSE_ERROR: $($file.Name): $($errors[0].Message)" }
+
+        $commands = $ast.FindAll({ param($node) $node -is [Management.Automation.Language.CommandAst] }, $true)
+        foreach ($command in $commands) {
+            $name = $command.GetCommandName()
+            if ([string]::IsNullOrWhiteSpace($name)) { continue }
+            if ($moduleFunctions.Contains($name) -and -not $exported.Contains($name)) {
+                $unresolved += "$($file.Name):$name"
+            }
+        }
+    }
+    if ($unresolved.Count -gt 0) { throw "LIVE_MATRIX_HELPER_NOT_IMPORTED: $($unresolved -join ', ')" }
+
+    $wellKnown = Get-WellKnownLiveMatrixSids
+    foreach ($property in 'System', 'Administrators') {
+        if ([string]::IsNullOrWhiteSpace([string]$wellKnown[$property])) { throw "LIVE_MATRIX_WELL_KNOWN_SID_MISSING: $property" }
+    }
+
+    return [pscustomobject]@{
+        runId = $RunId
+        overallStatus = 'HarnessValidated'
+        preflightPassed = $null
+        helperResolutionPassed = $true
+        scriptParsePassed = $true
+        requiredExportedFunctions = @($exported | Sort-Object)
+        checkedScripts = @($scriptFiles.Name)
+        checkedUtc = [DateTimeOffset]::UtcNow.ToString('o')
+    }
+}
+
 function Protect-LiveMatrixCredential {
     param([Parameter(Mandatory)] [pscredential] $Credential, [Parameter(Mandatory)] [string] $Path)
 
@@ -275,4 +351,4 @@ function Get-LiveMatrixBootTimeUtc {
     return (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime()
 }
 
-Export-ModuleMember -Function *-LiveMatrix*, Assert-LiveMatrixAdministrator, Set-DirectoryAclExact, Protect-LiveMatrixCredential, Unprotect-LiveMatrixCredential, Ensure-LiveMatrixLocalUser, Invoke-ScChecked, Test-FileSystemAclExact
+Export-ModuleMember -Function Assert-LiveMatrixAdministrator, Get-LiveMatrixRepositoryRoot, Get-LiveMatrixPaths, Set-DirectoryAclExact, Get-WellKnownLiveMatrixSids, Get-LiveMatrixErrorCode, Test-LiveMatrixHarnessRuntime, Protect-LiveMatrixCredential, Unprotect-LiveMatrixCredential, New-LiveMatrixPassword, New-LiveMatrixRandomBytes, ConvertTo-LiveMatrixHex, Ensure-LiveMatrixLocalUser, Invoke-LiveMatrixScheduledProcess, Invoke-ScChecked, Wait-LiveMatrixService, Get-LiveMatrixServiceEvidence, Assert-LiveMatrixServiceIdentity, Test-FileSystemAclExact, Write-LiveMatrixJson, Get-LiveMatrixBootTimeUtc

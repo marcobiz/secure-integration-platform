@@ -46,7 +46,8 @@ if ($null -ne $existing -and -not (Test-Path -LiteralPath (Join-Path $paths.Root
 
 $result = [ordered]@{
     runId = $RunId
-    passed = $true
+    preflightPassed = $true
+    overallStatus = 'InProgress'
     elevated = $true
     computerName = $env:COMPUTERNAME
     manufacturer = [string]$computer.Manufacturer
