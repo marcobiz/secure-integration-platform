@@ -13,9 +13,18 @@ $marker = Join-Path $paths.Root 'harness-owned-service.marker'
 if (-not (Test-Path -LiteralPath $marker)) { throw 'Refusing cleanup because the harness ownership marker is missing.' }
 if ([IO.File]::ReadAllText($marker).Trim() -ne $RunId) { throw 'Refusing cleanup because this run does not own the current service.' }
 $settingsPath = Join-Path $paths.State 'settings.json'
-if (-not (Test-Path -LiteralPath $settingsPath)) { throw 'Refusing cleanup because the run settings are missing.' }
-$settings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
-if ([string]$settings.runId -ne $RunId) { throw 'Refusing cleanup because RunId does not match the stored run.' }
+if (Test-Path -LiteralPath $settingsPath) {
+    $settings = Get-Content -Raw -LiteralPath $settingsPath | ConvertFrom-Json
+    if ([string]$settings.runId -ne $RunId) { throw 'Refusing cleanup because RunId does not match the stored run.' }
+}
+else {
+    $earlyService = Get-Service -Name SecureIntegrationBroker -ErrorAction SilentlyContinue
+    $earlyTasks = @(Get-ScheduledTask -TaskName 'SecureIntegration-LiveMatrix-*' -ErrorAction SilentlyContinue)
+    $earlyUsers = @(@('SibLiveAuthorized', 'SibLiveDenied') | ForEach-Object { Get-LocalUser -Name $_ -ErrorAction SilentlyContinue })
+    if ($null -ne $earlyService -or $earlyTasks.Count -gt 0 -or $earlyUsers.Count -gt 0 -or (Test-Path -LiteralPath $paths.Install) -or (Test-Path -LiteralPath $paths.BrokerData)) {
+        throw 'Refusing early-failure cleanup because harness-managed system objects exist without run settings.'
+    }
+}
 if (-not $PSCmdlet.ShouldProcess("live matrix run $RunId", 'Remove service, test accounts, binaries and Broker test storage')) { return }
 
 $service = Get-Service -Name SecureIntegrationBroker -ErrorAction SilentlyContinue

@@ -188,7 +188,7 @@ function Ensure-LiveMatrixLocalUser {
     param(
         [Parameter(Mandatory)] [string] $Name,
         [Parameter(Mandatory)] [string] $CredentialPath,
-        [Parameter(Mandatory)] [string] $Description
+        [Parameter(Mandatory)] [ValidateLength(1, 48)] [string] $Description
     )
 
     $existing = Get-LocalUser -Name $Name -ErrorAction SilentlyContinue

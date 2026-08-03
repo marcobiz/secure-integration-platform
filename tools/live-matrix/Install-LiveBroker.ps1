@@ -25,8 +25,8 @@ if ((Test-Path -LiteralPath $paths.Install) -and -not (Test-Path -LiteralPath $o
 }
 [IO.File]::WriteAllText($ownershipMarker, $RunId, [Text.UTF8Encoding]::new($false))
 
-$authorized = Ensure-LiveMatrixLocalUser -Name $AuthorizedUser -CredentialPath (Join-Path $paths.State 'authorized.credential.dpapi') -Description 'Secure Integration live matrix authorized legacy simulator'
-$unauthorized = Ensure-LiveMatrixLocalUser -Name $UnauthorizedUser -CredentialPath (Join-Path $paths.State 'unauthorized.credential.dpapi') -Description 'Secure Integration live matrix unauthorized Windows identity'
+$authorized = Ensure-LiveMatrixLocalUser -Name $AuthorizedUser -CredentialPath (Join-Path $paths.State 'authorized.credential.dpapi') -Description 'Secure Integration live matrix authorized'
+$unauthorized = Ensure-LiveMatrixLocalUser -Name $UnauthorizedUser -CredentialPath (Join-Path $paths.State 'unauthorized.credential.dpapi') -Description 'Secure Integration live matrix denied'
 $administratorSids = @(Get-LocalGroupMember -SID $wellKnown.Administrators | ForEach-Object { $_.SID.Value })
 foreach ($user in $authorized, $unauthorized) {
     if ($administratorSids -contains $user.Sid) { throw "Live matrix account $($user.Name) must not be a local administrator." }

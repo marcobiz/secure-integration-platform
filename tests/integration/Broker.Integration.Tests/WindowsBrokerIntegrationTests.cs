@@ -376,6 +376,24 @@ public sealed class WindowsBrokerIntegrationTests
         Assert.Contains(root.GetProperty("requiredExportedFunctions").EnumerateArray(), value => value.GetString() == "Get-WellKnownLiveMatrixSids");
     }
 
+    [Fact]
+    public void Live_matrix_local_user_descriptions_fit_windows_sam_limit()
+    {
+        string repositoryRoot = FindRepositoryRoot();
+        string installScript = File.ReadAllText(System.IO.Path.Combine(repositoryRoot, "tools", "live-matrix", "Install-LiveBroker.ps1"));
+        string[] descriptions =
+        [
+            "Secure Integration live matrix authorized",
+            "Secure Integration live matrix denied",
+        ];
+
+        foreach (string description in descriptions)
+        {
+            Assert.InRange(description.Length, 1, 48);
+            Assert.Contains($"-Description '{description}'", installScript, StringComparison.Ordinal);
+        }
+    }
+
     private static async Task WithBrokerAsync(Func<BrokerClient, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null, IBrokerAuditSink? audit = null)
         => await WithBrokerAndPipeAsync((client, _) => test(client), invalidHash, invalidPublisher, operationTimeout, gateway, audit);
 
