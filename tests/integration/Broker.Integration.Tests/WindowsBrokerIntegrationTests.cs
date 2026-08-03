@@ -28,9 +28,8 @@ public sealed class WindowsBrokerIntegrationTests
         Assert.Equal((uint)Environment.ProcessId, caller.ProcessId);
         Assert.Equal(Environment.ProcessPath, caller.ExecutablePath, ignoreCase: true);
         Assert.Equal(Process.GetCurrentProcess().StartTime.ToUniversalTime(), caller.ProcessStartTimeUtc.UtcDateTime, TimeSpan.FromSeconds(1));
-        Process retainedProcess = Assert.IsType<Process>(typeof(CallerIdentity).GetField("process", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(caller));
+        Microsoft.Win32.SafeHandles.SafeProcessHandle retainedHandle = Assert.IsType<Microsoft.Win32.SafeHandles.SafeProcessHandle>(typeof(CallerIdentity).GetField("processHandle", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(caller));
         FileStream retainedExecutable = Assert.IsType<FileStream>(typeof(CallerIdentity).GetField("executableFile", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(caller));
-        Microsoft.Win32.SafeHandles.SafeProcessHandle retainedHandle = retainedProcess.SafeHandle;
         Microsoft.Win32.SafeHandles.SafeFileHandle retainedFileHandle = retainedExecutable.SafeFileHandle;
         caller.Dispose();
         Assert.True(retainedHandle.IsClosed);
@@ -433,6 +432,19 @@ public sealed class WindowsBrokerIntegrationTests
         Assert.Contains("[IO.File]::ReadAllText($probeOutputPath)", commonModule, StringComparison.Ordinal);
         Assert.Contains("[IO.File]::WriteAllText($OutputPath, $reportJson", commonModule, StringComparison.Ordinal);
         Assert.Contains("Remove-Item -LiteralPath $probeOutputPath -Force -ErrorAction SilentlyContinue", commonModule, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Caller_identity_uses_limited_process_queries_for_cross_identity_clients()
+    {
+        string repositoryRoot = FindRepositoryRoot();
+        string authorizationSource = File.ReadAllText(System.IO.Path.Combine(repositoryRoot, "src", "Broker", "Broker.Infrastructure.Windows", "ApplicationAuthorization.cs"));
+
+        Assert.Contains("ProcessQueryLimitedInformation | Synchronize", authorizationSource, StringComparison.Ordinal);
+        Assert.Contains("QueryFullProcessImageName", authorizationSource, StringComparison.Ordinal);
+        Assert.Contains("GetProcessTimes", authorizationSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("process.SafeHandle", authorizationSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("process.MainModule", authorizationSource, StringComparison.Ordinal);
     }
 
     private static async Task WithBrokerAsync(Func<BrokerClient, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null, IBrokerAuditSink? audit = null)

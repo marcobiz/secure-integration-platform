@@ -1,4 +1,4 @@
-using System.Diagnostics;
+using System.ComponentModel;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -12,10 +12,10 @@ namespace SecureIntegration.Broker.Infrastructure.Windows;
 /// <summary>Identity and live process handle retained for the complete Named Pipe connection.</summary>
 public sealed class CallerIdentity : IDisposable
 {
-    private readonly Process process;
+    private readonly SafeProcessHandle processHandle;
     private readonly FileStream executableFile;
 
-    internal CallerIdentity(uint processId, string userSid, string executablePath, string executableSha256, string? publisherThumbprint, DateTimeOffset processStartTimeUtc, Process process, FileStream executableFile)
+    internal CallerIdentity(uint processId, string userSid, string executablePath, string executableSha256, string? publisherThumbprint, DateTimeOffset processStartTimeUtc, SafeProcessHandle processHandle, FileStream executableFile)
     {
         ProcessId = processId;
         UserSid = userSid;
@@ -23,7 +23,7 @@ public sealed class CallerIdentity : IDisposable
         ExecutableSha256 = executableSha256;
         PublisherThumbprint = publisherThumbprint;
         ProcessStartTimeUtc = processStartTimeUtc;
-        this.process = process;
+        this.processHandle = processHandle;
         this.executableFile = executableFile;
     }
 
@@ -43,7 +43,7 @@ public sealed class CallerIdentity : IDisposable
     public void Dispose()
     {
         executableFile.Dispose();
-        process.Dispose();
+        processHandle.Dispose();
     }
 }
 
@@ -89,34 +89,63 @@ public sealed class ApplicationAuthorizer
 /// <summary>Captures PID, SID, path and hash from an already connected Named Pipe.</summary>
 public static class NamedPipeCallerIdentity
 {
+    private const uint ProcessQueryLimitedInformation = 0x00001000;
+    private const uint Synchronize = 0x00100000;
+    private const uint StillActive = 259;
+
     /// <summary>Captures caller identity before request dispatch.</summary>
     public static CallerIdentity Capture(NamedPipeServerStream pipe)
     {
-        if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle, out uint processId)) throw new InvalidOperationException("Cannot identify Named Pipe client process.");
-        Process process = Process.GetProcessById(checked((int)processId));
+        if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle, out uint processId)) throw new BrokerException("caller_identity_unavailable", "authorization");
+        SafeProcessHandle processHandle = OpenProcess(ProcessQueryLimitedInformation | Synchronize, false, processId);
         FileStream? executable = null;
         try
         {
-            _ = process.SafeHandle;
-            DateTimeOffset startTime = process.StartTime.ToUniversalTime();
-            if (!OpenProcessToken(process.SafeHandle, (uint)TokenAccessLevels.Query, out SafeAccessTokenHandle accessToken)) throw new InvalidOperationException("Cannot open the Named Pipe client process token.");
+            if (processHandle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot open the Named Pipe client process.");
+            DateTimeOffset startTime = GetProcessStartTimeUtc(processHandle);
+            if (!OpenProcessToken(processHandle, (uint)TokenAccessLevels.Query, out SafeAccessTokenHandle accessToken)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot open the Named Pipe client process token.");
             using (accessToken)
             using (WindowsIdentity identity = new(accessToken.DangerousGetHandle()))
             {
                 string sid = identity.User?.Value ?? throw new InvalidOperationException("Cannot identify Named Pipe client SID.");
-                string path = Path.GetFullPath(process.MainModule?.FileName ?? throw new InvalidOperationException("Cannot identify Named Pipe client executable."));
+                string path = GetProcessImagePath(processHandle);
                 executable = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
                 string hash = Convert.ToHexString(SHA256.HashData(executable));
                 string? publisher = AuthenticodePublisher.TryGetTrustedThumbprint(path);
-                if (process.HasExited || process.StartTime.ToUniversalTime() != startTime) throw new BrokerException("caller_process_exited", "authorization");
-                return new CallerIdentity(processId, sid, path, hash, publisher, startTime, process, executable);
+                if (!GetExitCodeProcess(processHandle, out uint exitCode) || exitCode != StillActive || GetProcessStartTimeUtc(processHandle) != startTime) throw new BrokerException("caller_process_exited", "authorization");
+                return new CallerIdentity(processId, sid, path, hash, publisher, startTime, processHandle, executable);
             }
         }
-        catch
+        catch (Exception exception)
         {
             executable?.Dispose();
-            process.Dispose();
+            processHandle.Dispose();
+            if (exception is Win32Exception or InvalidOperationException or UnauthorizedAccessException)
+            {
+                throw new BrokerException("caller_identity_unavailable", "authorization");
+            }
             throw;
+        }
+    }
+
+    private static DateTimeOffset GetProcessStartTimeUtc(SafeProcessHandle processHandle)
+    {
+        if (!GetProcessTimes(processHandle, out long creationTime, out _, out _, out _)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot read the Named Pipe client process creation time.");
+        return new DateTimeOffset(DateTime.FromFileTimeUtc(creationTime));
+    }
+
+    private static string GetProcessImagePath(SafeProcessHandle processHandle)
+    {
+        uint length = 32768;
+        IntPtr path = Marshal.AllocHGlobal(checked((int)length * sizeof(char)));
+        try
+        {
+            if (!QueryFullProcessImageName(processHandle, 0, path, ref length)) throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot identify the Named Pipe client executable.");
+            return Path.GetFullPath(Marshal.PtrToStringUni(path) ?? throw new InvalidOperationException("Cannot identify the Named Pipe client executable."));
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(path);
         }
     }
 
@@ -125,6 +154,21 @@ public static class NamedPipeCallerIdentity
 #pragma warning disable SYSLIB1054 // SafeHandle signature does not require source-generated marshalling.
     private static extern bool GetNamedPipeClientProcessId(SafePipeHandle pipe, out uint clientProcessId);
 #pragma warning restore SYSLIB1054
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeProcessHandle OpenProcess(uint desiredAccess, [MarshalAs(UnmanagedType.Bool)] bool inheritHandle, uint processId);
+
+    [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryFullProcessImageName(SafeProcessHandle processHandle, uint flags, IntPtr executablePath, ref uint size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetProcessTimes(SafeProcessHandle processHandle, out long creationTime, out long exitTime, out long kernelTime, out long userTime);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetExitCodeProcess(SafeProcessHandle processHandle, out uint exitCode);
 
 #pragma warning disable SYSLIB1054 // SafeHandle signature does not require source-generated marshalling.
     [DllImport("advapi32.dll", SetLastError = true)]
