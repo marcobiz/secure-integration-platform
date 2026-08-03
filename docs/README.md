@@ -25,6 +25,7 @@ Questa directory è la fonte di verità architetturale del prodotto. Le decision
 19. [Backlog](implementation/backlog.md)
 20. [Definition of Done](implementation/definition-of-done.md)
 21. [Matrice di tracciabilità](traceability/requirements-traceability.md)
+22. [Gate Review M0/M1](reviews/M0-M1-GATE-REVIEW.md) e [matrice requisito-test-evidenza](reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md)
 
 ## Deliverable coperti
 
@@ -41,6 +42,7 @@ Questa directory è la fonte di verità architetturale del prodotto. Le decision
 | Connector schema, esempi e plugin contract | `connectors/` |
 | Roadmap e work breakdown | `implementation/` |
 | Definition of Done | `implementation/definition-of-done.md` |
+| Gate Review prima di M2 | `reviews/` |
 
 ## Regole di manutenzione
 
@@ -49,4 +51,3 @@ Questa directory è la fonte di verità architetturale del prodotto. Le decision
 - Contratti, esempi e JSON Schema devono evolvere nello stesso change set.
 - Non inserire valori provenienti dalle appendici dei report, certificati reali, token, password, chiavi o dati sanitari/personali.
 - Gli esempi devono usare esclusivamente host riservati (`example.invalid`) e identità sintetiche.
-

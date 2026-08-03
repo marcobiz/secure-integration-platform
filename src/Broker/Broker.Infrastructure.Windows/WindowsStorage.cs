@@ -85,8 +85,15 @@ public sealed class FileLocalSecretRepository : ILocalSecretRepository, IDisposa
             throw new BrokerException("local_storage_corrupt", "storage", innerException: exception);
         }
 
-        if (!Enum.TryParse(document.SecretClass, out LocalSecretClass secretClass)) throw new BrokerException("local_storage_corrupt", "storage");
-        return new LocalSecretRecord(document.SecretRef, document.OwnerApplicationId, document.LogicalName, secretClass, new HashSet<string>(document.AllowedOperations, StringComparer.Ordinal), Convert.FromBase64String(document.ProtectedValueBase64));
+        if (!Enum.TryParse(document.SecretClass, out LocalSecretClass secretClass) || document.AllowedOperations is null || string.IsNullOrWhiteSpace(document.ProtectedValueBase64)) throw new BrokerException("local_storage_corrupt", "storage");
+        try
+        {
+            return new LocalSecretRecord(document.SecretRef, document.OwnerApplicationId, document.LogicalName, secretClass, new HashSet<string>(document.AllowedOperations, StringComparer.Ordinal), Convert.FromBase64String(document.ProtectedValueBase64));
+        }
+        catch (FormatException exception)
+        {
+            throw new BrokerException("local_storage_corrupt", "storage", innerException: exception);
+        }
     }
 
     /// <inheritdoc />

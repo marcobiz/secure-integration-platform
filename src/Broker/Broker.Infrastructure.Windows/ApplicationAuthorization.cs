@@ -13,8 +13,9 @@ namespace SecureIntegration.Broker.Infrastructure.Windows;
 public sealed class CallerIdentity : IDisposable
 {
     private readonly Process process;
+    private readonly FileStream executableFile;
 
-    internal CallerIdentity(uint processId, string userSid, string executablePath, string executableSha256, string? publisherThumbprint, DateTimeOffset processStartTimeUtc, Process process)
+    internal CallerIdentity(uint processId, string userSid, string executablePath, string executableSha256, string? publisherThumbprint, DateTimeOffset processStartTimeUtc, Process process, FileStream executableFile)
     {
         ProcessId = processId;
         UserSid = userSid;
@@ -23,6 +24,7 @@ public sealed class CallerIdentity : IDisposable
         PublisherThumbprint = publisherThumbprint;
         ProcessStartTimeUtc = processStartTimeUtc;
         this.process = process;
+        this.executableFile = executableFile;
     }
 
     /// <summary>Kernel process ID.</summary>
@@ -38,7 +40,11 @@ public sealed class CallerIdentity : IDisposable
     /// <summary>Process creation time captured while holding its handle.</summary>
     public DateTimeOffset ProcessStartTimeUtc { get; }
     /// <inheritdoc />
-    public void Dispose() => process.Dispose();
+    public void Dispose()
+    {
+        executableFile.Dispose();
+        process.Dispose();
+    }
 }
 
 /// <summary>Authorizes a caller against its registered SID, executable and operation grants.</summary>
@@ -88,6 +94,7 @@ public static class NamedPipeCallerIdentity
     {
         if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle, out uint processId)) throw new InvalidOperationException("Cannot identify Named Pipe client process.");
         Process process = Process.GetProcessById(checked((int)processId));
+        FileStream? executable = null;
         try
         {
             _ = process.SafeHandle;
@@ -98,15 +105,16 @@ public static class NamedPipeCallerIdentity
             {
                 string sid = identity.User?.Value ?? throw new InvalidOperationException("Cannot identify Named Pipe client SID.");
                 string path = Path.GetFullPath(process.MainModule?.FileName ?? throw new InvalidOperationException("Cannot identify Named Pipe client executable."));
-                using FileStream executable = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+                executable = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read);
                 string hash = Convert.ToHexString(SHA256.HashData(executable));
                 string? publisher = AuthenticodePublisher.TryGetTrustedThumbprint(path);
                 if (process.HasExited || process.StartTime.ToUniversalTime() != startTime) throw new BrokerException("caller_process_exited", "authorization");
-                return new CallerIdentity(processId, sid, path, hash, publisher, startTime, process);
+                return new CallerIdentity(processId, sid, path, hash, publisher, startTime, process, executable);
             }
         }
         catch
         {
+            executable?.Dispose();
             process.Dispose();
             throw;
         }

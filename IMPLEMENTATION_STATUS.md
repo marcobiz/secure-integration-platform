@@ -6,10 +6,20 @@ Aggiornato: 2026-08-03
 
 | Ambito richiesto | Stato | Evidenza principale |
 |---|---|---|
-| M0 — fondamenta repository | Completato | build/test scripts, CI, toolchain pinned, scan e SBOM |
-| M1 — Local Broker minimo | Completato per l'artefatto minimo; limiti sotto esplicitati | service host, Named Pipe, authorization, DPAPI/AEAD, SDK e test Windows |
+| M0 — fondamenta repository | Implementato; baseline congelata | commit `7f68442`, tag `baseline-m0-m1-vslice-2026-08-03` |
+| M1 — Local Broker minimo | Implementato, **gate live non chiuso** | test automatici verdi; AC-002/004 live aperti |
 | Primo vertical slice E2E | Completato come harness ripetibile | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` |
 | M2 e milestone successive | Non implementate | assenza intenzionale di Gateway production, DB, Vault reale, Admin e adapter nativi |
+
+## Gate Review prima di M2
+
+Esito: **NO-GO per M2** fino alla chiusura della matrice live su macchina Windows pulita/VM. L'host disponibile è Windows 10 Pro non elevato e senza Hyper-V/Sandbox/container runtime; non è stato possibile installare un vero servizio, creare identità Windows distinte o osservare DPAPI sotto la virtual service identity.
+
+- **AC-002:** non soddisfatto in modo conclusivo; host/script esistono ma il virtual account non è stato osservato live.
+- **AC-004:** non soddisfatto in modo conclusivo; descriptor ACL e DPAPI sono testati, ma non tra gestionale, service identity e altro utente reali.
+- IPC v1 è **provvisorio**, non congelato per COM/C ABI/CLI prima di M2/M3.
+- review completa: `docs/reviews/M0-M1-GATE-REVIEW.md`;
+- matrice requirement/test/evidence: `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md`.
 
 ## Modifiche implementate
 
@@ -50,16 +60,18 @@ Aggiornato: 2026-08-03
 | `eng/validate-docs.ps1` | PASS | link/struttura/schema documentali |
 | `eng/scan-secrets.ps1` | PASS | repository escluso materiale sorgente riservato |
 | `eng/generate-sbom.ps1` | PASS | SBOM SPDX degli artefatti |
-| `Broker.Core.Tests` | 6 PASS | lifecycle, classi vietate, AEAD/tamper/rotation/AAD, assenza GetSecret |
-| `Broker.Integration.Tests` | 9 PASS | DPAPI, ACL, storage/corruption, key isolation, identity/authz, IPC/multiplexing/cancel/deadline, service account contract |
+| `Broker.Core.Tests` | 26 PASS | lifecycle/grant, AEAD/nonce/AAD/version, framing e hard limits |
+| `Broker.Integration.Tests` | 14 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction |
 | `VerticalSlice.Tests` | 1 PASS | vertical slice e negative/security path |
+
+In aggiunta, quattro critical test IPC/identity/cancel/redaction sono passati per 20 iterazioni consecutive (80 esecuzioni).
 
 I conteggi e gli esiti definitivi vanno aggiornati se una successiva esecuzione modifica le suite.
 
 ## Criteri di accettazione soddisfatti nel perimetro
 
 - **AC-001:** Vendor Secret assente da client e boundary Broker-Gateway, verificato E2E.
-- **AC-003:** processo con hash non autorizzato negato dal Broker.
+- **AC-003:** policy automatica nega hash/publisher/operation non concessi; resta da provare con processo realmente distinto nella matrice live.
 - **AC-005:** chiavi e ciphertext differenti tra due Installation.
 - **AC-006:** audit strutturato senza payload/secret e verifica E2E sul secret sintetico.
 - **AC-007:** il Gateway harness restituisce solo la risposta applicativa, mai il secret.
@@ -71,7 +83,7 @@ I conteggi e gli esiti definitivi vanno aggiornati se una successiva esecuzione 
 - **AC-023:** esempio Secure Layer eseguito dalla suite E2E.
 - **AC-027:** generazione SBOM SPDX verificata.
 
-Evidenza parziale, non dichiarata come accettazione globale: **AC-002** ha host/script con virtual account ma manca una matrice installata su Windows Server; **AC-004** ha DPAPI CurrentUser e ACL verificate, ma manca il test live con gestionale e servizio sotto identità distinte. Gli AC legati a M2+ restano aperti intenzionalmente.
+**AC-002 e AC-004 non sono accettati dal gate conclusivo** e sono blocker M2. Gli AC legati a M2+ restano aperti intenzionalmente.
 
 ## Debito tecnico noto
 
@@ -80,7 +92,7 @@ Evidenza parziale, non dichiarata come accettazione globale: **AC-002** ha host/
 - key rotation è leggibile dal formato/repository e testata nel core, ma manca un comando operativo atomico di rotazione;
 - installazione MSI, upgrade/repair/uninstall, signature e test live del virtual account appartengono alle milestone di packaging/hardening;
 - nessuna compatibilità .NET Framework 4.7.2 o adapter COM/C ABI/CLI: sono esplicitamente M6;
-- log redaction è verificata sul vertical slice, non ancora con un corpus completo di logger/exception/telemetry;
+- log/wire redaction copre normal, denied, invalid payload e crypto failure in-memory; Windows Event Log e telemetry live restano aperti;
 - il Gateway del vertical slice è un harness, non implementa identity Installation, revoca, replay distribuito, Vault reale o restricted egress production.
 
 ## Decisioni ancora aperte
@@ -88,9 +100,9 @@ Evidenza parziale, non dichiarata come accettazione globale: **AC-002** ha host/
 - policy di upgrade applicativo: publisher Authenticode, hash pinning o combinazione per ciascun prodotto;
 - procedura di provisioning/backup/recovery del profilo della virtual service identity e delle data key;
 - forma definitiva dell'MSI e materializzazione sicura di Installation ID e manifest Application;
-- semantica di multiplexing/cancellation e streaming da congelare prima degli adapter M6;
+- semantica streaming e aggregate limits da validare in M2/M3 prima del freeze IPC per M6;
 - implementazione M2 di Installation identity, trust chain, Vault e restricted egress prima di trasformare l'harness in servizio production.
 
 ## Deviazioni ADR
 
-Nessuna ADR è stata modificata: l'implementazione usa le decisioni accettate senza introdurre alternative. Il vertical slice usa harness di test proprio per non aggirare la dipendenza architetturale M3 da M2 con una falsa implementazione production.
+Nessuna ADR è stata modificata. La Gate Review raccomanda tempi e destinazioni ADR per upgrade policy, recovery, provisioning, streaming e key rotation senza anticiparne l'implementazione.

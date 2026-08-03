@@ -24,6 +24,27 @@ public sealed class BrokerCoreTests
         await Assert.ThrowsAsync<BrokerException>(() => service.ComputeHmacAsync("app-a", reference, [], Guid.NewGuid(), TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public async Task Local_secret_delete_is_idempotent_and_cross_application_use_is_denied()
+    {
+        MemorySecrets repository = new();
+        BrokerApplicationService service = CreateService(repository, "installation-a");
+        string reference = await service.PutLocalSecretAsync("app-a", "signing", "Session", ["ComputeHmac"], [1, 2, 3], Guid.NewGuid(), TestContext.Current.CancellationToken);
+        BrokerException crossApplication = await Assert.ThrowsAsync<BrokerException>(() => service.ComputeHmacAsync("app-b", reference, [4], Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.Equal("secret_not_found", crossApplication.Code);
+        await service.DeleteLocalSecretAsync("app-a", reference, Guid.NewGuid(), TestContext.Current.CancellationToken);
+        await service.DeleteLocalSecretAsync("app-a", reference, Guid.NewGuid(), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task HMAC_requires_an_explicit_secret_operation_grant()
+    {
+        BrokerApplicationService service = CreateService(new MemorySecrets(), "installation-a");
+        string reference = await service.PutLocalSecretAsync("app-a", "signing", "Tenant", [], [1, 2, 3], Guid.NewGuid(), TestContext.Current.CancellationToken);
+        BrokerException denied = await Assert.ThrowsAsync<BrokerException>(() => service.ComputeHmacAsync("app-a", reference, [4], Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.Equal("operation_not_granted", denied.Code);
+    }
+
     [Theory]
     [InlineData("Vendor")]
     [InlineData("Operator")]

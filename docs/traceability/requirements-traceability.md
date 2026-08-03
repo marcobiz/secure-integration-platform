@@ -8,10 +8,10 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 |---|---|---|
 | FR-001 | M2 | `IT-DAT-RegistryCrud`, RLS integration report |
 | FR-002 | M2 | `E2E-IDN-EnrollmentRenewRevoke` |
-| FR-003 | M1 | `IT_BRK_Authorized_application_uses_pipe_and_unauthorized_hash_is_denied` |
-| FR-004 | M1 | `UT_BRK_LocalSecretLifecycle`, `Public_API_has_no_GetSecret_operation` |
-| FR-005 | M1 | `UT_CRYPTO_AeadRoundTripTamperRotation`, `AC005_Installation_key_and_ciphertext_differentiation` |
-| FR-006 | M1/M7 | M1 HMAC: `UT_BRK_LocalSecretLifecycle`; firma/certificato: M7 |
+| FR-003 | M1 | `IT_BRK_Authorized_application_uses_pipe_and_unauthorized_hash_is_denied`, pipe ACL, HMAC/grant negative; live identities aperte |
+| FR-004 | M1 | `UT_BRK_LocalSecretLifecycle`, idempotent/cross-Application test, forbidden classes, API surface |
+| FR-005 | M1 | AEAD roundtrip/tamper/rotation + nonce/AAD/unknown-version/malformed suite + Installation differentiation |
+| FR-006 | M1/M7 | M1 HMAC lifecycle/grant/reopen; firma/certificato: M7 |
 | FR-007 | M2 | `SEC-TENANT-ClientTenantIgnored`, `SEC-TENANT-CrossTenantDenied` |
 | FR-008 | M3 | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` |
 | FR-009 | M8 | `E2E-CON-ManagedConnector` |
@@ -23,18 +23,18 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | FR-015 | M1/M6 | M1 SDK: Windows pipe/E2E suite; COM/C ABI/CLI: M6 |
 | FR-016 | M2/M5 | audit append/redaction/role tests |
 | FR-017 | M5/M9 | health/metrics/tracing/diagnostics tests |
-| FR-018 | M1 | `DPAPI_CurrentUser_round_trip_and_ciphertext_is_not_plaintext`, `Offline_storage_contains_no_plaintext_and_corruption_is_denied` |
+| FR-018 | M1 | DPAPI roundtrip, offline corruption e repository reopen; service identity live aperta |
 
 ## Requisiti non funzionali
 
 | Req | Test/evidence prevista |
 |---|---|
-| NFR-001 | Gitleaks + DB schema assertion + log redaction corpus |
+| NFR-001 | secret scan + wire/audit four-path redaction; EventLog live aperto |
 | NFR-002 | deny-by-default authorization/egress/binding/plugin tests |
 | NFR-003 | TLS invalid cert/hostname/version tests |
-| NFR-004 | boundary/oversize/stream backpressure tests |
+| NFR-004 | IPC exact boundary/oversize pass; aggregate stream/backpressure aperti |
 | NFR-005 | M1 deadline/cancel/idempotent delete; retry/circuit isolation da M2+ |
-| NFR-006 | distributed trace propagation assertion |
+| NFR-006 | correlation Broker-Gateway E2E; W3C distributed trace aperto |
 | NFR-007 | canonical checksum/immutability/tamper tests |
 | NFR-008 | clean build, SBOM, signature verification report |
 | NFR-009 | Windows and adapter compatibility matrix |
@@ -45,11 +45,11 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | AC | Test/evidence |
 |---|---|
 | AC-001 | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` + secret scan |
-| AC-002 | Parziale M1: `Service_install_contract_uses_a_virtual_service_account`; live Windows service matrix aperta |
-| AC-003 | `IT_BRK_Authorized_application_uses_pipe_and_unauthorized_hash_is_denied` |
-| AC-004 | Parziale M1: DPAPI CurrentUser + `Broker_storage_ACL_is_protected_and_has_no_world_grant`; identity separation live aperta |
+| AC-002 | **OPEN/BLOCKER:** static service contract passa; vera Windows Service matrix non eseguita |
+| AC-003 | automatic policy/grant suite passa; processo/utente distinti live aperti |
+| AC-004 | **OPEN/BLOCKER:** DPAPI/ACL descriptor passano; identity separation live non eseguita |
 | AC-005 | `AC005_Installation_key_and_ciphertext_differentiation` |
-| AC-006 | Vertical slice platform-audit secret absence; corpus completo aperto |
+| AC-006 | wire/audit four-path redaction + vertical slice; Windows EventLog live aperto |
 | AC-007 | Vertical slice response/secret-absence assertion; Gateway production aperto |
 | AC-008 | M1 project dependency boundary + vertical slice through `IGatewayInvoker` |
 | AC-009 | `InvokeGatewayRequest` API-surface assertion + fixed HTTPS BaseAddress/TLS negative test |
@@ -76,5 +76,7 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | AC-030 | pilot code/package/network bypass evidence |
 
 ## Security threats
+
+La fotografia conclusiva M0/M1, inclusi gli elementi non automatizzati, è in `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md`.
 
 Ogni `TM-*` in `security/threat-model.md` deve essere collegata a uno o più test `SEC-*` prima della milestone che introduce la relativa superficie. Un nuovo adapter/auth method non può essere Published senza aggiornare questa matrice.

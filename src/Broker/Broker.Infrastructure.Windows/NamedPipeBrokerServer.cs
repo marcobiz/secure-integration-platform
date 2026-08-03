@@ -14,16 +14,18 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
     private readonly BrokerOptions options;
     private readonly ApplicationAuthorizer authorizer;
     private readonly BrokerRequestDispatcher dispatcher;
+    private readonly IBrokerAuditSink? audit;
     private readonly ConcurrentDictionary<int, Task> clients = new();
     private int clientNumber;
     private bool disposed;
 
     /// <summary>Creates the server.</summary>
-    public NamedPipeBrokerServer(BrokerOptions options, ApplicationAuthorizer authorizer, BrokerRequestDispatcher dispatcher)
+    public NamedPipeBrokerServer(BrokerOptions options, ApplicationAuthorizer authorizer, BrokerRequestDispatcher dispatcher, IBrokerAuditSink? audit = null)
     {
         this.options = options;
         this.authorizer = authorizer;
         this.dispatcher = dispatcher;
+        this.audit = audit;
     }
 
     /// <summary>Accepts connections until cancellation.</summary>
@@ -69,12 +71,16 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
     {
         await using (pipe.ConfigureAwait(false))
         {
+            string auditApplicationId = "unidentified";
+            Guid auditCorrelationId = Guid.Empty;
             try
             {
                 IpcFrame handshakeFrame = await IpcFrameCodec.ReadAsync(pipe, serverCancellation).ConfigureAwait(false) ?? throw new EndOfStreamException();
                 HandshakeRequest handshake = IpcFrameCodec.Deserialize<HandshakeRequest>(handshakeFrame);
+                auditApplicationId = SafeAuditIdentifier(handshake.ApplicationRegistrationId);
+                auditCorrelationId = handshakeFrame.CorrelationId;
                 using CallerIdentity caller = NamedPipeCallerIdentity.Capture(pipe);
-                if (handshake.Message != "HandshakeRequest" || handshake.Supported.Major != IpcProtocol.Major || handshake.Supported.MinMinor > IpcProtocol.Minor || handshake.Supported.MaxMinor < IpcProtocol.Minor)
+                if (handshakeFrame.Type != IpcFrameType.Control || handshakeFrame.Sequence != 0 || handshakeFrame.CorrelationId == Guid.Empty || handshake.Message != "HandshakeRequest" || handshake.Supported.Major != IpcProtocol.Major || handshake.Supported.MinMinor > IpcProtocol.Minor || handshake.Supported.MaxMinor < IpcProtocol.Minor || !ValidNonce(handshake.ClientNonce, 16, 64))
                 {
                     throw new BrokerException("protocol_version_not_supported", "protocol");
                 }
@@ -84,7 +90,7 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
                 HandshakeResponse response = new() { ConnectionId = Guid.NewGuid(), ServerChallenge = challenge };
                 await IpcFrameCodec.WriteAsync(pipe, IpcFrameCodec.JsonFrame(handshakeFrame.CorrelationId, 0, response), serverCancellation).ConfigureAwait(false);
                 HashSet<string> nonces = new(StringComparer.Ordinal);
-                ConcurrentDictionary<Guid, CancellationTokenSource> activeCancellations = new();
+                ConcurrentDictionary<Guid, RequestCancellation> activeCancellations = new();
                 List<Task> activeTasks = [];
                 using SemaphoreSlim writeLock = new(1, 1);
                 ulong expectedSequence = 1;
@@ -95,12 +101,12 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
                     if (frame.Sequence != expectedSequence++) throw new BrokerException("invalid_sequence", "protocol");
                     if (frame.Type == IpcFrameType.Cancel)
                     {
-                        if (activeCancellations.TryGetValue(frame.CorrelationId, out CancellationTokenSource? target)) target.Cancel();
+                        if (activeCancellations.TryGetValue(frame.CorrelationId, out RequestCancellation? target)) target.CancelByClient();
                         continue;
                     }
 
                     BrokerRequest request = IpcFrameCodec.Deserialize<BrokerRequest>(frame);
-                    if (request.CorrelationId != frame.CorrelationId || request.ConnectionChallenge != challenge || request.DeadlineUtc <= DateTimeOffset.UtcNow || request.DeadlineUtc > DateTimeOffset.UtcNow.AddMinutes(1) || string.IsNullOrWhiteSpace(request.RequestNonce) || nonces.Count >= 1024 || !nonces.Add(request.RequestNonce))
+                    if (request.CorrelationId == Guid.Empty || request.CorrelationId != frame.CorrelationId || request.ProtocolVersion != "1.0" || request.ConnectionChallenge != challenge || request.DeadlineUtc <= DateTimeOffset.UtcNow || request.DeadlineUtc > DateTimeOffset.UtcNow.AddMinutes(1) || !ValidNonce(request.RequestNonce, 16, 64) || nonces.Count >= 1024 || !nonces.Add(request.RequestNonce))
                     {
                         throw new BrokerException("invalid_request_context", "protocol");
                     }
@@ -111,8 +117,7 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
                         continue;
                     }
 
-                    CancellationTokenSource requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(serverCancellation);
-                    requestCancellation.CancelAfter(request.DeadlineUtc - DateTimeOffset.UtcNow);
+                    RequestCancellation requestCancellation = new(request.DeadlineUtc - DateTimeOffset.UtcNow, serverCancellation);
                     if (!activeCancellations.TryAdd(request.CorrelationId, requestCancellation))
                     {
                         requestCancellation.Dispose();
@@ -123,12 +128,17 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
                     activeTasks.RemoveAll(static task => task.IsCompletedSuccessfully);
                 }
 
-                foreach (CancellationTokenSource active in activeCancellations.Values) active.Cancel();
+                foreach (RequestCancellation active in activeCancellations.Values) active.CancelForShutdown();
                 await Task.WhenAll(activeTasks).ConfigureAwait(false);
             }
             catch (Exception exception) when (exception is IOException or EndOfStreamException or BrokerException or UnauthorizedAccessException)
             {
                 // Connection-level failures deliberately close the pipe without echoing sensitive context.
+                if (audit is not null)
+                {
+                    string errorCode = exception is BrokerException brokerException ? brokerException.Code : "connection_rejected";
+                    await audit.WriteAsync("Connection", auditApplicationId, auditCorrelationId, false, errorCode, CancellationToken.None).ConfigureAwait(false);
+                }
             }
         }
     }
@@ -140,14 +150,27 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
         Error = new BrokerError { Code = exception.Code, Category = exception.Category, Retryable = exception.Retryable },
     };
 
+    private static bool ValidNonce(string value, int minimumBytes, int maximumBytes)
+    {
+        try
+        {
+            byte[] bytes = Convert.FromBase64String(value);
+            return bytes.Length >= minimumBytes && bytes.Length <= maximumBytes;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
     private async Task ExecuteRequestAsync(
         NamedPipeServerStream pipe,
         IpcFrame frame,
         BrokerRequest request,
         string applicationId,
         ApplicationPolicy policy,
-        CancellationTokenSource requestCancellation,
-        ConcurrentDictionary<Guid, CancellationTokenSource> activeCancellations,
+        RequestCancellation requestCancellation,
+        ConcurrentDictionary<Guid, RequestCancellation> activeCancellations,
         SemaphoreSlim writeLock,
         CancellationToken connectionCancellation)
     {
@@ -162,13 +185,18 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
-            bool deadlineExpired = DateTimeOffset.UtcNow >= request.DeadlineUtc;
+            bool deadlineExpired = !requestCancellation.CancelledByClient && !connectionCancellation.IsCancellationRequested;
             response = Failure(request.CorrelationId, new BrokerException(deadlineExpired ? "deadline_exceeded" : "cancelled", deadlineExpired ? "timeout" : "cancelled", deadlineExpired));
         }
         finally
         {
             _ = activeCancellations.TryRemove(request.CorrelationId, out _);
             requestCancellation.Dispose();
+        }
+
+        if (audit is not null)
+        {
+            await audit.WriteAsync(SafeAuditIdentifier(request.Operation), SafeAuditIdentifier(applicationId), request.CorrelationId, response.Success, response.Error?.Code, CancellationToken.None).ConfigureAwait(false);
         }
 
         await WriteResponseAsync(pipe, frame, response, writeLock, connectionCancellation).ConfigureAwait(false);
@@ -185,6 +213,35 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
         {
             writeLock.Release();
         }
+    }
+
+    private sealed class RequestCancellation : IDisposable
+    {
+        private readonly CancellationTokenSource source;
+        private int cancelledByClient;
+
+        public RequestCancellation(TimeSpan deadline, CancellationToken connectionCancellation)
+        {
+            source = CancellationTokenSource.CreateLinkedTokenSource(connectionCancellation);
+            source.CancelAfter(deadline);
+        }
+
+        public CancellationToken Token => source.Token;
+        public bool CancelledByClient => Volatile.Read(ref cancelledByClient) != 0;
+        public void CancelByClient()
+        {
+            Interlocked.Exchange(ref cancelledByClient, 1);
+            source.Cancel();
+        }
+
+        public void CancelForShutdown() => source.Cancel();
+        public void Dispose() => source.Dispose();
+    }
+
+    private static string SafeAuditIdentifier(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 128 || value.Any(static character => !char.IsAsciiLetterOrDigit(character) && character is not '.' and not '-' and not '_')) return "invalid";
+        return value;
     }
 
     private NamedPipeServerStream CreatePipe()

@@ -1,5 +1,7 @@
 # Protocollo IPC del Local Broker
 
+> **Stato del contratto:** provvisorio dopo M1. Framing e operazioni implementate sono stabili per i test interni, ma IPC v1 non è congelato per COM/C ABI/CLI. Il freeze richiede validazione attraverso M2 e il vertical slice M3 production-like, inclusi streaming e compatibility matrix.
+
 ## Trasporto
 
 Named Pipe Windows `\\.\pipe\<Vendor>.<Product>.Broker.v1`, byte mode, full duplex. L'API localhost è fuori dall'MVP.
@@ -117,4 +119,3 @@ Categorie: protocol, identity, authorization, validation, storage, cryptography,
 - Nuove operazioni richiedono minor increment.
 - Nuovi campi opzionali sono ammessi solo dentro `extensions` finché la minor non viene negoziata.
 - SDK e Broker mantengono una matrice di compatibilità testata.
-

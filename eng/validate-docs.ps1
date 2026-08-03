@@ -36,4 +36,4 @@ $sequenceCount = (Select-String -LiteralPath (Join-Path $root 'docs/architecture
 if ($sequenceCount -ne 12) { throw "Expected 12 sequence diagrams, found $sequenceCount." }
 
 Write-Host 'Documentation validation succeeded.'
-
+exit 0

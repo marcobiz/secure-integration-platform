@@ -24,4 +24,4 @@ if ($hits.Count -gt 0) {
 }
 
 Write-Host 'Conservative secret scan succeeded.'
-
+exit 0

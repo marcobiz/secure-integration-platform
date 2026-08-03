@@ -42,6 +42,7 @@ public sealed class SecureLayerVerticalSliceTests
         Assert.Equal(harness.VendorApiKey, harness.ExternalApiKeySeen);
         Assert.Equal(harness.GatewayClientCertificate.Thumbprint, harness.ExternalClientCertificateSeen, ignoreCase: true);
         Assert.Equal(harness.BrokerClientCertificate.Thumbprint, harness.GatewayClientCertificateSeen, ignoreCase: true);
+        Assert.True(Guid.TryParse(harness.GatewayCorrelationSeen, out _));
         Assert.Equal(legacyPayload, harness.GatewayPayloadSeen);
         Assert.DoesNotContain(harness.VendorApiKey, Encoding.UTF8.GetString(harness.GatewayPayloadSeen), StringComparison.Ordinal);
         Assert.DoesNotContain(harness.VendorApiKey, result.PayloadBase64, StringComparison.Ordinal);
@@ -115,6 +116,7 @@ public sealed class SecureLayerVerticalSliceTests
         public string? ExternalApiKeySeen { get; private set; }
         public string? ExternalClientCertificateSeen { get; private set; }
         public string? GatewayClientCertificateSeen { get; private set; }
+        public string? GatewayCorrelationSeen { get; private set; }
         public byte[] GatewayPayloadSeen { get; private set; } = [];
         public int ExternalRequestCount { get; private set; }
         public List<string> PlatformAudit { get; } = [];
@@ -161,6 +163,7 @@ public sealed class SecureLayerVerticalSliceTests
                 }
 
                 harness!.GatewayClientCertificateSeen = (await context.Connection.GetClientCertificateAsync())!.Thumbprint;
+                harness.GatewayCorrelationSeen = context.Request.Headers["X-Correlation-Id"].ToString();
                 using MemoryStream payload = new();
                 await context.Request.Body.CopyToAsync(payload, context.RequestAborted);
                 harness.GatewayPayloadSeen = payload.ToArray();

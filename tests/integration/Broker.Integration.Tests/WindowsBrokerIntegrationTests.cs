@@ -3,6 +3,7 @@ using System.IO.Pipes;
 using System.Security.Cryptography;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text;
 using System.Text.Json;
 using SecureIntegration.Broker.Core;
 using SecureIntegration.Broker.Infrastructure.Windows;
@@ -26,6 +27,14 @@ public sealed class WindowsBrokerIntegrationTests
         using CallerIdentity caller = NamedPipeCallerIdentity.Capture(server);
         Assert.Equal((uint)Environment.ProcessId, caller.ProcessId);
         Assert.Equal(Environment.ProcessPath, caller.ExecutablePath, ignoreCase: true);
+        Assert.Equal(Process.GetCurrentProcess().StartTime.ToUniversalTime(), caller.ProcessStartTimeUtc.UtcDateTime, TimeSpan.FromSeconds(1));
+        Process retainedProcess = Assert.IsType<Process>(typeof(CallerIdentity).GetField("process", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(caller));
+        FileStream retainedExecutable = Assert.IsType<FileStream>(typeof(CallerIdentity).GetField("executableFile", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(caller));
+        Microsoft.Win32.SafeHandles.SafeProcessHandle retainedHandle = retainedProcess.SafeHandle;
+        Microsoft.Win32.SafeHandles.SafeFileHandle retainedFileHandle = retainedExecutable.SafeFileHandle;
+        caller.Dispose();
+        Assert.True(retainedHandle.IsClosed);
+        Assert.True(retainedFileHandle.IsClosed);
     }
 
     [Fact]
@@ -47,6 +56,30 @@ public sealed class WindowsBrokerIntegrationTests
         Assert.True(security.AreAccessRulesProtected);
         SecurityIdentifier world = new(WellKnownSidType.WorldSid, null);
         Assert.DoesNotContain(security.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>(), rule => rule.IdentityReference == world && rule.AccessControlType == AccessControlType.Allow);
+    }
+
+    [Fact]
+    public void Named_pipe_ACL_is_protected_and_contains_only_configured_principals()
+    {
+        using TestDirectory temporary = new();
+        string sid = WindowsIdentity.GetCurrent().User!.Value;
+        BrokerOptions options = new()
+        {
+            PipeName = "SecureIntegration.Acl.Tests." + Guid.NewGuid().ToString("N"),
+            InstallationId = "acl-test",
+            DataDirectory = temporary.Path,
+            Applications = [new ApplicationPolicy { RegistrationId = "app", AllowedUserSids = [sid], ExecutablePaths = [Environment.ProcessPath!] }],
+        };
+        WindowsDpapiProtectionProvider protection = new();
+        using FileLocalSecretRepository secrets = new(temporary.Path);
+        using FileDataKeyRepository keys = new(temporary.Path, protection);
+        BrokerApplicationService application = new(secrets, protection, new AeadDataProtector(keys, options.InstallationId), new NullAudit(), options.InstallationId);
+        NamedPipeBrokerServer broker = new(options, new ApplicationAuthorizer(options.Applications), new BrokerRequestDispatcher(application));
+        using NamedPipeServerStream pipe = Assert.IsType<NamedPipeServerStream>(typeof(NamedPipeBrokerServer).GetMethod("CreatePipe", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(broker, null));
+        PipeSecurity security = pipe.GetAccessControl();
+        Assert.True(security.AreAccessRulesProtected);
+        string[] allowed = security.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<PipeAccessRule>().Where(static rule => rule.AccessControlType == AccessControlType.Allow).Select(static rule => rule.IdentityReference.Value).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        Assert.All(allowed, value => Assert.Equal(sid, value, ignoreCase: true));
     }
 
     [Fact]
@@ -76,6 +109,12 @@ public sealed class WindowsBrokerIntegrationTests
         BrokerException failure = await Assert.ThrowsAsync<BrokerException>(() => keys.GetAsync(1, TestContext.Current.CancellationToken));
         Assert.Equal("data_key_unwrap_failed", failure.Code);
         Assert.StartsWith("lsr_", reference, StringComparison.Ordinal);
+
+        const string corruptReference = "lsr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        string corruptPath = System.IO.Path.Combine(temporary.Path, "secrets", corruptReference + ".json");
+        await File.WriteAllTextAsync(corruptPath, "{\"SecretRef\":\"lsr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"OwnerApplicationId\":\"app-a\",\"LogicalName\":\"x\",\"SecretClass\":\"Tenant\",\"AllowedOperations\":[],\"ProtectedValueBase64\":\"not-base64\"}", TestContext.Current.CancellationToken);
+        BrokerException corruptSecret = await Assert.ThrowsAsync<BrokerException>(() => secrets.FindAsync(corruptReference, TestContext.Current.CancellationToken));
+        Assert.Equal("local_storage_corrupt", corruptSecret.Code);
     }
 
     [Fact]
@@ -90,6 +129,31 @@ public sealed class WindowsBrokerIntegrationTests
         byte[] second = await new AeadDataProtector(secondKeys, "installation-b").ProtectAsync("app", "purpose", "text/plain", [1], TestContext.Current.CancellationToken);
         Assert.NotEqual((await firstKeys.GetActiveAsync(TestContext.Current.CancellationToken)).Value, (await secondKeys.GetActiveAsync(TestContext.Current.CancellationToken)).Value);
         Assert.NotEqual(first, second);
+    }
+
+    [Fact]
+    public async Task Repository_reopen_recovers_keys_secrets_and_protected_data_under_same_identity()
+    {
+        using TestDirectory temporary = new();
+        WindowsDpapiProtectionProvider protection = new();
+        string secretReference;
+        byte[] envelope;
+        byte[] expectedHmac = HMACSHA256.HashData("restart-key"u8.ToArray(), "message"u8.ToArray());
+        using (FileLocalSecretRepository secrets = new(temporary.Path))
+        using (FileDataKeyRepository keys = new(temporary.Path, protection))
+        {
+            BrokerApplicationService beforeRestart = new(secrets, protection, new AeadDataProtector(keys, "installation-restart"), new NullAudit(), "installation-restart");
+            secretReference = await beforeRestart.PutLocalSecretAsync("app-a", "restart-key", "Tenant", ["ComputeHmac"], "restart-key"u8.ToArray(), Guid.NewGuid(), TestContext.Current.CancellationToken);
+            envelope = await beforeRestart.ProtectDataAsync("app-a", "restart", "application/json", "persisted-data"u8.ToArray(), TestContext.Current.CancellationToken);
+        }
+
+        using (FileLocalSecretRepository secrets = new(temporary.Path))
+        using (FileDataKeyRepository keys = new(temporary.Path, protection))
+        {
+            BrokerApplicationService afterRestart = new(secrets, protection, new AeadDataProtector(keys, "installation-restart"), new NullAudit(), "installation-restart");
+            Assert.Equal(expectedHmac, await afterRestart.ComputeHmacAsync("app-a", secretReference, "message"u8.ToArray(), Guid.NewGuid(), TestContext.Current.CancellationToken));
+            Assert.Equal("persisted-data"u8.ToArray(), await afterRestart.UnprotectDataAsync("app-a", "restart", "application/json", envelope, TestContext.Current.CancellationToken));
+        }
     }
 
     [Fact]
@@ -164,10 +228,111 @@ public sealed class WindowsBrokerIntegrationTests
         }, gateway: new SlowGateway());
     }
 
-    private static async Task WithBrokerAsync(Func<BrokerClient, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null)
-        => await WithBrokerAndPipeAsync((client, _) => test(client), invalidHash, invalidPublisher, operationTimeout, gateway);
+    [Fact]
+    public async Task Wire_errors_redact_invalid_payload_and_cryptographic_failure()
+    {
+        CapturingAudit audit = new();
+        await WithBrokerAndPipeAsync(async (client, name) =>
+        {
+            ProtectedDataResult valid = await client.ProtectDataAsync(new ProtectDataRequest { Purpose = "redaction", ContentType = "text/plain", PlaintextBase64 = Convert.ToBase64String("sensitive-plaintext"u8) }, TestContext.Current.CancellationToken);
+            byte[] tampered = Convert.FromBase64String(valid.EnvelopeBase64);
+            tampered[^1] ^= 1;
 
-    private static async Task WithBrokerAndPipeAsync(Func<BrokerClient, string, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null)
+            await using NamedPipeClientStream pipe = new(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
+            await pipe.ConnectAsync(TestContext.Current.CancellationToken);
+            Guid handshakeId = Guid.NewGuid();
+            await IpcFrameCodec.WriteAsync(pipe, IpcFrameCodec.JsonFrame(handshakeId, 0, new HandshakeRequest { ApplicationRegistrationId = "test-app", ClientNonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)) }), TestContext.Current.CancellationToken);
+            HandshakeResponse handshake = IpcFrameCodec.Deserialize<HandshakeResponse>((await IpcFrameCodec.ReadAsync(pipe, TestContext.Current.CancellationToken))!);
+
+            BrokerRequest Request(Guid id, string operation, object body) => new()
+            {
+                Operation = operation,
+                CorrelationId = id,
+                ConnectionChallenge = handshake.ServerChallenge,
+                RequestNonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(24)),
+                DeadlineUtc = DateTimeOffset.UtcNow.AddSeconds(5),
+                Body = JsonSerializer.SerializeToElement(body, IpcProtocol.JsonOptions),
+            };
+
+            const string invalidSensitiveValue = "sensitive-invalid-base64-value";
+            Guid invalidId = Guid.NewGuid();
+            ProtectDataRequest invalidBody = new() { Purpose = "redaction", ContentType = "text/plain", PlaintextBase64 = invalidSensitiveValue };
+            await IpcFrameCodec.WriteAsync(pipe, IpcFrameCodec.JsonFrame(invalidId, 1, Request(invalidId, BrokerOperations.ProtectData, invalidBody)), TestContext.Current.CancellationToken);
+            IpcFrame invalidFrame = (await IpcFrameCodec.ReadAsync(pipe, TestContext.Current.CancellationToken))!;
+            string invalidWire = Encoding.UTF8.GetString(invalidFrame.Body);
+            BrokerResponse invalidResponse = IpcFrameCodec.Deserialize<BrokerResponse>(invalidFrame);
+            Assert.Equal("invalid_base64", invalidResponse.Error?.Code);
+            Assert.DoesNotContain(invalidSensitiveValue, invalidWire, StringComparison.Ordinal);
+            Assert.DoesNotContain("FormatException", invalidWire, StringComparison.Ordinal);
+            Assert.DoesNotContain("C:\\", invalidWire, StringComparison.OrdinalIgnoreCase);
+
+            Guid cryptoId = Guid.NewGuid();
+            UnprotectDataRequest cryptoBody = new() { Purpose = "redaction", ContentType = "text/plain", EnvelopeBase64 = Convert.ToBase64String(tampered) };
+            await IpcFrameCodec.WriteAsync(pipe, IpcFrameCodec.JsonFrame(cryptoId, 2, Request(cryptoId, BrokerOperations.UnprotectData, cryptoBody)), TestContext.Current.CancellationToken);
+            IpcFrame cryptoFrame = (await IpcFrameCodec.ReadAsync(pipe, TestContext.Current.CancellationToken))!;
+            string cryptoWire = Encoding.UTF8.GetString(cryptoFrame.Body);
+            BrokerResponse cryptoResponse = IpcFrameCodec.Deserialize<BrokerResponse>(cryptoFrame);
+            Assert.Equal("authentication_failed", cryptoResponse.Error?.Code);
+            Assert.DoesNotContain(valid.EnvelopeBase64, cryptoWire, StringComparison.Ordinal);
+            Assert.DoesNotContain("CryptographicException", cryptoWire, StringComparison.Ordinal);
+        }, audit: audit);
+        string auditText = string.Join("\n", audit.Events);
+        Assert.DoesNotContain("sensitive", auditText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("CryptographicException", auditText, StringComparison.Ordinal);
+        Assert.Contains("invalid_base64", auditText, StringComparison.Ordinal);
+        Assert.Contains("authentication_failed", auditText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Audit_logging_redacts_normal_and_authentication_denied_paths()
+    {
+        const string sensitive = "audit-sensitive-local-secret";
+        CapturingAudit normalAudit = new();
+        await WithBrokerAsync(async client =>
+        {
+            LocalSecretReference reference = await client.PutLocalSecretAsync(new PutLocalSecretRequest
+            {
+                LogicalName = "audit-key",
+                SecretClass = "Tenant",
+                ValueBase64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(sensitive)),
+                AllowedOperations = ["ComputeHmac"],
+            }, TestContext.Current.CancellationToken);
+            _ = await client.ComputeHmacAsync(new ComputeHmacRequest { SecretRef = reference.SecretRef, MessageBase64 = Convert.ToBase64String("message"u8) }, TestContext.Current.CancellationToken);
+        }, audit: normalAudit);
+        Assert.DoesNotContain(sensitive, string.Join("\n", normalAudit.Events), StringComparison.Ordinal);
+
+        CapturingAudit deniedAudit = new();
+        await Assert.ThrowsAnyAsync<Exception>(() => WithBrokerAsync(client => client.GetStatusAsync(TestContext.Current.CancellationToken), invalidHash: true, audit: deniedAudit));
+        string deniedText = string.Join("\n", deniedAudit.Events);
+        Assert.Contains("application_not_authorized", deniedText, StringComparison.Ordinal);
+        Assert.DoesNotContain(Environment.ProcessPath!, deniedText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(new string('0', 64), deniedText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Handshake_rejects_nonzero_sequence_and_malformed_nonce()
+    {
+        await WithBrokerAndPipeAsync(async (_, name) =>
+        {
+            async Task AssertRejectedAsync(ulong sequence, string nonce)
+            {
+                await using NamedPipeClientStream pipe = new(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
+                await pipe.ConnectAsync(TestContext.Current.CancellationToken);
+                Guid correlation = Guid.NewGuid();
+                HandshakeRequest request = new() { ApplicationRegistrationId = "test-app", ClientNonce = nonce };
+                await IpcFrameCodec.WriteAsync(pipe, IpcFrameCodec.JsonFrame(correlation, sequence, request), TestContext.Current.CancellationToken);
+                Assert.Null(await IpcFrameCodec.ReadAsync(pipe, TestContext.Current.CancellationToken));
+            }
+
+            await AssertRejectedAsync(1, Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
+            await AssertRejectedAsync(0, "not-base64");
+        });
+    }
+
+    private static async Task WithBrokerAsync(Func<BrokerClient, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null, IBrokerAuditSink? audit = null)
+        => await WithBrokerAndPipeAsync((client, _) => test(client), invalidHash, invalidPublisher, operationTimeout, gateway, audit);
+
+    private static async Task WithBrokerAndPipeAsync(Func<BrokerClient, string, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null, IBrokerAuditSink? audit = null)
     {
         using TestDirectory temporary = new();
         string pipeName = "SecureIntegration.Broker.Tests." + Guid.NewGuid().ToString("N");
@@ -181,15 +346,16 @@ public sealed class WindowsBrokerIntegrationTests
             ExecutablePaths = [executable],
             ExecutableSha256 = [invalidHash ? new string('0', 64) : hash],
             AllowedPublisherThumbprints = invalidPublisher ? [new string('0', 40)] : [],
-            AllowedOperations = [BrokerOperations.ProtectData, BrokerOperations.UnprotectData, BrokerOperations.GetBrokerStatus, BrokerOperations.InvokeGateway],
+            AllowedOperations = [BrokerOperations.PutLocalSecret, BrokerOperations.DeleteLocalSecret, BrokerOperations.ComputeHmac, BrokerOperations.ProtectData, BrokerOperations.UnprotectData, BrokerOperations.GetBrokerStatus, BrokerOperations.InvokeGateway],
             GatewayGrants = ["secure-layer-demo:submit"],
         };
         BrokerOptions options = new() { PipeName = pipeName, InstallationId = "test-installation", DataDirectory = temporary.Path, Applications = [policy] };
         WindowsDpapiProtectionProvider protection = new();
         using FileLocalSecretRepository secrets = new(temporary.Path);
         using FileDataKeyRepository keys = new(temporary.Path, protection);
-        BrokerApplicationService application = new(secrets, protection, new AeadDataProtector(keys, options.InstallationId), new NullAudit(), options.InstallationId, gateway);
-        await using NamedPipeBrokerServer server = new(options, new ApplicationAuthorizer(options.Applications), new BrokerRequestDispatcher(application));
+        IBrokerAuditSink selectedAudit = audit ?? new NullAudit();
+        BrokerApplicationService application = new(secrets, protection, new AeadDataProtector(keys, options.InstallationId), selectedAudit, options.InstallationId, gateway);
+        await using NamedPipeBrokerServer server = new(options, new ApplicationAuthorizer(options.Applications), new BrokerRequestDispatcher(application), selectedAudit);
         using CancellationTokenSource stopped = new();
         Task running = server.RunAsync(stopped.Token);
         BrokerClient client = new(new BrokerClientOptions { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId, OperationTimeout = operationTimeout ?? TimeSpan.FromSeconds(5) });
@@ -213,6 +379,17 @@ public sealed class WindowsBrokerIntegrationTests
     private sealed class NullAudit : IBrokerAuditSink
     {
         public Task WriteAsync(string operation, string applicationId, Guid correlationId, bool succeeded, string? errorCode, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class CapturingAudit : IBrokerAuditSink
+    {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> events = new();
+        public IReadOnlyCollection<string> Events => events.ToArray();
+        public Task WriteAsync(string operation, string applicationId, Guid correlationId, bool succeeded, string? errorCode, CancellationToken cancellationToken)
+        {
+            events.Enqueue($"operation={operation} application={applicationId} correlation={correlationId:D} succeeded={succeeded} error={errorCode}");
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class TestDirectory : IDisposable
