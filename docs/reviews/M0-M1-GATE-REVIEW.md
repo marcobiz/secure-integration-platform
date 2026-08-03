@@ -3,7 +3,14 @@
 **Data:** 2026-08-03  
 **Baseline congelata:** commit `7f68442ceb9adcc47bb1b1a534ad64e23bd26bac`  
 **Tag annotato:** `baseline-m0-m1-vslice-2026-08-03`  
-**Esito del gate:** **NO-GO per M2 finché i blocker live non sono chiusi**  
+**SUT baseline M0/M1:** `39ac4eae23d6a4c43729863ca345fdbf10af0ee6`
+
+**Harness baseline:** `f33bf910b9f7c1f5b8a4ea47476c26f7c49c2170`
+
+**Commit live testato:** `24288dbe065ecedc21c0018e8ed37ca844bc8caf`
+
+**Esito del gate:** **NO-GO per M2: matrice live PASS, integrazione canonica pendente**
+
 **IPC:** **provvisorio**, non congelato per COM/C ABI/CLI
 
 Questa review usa `IMPLEMENTATION_STATUS.md` e il rapporto del vertical slice come baseline, ma registra soltanto evidenze aggiuntive, finding e decisioni di gate.
@@ -39,49 +46,42 @@ La review ha aggiunto test/controlli per:
 
 I quattro test critici IPC/identity/cancel/redaction sono passati in **20/20 iterazioni**, 80 esecuzioni complessive senza failure.
 
-Sullo stato finale della review: build Release dell'intera solution con **0 warning/0 errori**; **26 unit + 14 integration + 1 E2E = 41/41 test passati**; documentation gate, secret scan, NuGet vulnerability scan e SBOM tutti passati.
+Sullo stato live finale: build Release dell'intera solution con **0 warning/0 errori**; **26 unit + 22 integration + 1 E2E = 49/49 test passati**; parsing PowerShell 5.1, `ValidateHarness`, documentation gate e secret scan passati.
 
 ## 2. Qualificazione dell'ambiente live
 
-L'ambiente disponibile è:
+L'ambiente qualificato per la run live è:
 
 | Proprietà | Valore osservato |
 |---|---|
-| OS | Windows 10 Pro 10.0.19045 |
-| Tipo | workstation, non Windows Server |
-| Sessione elevata | no |
-| Hyper-V/Get-VM | non disponibile |
-| Windows Sandbox executable | assente |
-| Docker/Podman | non disponibile |
-| Broker service preesistente | assente |
+| OS | Windows 11 Pro 10.0.26200, build 26200 |
+| Tipo | Microsoft Virtual Machine, UUID `864384BD-9128-4F51-A741-001485E7DF72` |
+| Runner elevato | sì, verificato con `WindowsPrincipal.IsInRole(Administrator)` |
+| PowerShell | Windows PowerShell 5.1.26100.7920, processo `-NoProfile` |
+| Commit repository | `24288dbe065ecedc21c0018e8ed37ca844bc8caf` |
+| RunId | `m0-m1-20260803-232955` |
+| Reboot osservato | boot UTC `2026-08-03T21:38:33.1818970Z` |
 
-La lettura delle Windows optional features è stata rifiutata perché richiede elevazione. Non esiste quindi un percorso autorizzato e ripetibile per creare utenti locali, registrare un servizio, usare un virtual account o avviare una VM pulita. Una simulazione in-process non soddisferebbe gli obiettivi richiesti.
+Il runner elevato ha creato account locali distinti, installato il servizio con virtual account, applicato ACL reali e predisposto un task post-reboot eseguito come SYSTEM. Nessuna prova simulata è stata usata.
 
 ### Matrice live A–F
 
-| Matrice | Evidenza live | Evidenza automatica sostitutiva disponibile | Esito gate |
-|---|---|---|---|
-| A — applicazione autorizzata | **NON ESEGUITA**: nessun servizio/legacy identity reale | pipe+SDK, operation grants, Protect/Unprotect, local secret/HMAC, repository reopen | OPEN-LIVE |
-| B — processo non autorizzato stesso utente | **NON ESEGUITA** con processo distinto | wrong hash/publisher e operation grant denied; ACL storage descriptor | OPEN-LIVE |
-| C — utente Windows differente | **NON ESEGUITA** | security descriptor pipe/storage verificato, ma stesso SID del testhost | OPEN-LIVE |
-| D — account gestionale | **NON ESEGUITA** | API surface senza GetSecret/KEK/DEK e storage cifrato ispezionato | OPEN-LIVE |
-| E — riavvio servizio | **NON ESEGUITO** | repository dispose/reopen recupera key, HMAC ed envelope; tamper/unknown version rifiutati | OPEN-LIVE |
-| F — Windows Service logging | **NON ESEGUITO** | wire e audit sink in-memory redatti per quattro path | OPEN-LIVE |
+| Matrice | Evidenza live | Esito gate |
+|---|---|---|
+| A — applicazione autorizzata | pipe, grants, HMAC, Protect/Unprotect e persistenza | PASS-LIVE |
+| B — processo non autorizzato stesso utente | processo/path distinto negato dalla policy; storage negato | PASS-LIVE |
+| C — utente Windows differente | pipe, storage e DPAPI negati | PASS-LIVE |
+| D — account gestionale | DB legacy cifrato leggibile; nessuna API per secret o key material | PASS-LIVE |
+| E — restart e reboot | tamper envelope/key rifiutato, restore riuscito, HMAC e protected data persistenti | PASS-LIVE |
+| F — Windows Service logging | Event Log reale presente e scansione di 11 canary senza leakage | PASS-LIVE |
 
-Non sono stati creati utenti, servizi o ACL di sistema e quindi non esiste cleanup live da dichiarare.
+Il servizio è rimasto installato e `Running` come stato finale osservabile del SUT. Il task post-reboot è stato rimosso automaticamente; il bundle e le run bloccate sono conservati in `C:\ProgramData\SecureIntegration\LiveMatrix`.
 
 Il transcript qualificato e la checklist dell'evidence pack sono in `docs/reviews/evidence/M0-M1-LIVE-MATRIX-EVIDENCE.md`.
 
-### Evidenze richieste per chiudere il live gate
+### Evidenze acquisite
 
-Su una VM snapshot/revert Windows supportata, con runner elevato:
-
-1. pubblicare il Broker self-contained o installare il runtime pinned;
-2. creare un account legacy e un account estraneo; registrare il servizio come `NT SERVICE\SecureIntegrationBroker`;
-3. materializzare Installation ID univoco e manifest con SID/path/publisher/hash del simulatore;
-4. catturare `sc.exe qc`, `Win32_Service.StartName`, token SID del processo servizio, SDDL pipe e `icacls` ProgramData;
-5. eseguire A–F e conservare command transcript, exit code, Event Log export e hash degli artefatti;
-6. ripristinare lo snapshot, evitando di conservare password/certificati di test.
+Il bundle `M0-M1-live-matrix-m0-m1-20260803-232955.zip` contiene 24 file dichiarati nel manifest più il manifest stesso. Tutte le dimensioni e gli SHA-256 sono stati verificati; lo SHA-256 del ZIP è `5B6E9997EF0C5C482B27B7DB63323BA54C96D5C2B083DAAEB4A47255D156C52C` e coincide con il sidecar.
 
 ## 3. Riesame mirato delle superfici critiche
 
@@ -121,14 +121,14 @@ Resta non atomica la scrittura di `active.txt` e manca il workflow operativo di 
 
 Le response IPC espongono solo code/category/retryable. Gli audit normal/denied/error usano operation/application/correlation e code sanitizzati; path, payload, Base64, stack ed exception type non vengono emessi. L'autenticazione negata produce ora un audit metadata-only.
 
-Il test non copre il vero provider Windows Event Log, crash non gestiti o telemetry futura. Questo è parte del live blocker F.
+La run live copre il provider Windows Event Log sui path normal, denied, invalid payload, authentication failure e key unwrap failure. Crash non gestiti e telemetry futura restano debito non bloccante.
 
 ## 4. Criteri AC-002 e AC-004
 
-- **AC-002 — NON SODDISFATTO / blocker:** esistono host, install script e configurazione virtual account, ma non è stata osservata una vera istanza `SecureIntegrationBroker` con `StartName = NT SERVICE\SecureIntegrationBroker` e token/profile effettivi.
-- **AC-004 — NON SODDISFATTO / blocker:** ACL e DPAPI CurrentUser passano nello stesso test account, ma non è provato che gestionale/altro utente non possano leggere storage o usare `CryptUnprotectData` sui blob prodotti dalla service identity.
+- **AC-002 — PASS-LIVE sul commit testato:** istanza reale `SecureIntegrationBroker` osservata con `StartName = NT SERVICE\SecureIntegrationBroker`, service SID, restart SCM e persistenza post-reboot.
+- **AC-004 — PASS-LIVE sul commit testato:** pipe/storage negati all'altro utente e DPAPI `CurrentUser` non sbloccabile dagli account autorizzato, same-user untrusted e altro utente.
 
-La precedente qualificazione “parziale” non è sufficiente per questo gate conclusivo.
+Il risultato è attribuibile esclusivamente al commit `24288dbe065ecedc21c0018e8ed37ca844bc8caf` registrato nel manifest.
 
 ## 5. Decisioni aperte valutate, non implementate
 
@@ -156,12 +156,9 @@ Nessun adapter M6 deve assumere ABI definitiva prima di questi gate.
 
 ## 7. Blocker per M2
 
-1. **Matrice live A–F non eseguita su macchina pulita/VM elevata.**
-2. **AC-002 non soddisfatto:** virtual service account non osservato live.
-3. **AC-004 non soddisfatto:** separazione gestionale/service/altro utente e DPAPI cross-user non provate.
-4. **Provider Windows Event Log non verificato live** sui failure path obbligatori.
+1. **Integrazione canonica pendente:** la run PASS è sul commit locale `24288dbe065ecedc21c0018e8ed37ca844bc8caf`; `origin/main` punta ancora a `f33bf910b9f7c1f5b8a4ea47476c26f7c49c2170`.
 
-Il precedente blocker documentale sul provisioning è chiuso da ADR-0017. È inoltre disponibile un harness idempotente in `tools/live-matrix` con runbook `docs/operations/M0-M1-LIVE-MATRIX-RUNBOOK.md`. La sua disponibilità rende ripetibile la chiusura dei blocker 1-4, ma non li chiude senza una run PASS su VM.
+La lineage correttiva deve essere revisionata e integrata mantenendo esattamente lo SHA testato. Se l'integrazione usa squash, rebase o qualsiasi riscrittura, la matrice completa deve essere rieseguita sul nuovo commit da stato pulito. I precedenti blocker live A-F, AC-002, AC-004 ed Event Log sono chiusi per il commit testato.
 
 ## 8. Non-blocker
 
@@ -186,6 +183,6 @@ Local Administrator e SYSTEM possono leggere memoria, impersonare il servizio, c
 
 ## 11. Decisione finale
 
-Il codice automatico M0/M1 è sufficientemente solido per continuare hardening e preparare la validazione, ma il gate richiesto **non è chiuso**. M2 non deve iniziare finché almeno i blocker 1–4 non hanno evidenze live firmate/archiviate e AC-002/004 non passano. Questa review non implementa alcuna funzionalità M2.
+La matrice tecnica M0/M1 è **PASS** e AC-002/AC-004 sono soddisfatti per il commit testato. La decisione operativa resta **NO-GO per M2** finché la medesima lineage non è revisionata e integrata nel branch canonico; se lo SHA cambia, serve una nuova run completa. Questa review non implementa né avvia alcuna funzionalità M2.
 
 La matrice completa requisito/test/evidenza è in `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md`.

@@ -7,17 +7,17 @@ Aggiornato: 2026-08-03
 | Ambito richiesto | Stato | Evidenza principale |
 |---|---|---|
 | M0 — fondamenta repository | Implementato; baseline congelata | commit `7f68442`, tag `baseline-m0-m1-vslice-2026-08-03` |
-| M1 — Local Broker minimo | Implementato, **gate live non chiuso** | test automatici verdi; AC-002/004 live aperti |
+| M1 — Local Broker minimo | Implementato; **gate live tecnico PASS** | run `m0-m1-20260803-232955`; AC-002/004 PASS-LIVE sul commit testato |
 | Primo vertical slice E2E | Completato come harness ripetibile | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` |
 | M2 e milestone successive | Non implementate | assenza intenzionale di Gateway production, DB, Vault reale, Admin e adapter nativi |
-| Harness matrice live M0/M1 | Implementato, **non ancora eseguito su VM** | `tools/live-matrix`; runbook pre/post reboot; nessuna evidenza simulata |
+| Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
 ## Gate Review prima di M2
 
-Esito: **NO-GO per M2** fino alla chiusura della matrice live su macchina Windows pulita/VM. L'host disponibile è Windows 10 Pro non elevato e senza Hyper-V/Sandbox/container runtime; non è stato possibile installare un vero servizio, creare identità Windows distinte o osservare DPAPI sotto la virtual service identity.
+Esito: **NO-GO per M2 per integrazione ancora pendente**. La matrice live A-F è PASS sul commit locale `24288dbe065ecedc21c0018e8ed37ca844bc8caf`, mentre `origin/main` è ancora `f33bf910b9f7c1f5b8a4ea47476c26f7c49c2170`. La lineage correttiva deve essere revisionata e integrata senza riscrivere il commit testato; in caso di squash/rebase occorre ripetere la matrice sul nuovo SHA.
 
-- **AC-002:** non soddisfatto in modo conclusivo; host/script esistono ma il virtual account non è stato osservato live.
-- **AC-004:** non soddisfatto in modo conclusivo; descriptor ACL e DPAPI sono testati, ma non tra gestionale, service identity e altro utente reali.
+- **AC-002:** PASS-LIVE sul commit testato; servizio reale osservato come `NT SERVICE\SecureIntegrationBroker`, con restart e persistenza dopo reboot.
+- **AC-004:** PASS-LIVE sul commit testato; ACL pipe/storage e negazione DPAPI verificate tra identità Windows distinte.
 - IPC v1 è **provvisorio**, non congelato per COM/C ABI/CLI prima di M2/M3.
 - review completa: `docs/reviews/M0-M1-GATE-REVIEW.md`;
 - matrice requirement/test/evidence: `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md`.
@@ -64,7 +64,7 @@ Esito: **NO-GO per M2** fino alla chiusura della matrice live su macchina Window
 | `eng/scan-secrets.ps1` | PASS | repository escluso materiale sorgente riservato |
 | `eng/generate-sbom.ps1` | PASS | SBOM SPDX degli artefatti |
 | `Broker.Core.Tests` | 26 PASS | lifecycle/grant, AEAD/nonce/AAD/version, framing e hard limits |
-| `Broker.Integration.Tests` | 14 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction |
+| `Broker.Integration.Tests` | 22 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction |
 | `VerticalSlice.Tests` | 1 PASS | vertical slice e negative/security path |
 | parsing `tools/live-matrix/*.ps1/*.psm1` | 9 PASS | sintassi PowerShell dell'intero harness |
 | prerequisite check non elevato | expected FAIL con `LIVE_MATRIX_REQUIRES_ELEVATION` | fail-closed prima di qualsiasi modifica di sistema |
@@ -74,12 +74,14 @@ In aggiunta, quattro critical test IPC/identity/cancel/redaction sono passati pe
 
 I conteggi e gli esiti definitivi vanno aggiornati se una successiva esecuzione modifica le suite.
 
-La matrice live A-F non è stata eseguita su questo host: build e controlli statici del pacchetto non sostituiscono le evidenze VM richieste.
+La matrice live A-F è PASS sulla VM `DESKTOP-5T30P6J` con RunId `m0-m1-20260803-232955`; il bundle locale e il relativo hash sono registrati nella documentazione di evidence.
 
 ## Criteri di accettazione soddisfatti nel perimetro
 
 - **AC-001:** Vendor Secret assente da client e boundary Broker-Gateway, verificato E2E.
-- **AC-003:** policy automatica nega hash/publisher/operation non concessi; resta da provare con processo realmente distinto nella matrice live.
+- **AC-002:** virtual service account, restart e persistenza post-reboot verificati live.
+- **AC-003:** policy automatica e processo realmente distinto sotto lo stesso utente verificati live.
+- **AC-004:** separazione service identity/gestionale/altro utente, ACL e DPAPI cross-user verificate live.
 - **AC-005:** chiavi e ciphertext differenti tra due Installation.
 - **AC-006:** audit strutturato senza payload/secret e verifica E2E sul secret sintetico.
 - **AC-007:** il Gateway harness restituisce solo la risposta applicativa, mai il secret.
@@ -91,16 +93,16 @@ La matrice live A-F non è stata eseguita su questo host: build e controlli stat
 - **AC-023:** esempio Secure Layer eseguito dalla suite E2E.
 - **AC-027:** generazione SBOM SPDX verificata.
 
-**AC-002 e AC-004 non sono accettati dal gate conclusivo** e sono blocker M2. Gli AC legati a M2+ restano aperti intenzionalmente.
+**AC-002 e AC-004 sono accettati come PASS-LIVE per il commit testato.** Il blocker M2 residuo è la mancata integrazione della stessa lineage verificata nel branch canonico; gli AC legati a M2+ restano aperti intenzionalmente.
 
 ## Debito tecnico noto
 
 - il server supporta multiplexing e `Cancel`, ma l'SDK sottile apre ancora una connessione per invocazione e non offre un client persistente condiviso;
 - i frame Data/End sono codificati ma l'assembly streaming 16/64 MiB non è ancora esposto dall'SDK; gli input M1 usano control frame base64 e quindi un limite effettivo inferiore;
 - key rotation è leggibile dal formato/repository e testata nel core, ma manca un comando operativo atomico di rotazione;
-- installazione MSI, upgrade/repair/uninstall, signature e test live del virtual account appartengono alle milestone di packaging/hardening;
+- installazione MSI, upgrade/repair/uninstall e signature appartengono alle milestone di packaging/hardening;
 - nessuna compatibilità .NET Framework 4.7.2 o adapter COM/C ABI/CLI: sono esplicitamente M6;
-- log/wire redaction copre normal, denied, invalid payload e crypto failure in-memory; Windows Event Log e telemetry live restano aperti;
+- log/wire redaction copre normal, denied, invalid payload e crypto failure anche nel Windows Event Log live; crash non gestiti e telemetry futura restano aperti;
 - il Gateway del vertical slice è un harness, non implementa identity Installation, revoca, replay distribuito, Vault reale o restricted egress production.
 
 ## Decisioni ancora aperte
