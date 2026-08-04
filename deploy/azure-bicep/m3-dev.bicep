@@ -37,6 +37,7 @@ var compact = toLower('${prefix}${suffix}')
 var acrName = take('${compact}acr', 50)
 var vaultName = take('${compact}kv', 24)
 var identityName = take('${compact}-gateway-mi', 128)
+var vendorIdentityName = take('${compact}-vendor-mi', 128)
 var planName = take('${compact}-plan', 40)
 var gatewayName = take('${compact}-gateway', 60)
 var vendorName = take('${compact}-vendor', 60)
@@ -76,6 +77,11 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' 
   location: location
 }
 
+resource vendorIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
+  name: vendorIdentityName
+  location: location
+}
+
 resource registry 'Microsoft.ContainerRegistry/registries@2025-11-01' = {
   name: acrName
   location: location
@@ -107,6 +113,16 @@ resource registryPush 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalId: deploymentPrincipalObjectId
     principalType: 'ServicePrincipal'
     roleDefinitionId: acrPushRole
+  }
+}
+
+resource vendorRegistryPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(registry.id, vendorIdentity.id, acrPullRole)
+  scope: registry
+  properties: {
+    principalId: vendorIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: acrPullRole
   }
 }
 
@@ -185,6 +201,10 @@ resource vendor 'Microsoft.Web/sites@2025-03-01' = {
   name: vendorName
   location: location
   kind: 'app,linux,container'
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: { '${vendorIdentity.id}': {} }
+  }
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
@@ -195,6 +215,8 @@ resource vendor 'Microsoft.Web/sites@2025-03-01' = {
       alwaysOn: true
       linuxFxVersion: 'DOCKER|${vendorImageReference}'
       healthCheckPath: '/health/ready'
+      acrUseManagedIdentityCreds: true
+      acrUserManagedIdentityID: vendorIdentity.properties.clientId
       appSettings: [
         { name: 'WEBSITES_PORT', value: '8080' }
         { name: 'M3_VENDOR_API_KEY', value: vendorApiKey }
@@ -204,6 +226,7 @@ resource vendor 'Microsoft.Web/sites@2025-03-01' = {
       ]
     }
   }
+  dependsOn: [vendorRegistryPull]
 }
 
 resource gateway 'Microsoft.Web/sites@2025-03-01' = {

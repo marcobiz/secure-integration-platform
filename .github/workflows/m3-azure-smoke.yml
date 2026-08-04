@@ -1,0 +1,222 @@
+name: m3-azure-smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  azure-dev-smoke:
+    runs-on: ubuntu-latest
+    environment: azure-dev
+    timeout-minutes: 90
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_DEPLOYMENT_PRINCIPAL_OBJECT_ID: ${{ vars.AZURE_DEPLOYMENT_PRINCIPAL_OBJECT_ID }}
+      AZURE_M3_LOCATION: ${{ vars.AZURE_M3_LOCATION }}
+      AZURE_M3_RESOURCE_GROUP: ${{ vars.AZURE_M3_RESOURCE_GROUP }}
+      AZURE_M3_PREFIX: ${{ vars.AZURE_M3_PREFIX }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+      - name: Require federated Azure dev configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID AZURE_DEPLOYMENT_PRINCIPAL_OBJECT_ID AZURE_M3_LOCATION AZURE_M3_RESOURCE_GROUP AZURE_M3_PREFIX; do
+            test -n "${!name:-}" || { echo "Missing protected environment variable: $name" >&2; exit 1; }
+          done
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+      - name: Generate synthetic material and redact Actions output
+        id: fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw="$RUNNER_TEMP/m3b-$GITHUB_RUN_ID/raw-evidence"
+          redacted="$RUNNER_TEMP/m3b-$GITHUB_RUN_ID/redacted-evidence"
+          mkdir -p "$raw" "$redacted"
+          dotnet run --project tools/m3/FixtureGenerator/FixtureGenerator.csproj -c Release -- "$raw"
+          set -a
+          source "$raw/m3a.env"
+          set +a
+          for value in "$M3_CERTIFICATE_PASSWORD" "$M3_POSTGRES_ADMIN_PASSWORD" "$M3_POSTGRES_RUNTIME_PASSWORD" "$M3_ACTIVATION_HMAC_BASE64" "$M3_VENDOR_API_KEY" "$M3_VENDOR_CONTROL_TOKEN" "$M3_VENDOR_CLIENT_PFX_BASE64"; do echo "::add-mask::$value"; done
+          resource_group="${AZURE_M3_RESOURCE_GROUP}-${GITHUB_RUN_ID}"
+          echo "raw=$raw" >>"$GITHUB_OUTPUT"
+          echo "redacted=$redacted" >>"$GITHUB_OUTPUT"
+          echo "resource_group=$resource_group" >>"$GITHUB_OUTPUT"
+      - name: Deploy Azure dev foundation through Bicep
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw='${{ steps.fixture.outputs.raw }}'
+          set -a
+          source "$raw/m3a.env"
+          set +a
+          rg='${{ steps.fixture.outputs.resource_group }}'
+          az group create --name "$rg" --location "$AZURE_M3_LOCATION" --tags milestone=M3 runId="$GITHUB_RUN_ID" commit="$GITHUB_SHA" >/dev/null
+          jq -n \
+            --arg prefix "$AZURE_M3_PREFIX" --arg location "$AZURE_M3_LOCATION" \
+            --arg gatewayImage 'mcr.microsoft.com/dotnet/aspnet:10.0-alpine' \
+            --arg vendorImage 'mcr.microsoft.com/dotnet/aspnet:10.0-alpine' \
+            --arg principal "$AZURE_DEPLOYMENT_PRINCIPAL_OBJECT_ID" \
+            --arg postgres "$M3_POSTGRES_ADMIN_PASSWORD" --arg apiKey "$M3_VENDOR_API_KEY" \
+            --arg control "$M3_VENDOR_CONTROL_TOKEN" --arg thumbprint "$M3_VENDOR_CLIENT_THUMBPRINT" \
+            '{prefix:{value:$prefix},location:{value:$location},gatewayImageReference:{value:$gatewayImage},vendorImageReference:{value:$vendorImage},deploymentPrincipalObjectId:{value:$principal},postgresAdministratorPassword:{value:$postgres},vendorApiKey:{value:$apiKey},vendorControlToken:{value:$control},vendorClientThumbprint:{value:$thumbprint}}' >"$raw/azure-parameters.json"
+          az deployment group create --resource-group "$rg" --name m3b-foundation --template-file deploy/azure-bicep/m3-dev.bicep --parameters @"$raw/azure-parameters.json" >/dev/null
+          az deployment group show --resource-group "$rg" --name m3b-foundation --query properties.outputs >"$raw/deployment-outputs.json"
+          echo "registry=$(jq -r .registryName.value "$raw/deployment-outputs.json")" >>"$GITHUB_OUTPUT"
+          echo "registry_server=$(jq -r .registryLoginServer.value "$raw/deployment-outputs.json")" >>"$GITHUB_OUTPUT"
+          echo "vault=$(jq -r .vaultName.value "$raw/deployment-outputs.json")" >>"$GITHUB_OUTPUT"
+          echo "gateway=$(jq -r .gatewayName.value "$raw/deployment-outputs.json")" >>"$GITHUB_OUTPUT"
+          echo "gateway_url=$(jq -r .gatewayUrl.value "$raw/deployment-outputs.json")" >>"$GITHUB_OUTPUT"
+          echo "vendor=$(jq -r .vendorName.value "$raw/deployment-outputs.json")" >>"$GITHUB_OUTPUT"
+          echo "postgres_fqdn=$(jq -r .postgresFqdn.value "$raw/deployment-outputs.json")" >>"$GITHUB_OUTPUT"
+          echo "managed_identity_client_id=$(jq -r .gatewayManagedIdentityClientId.value "$raw/deployment-outputs.json")" >>"$GITHUB_OUTPUT"
+      - name: Build immutable Gateway and vendor images in ACR
+        id: images
+        shell: bash
+        run: |
+          set -euo pipefail
+          registry='${{ steps.deploy.outputs.registry }}'
+          registry_server='${{ steps.deploy.outputs.registry_server }}'
+          az acr build --registry "$registry" --image "gateway:$GITHUB_SHA" --file src/Gateway/Gateway.Api/Dockerfile . >/dev/null
+          az acr build --registry "$registry" --image "vendor-mock:$GITHUB_SHA" --file tools/m3/VendorMock/Dockerfile . >/dev/null
+          gateway_digest="$(az acr repository show --name "$registry" --image "gateway:$GITHUB_SHA" --query digest -o tsv)"
+          vendor_digest="$(az acr repository show --name "$registry" --image "vendor-mock:$GITHUB_SHA" --query digest -o tsv)"
+          [[ "$gateway_digest" == sha256:* && "$vendor_digest" == sha256:* ]]
+          echo "gateway_digest=$gateway_digest" >>"$GITHUB_OUTPUT"
+          echo "vendor_digest=$vendor_digest" >>"$GITHUB_OUTPUT"
+          echo "gateway_reference=$registry_server/gateway@$gateway_digest" >>"$GITHUB_OUTPUT"
+          echo "vendor_reference=$registry_server/vendor-mock@$vendor_digest" >>"$GITHUB_OUTPUT"
+      - name: Pin App Services to immutable image digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw='${{ steps.fixture.outputs.raw }}'
+          set -a
+          source "$raw/m3a.env"
+          set +a
+          jq --arg gatewayImage '${{ steps.images.outputs.gateway_reference }}' --arg vendorImage '${{ steps.images.outputs.vendor_reference }}' \
+            '.gatewayImageReference.value=$gatewayImage | .vendorImageReference.value=$vendorImage' "$raw/azure-parameters.json" >"$raw/azure-parameters-pinned.json"
+          az deployment group create --resource-group '${{ steps.fixture.outputs.resource_group }}' --name m3b-pinned --template-file deploy/azure-bicep/m3-dev.bicep --parameters @"$raw/azure-parameters-pinned.json" >/dev/null
+      - name: Migrate and provision PostgreSQL 18 from temporary runner firewall rule
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw='${{ steps.fixture.outputs.raw }}'
+          set -a
+          source "$raw/m3a.env"
+          set +a
+          rg='${{ steps.fixture.outputs.resource_group }}'
+          server="$(jq -r .postgresServerName.value "$raw/deployment-outputs.json")"
+          runner_ip="$(curl --fail --silent https://api.ipify.org)"
+          az postgres flexible-server firewall-rule create --resource-group "$rg" --name "$server" --rule-name github-runner --start-ip-address "$runner_ip" --end-ip-address "$runner_ip" >/dev/null
+          trap 'az postgres flexible-server firewall-rule delete --yes --resource-group "$rg" --name "$server" --rule-name github-runner >/dev/null 2>&1 || true' EXIT
+          admin_connection="Host=${{ steps.deploy.outputs.postgres_fqdn }};Port=5432;Database=broker_gateway_m3;Username=m3admin;Password=${M3_POSTGRES_ADMIN_PASSWORD};SSL Mode=Require;Trust Server Certificate=false"
+          export GATEWAY_MIGRATION_CONNECTION="$admin_connection"
+          dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release -- apply
+          export M3_POSTGRES_ADMIN_CONNECTION="$admin_connection"
+          export M3_PROVISIONING_OUTPUT="$raw/provisioning.json"
+          dotnet run --project tools/m3/Provisioner/Provisioner.csproj -c Release
+      - name: Seed synthetic Key Vault values using OIDC principal
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw='${{ steps.fixture.outputs.raw }}'
+          set -a
+          source "$raw/m3a.env"
+          set +a
+          vault='${{ steps.deploy.outputs.vault }}'
+          for attempt in {1..30}; do
+            if az keyvault secret set --vault-name "$vault" --name activation-hmac --value "$M3_ACTIVATION_HMAC_BASE64" >/dev/null 2>&1; then break; fi
+            test "$attempt" -lt 30
+            sleep 10
+          done
+          az keyvault secret set --vault-name "$vault" --name vendor-api-key --value "$M3_VENDOR_API_KEY" >/dev/null
+          az keyvault secret set --vault-name "$vault" --name vendor-client-certificate --value "$M3_VENDOR_CLIENT_PFX_BASE64" >/dev/null
+          db_connection="Host=${{ steps.deploy.outputs.postgres_fqdn }};Port=5432;Database=broker_gateway_m3;Username=m3_gateway_runtime;Password=${M3_POSTGRES_RUNTIME_PASSWORD};SSL Mode=Require;Trust Server Certificate=false"
+          az keyvault secret set --vault-name "$vault" --name gateway-database-connection --value "$db_connection" >/dev/null
+          az webapp log config --resource-group '${{ steps.fixture.outputs.resource_group }}' --name '${{ steps.deploy.outputs.gateway }}' --docker-container-logging filesystem >/dev/null
+          az webapp log config --resource-group '${{ steps.fixture.outputs.resource_group }}' --name '${{ steps.deploy.outputs.vendor }}' --docker-container-logging filesystem >/dev/null
+          az webapp restart --resource-group '${{ steps.fixture.outputs.resource_group }}' --name '${{ steps.deploy.outputs.vendor }}'
+          az webapp restart --resource-group '${{ steps.fixture.outputs.resource_group }}' --name '${{ steps.deploy.outputs.gateway }}'
+      - name: Run real Key Vault and mTLS smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          gateway_url='${{ steps.deploy.outputs.gateway_url }}'
+          for attempt in {1..90}; do
+            if curl --fail --silent "${gateway_url}health/ready" >/dev/null; then break; fi
+            test "$attempt" -lt 90
+            sleep 5
+          done
+          raw='${{ steps.fixture.outputs.raw }}'
+          redacted='${{ steps.fixture.outputs.redacted }}'
+          set -a
+          source "$raw/m3a.env"
+          set +a
+          export M3_GATEWAY_BASE_ADDRESS="$gateway_url"
+          export M3_PROVISIONING_FILE="$raw/provisioning.json"
+          export M3_SECURITY_DRIVER_PFX="$raw/certificates/security-driver.pfx"
+          export M3_SECURITY_SCOPE=smoke
+          export M3_SECURITY_OUTPUT="$redacted/azure-security-smoke.json"
+          dotnet run --project tools/m3/SecurityDriver/SecurityDriver.csproj -c Release
+          jq -e '.passed == true' "$M3_SECURITY_OUTPUT"
+          actual_client_id="$(az webapp identity show --resource-group '${{ steps.fixture.outputs.resource_group }}' --name '${{ steps.deploy.outputs.gateway }}' --query userAssignedIdentities -o json | jq -r 'to_entries[0].value.clientId')"
+          test "$actual_client_id" = '${{ steps.deploy.outputs.managed_identity_client_id }}'
+      - name: Collect and scan cloud logs, then produce redacted evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw='${{ steps.fixture.outputs.raw }}'
+          redacted='${{ steps.fixture.outputs.redacted }}'
+          set -a
+          source "$raw/m3a.env"
+          set +a
+          rg='${{ steps.fixture.outputs.resource_group }}'
+          az webapp log download --resource-group "$rg" --name '${{ steps.deploy.outputs.gateway }}' --log-file "$raw/gateway-logs.zip" >/dev/null
+          az webapp log download --resource-group "$rg" --name '${{ steps.deploy.outputs.vendor }}' --log-file "$raw/vendor-logs.zip" >/dev/null
+          mkdir -p "$raw/logs"
+          unzip -q "$raw/gateway-logs.zip" -d "$raw/logs/gateway"
+          unzip -q "$raw/vendor-logs.zip" -d "$raw/logs/vendor"
+          provisioning="$raw/provisioning.json"
+          mapfile -t canaries < <(printf '%s\n' "$(jq -r .activationCode "$provisioning")" "$(jq -r .securityActivationCode "$provisioning")" "$M3_VENDOR_API_KEY" "$M3_VENDOR_CLIENT_PFX_BASE64" "$M3_ACTIVATION_HMAC_BASE64" "$M3_POSTGRES_ADMIN_PASSWORD" "$M3_POSTGRES_RUNTIME_PASSWORD")
+          for canary in "${canaries[@]}"; do
+            if grep -R -Fq -- "$canary" "$raw/logs"; then echo 'Synthetic secret found in Azure logs.' >&2; exit 1; fi
+          done
+          jq -n --arg runId "$GITHUB_RUN_ID" --arg commit "$GITHUB_SHA" --arg rg "$rg" \
+            --arg gatewayDigest '${{ steps.images.outputs.gateway_digest }}' --arg vendorDigest '${{ steps.images.outputs.vendor_digest }}' \
+            --arg identity '${{ steps.deploy.outputs.managed_identity_client_id }}' \
+            --slurpfile scenarios "$redacted/azure-security-smoke.json" \
+            '{schemaVersion:1,environment:"M3B",runId:$runId,commitSha:$commit,resourceGroup:$rg,gatewayImageDigest:$gatewayDigest,vendorImageDigest:$vendorDigest,managedIdentityClientId:$identity,managedIdentityVerified:true,canaryScan:"PASS",scenarios:$scenarios[0]}' >"$redacted/manifest.json"
+          (cd "$redacted" && zip -q -r "$RUNNER_TEMP/m3b-$GITHUB_RUN_ID-redacted-evidence.zip" .)
+          sha256sum "$RUNNER_TEMP/m3b-$GITHUB_RUN_ID-redacted-evidence.zip" >"$RUNNER_TEMP/m3b-$GITHUB_RUN_ID-redacted-evidence.zip.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: m3b-${{ github.sha }}-redacted-evidence
+          path: |
+            ${{ runner.temp }}/m3b-${{ github.run_id }}-redacted-evidence.zip
+            ${{ runner.temp }}/m3b-${{ github.run_id }}-redacted-evidence.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+      - name: Delete ephemeral Azure dev resource group
+        if: always()
+        shell: bash
+        run: |
+          if test -n '${{ steps.fixture.outputs.resource_group }}'; then
+            az group delete --yes --no-wait --name '${{ steps.fixture.outputs.resource_group }}' || true
+          fi

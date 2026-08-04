@@ -12,8 +12,9 @@ string gatewayBase = Required("M3_GATEWAY_BASE_ADDRESS");
 string provisioningPath = Required("M3_PROVISIONING_FILE");
 string certificatePath = Required("M3_SECURITY_DRIVER_PFX");
 string certificatePassword = Required("M3_CERTIFICATE_PASSWORD");
-string vaultToken = Required("M3_SYNTHETIC_VAULT_TOKEN");
-string adminConnection = Required("M3_POSTGRES_ADMIN_CONNECTION");
+bool smokeOnly = string.Equals(Environment.GetEnvironmentVariable("M3_SECURITY_SCOPE"), "smoke", StringComparison.Ordinal);
+string vaultToken = smokeOnly ? string.Empty : Required("M3_SYNTHETIC_VAULT_TOKEN");
+string adminConnection = smokeOnly ? string.Empty : Required("M3_POSTGRES_ADMIN_CONNECTION");
 string outputPath = Required("M3_SECURITY_OUTPUT");
 using JsonDocument provisioning = JsonDocument.Parse(await File.ReadAllBytesAsync(provisioningPath).ConfigureAwait(false));
 JsonElement root = provisioning.RootElement;
@@ -33,6 +34,12 @@ Result positive = await SendSignedAsync(authenticated, "m3-vendor", "submit", no
 bool sanitized = positive.Status == HttpStatusCode.OK && ResponseIsSanitized(positive.Body);
 Record("M3-P01", true, "BGW-ENROLLMENT-OK");
 Record("M3-P03-P07", sanitized, positive.Code);
+if (smokeOnly)
+{
+    bool smokePassed = scenarios.All(scenario => scenario.Passed);
+    await WriteReportAsync(smokePassed).ConfigureAwait(false);
+    return smokePassed ? 0 : 1;
+}
 
 SignedRequest invalid = Sign("m3-vendor", "submit", normalBody);
 invalid.Headers["X-BG-Signature"] = Base64Url(RandomNumberGenerator.GetBytes(64));
@@ -87,8 +94,7 @@ Result revoked = await SendSignedAsync(authenticated, "m3-vendor", "submit", nor
 Record("M3-N01", revoked.Status == HttpStatusCode.Forbidden && revoked.Code == "BGW-INSTALLATION-REVOKED", revoked.Code);
 
 bool passed = scenarios.All(scenario => scenario.Passed);
-Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
-await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(new { schemaVersion = 1, passed, scenarios }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true })).ConfigureAwait(false);
+await WriteReportAsync(passed).ConfigureAwait(false);
 return passed ? 0 : 1;
 
 async Task EnrollAsync()
@@ -104,6 +110,11 @@ async Task EnrollAsync()
 }
 
 void Record(string id, bool passed, string code) => scenarios.Add(new Scenario(id, passed, passed ? "PASS" : "FAIL", code));
+async Task WriteReportAsync(bool passed)
+{
+    Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
+    await File.WriteAllTextAsync(outputPath, JsonSerializer.Serialize(new { schemaVersion = 1, passed, scenarios }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true })).ConfigureAwait(false);
+}
 
 async Task SetVaultAvailabilityAsync(bool value)
 {
