@@ -484,10 +484,12 @@ if ($Phase -eq 'Prepare') {
         New-Item -ItemType Directory -Path $vmInput -Force | Out-Null
         Copy-Item -LiteralPath (Join-Path $rawRoot 'certificates\ca.crt') -Destination (Join-Path $vmInput 'ca.crt')
         $payloadCanary = 'M3_SPLIT_PAYLOAD_' + [Guid]::NewGuid().ToString('N')
+        $rollbackDeadlineUtc = [string]((Get-Content -LiteralPath $firewallStatePath -Raw | ConvertFrom-Json).rollbackDeadlineUtc)
         Write-JsonFile -Path (Join-Path $vmInput 'bootstrap.json') -Value ([ordered]@{
             schemaVersion = 1
             runId = $RunId
             candidateCommit = $CandidateCommit
+            rollbackDeadlineUtc = $rollbackDeadlineUtc
             gatewayBaseAddress = "https://${HostHyperVAddress}:${GatewayPort}/"
             installationId = [string]$provisioning.installationId
             activationCodeId = [string]$provisioning.activationCodeId
@@ -499,6 +501,40 @@ if ($Phase -eq 'Prepare') {
         Compress-Archive -Path (Join-Path $vmInput '*') -DestinationPath $archive -CompressionLevel Optimal
         $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
         [IO.File]::WriteAllText(($archive + '.sha256'), ($archiveHash + '  ' + [IO.Path]::GetFileName($archive) + [Environment]::NewLine), [Text.Encoding]::ASCII)
+        $operatorSource = Join-Path $PSScriptRoot 'Invoke-M3ASplitVmOperator.ps1'
+        $operatorCopy = Join-Path $runRoot 'Invoke-M3ASplitVmOperator.ps1'
+        Copy-Item -LiteralPath $operatorSource -Destination $operatorCopy
+        $operatorHash = (Get-FileHash -LiteralPath $operatorCopy -Algorithm SHA256).Hash
+        [IO.File]::WriteAllText(($operatorCopy + '.sha256'), ($operatorHash + '  Invoke-M3ASplitVmOperator.ps1' + [Environment]::NewLine), [Text.Encoding]::ASCII)
+        $runIdFile = Join-Path $runRoot 'RUNID.txt'
+        [IO.File]::WriteAllText($runIdFile, ($RunId + [Environment]::NewLine), [Text.Encoding]::ASCII)
+        $guestPackageRoot = 'C:\Lab\M3A\' + $RunId
+        $handoffSession = New-PSSession -VMId $VmId -Credential $VmCredential
+        try {
+            Invoke-Command -Session $handoffSession -ArgumentList $guestPackageRoot -ScriptBlock {
+                param($Path)
+                if (Test-Path -LiteralPath $Path) { throw 'M3A_SPLIT_OPERATOR_HANDOFF_ALREADY_EXISTS.' }
+                New-Item -ItemType Directory -Path $Path | Out-Null
+            }
+            Copy-Item -LiteralPath $archive -Destination (Join-Path $guestPackageRoot 'input.zip') -ToSession $handoffSession
+            Copy-Item -LiteralPath ($archive + '.sha256') -Destination (Join-Path $guestPackageRoot 'input.zip.sha256') -ToSession $handoffSession
+            Copy-Item -LiteralPath $operatorCopy -Destination (Join-Path $guestPackageRoot 'Invoke-M3ASplitVmOperator.ps1') -ToSession $handoffSession
+            Copy-Item -LiteralPath ($operatorCopy + '.sha256') -Destination (Join-Path $guestPackageRoot 'Invoke-M3ASplitVmOperator.ps1.sha256') -ToSession $handoffSession
+            Copy-Item -LiteralPath $runIdFile -Destination (Join-Path $guestPackageRoot 'RUNID.txt') -ToSession $handoffSession
+            $handoffVerified = Invoke-Command -Session $handoffSession -ArgumentList $guestPackageRoot, $archiveHash, $operatorHash, $RunId -ScriptBlock {
+                param($Path, $ExpectedInputHash, $ExpectedOperatorHash, $ExactRunId)
+                $input = Join-Path $Path 'input.zip'
+                $operator = Join-Path $Path 'Invoke-M3ASplitVmOperator.ps1'
+                if ((Get-FileHash -LiteralPath $input -Algorithm SHA256).Hash -ne $ExpectedInputHash -or
+                    (Get-FileHash -LiteralPath $operator -Algorithm SHA256).Hash -ne $ExpectedOperatorHash -or
+                    [IO.File]::ReadAllText((Join-Path $Path 'RUNID.txt')).Trim() -ne $ExactRunId) {
+                    throw 'M3A_SPLIT_OPERATOR_HANDOFF_TRANSFER_MISMATCH.'
+                }
+                $true
+            }
+        }
+        finally { Remove-PSSession -Session $handoffSession -ErrorAction SilentlyContinue }
+        if (-not $handoffVerified) { throw 'M3A_SPLIT_OPERATOR_HANDOFF_NOT_VERIFIED.' }
         Write-JsonFile -Path $statePath -Value ([ordered]@{
             schemaVersion = 1; runId = $RunId; candidateCommit = $CandidateCommit
             hostAddress = $HostHyperVAddress; vmAddress = $VmAddress; gatewayPort = $GatewayPort
@@ -508,9 +544,11 @@ if ($Phase -eq 'Prepare') {
             vmId = [string]$VmId; isolatedSwitch = $IsolatedSwitchName; isolatedVmNic = $IsolatedVmNicName
             isolatedVmNicMac = [string]$network.vmNicMacAddress; checkpoint = [string]$network.checkpointName
             tailscaleTemporarilyDisabled = [bool]$tailscaleIsolation.disabled; exposureContract = $exposure
+            operatorScriptSha256 = $operatorHash; guestHandoffPath = $guestPackageRoot
             preparedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
         })
-        [pscustomobject]@{ runId = $RunId; status = 'AWAITING_VM'; commit = $CandidateCommit; vmInput = $archive; vmInputSha256 = $archiveHash; gateway = "https://${HostHyperVAddress}:${GatewayPort}/" } | ConvertTo-Json -Compress
+        $operatorCommand = 'powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $guestPackageRoot 'Invoke-M3ASplitVmOperator.ps1') + '" -RunId ' + $RunId + ' -ExpectedScriptSha256 ' + $operatorHash
+        [pscustomobject]@{ runId = $RunId; status = 'WAITING_FOR_OPERATOR'; commit = $CandidateCommit; vmInput = $archive; vmInputSha256 = $archiveHash; operatorScriptSha256 = $operatorHash; guestHandoff = $guestPackageRoot; operatorCommand = $operatorCommand; gateway = "https://${HostHyperVAddress}:${GatewayPort}/" } | ConvertTo-Json -Compress
     }
     catch {
         try { Remove-HostResources | Out-Null } catch { }
