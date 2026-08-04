@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>SecureIntegration.M3.FixtureGenerator</AssemblyName>
+    <RootNamespace>SecureIntegration.M3.FixtureGenerator</RootNamespace>
+  </PropertyGroup>
+</Project>

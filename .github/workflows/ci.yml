@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  M2_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  CANDIDATE_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   build-test:
@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.M2_COMMIT_SHA }}
+          ref: ${{ env.CANDIDATE_COMMIT_SHA }}
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
@@ -57,7 +57,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ env.M2_COMMIT_SHA }}
+          ref: ${{ env.CANDIDATE_COMMIT_SHA }}
       - uses: gitleaks/gitleaks-action@v2
 
   gateway-postgresql-18:
@@ -83,7 +83,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.M2_COMMIT_SHA }}
+          ref: ${{ env.CANDIDATE_COMMIT_SHA }}
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
@@ -137,21 +137,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.M2_COMMIT_SHA }}
+          ref: ${{ env.CANDIDATE_COMMIT_SHA }}
       - name: Build Gateway container
         id: image
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$M2_COMMIT_SHA"
-          docker build --label "org.opencontainers.image.revision=$M2_COMMIT_SHA" -f src/Gateway/Gateway.Api/Dockerfile -t broker-gateway:m2 .
-          docker build --label "org.opencontainers.image.revision=$M2_COMMIT_SHA" -f src/Gateway/Gateway.Migrations/Dockerfile -t broker-gateway-migrations:m2 .
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT_SHA"
+          docker build --label "org.opencontainers.image.revision=$CANDIDATE_COMMIT_SHA" -f src/Gateway/Gateway.Api/Dockerfile -t broker-gateway:m2 .
+          docker build --label "org.opencontainers.image.revision=$CANDIDATE_COMMIT_SHA" -f src/Gateway/Gateway.Migrations/Dockerfile -t broker-gateway-migrations:m2 .
           image_digest="$(docker image inspect broker-gateway:m2 --format '{{.Id}}')"
           migration_digest="$(docker image inspect broker-gateway-migrations:m2 --format '{{.Id}}')"
           [[ "$image_digest" == sha256:* ]]
           [[ "$migration_digest" == sha256:* ]]
-          test "$(docker image inspect broker-gateway:m2 | jq -r '.[0].Config.Labels["org.opencontainers.image.revision"]')" = "$M2_COMMIT_SHA"
-          printf 'gateway_image=%s\nmigration_image=%s\ncommit=%s\n' "$image_digest" "$migration_digest" "$M2_COMMIT_SHA" | tee gateway-image-digests.txt
+          test "$(docker image inspect broker-gateway:m2 | jq -r '.[0].Config.Labels["org.opencontainers.image.revision"]')" = "$CANDIDATE_COMMIT_SHA"
+          printf 'gateway_image=%s\nmigration_image=%s\ncommit=%s\n' "$image_digest" "$migration_digest" "$CANDIDATE_COMMIT_SHA" | tee gateway-image-digests.txt
           echo "digest=$image_digest" >> "$GITHUB_OUTPUT"
       - name: Verify executable, non-root, read-only, health, readiness and clean shutdown
         shell: bash
@@ -196,10 +196,100 @@ jobs:
           image: broker-gateway:m2
           format: spdx-json
           output-file: gateway-image.spdx.json
-          artifact-name: gateway-image-sbom-${{ env.M2_COMMIT_SHA }}.spdx.json
+          artifact-name: gateway-image-sbom-${{ env.CANDIDATE_COMMIT_SHA }}.spdx.json
       - name: Upload image digest evidence
         uses: actions/upload-artifact@v4
         with:
-          name: gateway-image-digest-${{ env.M2_COMMIT_SHA }}
+          name: gateway-image-digest-${{ env.CANDIDATE_COMMIT_SHA }}
           path: gateway-image-digests.txt
           if-no-files-found: error
+
+  m3-deterministic-container-slice:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_COMMIT_SHA }}
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+      - uses: azure/setup-bicep@v2
+      - name: Validate M3 Azure template
+        run: bicep build deploy/azure-bicep/m3-dev.bicep --stdout >/dev/null
+      - name: Generate per-run synthetic fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/m3/ci/raw-evidence .artifacts/m3/ci/redacted-evidence
+          dotnet run --project tools/m3/FixtureGenerator/FixtureGenerator.csproj -c Release -- .artifacts/m3/ci/raw-evidence
+          chmod 0777 .artifacts/m3/ci/raw-evidence
+          sudo cp .artifacts/m3/ci/raw-evidence/certificates/ca.crt /usr/local/share/ca-certificates/m3-synthetic.crt
+          sudo update-ca-certificates
+      - name: Validate compose and start real Gateway/PostgreSQL/Vault/vendor stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          env_file=.artifacts/m3/ci/raw-evidence/m3a.env
+          docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml config --quiet
+          docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml up --build --detach
+          for attempt in {1..90}; do
+            if curl --fail --silent https://localhost:18443/health/ready >/dev/null && test -f .artifacts/m3/ci/raw-evidence/provisioning.json; then exit 0; fi
+            sleep 2
+          done
+          docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml ps
+          docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml logs --no-color
+          exit 1
+      - name: Run M3 positive and negative Gateway scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          source .artifacts/m3/ci/raw-evidence/m3a.env
+          set +a
+          export M3_GATEWAY_BASE_ADDRESS=https://localhost:18443/
+          export M3_PROVISIONING_FILE="$PWD/.artifacts/m3/ci/raw-evidence/provisioning.json"
+          export M3_SECURITY_DRIVER_PFX="$PWD/.artifacts/m3/ci/raw-evidence/certificates/security-driver.pfx"
+          export M3_POSTGRES_ADMIN_CONNECTION="Host=127.0.0.1;Port=15432;Database=broker_gateway_m3;Username=postgres;Password=${M3_POSTGRES_ADMIN_PASSWORD};SSL Mode=Disable"
+          export M3_SECURITY_OUTPUT="$PWD/.artifacts/m3/ci/redacted-evidence/security-scenarios.json"
+          dotnet run --project tools/m3/SecurityDriver/SecurityDriver.csproj -c Release
+          jq -e '.passed == true' "$M3_SECURITY_OUTPUT"
+      - name: Verify non-root/read-only fixtures and secret redaction
+        shell: bash
+        run: |
+          set -euo pipefail
+          env_file=.artifacts/m3/ci/raw-evidence/m3a.env
+          set -a
+          source "$env_file"
+          set +a
+          provisioning=.artifacts/m3/ci/raw-evidence/provisioning.json
+          logs=.artifacts/m3/ci/raw-evidence/containers.log
+          docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml logs --no-color >"$logs"
+          for service in gateway vault vendor; do
+            container_id="$(docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml ps -q "$service")"
+            test -n "$container_id"
+            test "$(docker inspect "$container_id" --format '{{.HostConfig.ReadonlyRootfs}}')" = true
+            test "$(docker exec "$container_id" id -u)" != 0
+          done
+          mapfile -t canaries < <(printf '%s\n' \
+            "$(jq -r .activationCode "$provisioning")" \
+            "$(jq -r .securityActivationCode "$provisioning")" \
+            "$M3_VENDOR_API_KEY" "$M3_SYNTHETIC_VAULT_TOKEN" "$M3_VENDOR_CONTROL_TOKEN" \
+            "$M3_POSTGRES_ADMIN_PASSWORD" "$M3_POSTGRES_RUNTIME_PASSWORD" \
+            "$M3_CERTIFICATE_PASSWORD" "$M3_ACTIVATION_HMAC_BASE64")
+          for canary in "${canaries[@]}"; do
+            if grep -Fq -- "$canary" "$logs"; then echo 'A sensitive canary was found in container logs.' >&2; exit 1; fi
+          done
+      - name: Collect diagnostics and clean M3 deterministic stack
+        if: always()
+        shell: bash
+        run: |
+          env_file=.artifacts/m3/ci/raw-evidence/m3a.env
+          if test -f "$env_file"; then
+            docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml ps || true
+            docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml logs --no-color || true
+            docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml down --volumes --remove-orphans || true
+          fi

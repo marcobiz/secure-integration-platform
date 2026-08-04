@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>SecureIntegration.M3.VendorMock</AssemblyName>
+    <RootNamespace>SecureIntegration.M3.VendorMock</RootNamespace>
+  </PropertyGroup>
+</Project>
