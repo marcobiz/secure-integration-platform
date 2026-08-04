@@ -9,7 +9,13 @@ param(
     [string] $VmAddress,
     [ValidateRange(1024, 65535)] [int] $GatewayPort = 28443,
     [string] $EvidenceRoot = 'C:\SecureEvidence',
-    [string] $VmResultDirectory
+    [string] $VmResultDirectory,
+    [guid] $VmId = [guid]::Empty,
+    [Management.Automation.PSCredential] $VmCredential,
+    [string] $IsolatedSwitchName = 'M3A-Isolated',
+    [string] $IsolatedVmNicName = 'M3A-Isolated',
+    [string] $IsolatedNetworkAddress = '192.168.250.0',
+    [ValidateRange(29, 30)] [int] $IsolatedPrefixLength = 29
 )
 
 Set-StrictMode -Version Latest
@@ -22,13 +28,18 @@ $redactedRoot = Join-Path $runRoot 'redacted'
 $statePath = Join-Path $runRoot 'host-state.json'
 $firewallStatePath = Join-Path $runRoot 'firewall-state.json'
 $firewallRollbackPath = Join-Path $runRoot 'firewall-rollback.ps1'
+$networkStatePath = Join-Path $runRoot 'network-state.json'
+$networkInventoryPath = Join-Path $runRoot 'pre-network-inventory.json'
+$networkRollbackPath = Join-Path $runRoot 'network-rollback.ps1'
 $environmentPath = Join-Path $rawRoot 'm3a.env'
 $provisioningPath = Join-Path $rawRoot 'provisioning.json'
 $firewallName = 'SecureIntegration M3A split ' + $RunId
 $projectName = ($RunId.ToLowerInvariant() -replace '[^a-z0-9_-]', '-')
 $firewallRollbackTask = 'SecureIntegration-M3A-FirewallRollback-' + ($RunId -replace '[^A-Za-z0-9_-]', '-')
+$networkRollbackTask = 'SecureIntegration-M3A-NetworkRollback-' + ($RunId -replace '[^A-Za-z0-9_-]', '-')
 $rootThumbprint = $null
 Import-Module (Join-Path $PSScriptRoot 'M3ASplitFirewall.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'M3ASplitNetwork.psm1') -Force
 
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -306,19 +317,23 @@ function Remove-HostResources {
     if ($thumbprint) {
         Get-ChildItem Cert:\LocalMachine\Root | Where-Object Thumbprint -eq $thumbprint | Remove-Item -Force
     }
+    $networkRestored = Remove-M3AIsolatedNetwork -StatePath $networkStatePath -RollbackPath $networkRollbackPath
     $remainingContainers = @(& docker ps -aq --filter ('label=com.docker.compose.project=' + $projectName) 2>$null)
     $remainingVolumes = @(& docker volume ls -q --filter ('label=com.docker.compose.project=' + $projectName) 2>$null)
     $remainingNetworks = @(& docker network ls -q --filter ('label=com.docker.compose.project=' + $projectName) 2>$null)
     $remainingRules = @(Get-NetFirewallRule -DisplayName $firewallName -ErrorAction SilentlyContinue)
     $remainingTasks = @(Get-ScheduledTask -TaskName $firewallRollbackTask -ErrorAction SilentlyContinue)
+    $remainingNetworkTasks = @(Get-ScheduledTask -TaskName $networkRollbackTask -ErrorAction SilentlyContinue)
     return [ordered]@{
-        status = if ($remainingContainers.Count -eq 0 -and $remainingVolumes.Count -eq 0 -and $remainingNetworks.Count -eq 0 -and $remainingRules.Count -eq 0 -and $remainingTasks.Count -eq 0 -and $firewallRestored) { 'PASS' } else { 'FAIL' }
+        status = if ($remainingContainers.Count -eq 0 -and $remainingVolumes.Count -eq 0 -and $remainingNetworks.Count -eq 0 -and $remainingRules.Count -eq 0 -and $remainingTasks.Count -eq 0 -and $remainingNetworkTasks.Count -eq 0 -and $firewallRestored -and $networkRestored) { 'PASS' } else { 'FAIL' }
         remainingContainers = $remainingContainers.Count
         remainingVolumes = $remainingVolumes.Count
         remainingNetworks = $remainingNetworks.Count
         remainingFirewallRules = $remainingRules.Count
         remainingFirewallRollbackTasks = $remainingTasks.Count
+        remainingNetworkRollbackTasks = $remainingNetworkTasks.Count
         firewallProfileRestored = [bool]$firewallRestored
+        isolatedNetworkRestored = [bool]$networkRestored
     }
 }
 
@@ -360,19 +375,23 @@ if ($Phase -eq 'Prepare') {
     if (& git -C $repositoryRoot status --porcelain) { throw 'M3A_SPLIT_WORKTREE_NOT_CLEAN.' }
     & git -C $repositoryRoot merge-base --is-ancestor m2-gateway-baseline-2026-08-04 $head
     if ($LASTEXITCODE -ne 0) { throw 'M3A_SPLIT_M2_BASELINE_MISSING.' }
+    if (Test-Path -LiteralPath $runRoot) { throw 'M3A_SPLIT_RUN_DIRECTORY_ALREADY_EXISTS.' }
+    if ($VmId -eq [guid]::Empty) { throw 'M3A_SPLIT_VM_ID_REQUIRED.' }
+    if ($null -eq $VmCredential) { throw 'M3A_SPLIT_VM_CREDENTIAL_REQUIRED.' }
+    try {
+    $checkpointName = 'pre-m3a-isolated-network-' + (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
+    $network = New-M3AIsolatedNetwork -VmId $VmId -VmCredential $VmCredential -SwitchName $IsolatedSwitchName -VmNicName $IsolatedVmNicName -NetworkAddress $IsolatedNetworkAddress -HostAddress $HostHyperVAddress -VmAddress $VmAddress -PrefixLength $IsolatedPrefixLength -StatePath $networkStatePath -InventoryPath $networkInventoryPath -RollbackPath $networkRollbackPath -RollbackTaskName $networkRollbackTask -CheckpointName $checkpointName
     $addressRecord = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $HostHyperVAddress -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($null -eq $addressRecord) { throw 'M3A_SPLIT_HOST_ADDRESS_NOT_ASSIGNED.' }
+    if ($null -eq $addressRecord -or [string]$addressRecord.InterfaceAlias -ne ('vEthernet (' + $IsolatedSwitchName + ')')) { throw 'M3A_SPLIT_HOST_ADDRESS_NOT_ASSIGNED_TO_ISOLATED_SWITCH.' }
     $firewallSelection = Resolve-HostFirewallSelection -AddressRecord $addressRecord
     Assert-PortFree -Address $HostHyperVAddress -Port $GatewayPort
     foreach ($port in 15432, 18444, 18445) { Assert-PortFree -Address '127.0.0.1' -Port $port }
-    if (Test-Path -LiteralPath $runRoot) { throw 'M3A_SPLIT_RUN_DIRECTORY_ALREADY_EXISTS.' }
     New-Item -ItemType Directory -Path $rawRoot, $redactedRoot -Force | Out-Null
     $dotnet = Get-DotnetPath
     Invoke-NativeChecked -FilePath $dotnet -Arguments @('run', '--project', (Join-Path $repositoryRoot 'tools\m3\FixtureGenerator\FixtureGenerator.csproj'), '-c', 'Release', '--', $rawRoot, $HostHyperVAddress)
     Add-HostBindingsToEnvironmentFile -Path $environmentPath -HostAddress $HostHyperVAddress -Port $GatewayPort
     $installed = Import-Certificate -FilePath (Join-Path $rawRoot 'certificates\ca.crt') -CertStoreLocation Cert:\LocalMachine\Root
     $rootThumbprint = $installed.Thumbprint
-    try {
         Install-FirewallFailSafe -Selection $firewallSelection
         Enable-SelectedFirewallProfile -Selection $firewallSelection
         New-NetFirewallRule -DisplayName $firewallName -Direction Inbound -Action Allow -Protocol TCP -LocalAddress $HostHyperVAddress -RemoteAddress $VmAddress -LocalPort $GatewayPort -Profile ([string]$firewallSelection.ProfileName) -InterfaceAlias ([string]$firewallSelection.InterfaceAlias) | Out-Null
@@ -420,6 +439,8 @@ if ($Phase -eq 'Prepare') {
             interfaceAlias = [string]$addressRecord.InterfaceAlias; composeProject = $projectName
             firewallRule = $firewallName; firewallProfile = [string]$firewallSelection.ProfileName
             firewallRollbackTask = $firewallRollbackTask; hostRootThumbprint = $rootThumbprint
+            vmId = [string]$VmId; isolatedSwitch = $IsolatedSwitchName; isolatedVmNic = $IsolatedVmNicName
+            isolatedVmNicMac = [string]$network.vmNicMacAddress; checkpoint = [string]$network.checkpointName
             preparedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
         })
         [pscustomobject]@{ runId = $RunId; status = 'AWAITING_VM'; commit = $CandidateCommit; vmInput = $archive; vmInputSha256 = $archiveHash; gateway = "https://${HostHyperVAddress}:${GatewayPort}/" } | ConvertTo-Json -Compress
