@@ -172,7 +172,7 @@ jobs:
           fi
           test "$(docker inspect gateway-failclosed --format '{{.State.ExitCode}}')" != "0"
       - name: Scan image for embedded secrets
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: broker-gateway:m2
           scanners: secret

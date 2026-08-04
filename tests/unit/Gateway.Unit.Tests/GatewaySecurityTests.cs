@@ -287,9 +287,18 @@ public sealed class GatewaySecurityTests
         private readonly InMemoryGatewayRegistry registry;
         private readonly byte[] spki;
 
-        private Fixture(ECDsa key, X509Certificate2 certificate, byte[] spki, InMemoryGatewayRegistry registry, FakeClock clock, ProvisionedActivation provisioning, Guid tenantId, Guid applicationId, Guid environmentId)
+        private Fixture(
+            ECDsa proofSigner,
+            X509Certificate2 certificate,
+            byte[] spki,
+            InMemoryGatewayRegistry registry,
+            FakeClock clock,
+            ProvisionedActivation provisioning,
+            Guid tenantId,
+            Guid applicationId,
+            Guid environmentId)
         {
-            this.key = key;
+            key = proofSigner;
             this.spki = spki;
             this.registry = registry;
             Certificate = certificate;
