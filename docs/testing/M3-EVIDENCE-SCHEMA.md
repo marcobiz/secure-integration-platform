@@ -3,13 +3,15 @@
 Il bundle M3 è una prova riproducibile, non un archivio dei dati grezzi. Il manifest JSON
 usa proprietà ordinate e contiene:
 
-- `schemaVersion`, `runId`, `environment` (`M3A` o `M3B`);
+- `schemaVersion`, `runId`, `environment` (`M3A`, `M3A-CI` o `M3B`) e `scope`;
 - `commitSha`, `m2BaselineTag`, `startedAtUtc`, `completedAtUtc`;
-- digest SHA-256 di immagini, migration e bundle;
+- digest SHA-256 di immagini e migration; il digest del bundle è nel sidecar esterno per
+  evitare un riferimento circolare;
 - identità pubbliche (SID service/account o resource ID Managed Identity), mai token;
-- lista scenario con ID, stato, durata, codice osservato ed evidence file redatto;
+- lista scenario con ID, stato e codice osservato; durata ed evidence file sono richiesti
+  per i gate live M3A/M3B e facoltativi nel sotto-gate `M3A-CI`;
 - contatori Vault/mock/DB prima e dopo i negative path;
-- esito canary scan e cleanup;
+- esito canary scan e cleanup verificato prima della finalizzazione;
 - tool/runtime versions.
 
 File ammessi: manifest, report Markdown, JUnit/TRX senza payload, ACL/config pubblica,

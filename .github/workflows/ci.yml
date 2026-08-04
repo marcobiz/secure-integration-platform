@@ -226,6 +226,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .artifacts/m3/ci/raw-evidence .artifacts/m3/ci/redacted-evidence
+          date -u +"%Y-%m-%dT%H:%M:%SZ" >.artifacts/m3/ci/raw-evidence/started-at-utc.txt
           dotnet run --project tools/m3/FixtureGenerator/FixtureGenerator.csproj -c Release -- .artifacts/m3/ci/raw-evidence
           chmod 0777 .artifacts/m3/ci/raw-evidence
           sudo cp .artifacts/m3/ci/raw-evidence/certificates/ca.crt /usr/local/share/ca-certificates/m3-synthetic.crt
@@ -298,11 +299,45 @@ jobs:
           vault_digest="$(docker inspect "$vault_container" --format '{{.Image}}')"
           vendor_digest="$(docker inspect "$vendor_container" --format '{{.Image}}')"
           postgres_version="$(docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml exec -T postgres postgres --version)"
+          migration_sha="$(sha256sum src/Gateway/Gateway.Infrastructure/Persistence/Migrations/0001_gateway_m2.sql | awk '{print toupper($1)}')"
+          started_at="$(cat .artifacts/m3/ci/raw-evidence/started-at-utc.txt)"
+          dotnet_version="$(dotnet --version)"
+          docker_version="$(docker version --format '{{.Server.Version}}')"
+          compose_version="$(docker compose version --short)"
           cp .artifacts/m3/ci/raw-evidence/fixture-public.json "$redacted/fixture-public.json"
-          jq -n --arg runId "$GITHUB_RUN_ID" --arg commit "$CANDIDATE_COMMIT_SHA" \
+          jq -n --arg runId "$GITHUB_RUN_ID" --arg commit "$CANDIDATE_COMMIT_SHA" --arg startedAt "$started_at" \
             --arg gatewayDigest "$gateway_digest" --arg vaultDigest "$vault_digest" --arg vendorDigest "$vendor_digest" \
-            --arg postgresVersion "$postgres_version" --slurpfile scenarios "$redacted/security-scenarios.json" \
-            '{schemaVersion:1,environment:"M3A-CI",scope:"gateway-container-only",runId:$runId,commitSha:$commit,gatewayImageDigest:$gatewayDigest,vaultImageDigest:$vaultDigest,vendorImageDigest:$vendorDigest,postgresVersion:$postgresVersion,brokerWindowsServiceVerified:false,azureVerified:false,canaryScan:"PASS",scenarios:$scenarios[0]}' >"$redacted/manifest.json"
+            --arg postgresVersion "$postgres_version" --arg migrationSha "$migration_sha" \
+            --arg dotnetVersion "$dotnet_version" --arg dockerVersion "$docker_version" --arg composeVersion "$compose_version" \
+            --slurpfile scenarios "$redacted/security-scenarios.json" \
+            '{schemaVersion:1,environment:"M3A-CI",scope:"gateway-container-only",runId:$runId,commitSha:$commit,m2BaselineTag:"m2-gateway-baseline-2026-08-04",startedAtUtc:$startedAt,gatewayImageDigest:$gatewayDigest,vaultImageDigest:$vaultDigest,vendorImageDigest:$vendorDigest,migrationSha256:$migrationSha,postgresVersion:$postgresVersion,toolRuntimeVersions:{dotnet:$dotnetVersion,docker:$dockerVersion,compose:$composeVersion},brokerWindowsServiceVerified:false,azureVerified:false,canaryScan:"PASS",scenarios:$scenarios[0]}' >"$redacted/manifest.pre-cleanup.json"
+      - name: Collect diagnostics and clean M3 deterministic stack
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          env_file=.artifacts/m3/ci/raw-evidence/m3a.env
+          if test -f "$env_file"; then
+            docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml ps || true
+            docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml logs --no-color || true
+            cleanup_status=PASS
+            docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml down --volumes --remove-orphans || cleanup_status=FAIL
+            remaining_containers="$(docker ps -aq --filter label=com.docker.compose.project=broker-gateway-m3a)"
+            remaining_volumes="$(docker volume ls -q --filter label=com.docker.compose.project=broker-gateway-m3a)"
+            if test -n "$remaining_containers" || test -n "$remaining_volumes"; then cleanup_status=FAIL; fi
+            jq -n --arg status "$cleanup_status" --arg containers "$remaining_containers" --arg volumes "$remaining_volumes" \
+              '{status:$status,remainingContainerIds:(if ($containers|length)>0 then $containers else null end),remainingVolumeNames:(if ($volumes|length)>0 then $volumes else null end)}' >.artifacts/m3/ci/redacted-evidence/cleanup.json
+            test "$cleanup_status" = PASS
+          fi
+      - name: Finalize redacted M3 deterministic evidence after cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          redacted=.artifacts/m3/ci/redacted-evidence
+          completed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          jq --arg completedAt "$completed_at" --slurpfile cleanup "$redacted/cleanup.json" \
+            '. + {completedAtUtc:$completedAt,cleanup:$cleanup[0]}' "$redacted/manifest.pre-cleanup.json" >"$redacted/manifest.json"
+          rm "$redacted/manifest.pre-cleanup.json" "$redacted/cleanup.json"
           (cd "$redacted" && zip -q -r "$RUNNER_TEMP/m3a-ci-$GITHUB_RUN_ID-redacted-evidence.zip" .)
           sha256sum "$RUNNER_TEMP/m3a-ci-$GITHUB_RUN_ID-redacted-evidence.zip" >"$RUNNER_TEMP/m3a-ci-$GITHUB_RUN_ID-redacted-evidence.zip.sha256"
       - name: Upload redacted M3 deterministic evidence
@@ -314,13 +349,3 @@ jobs:
             ${{ runner.temp }}/m3a-ci-${{ github.run_id }}-redacted-evidence.zip.sha256
           if-no-files-found: error
           retention-days: 30
-      - name: Collect diagnostics and clean M3 deterministic stack
-        if: always()
-        shell: bash
-        run: |
-          env_file=.artifacts/m3/ci/raw-evidence/m3a.env
-          if test -f "$env_file"; then
-            docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml ps || true
-            docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml logs --no-color || true
-            docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml down --volumes --remove-orphans || true
-          fi
