@@ -72,14 +72,24 @@ Get-NetIPAddress -AddressFamily IPv4 |
     Format-Table InterfaceAlias,IPAddress,PrefixLength
 ```
 
-Registrare un IPv4 HOST dell'adattatore Hyper-V e l'IPv4 VM sulla stessa rete. Non
-usare loopback, NAT Docker o un indirizzo LAN differente. Riservare `28443/TCP` al
-Gateway; il runner fallisce se la porta è già occupata.
+La run usa un secondo switch Hyper-V Internal chiamato `M3A-Isolated` e una seconda
+NIC VM omonima. La NIC di management collegata al Default Switch non viene sostituita
+o scollegata. La configurazione predefinita, subordinata al controllo conflitti, è:
+
+- subnet `192.168.250.0/29`;
+- HOST `192.168.250.1/29`;
+- VM `192.168.250.2/29`;
+- nessun DHCP, NAT, gateway, DNS o forwarding sul segmento;
+- DHCP Guard, Router Guard e MAC spoofing disabilitato sulla NIC VM M3A.
+
+Il runner registra inventario e checkpoint prima della mutazione. Un task SYSTEM
+per-run ripristina profili firewall e Tailscale e rimuove esclusivamente la NIC e lo
+switch M3A dopo 30 minuti. Il Default Switch è fuori dai target di rollback.
 
 Verificare anche l'associazione firewall, senza mutazioni:
 
 ```powershell
-$hostAddress = '<IP-HOST-HYPERV>'
+$hostAddress = '192.168.250.1'
 $hostNic = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $hostAddress
 Get-NetConnectionProfile -InterfaceIndex $hostNic.InterfaceIndex
 Get-NetFirewallProfile -PolicyStore ActiveStore -Name Domain,Private,Public |
@@ -103,15 +113,25 @@ git pull --ff-only
 $candidate = (git rev-parse HEAD).Trim()
 if (git status --porcelain) { throw 'Worktree non pulito' }
 
-$hostHyperVAddress = '<IP-HOST-HYPERV>'
-$vmAddress = '<IP-VM>'
+$hostHyperVAddress = '192.168.250.1'
+$vmAddress = '192.168.250.2'
+$vmId = [guid]'5ff35721-5181-4b69-b30a-6ff53fa8c842'
+$vmCredential = Get-Credential -UserName 'LabAdmin' `
+    -Message 'Credenziale locale VM per configurare esclusivamente la NIC M3A-Isolated'
 .\tools\m3\split-host\Invoke-M3ASplitHost.ps1 `
     -Phase Prepare `
     -RunId $runId `
     -CandidateCommit $candidate `
     -HostHyperVAddress $hostHyperVAddress `
     -VmAddress $vmAddress `
-    -GatewayPort 28443
+    -GatewayPort 28443 `
+    -VmId $vmId `
+    -VmCredential $vmCredential `
+    -IsolatedSwitchName 'M3A-Isolated' `
+    -IsolatedVmNicName 'M3A-Isolated' `
+    -IsolatedNetworkAddress '192.168.250.0' `
+    -IsolatedPrefixLength 29
+$vmCredential = $null
 ```
 
 `Prepare`:
@@ -124,11 +144,19 @@ $vmAddress = '<IP-VM>'
   abilita soltanto il profilo associato e crea una regola limitata a interfaccia, IP VM,
   IP HOST e porta Gateway;
 - verifica la regola nell'`ActiveStore` e rifiuta un profilo non enforcing;
+- disabilita temporaneamente soltanto l'adattatore HOST Tailscale dopo l'attivazione
+  del rollback; Private deve risultare associato soltanto a `M3A-Isolated`;
+- tramite PowerShell Direct verifica la connettività Internet della NIC management e
+  prova che dalla VM siano raggiungibili soltanto HOST `192.168.250.1:28443`, non la
+  stessa porta su Default Switch/LAN né PostgreSQL, vault e vendor mock;
 - produce `C:\SecureEvidence\<RunId>\<RunId>-vm-input.zip` e sidecar;
 - restituisce `AWAITING_VM`, non un PASS.
 
 Il ZIP VM contiene activation code monouso ed è materiale raw temporaneo. Non
 caricarlo su GitHub, non inserirlo in evidence redatta e non copiarlo nel repository.
+Il task fail-safe scade 30 minuti dopo `Prepare`: completare l'handoff e il test VM
+entro tale finestra oppure eseguire cleanup e iniziare una nuova run con nuovi
+certificati e activation code.
 
 ## Trasferimento HOST → VM
 
@@ -234,6 +262,8 @@ della run. Una collisione con un `SecureIntegrationBroker` preesistente è un bl
 identificarne proprietà e ownership prima di rimuoverlo con il relativo harness.
 
 Il cleanup HOST rimuove regola, container, volumi e network, ripristina i tre stati
-firewall dal record per-run e cancella il task di rollback. Se la sessione termina
-prima, il task SYSTEM esegue lo stesso ripristino dopo 30 minuti senza password
-persistite. Un esito con `firewallProfileRestored=false` non è PASS.
+firewall dal record per-run, riabilita Tailscale se originariamente attivo, rimuove
+soltanto la NIC VM e lo switch `M3A-Isolated` e cancella i task di rollback. Se la
+sessione termina prima, il task SYSTEM esegue lo stesso ripristino dopo 30 minuti
+senza password persistite. Un esito con `firewallProfileRestored=false` o
+`isolatedNetworkRestored=false` non è PASS.

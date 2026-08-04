@@ -81,7 +81,7 @@ Esito conclusivo: **GO per M2**. La lineage live è stata integrata linearmente:
 
 Il gate non è chiuso: sul repository GitHub non sono configurati runner Windows elevati né l'environment `azure-dev`. Di conseguenza M3-P02 non è ancora PASS-LIVE nel nuovo slice e M3B non è stata eseguita. Nessun tag M3 è stato creato e M4 resta vietata. Review: `docs/reviews/M3-GATE-REVIEW.md`.
 
-La run split-host `m3a-live-20260804-131718` è stata classificata **BLOCKED — PRE-HANDOFF INFRASTRUCTURE VALIDATION**: live/readiness erano HTTP 200, ma Docker health falliva per SAN incompatibile e i profili Windows Firewall erano disabilitati. Il runner VM non è stato eseguito e P02 non è stato testato. Cleanup PASS ha lasciato zero risorse della run e ha rimosso l'handoff non utilizzato. I fix health/TLS e firewall reversibile sono implementati; la topologia corrente `vEthernet (Default Switch)` non ha un profilo di rete associato e richiede una rete Hyper-V interna dedicata prima di una nuova run. Dettagli: `docs/reviews/M3A-BLOCKED-RUN-20260804-131718.md`.
+La run split-host `m3a-live-20260804-131718` è stata classificata **BLOCKED — PRE-HANDOFF INFRASTRUCTURE VALIDATION**: live/readiness erano HTTP 200, ma Docker health falliva per SAN incompatibile e i profili Windows Firewall erano disabilitati. Il runner VM non è stato eseguito e P02 non è stato testato. Cleanup PASS ha lasciato zero risorse della run e ha rimosso l'handoff non utilizzato. I fix health/TLS e firewall reversibile sono implementati. Il runner predispone ora un secondo switch Hyper-V Internal e una NIC VM `M3A-Isolated`, senza NAT/gateway/DNS/forwarding, con rollback SYSTEM, isolamento del profilo Private e probe VM→HOST pre-handoff. La nuova prova live resta PENDING. Dettagli: `docs/reviews/M3A-BLOCKED-RUN-20260804-131718.md`.
 
 ## Test ed esiti
 
@@ -153,7 +153,7 @@ Per M3, AC-001/006/007/009/010/011/012/013/021/023 hanno nuova evidenza containe
 - Gateway HTTP v1 e IPC v1 restano provvisori fino al gate M3.
 - il workflow M3A container prova il Gateway e i servizi reali ma non sostituisce l'esecuzione elevata del Broker Windows Service; serve un runner Windows effimero con Docker Linux;
 - M3B è implementata ma non eseguita: mancano environment GitHub protetto, federazione OIDC e subscription Azure dev autorizzata;
-- la rete Hyper-V Default Switch dell'HOST non espone un profilo Windows Firewall risolvibile: il nuovo preflight blocca correttamente la run finché non viene predisposta una rete interna dedicata e verificata;
+- la rete Default Switch resta esclusa dal gate; la rete interna M3A dedicata è automatizzata ma deve ancora superare la prova live e il rollback reale sull'HOST/VM;
 - le action `checkout@v4`/`upload-artifact@v4` producono un warning di runtime Node 20 deprecato sul runner corrente; non altera l'esito ma richiede upgrade quando disponibile.
 
 ## Decisioni ancora aperte

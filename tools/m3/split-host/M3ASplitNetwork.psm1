@@ -44,12 +44,33 @@ function Assert-M3AIsolatedSubnetAvailable {
         [Parameter(Mandatory)] [string] $NetworkAddress,
         [ValidateRange(29, 30)] [int] $PrefixLength
     )
-    $conflicts = @()
-    $conflicts += @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop | Where-Object { Test-M3AAddressInSubnet ([string]$_.IPAddress) $NetworkAddress $PrefixLength })
+    Assert-M3AIsolatedSubnetRecordsAvailable -NetworkAddress $NetworkAddress -PrefixLength $PrefixLength -AddressRecords @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop) -RouteRecords @(Get-NetRoute -AddressFamily IPv4 -ErrorAction Stop) -NatRecords @(Get-NetNat -ErrorAction SilentlyContinue)
+}
+
+function Assert-M3AIsolatedSubnetRecordsAvailable {
+    param(
+        [Parameter(Mandatory)] [string] $NetworkAddress,
+        [ValidateRange(29, 30)] [int] $PrefixLength,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $AddressRecords,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $RouteRecords,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $NatRecords
+    )
+    $conflicts = @($AddressRecords | Where-Object { Test-M3AAddressInSubnet ([string]$_.IPAddress) $NetworkAddress $PrefixLength })
     $prefix = "$NetworkAddress/$PrefixLength"
-    $conflicts += @(Get-NetRoute -AddressFamily IPv4 -ErrorAction Stop | Where-Object { [string]$_.DestinationPrefix -eq $prefix })
-    $conflicts += @(Get-NetNat -ErrorAction SilentlyContinue | Where-Object { [string]$_.InternalIPInterfaceAddressPrefix -eq $prefix })
+    $conflicts += @($RouteRecords | Where-Object { [string]$_.DestinationPrefix -eq $prefix })
+    $conflicts += @($NatRecords | Where-Object { [string]$_.InternalIPInterfaceAddressPrefix -eq $prefix })
     if ($conflicts.Count -ne 0) { throw 'M3A_SPLIT_ISOLATED_SUBNET_CONFLICT.' }
+}
+
+function Assert-M3ANetworkEndpointContract {
+    param(
+        [Parameter(Mandatory)] [int] $DefaultGatewayCount,
+        [Parameter(Mandatory)] [int] $DnsServerCount,
+        [Parameter(Mandatory)] [string] $Forwarding,
+        [Parameter(Mandatory)] [int] $NatCount,
+        [Parameter(Mandatory)] [string] $ErrorCode
+    )
+    if ($DefaultGatewayCount -ne 0 -or $DnsServerCount -ne 0 -or $Forwarding -ne 'Disabled' -or $NatCount -ne 0) { throw $ErrorCode }
 }
 
 function Assert-M3AInternalSwitch {
@@ -62,8 +83,8 @@ function Assert-M3AInternalSwitch {
 function Test-M3ANetworkStateRestored {
     param(
         [Parameter(Mandatory)] $State,
-        [Parameter(Mandatory)] [object[]] $Switches,
-        [Parameter(Mandatory)] [object[]] $VmAdapters,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Switches,
+        [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $VmAdapters,
         [Parameter(Mandatory)] [object[]] $FirewallProfiles,
         [Parameter(Mandatory)] $TailscaleAdapter
     )
@@ -262,7 +283,7 @@ function New-M3AIsolatedNetwork {
     }
     finally { Remove-PSSession -Session $session -ErrorAction SilentlyContinue }
     $state.guestInterfaceAlias = [string]$guest.InterfaceAlias; $state.guestInterfaceIndex = [uint32]$guest.InterfaceIndex
-    if ($guest.DefaultGatewayCount -ne 0 -or $guest.DnsServerCount -ne 0 -or [string]$guest.Forwarding -ne 'Disabled') { throw 'M3A_SPLIT_GUEST_ISOLATION_CONTRACT_INVALID.' }
+    Assert-M3ANetworkEndpointContract -DefaultGatewayCount $guest.DefaultGatewayCount -DnsServerCount $guest.DnsServerCount -Forwarding ([string]$guest.Forwarding) -NatCount 0 -ErrorCode 'M3A_SPLIT_GUEST_ISOLATION_CONTRACT_INVALID.'
     if ($guest.ManagementDefaultRouteCount -lt 1 -or -not [bool]$guest.ManagementInternetReachable) { throw 'M3A_SPLIT_VM_MANAGEMENT_CONNECTIVITY_LOST.' }
 
     $profile = $null
@@ -277,7 +298,7 @@ function New-M3AIsolatedNetwork {
     $hostDns = @(Get-DnsClientServerAddress -InterfaceIndex $hostAdapter.InterfaceIndex -AddressFamily IPv4 | Select-Object -ExpandProperty ServerAddresses)
     $hostIpInterface = Get-NetIPInterface -InterfaceIndex $hostAdapter.InterfaceIndex -AddressFamily IPv4
     $nat = @(Get-NetNat -ErrorAction SilentlyContinue | Where-Object { [string]$_.InternalIPInterfaceAddressPrefix -eq "$NetworkAddress/$PrefixLength" })
-    if ($hostDefault.Count -ne 0 -or $hostDns.Count -ne 0 -or [string]$hostIpInterface.Forwarding -ne 'Disabled' -or $nat.Count -ne 0) { throw 'M3A_SPLIT_HOST_ISOLATION_CONTRACT_INVALID.' }
+    Assert-M3ANetworkEndpointContract -DefaultGatewayCount $hostDefault.Count -DnsServerCount $hostDns.Count -Forwarding ([string]$hostIpInterface.Forwarding) -NatCount $nat.Count -ErrorCode 'M3A_SPLIT_HOST_ISOLATION_CONTRACT_INVALID.'
     if (-not (Test-Connection -ComputerName $VmAddress -Count 2 -Quiet)) { throw 'M3A_SPLIT_HOST_TO_VM_CONNECTIVITY_FAILED.' }
     $state.hostConnectionProfile = 'Private'; $state.hostToVmConnectivity = 'PASS'; $state.vmManagementInternet = 'PASS'
     Write-M3ANetworkJson $state $StatePath
@@ -320,4 +341,4 @@ function Remove-M3AIsolatedNetwork {
     return $restored
 }
 
-Export-ModuleMember -Function Test-M3AAddressInSubnet, Assert-M3AIsolatedAddressContract, Assert-M3AIsolatedSubnetAvailable, Assert-M3AInternalSwitch, Test-M3ANetworkStateRestored, Disable-M3ATailscaleForIsolation, Set-M3ANetworkFirewallRuleState, Save-M3ANetworkInventory, New-M3AIsolatedNetwork, Remove-M3AIsolatedNetwork
+Export-ModuleMember -Function Test-M3AAddressInSubnet, Assert-M3AIsolatedAddressContract, Assert-M3AIsolatedSubnetAvailable, Assert-M3AIsolatedSubnetRecordsAvailable, Assert-M3ANetworkEndpointContract, Assert-M3AInternalSwitch, Test-M3ANetworkStateRestored, Disable-M3ATailscaleForIsolation, Set-M3ANetworkFirewallRuleState, Save-M3ANetworkInventory, New-M3AIsolatedNetwork, Remove-M3AIsolatedNetwork
