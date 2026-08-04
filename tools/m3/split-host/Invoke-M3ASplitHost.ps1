@@ -36,8 +36,14 @@ function Assert-Administrator {
 
 function Invoke-NativeChecked {
     param([Parameter(Mandatory)] [string] $FilePath, [Parameter(Mandatory)] [string[]] $Arguments)
-    & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "M3A_SPLIT_NATIVE_FAILED: $FilePath exited with $LASTEXITCODE." }
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $FilePath @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $previousPreference }
+    if ($exitCode -ne 0) { throw "M3A_SPLIT_NATIVE_FAILED: $FilePath exited with $exitCode." }
 }
 
 function Get-DotnetPath {
