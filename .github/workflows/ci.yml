@@ -252,12 +252,35 @@ jobs:
           jq -e '[.services.postgres,.services.vault,.services.vendor] | all(.ports[0].host_ip == "127.0.0.1")' <<<"$split_config"
           docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml up --build --detach
           for attempt in {1..90}; do
-            if curl --fail --silent https://localhost:18443/health/ready >/dev/null && test -f .artifacts/m3/ci/raw-evidence/provisioning.json; then exit 0; fi
+            gateway_container="$(docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml ps -q gateway)"
+            gateway_health="$(docker inspect "$gateway_container" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}')"
+            if test "$gateway_health" = healthy && \
+               curl --fail --silent --show-error --noproxy '*' https://localhost:18443/health/live >/dev/null && \
+               curl --fail --silent --show-error --noproxy '*' https://localhost:18443/health/ready >/dev/null && \
+               test -f .artifacts/m3/ci/raw-evidence/provisioning.json; then break; fi
+            test "$gateway_health" != unhealthy
+            test "$attempt" -lt 90
             sleep 2
           done
-          docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml ps
-          docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml logs --no-color
-          exit 1
+          test "$(docker inspect "$gateway_container" --format '{{.State.Health.Status}}')" = healthy
+          docker exec "$gateway_container" dotnet SecureIntegration.Gateway.Api.dll --health-probe
+          if curl --fail --silent --show-error --noproxy '*' \
+             --resolve san-mismatch.m3.test:18443:127.0.0.1 \
+             https://san-mismatch.m3.test:18443/health/live >/dev/null 2>&1; then
+            echo 'TLS accepted an HTTPS hostname absent from the certificate SAN.' >&2
+            exit 1
+          fi
+          if docker exec -e GATEWAY_HEALTH_URL=https://gateway:8443/health/live "$gateway_container" dotnet SecureIntegration.Gateway.Api.dll --health-probe; then
+            echo 'Health probe accepted a DNS name absent from the certificate SAN.' >&2
+            exit 1
+          fi
+          set -a
+          source "$env_file"
+          set +a
+          openssl pkcs12 -in .artifacts/m3/ci/raw-evidence/certificates/gateway.pfx -clcerts -nokeys -passin "pass:${M3_CERTIFICATE_PASSWORD}" 2>/dev/null |
+            openssl x509 -noout -ext subjectAltName |
+            grep -F 'DNS:localhost, IP Address:127.0.0.1'
+          pwsh -NoLogo -NoProfile -File eng/validate-tls-hardening.ps1
       - name: Run M3 positive and negative Gateway scenarios
         shell: bash
         run: |

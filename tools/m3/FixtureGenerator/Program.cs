@@ -25,7 +25,7 @@ caRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.
 caRequest.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(caRequest.PublicKey, false));
 using X509Certificate2 ca = caRequest.CreateSelfSigned(now.AddMinutes(-5), now.AddDays(2));
 
-using X509Certificate2 gateway = CreateIssued("CN=gateway.m3.test", ["gateway.m3.test", gatewayHost], false, ca, now);
+using X509Certificate2 gateway = CreateIssued("CN=gateway.m3.test", ["gateway.m3.test", "localhost", "127.0.0.1", gatewayHost], false, ca, now);
 using X509Certificate2 vault = CreateIssued("CN=vault.m3.test", ["vault.m3.test", "localhost"], false, ca, now);
 using X509Certificate2 vendorServer = CreateIssued("CN=vendor.m3.test", ["vendor.m3.test"], false, ca, now);
 using X509Certificate2 vendorClient = CreateIssued("CN=M3 Synthetic Vendor Client", [], true, ca, now);
@@ -82,7 +82,7 @@ static X509Certificate2 CreateIssued(string subject, string[] names, bool client
     if (names.Length != 0)
     {
         SubjectAlternativeNameBuilder san = new();
-        foreach (string name in names)
+        foreach (string name in names.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (System.Net.IPAddress.TryParse(name, out System.Net.IPAddress? address)) san.AddIpAddress(address);
             else san.AddDnsName(name);

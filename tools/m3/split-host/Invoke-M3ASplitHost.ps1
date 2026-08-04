@@ -165,6 +165,30 @@ function Wait-Gateway {
     throw 'M3A_SPLIT_GATEWAY_NOT_READY.'
 }
 
+function Wait-ComposeServiceState {
+    param(
+        [Parameter(Mandatory)] [string] $Service,
+        [Parameter(Mandatory)] [string] $ExpectedState,
+        [string] $ExpectedHealth,
+        [int] $TimeoutSeconds = 120
+    )
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $container = (& docker compose -p $projectName --env-file $environmentPath -f $composeFile ps -aq $Service 2>$null | Out-String).Trim()
+        if ($container) {
+            $inspection = (& docker inspect $container | ConvertFrom-Json)[0]
+            $state = [string]$inspection.State.Status
+            $healthProperty = $inspection.State.PSObject.Properties['Health']
+            $health = if ($null -ne $healthProperty -and $null -ne $healthProperty.Value) { [string]$healthProperty.Value.Status } else { $null }
+            if ($state -eq $ExpectedState -and ([string]::IsNullOrWhiteSpace($ExpectedHealth) -or $health -eq $ExpectedHealth)) { return }
+            if ($health -eq 'unhealthy') { throw "M3A_SPLIT_REQUIRED_CONTAINER_UNHEALTHY: $Service." }
+            if ($state -eq 'exited' -and $ExpectedState -ne 'exited') { throw "M3A_SPLIT_REQUIRED_CONTAINER_STOPPED: $Service." }
+        }
+        Start-Sleep -Seconds 2
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw "M3A_SPLIT_REQUIRED_CONTAINER_STATE_TIMEOUT: $Service expected $ExpectedState/$ExpectedHealth."
+}
+
 function Remove-HostResources {
     $state = if (Test-Path -LiteralPath $statePath) { Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json } else { $null }
     if (Test-Path -LiteralPath $environmentPath) {
@@ -246,6 +270,12 @@ if ($Phase -eq 'Prepare') {
         Invoke-NativeChecked -FilePath 'docker.exe' -Arguments (Get-ComposeArguments -Arguments @('config', '--quiet'))
         Invoke-NativeChecked -FilePath 'docker.exe' -Arguments (Get-ComposeArguments -Arguments @('up', '--build', '--detach'))
         Wait-Gateway -Address ("https://${HostHyperVAddress}:${GatewayPort}/health/ready")
+        Wait-ComposeServiceState -Service 'gateway' -ExpectedState 'running' -ExpectedHealth 'healthy'
+        Wait-ComposeServiceState -Service 'postgres' -ExpectedState 'running' -ExpectedHealth 'healthy'
+        Wait-ComposeServiceState -Service 'vault' -ExpectedState 'running'
+        Wait-ComposeServiceState -Service 'vendor' -ExpectedState 'running'
+        Wait-ComposeServiceState -Service 'migrations' -ExpectedState 'exited'
+        Wait-ComposeServiceState -Service 'provisioner' -ExpectedState 'exited'
         $listener = Get-NetTCPConnection -State Listen -LocalPort $GatewayPort -ErrorAction Stop
         if (@($listener | Where-Object LocalAddress -eq $HostHyperVAddress).Count -eq 0 -or @($listener | Where-Object LocalAddress -in @('0.0.0.0', '::')).Count -ne 0) {
             throw 'M3A_SPLIT_GATEWAY_BIND_NOT_RESTRICTED.'
