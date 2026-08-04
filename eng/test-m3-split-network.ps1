@@ -66,9 +66,9 @@ foreach ($required in @(
     'M3A_SPLIT_VM_EXPOSURE_CONTRACT_FAILED',
     'M3A_SPLIT_GATEWAY_BIND_NOT_RESTRICTED',
     'Disable-M3ATailscaleForIsolation',
-    'Get-VMNetworkAdapter -All',
     'Get-VM -Id $ExactVmId',
     'Get-VMNetworkAdapter -VM $exactVm -Name $IsolatedVmNicName',
+    'Get-VM | Where-Object Id -ne $ExactVmId',
     'New-PSSession -VMId $ExactVmId',
     'remainingNetworkRollbackTasks',
     'isolatedNetworkRestored'
