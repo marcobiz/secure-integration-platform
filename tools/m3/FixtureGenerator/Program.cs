@@ -30,7 +30,7 @@ using X509Certificate2 vendorClient = CreateIssued("CN=M3 Synthetic Vendor Clien
 using X509Certificate2 wrongVendorClient = CreateIssued("CN=M3 Wrong Vendor Client", [], true, ca, now);
 using X509Certificate2 securityDriver = CreateIssued("CN=M3 Security Driver Installation", [], true, ca, now);
 
-await File.WriteAllBytesAsync(Path.Combine(certificateDirectory, "ca.crt"), ca.Export(X509ContentType.Cert)).ConfigureAwait(false);
+await File.WriteAllTextAsync(Path.Combine(certificateDirectory, "ca.crt"), ca.ExportCertificatePem()).ConfigureAwait(false);
 await File.WriteAllBytesAsync(Path.Combine(certificateDirectory, "gateway.pfx"), gateway.Export(X509ContentType.Pkcs12, certificatePassword)).ConfigureAwait(false);
 await File.WriteAllBytesAsync(Path.Combine(certificateDirectory, "vault.pfx"), vault.Export(X509ContentType.Pkcs12, certificatePassword)).ConfigureAwait(false);
 await File.WriteAllBytesAsync(Path.Combine(certificateDirectory, "vendor-server.pfx"), vendorServer.Export(X509ContentType.Pkcs12, certificatePassword)).ConfigureAwait(false);
