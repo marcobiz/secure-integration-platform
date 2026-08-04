@@ -25,7 +25,7 @@ services:
       context: ../..
       dockerfile: src/Gateway/Gateway.Migrations/Dockerfile
     environment:
-      GATEWAY_MIGRATION_CONNECTION: Host=postgres;Port=5432;Database=broker_gateway_m3;Username=postgres;Password=${M3_POSTGRES_ADMIN_PASSWORD:?required};SSL Mode=Disable
+      GATEWAY_MIGRATION_CONNECTION: Host=postgres;Port=5432;Database=broker_gateway_m3;Username=postgres;Password=${M3_POSTGRES_ADMIN_PASSWORD:?required};SSL Mode=Disable;GSS Encryption Mode=Disable
     depends_on:
       postgres:
         condition: service_healthy
@@ -38,7 +38,7 @@ services:
       context: ../..
       dockerfile: tools/m3/Provisioner/Dockerfile
     environment:
-      M3_POSTGRES_ADMIN_CONNECTION: Host=postgres;Port=5432;Database=broker_gateway_m3;Username=postgres;Password=${M3_POSTGRES_ADMIN_PASSWORD:?required};SSL Mode=Disable
+      M3_POSTGRES_ADMIN_CONNECTION: Host=postgres;Port=5432;Database=broker_gateway_m3;Username=postgres;Password=${M3_POSTGRES_ADMIN_PASSWORD:?required};SSL Mode=Disable;GSS Encryption Mode=Disable
       M3_POSTGRES_RUNTIME_PASSWORD: ${M3_POSTGRES_RUNTIME_PASSWORD:?required}
       M3_ACTIVATION_HMAC_BASE64: ${M3_ACTIVATION_HMAC_BASE64:?required}
       M3_PROVISIONING_OUTPUT: /evidence-raw/provisioning.json
@@ -112,7 +112,7 @@ services:
       ASPNETCORE_Kestrel__Certificates__Default__Password: ${M3_CERTIFICATE_PASSWORD:?required}
       GATEWAY_HEALTH_URL: https://localhost:8443/health/live
       SSL_CERT_FILE: /run/m3-certs/ca.crt
-      ConnectionStrings__GatewayDatabase: Host=postgres;Port=5432;Database=broker_gateway_m3;Username=m3_gateway_runtime;Password=${M3_POSTGRES_RUNTIME_PASSWORD:?required};SSL Mode=Disable
+      ConnectionStrings__GatewayDatabase: Host=postgres;Port=5432;Database=broker_gateway_m3;Username=m3_gateway_runtime;Password=${M3_POSTGRES_RUNTIME_PASSWORD:?required};SSL Mode=Disable;GSS Encryption Mode=Disable
       Gateway__SyntheticVaultUri: https://vault.m3.test:8443/
       Gateway__SyntheticVaultTokenEnvironmentVariable: M3_SYNTHETIC_VAULT_TOKEN
       M3_SYNTHETIC_VAULT_TOKEN: ${M3_SYNTHETIC_VAULT_TOKEN:?required}

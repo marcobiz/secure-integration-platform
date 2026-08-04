@@ -126,7 +126,7 @@ jobs:
           runner_ip="$(curl --fail --silent https://api.ipify.org)"
           az postgres flexible-server firewall-rule create --resource-group "$rg" --name "$server" --rule-name github-runner --start-ip-address "$runner_ip" --end-ip-address "$runner_ip" >/dev/null
           trap 'az postgres flexible-server firewall-rule delete --yes --resource-group "$rg" --name "$server" --rule-name github-runner >/dev/null 2>&1 || true' EXIT
-          admin_connection="Host=${{ steps.deploy.outputs.postgres_fqdn }};Port=5432;Database=broker_gateway_m3;Username=m3admin;Password=${M3_POSTGRES_ADMIN_PASSWORD};SSL Mode=Require;Trust Server Certificate=false"
+          admin_connection="Host=${{ steps.deploy.outputs.postgres_fqdn }};Port=5432;Database=broker_gateway_m3;Username=m3admin;Password=${M3_POSTGRES_ADMIN_PASSWORD};SSL Mode=Require;Trust Server Certificate=false;GSS Encryption Mode=Disable"
           export GATEWAY_MIGRATION_CONNECTION="$admin_connection"
           dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release -- apply
           export M3_POSTGRES_ADMIN_CONNECTION="$admin_connection"
@@ -148,7 +148,7 @@ jobs:
           done
           az keyvault secret set --vault-name "$vault" --name vendor-api-key --value "$M3_VENDOR_API_KEY" >/dev/null
           az keyvault secret set --vault-name "$vault" --name vendor-client-certificate --value "$M3_VENDOR_CLIENT_PFX_BASE64" >/dev/null
-          db_connection="Host=${{ steps.deploy.outputs.postgres_fqdn }};Port=5432;Database=broker_gateway_m3;Username=m3_gateway_runtime;Password=${M3_POSTGRES_RUNTIME_PASSWORD};SSL Mode=Require;Trust Server Certificate=false"
+          db_connection="Host=${{ steps.deploy.outputs.postgres_fqdn }};Port=5432;Database=broker_gateway_m3;Username=m3_gateway_runtime;Password=${M3_POSTGRES_RUNTIME_PASSWORD};SSL Mode=Require;Trust Server Certificate=false;GSS Encryption Mode=Disable"
           az keyvault secret set --vault-name "$vault" --name gateway-database-connection --value "$db_connection" >/dev/null
           az webapp log config --resource-group '${{ steps.fixture.outputs.resource_group }}' --name '${{ steps.deploy.outputs.gateway }}' --docker-container-logging filesystem >/dev/null
           az webapp log config --resource-group '${{ steps.fixture.outputs.resource_group }}' --name '${{ steps.deploy.outputs.vendor }}' --docker-container-logging filesystem >/dev/null

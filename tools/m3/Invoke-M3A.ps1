@@ -187,7 +187,7 @@ try {
     $env:M3_GATEWAY_BASE_ADDRESS = 'https://localhost:18443/'
     $env:M3_PROVISIONING_FILE = $provisioningPath
     $env:M3_SECURITY_DRIVER_PFX = Join-Path $rawRoot 'certificates\security-driver.pfx'
-    $env:M3_POSTGRES_ADMIN_CONNECTION = 'Host=127.0.0.1;Port=15432;Database=broker_gateway_m3;Username=postgres;Password=' + $generated.M3_POSTGRES_ADMIN_PASSWORD + ';SSL Mode=Disable'
+    $env:M3_POSTGRES_ADMIN_CONNECTION = 'Host=127.0.0.1;Port=15432;Database=broker_gateway_m3;Username=postgres;Password=' + $generated.M3_POSTGRES_ADMIN_PASSWORD + ';SSL Mode=Disable;GSS Encryption Mode=Disable'
     $env:M3_SECURITY_OUTPUT = Join-Path $redactedRoot 'security-scenarios.json'
     # PostgreSQL is published only on loopback for the failure-control driver.
     Invoke-M3Native -FilePath $dotnet -Arguments @('run', '--project', (Join-Path $repositoryRoot 'tools\m3\SecurityDriver\SecurityDriver.csproj'), '-c', 'Release')

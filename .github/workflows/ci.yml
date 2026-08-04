@@ -255,7 +255,7 @@ jobs:
           export M3_GATEWAY_BASE_ADDRESS=https://localhost:18443/
           export M3_PROVISIONING_FILE="$PWD/.artifacts/m3/ci/raw-evidence/provisioning.json"
           export M3_SECURITY_DRIVER_PFX="$PWD/.artifacts/m3/ci/raw-evidence/certificates/security-driver.pfx"
-          export M3_POSTGRES_ADMIN_CONNECTION="Host=127.0.0.1;Port=15432;Database=broker_gateway_m3;Username=postgres;Password=${M3_POSTGRES_ADMIN_PASSWORD};SSL Mode=Disable"
+          export M3_POSTGRES_ADMIN_CONNECTION="Host=127.0.0.1;Port=15432;Database=broker_gateway_m3;Username=postgres;Password=${M3_POSTGRES_ADMIN_PASSWORD};SSL Mode=Disable;GSS Encryption Mode=Disable"
           export M3_SECURITY_OUTPUT="$PWD/.artifacts/m3/ci/redacted-evidence/security-scenarios.json"
           dotnet run --project tools/m3/SecurityDriver/SecurityDriver.csproj -c Release
           jq -e '.passed == true' "$M3_SECURITY_OUTPUT"
@@ -270,6 +270,10 @@ jobs:
           provisioning=.artifacts/m3/ci/raw-evidence/provisioning.json
           logs=.artifacts/m3/ci/raw-evidence/containers.log
           docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml logs --no-color >"$logs"
+          if grep -Fiq -- 'libgssapi_krb5' "$logs"; then
+            echo 'Unexpected optional GSSAPI load warning found in M3 container logs.' >&2
+            exit 1
+          fi
           for service in gateway vault vendor; do
             container_id="$(docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml ps -q "$service")"
             test -n "$container_id"
