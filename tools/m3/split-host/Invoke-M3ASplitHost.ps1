@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('ValidateHost', 'Prepare', 'Finalize', 'Cleanup')]
+    [ValidateSet('ValidateHost', 'Prepare', 'ExecuteVm', 'Finalize', 'Cleanup')]
     [string] $Phase = 'ValidateHost',
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]{5,39}$')]
     [string] $RunId = ('m3a-split-' + (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')),
@@ -16,7 +16,8 @@ param(
     [string] $IsolatedVmNicName = 'M3A-Isolated',
     [string] $IsolatedNetworkAddress = '192.168.250.0',
     [ValidateRange(29, 30)] [int] $IsolatedPrefixLength = 29,
-    [ValidateRange(30, 180)] [int] $RollbackTimeoutMinutes = 30
+    [ValidateRange(30, 180)] [int] $RollbackTimeoutMinutes = 30,
+    [ValidateRange(15, 120)] [int] $VmExecutionTimeoutMinutes = 90
 )
 
 Set-StrictMode -Version Latest
@@ -38,9 +39,11 @@ $firewallName = 'SecureIntegration M3A split ' + $RunId
 $projectName = ($RunId.ToLowerInvariant() -replace '[^a-z0-9_-]', '-')
 $firewallRollbackTask = 'SecureIntegration-M3A-FirewallRollback-' + ($RunId -replace '[^A-Za-z0-9_-]', '-')
 $networkRollbackTask = 'SecureIntegration-M3A-NetworkRollback-' + ($RunId -replace '[^A-Za-z0-9_-]', '-')
+$vmExecuteTask = 'SecureIntegration-M3A-ExecuteVm-' + ($RunId -replace '[^A-Za-z0-9_.-]', '-')
 $rootThumbprint = $null
 Import-Module (Join-Path $PSScriptRoot 'M3ASplitFirewall.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'M3ASplitNetwork.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'M3ASplitVmExecutor.psm1') -Force
 
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -356,6 +359,180 @@ function Assert-VmExposureContract {
     return $probe
 }
 
+function Invoke-M3AVmCleanupAsSystem {
+    param(
+        [Parameter(Mandatory)] [Management.Automation.Runspaces.PSSession] $Session,
+        [Parameter(Mandatory)] [string] $GuestRepositoryRoot
+    )
+    $cleanupTask = 'SecureIntegration-M3A-Cleanup-' + $RunId
+    Invoke-Command -Session $Session -ArgumentList $cleanupTask, $RunId, $GuestRepositoryRoot -ScriptBlock {
+        param($TaskName, $ExactRunId, $RepositoryRoot)
+        $runner = Join-Path $RepositoryRoot 'tools\m3\split-host\Invoke-M3ASplitVm.ps1'
+        $arguments = '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $runner + '" -Phase Cleanup -RunId ' + $ExactRunId + ' -RepositoryRoot "' + $RepositoryRoot + '"'
+        $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument $arguments -WorkingDirectory $RepositoryRoot
+        $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -MultipleInstances IgnoreNew
+        try {
+            Register-ScheduledTask -TaskName $TaskName -Action $action -Principal $principal -Settings $settings -Force | Out-Null
+            Start-ScheduledTask -TaskName $TaskName
+            $deadline = [DateTimeOffset]::UtcNow.AddMinutes(10)
+            do {
+                Start-Sleep -Seconds 1
+                $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+            } while ($task.State -eq 'Running' -and [DateTimeOffset]::UtcNow -lt $deadline)
+            if ($task.State -eq 'Running') { Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue; throw 'M3A_SPLIT_EXECUTE_VM_CLEANUP_TIMEOUT.' }
+            $result = (Get-ScheduledTaskInfo -TaskName $TaskName).LastTaskResult
+            if ($result -ne 0) { throw 'M3A_SPLIT_EXECUTE_VM_CLEANUP_FAILED.' }
+        }
+        finally { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue }
+    } | Out-Null
+}
+
+function Invoke-M3AExecuteVmPhase {
+    param(
+        [Parameter(Mandatory)] [guid] $ExactVmId,
+        [Parameter(Mandatory)] [Management.Automation.PSCredential] $Credential,
+        [Parameter(Mandatory)] [int] $TimeoutMinutes
+    )
+    $guestRepository = 'C:\Lab\broker-gateway'
+    $guestPackageRoot = 'C:\Lab\M3A\' + $RunId
+    $guestInput = Join-Path $guestPackageRoot 'input'
+    $guestExecutionRoot = 'C:\ProgramData\SecureIntegration\M3A\Executions\' + $RunId
+    $guestLauncher = Join-Path $guestExecutionRoot 'Invoke-M3ASplitVmSystem.ps1'
+    $guestModule = Join-Path $guestExecutionRoot 'M3ASplitVmExecutor.psm1'
+    $guestEvidenceRoot = 'C:\SecureEvidence\' + $RunId
+    $guestOutput = Join-Path $guestEvidenceRoot 'vm-redacted'
+    $guestStatus = Join-Path $guestEvidenceRoot 'VM-ELEVATED-LAUNCH-STATUS.json'
+    $hostInput = Join-Path $runRoot ($RunId + '-vm-input.zip')
+    $hostSidecar = $hostInput + '.sha256'
+    $hostLauncher = Join-Path $PSScriptRoot 'Invoke-M3ASplitVmSystem.ps1'
+    $hostModule = Join-Path $PSScriptRoot 'M3ASplitVmExecutor.psm1'
+    foreach ($required in $hostInput, $hostSidecar, $hostLauncher, $hostModule, $firewallStatePath) {
+        if (-not (Test-Path -LiteralPath $required)) { throw 'M3A_SPLIT_EXECUTE_VM_REQUIRED_INPUT_MISSING.' }
+    }
+    $firewallState = Get-Content -LiteralPath $firewallStatePath -Raw | ConvertFrom-Json
+    $deadline = [DateTimeOffset]::Parse([string]$firewallState.rollbackDeadlineUtc).ToUniversalTime()
+    $remaining = Assert-M3AExecuteVmWindow -DeadlineUtc $deadline -MinimumRemainingMinutes 45
+    if ($TimeoutMinutes -ge [Math]::Floor($remaining)) { throw 'M3A_SPLIT_EXECUTE_VM_TIMEOUT_EXCEEDS_WINDOW.' }
+    $launcherHash = (Get-FileHash -LiteralPath $hostLauncher -Algorithm SHA256).Hash
+    $moduleHash = (Get-FileHash -LiteralPath $hostModule -Algorithm SHA256).Hash
+    $session = New-PSSession -VMId $ExactVmId -Credential $Credential
+    $taskRegistered = $false
+    try {
+        $guest = Invoke-Command -Session $session -ArgumentList $RunId, $CandidateCommit, $guestRepository, $guestPackageRoot, $guestExecutionRoot, $guestEvidenceRoot -ScriptBlock {
+            param($ExactRunId, $ExactCommit, $RepositoryRoot, $PackageRoot, $ExecutionRoot, $EvidenceRoot)
+            if ($env:COMPUTERNAME -eq '') { throw 'M3A_SPLIT_EXECUTE_VM_HOSTNAME_MISSING.' }
+            $foreign = @(Get-ScheduledTask -TaskName 'SecureIntegration-M3A-ExecuteVm-*' -ErrorAction SilentlyContinue)
+            if ($foreign.Count -ne 0) { throw 'M3A_SPLIT_EXECUTE_VM_FOREIGN_TASK_PRESENT.' }
+            foreach ($path in $PackageRoot, $ExecutionRoot, $EvidenceRoot) {
+                if (Test-Path -LiteralPath $path) { throw 'M3A_SPLIT_EXECUTE_VM_RUN_DIRECTORY_EXISTS.' }
+                New-Item -ItemType Directory -Path $path -Force | Out-Null
+            }
+            $worktree = (& git.exe -c ('safe.directory=' + $RepositoryRoot.Replace('\', '/')) -C $RepositoryRoot status --porcelain | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or $worktree) { throw 'M3A_SPLIT_EXECUTE_VM_WORKTREE_NOT_CLEAN.' }
+            & git.exe -c ('safe.directory=' + $RepositoryRoot.Replace('\', '/')) -C $RepositoryRoot fetch --prune origin *> $null
+            if ($LASTEXITCODE -ne 0) { throw 'M3A_SPLIT_EXECUTE_VM_FETCH_FAILED.' }
+            & git.exe -c ('safe.directory=' + $RepositoryRoot.Replace('\', '/')) -C $RepositoryRoot cat-file -e ($ExactCommit + '^{commit}') *> $null
+            if ($LASTEXITCODE -ne 0) { throw 'M3A_SPLIT_EXECUTE_VM_COMMIT_MISSING.' }
+            & git.exe -c ('safe.directory=' + $RepositoryRoot.Replace('\', '/')) -C $RepositoryRoot switch --detach $ExactCommit *> $null
+            if ($LASTEXITCODE -ne 0) { throw 'M3A_SPLIT_EXECUTE_VM_DETACH_FAILED.' }
+            [pscustomobject]@{ hostName = $env:COMPUTERNAME }
+        }
+        Copy-Item -LiteralPath $hostInput -Destination (Join-Path $guestPackageRoot 'input.zip') -ToSession $session
+        Copy-Item -LiteralPath $hostSidecar -Destination (Join-Path $guestPackageRoot 'input.zip.sha256') -ToSession $session
+        Copy-Item -LiteralPath $hostLauncher -Destination $guestLauncher -ToSession $session
+        Copy-Item -LiteralPath $hostModule -Destination $guestModule -ToSession $session
+        $contract = New-M3AExecuteVmTaskContract -RunId $RunId -CandidateCommit $CandidateCommit -LauncherPath $guestLauncher -ExecutorModuleSha256 $moduleHash -ExecutionRoot $guestExecutionRoot -RepositoryRoot $guestRepository -PackageRoot $guestPackageRoot -OutputDirectory $guestOutput -StatusPath $guestStatus -ExpectedHostName ([string]$guest.hostName) -DeadlineUtc $deadline -TimeoutMinutes $TimeoutMinutes
+        $registered = Invoke-Command -Session $session -ArgumentList $RunId, $CandidateCommit, $guestPackageRoot, $guestInput, $guestExecutionRoot, $guestLauncher, $guestModule, $launcherHash, $moduleHash, $contract -ScriptBlock {
+            param($ExactRunId, $ExactCommit, $PackageRoot, $InputRoot, $ExecutionRoot, $LauncherPath, $ModulePath, $ExpectedLauncherHash, $ExpectedModuleHash, $TaskContract)
+            if ((Get-FileHash -LiteralPath $LauncherPath -Algorithm SHA256).Hash -ne $ExpectedLauncherHash -or (Get-FileHash -LiteralPath $ModulePath -Algorithm SHA256).Hash -ne $ExpectedModuleHash) {
+                throw 'M3A_SPLIT_EXECUTE_VM_LAUNCHER_HASH_MISMATCH.'
+            }
+            $zip = Join-Path $PackageRoot 'input.zip'
+            $sidecar = $zip + '.sha256'
+            $expected = (([IO.File]::ReadAllText($sidecar)) -split '\s+')[0].ToUpperInvariant()
+            if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ne $expected) { throw 'M3A_SPLIT_EXECUTE_VM_HANDOFF_HASH_MISMATCH.' }
+            New-Item -ItemType Directory -Path $InputRoot -Force | Out-Null
+            Expand-Archive -LiteralPath $zip -DestinationPath $InputRoot -Force
+            [IO.File]::WriteAllText((Join-Path $PackageRoot 'RUNID.txt'), ($ExactRunId + [Environment]::NewLine), [Text.Encoding]::ASCII)
+            $bootstrap = Get-Content -LiteralPath (Join-Path $InputRoot 'bootstrap.json') -Raw | ConvertFrom-Json
+            if ([string]$bootstrap.runId -ne $ExactRunId -or [string]$bootstrap.candidateCommit -ne $ExactCommit) { throw 'M3A_SPLIT_EXECUTE_VM_BOOTSTRAP_MISMATCH.' }
+            $action = New-ScheduledTaskAction -Execute ([string]$TaskContract.Executable) -Argument ([string]$TaskContract.Arguments) -WorkingDirectory ([string]$TaskContract.WorkingDirectory)
+            $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+            $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes ([int]$TaskContract.TimeoutMinutes)) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+            Register-ScheduledTask -TaskName ([string]$TaskContract.TaskName) -Action $action -Principal $principal -Settings $settings | Out-Null
+            Import-Module $ModulePath -Force
+            $task = Get-ScheduledTask -TaskName ([string]$TaskContract.TaskName) -ErrorAction Stop
+            [void](Assert-M3AExecuteVmTaskDefinition -Task $task -Contract $TaskContract -ActualLauncherHash (Get-FileHash -LiteralPath $LauncherPath -Algorithm SHA256).Hash -ExpectedLauncherHash $ExpectedLauncherHash)
+            [pscustomobject]@{ taskName = [string]$TaskContract.TaskName; principal = [string]$task.Principal.UserId; runLevel = [string]$task.Principal.RunLevel; launcherSha256 = $ExpectedLauncherHash }
+        }
+        $taskRegistered = $true
+        Invoke-Command -Session $session -ArgumentList $vmExecuteTask -ScriptBlock { param($TaskName) Start-ScheduledTask -TaskName $TaskName }
+        $monitorDeadline = [DateTimeOffset]::UtcNow.AddMinutes($TimeoutMinutes)
+        do {
+            Start-Sleep -Seconds 2
+            $taskState = Invoke-Command -Session $session -ArgumentList $vmExecuteTask -ScriptBlock {
+                param($TaskName)
+                $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+                $info = Get-ScheduledTaskInfo -TaskName $TaskName -ErrorAction Stop
+                [pscustomobject]@{ state = [string]$task.State; lastTaskResult = [int64]$info.LastTaskResult }
+            }
+        } while ($taskState.state -eq 'Running' -and [DateTimeOffset]::UtcNow -lt $monitorDeadline -and [DateTimeOffset]::UtcNow.AddMinutes(5) -lt $deadline)
+        if ($taskState.state -eq 'Running') {
+            Invoke-Command -Session $session -ArgumentList $vmExecuteTask -ScriptBlock { param($TaskName) Stop-ScheduledTask -TaskName $TaskName -ErrorAction Stop }
+            throw 'M3A_SPLIT_EXECUTE_VM_TASK_TIMEOUT.'
+        }
+        $status = Invoke-Command -Session $session -ArgumentList $guestStatus -ScriptBlock {
+            param($Path)
+            if (-not (Test-Path -LiteralPath $Path)) { throw 'M3A_SPLIT_EXECUTE_VM_STATUS_MISSING.' }
+            Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+        }
+        $transfer = Join-Path $runRoot 'vm-transfer'
+        New-Item -ItemType Directory -Path $transfer -Force | Out-Null
+        Copy-Item -LiteralPath $guestStatus -Destination (Join-Path $transfer 'VM-ELEVATED-LAUNCH-STATUS.json') -FromSession $session
+        if ($taskState.lastTaskResult -ne 0 -or [string]$status.status -ne 'PASS' -or [string]$status.validateVm -ne 'PASS' -or [string]$status.run -ne 'PASS') {
+            $failureFiles = Invoke-Command -Session $session -ArgumentList $guestEvidenceRoot, $RunId -ScriptBlock {
+                param($Root, $ExactRunId)
+                @(Get-ChildItem -LiteralPath $Root -File -ErrorAction SilentlyContinue | Where-Object Name -like ($ExactRunId + '-*failure*') | Select-Object -ExpandProperty FullName)
+            }
+            foreach ($file in @($failureFiles)) { Copy-Item -LiteralPath $file -Destination $transfer -FromSession $session }
+            throw 'M3A_SPLIT_EXECUTE_VM_TASK_FAILED.'
+        }
+        $archive = Join-Path $guestEvidenceRoot ($RunId + '-vm-redacted.zip')
+        $archiveSidecar = $archive + '.sha256'
+        $guestArchive = Invoke-Command -Session $session -ArgumentList $archive, $archiveSidecar -ScriptBlock {
+            param($Archive, $Sidecar)
+            if (-not (Test-Path -LiteralPath $Archive) -or -not (Test-Path -LiteralPath $Sidecar)) { throw 'M3A_SPLIT_EXECUTE_VM_RESULT_ARCHIVE_MISSING.' }
+            $expected = (([IO.File]::ReadAllText($Sidecar)) -split '\s+')[0].ToUpperInvariant()
+            $actual = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash
+            if ($expected -ne $actual) { throw 'M3A_SPLIT_EXECUTE_VM_RESULT_HASH_MISMATCH.' }
+            [pscustomobject]@{ hash = $actual }
+        }
+        $hostArchive = Join-Path $transfer ([IO.Path]::GetFileName($archive))
+        Copy-Item -LiteralPath $archive -Destination $hostArchive -FromSession $session
+        Copy-Item -LiteralPath $archiveSidecar -Destination ($hostArchive + '.sha256') -FromSession $session
+        if ((Get-FileHash -LiteralPath $hostArchive -Algorithm SHA256).Hash -ne [string]$guestArchive.hash) { throw 'M3A_SPLIT_EXECUTE_VM_TRANSFER_HASH_MISMATCH.' }
+        $vmResult = Join-Path $runRoot 'vm-result'
+        Expand-Archive -LiteralPath $hostArchive -DestinationPath $vmResult
+        $allowed = @('RESULT.json', 'vm-manifest.json', 'legacy-simulator.json', 'unauthorized-application.json', 'broker-events-redacted.json')
+        $unexpected = @(Get-ChildItem -LiteralPath $vmResult -File -Recurse | Where-Object { $allowed -notcontains $_.Name })
+        if ($unexpected.Count -ne 0) { throw 'M3A_SPLIT_EXECUTE_VM_UNEXPECTED_EVIDENCE_FILE.' }
+        return [pscustomobject]@{ runId = $RunId; status = 'VM_PASS_AWAITING_FINALIZE'; task = $registered; lastTaskResult = $taskState.lastTaskResult; vmResultDirectory = $vmResult; evidenceSha256 = [string]$guestArchive.hash; deadlineUtc = $deadline.ToString('O') }
+    }
+    catch {
+        $executeError = $_
+        try { Invoke-M3AVmCleanupAsSystem -Session $session -GuestRepositoryRoot $guestRepository } catch { Write-Warning 'M3A_SPLIT_EXECUTE_VM_CLEANUP_FAILED.' }
+        try { Remove-HostResources | Out-Null } catch { Write-Warning 'M3A_SPLIT_HOST_CLEANUP_FAILED.' }
+        throw $executeError
+    }
+    finally {
+        if ($taskRegistered) {
+            Invoke-Command -Session $session -ArgumentList $vmExecuteTask -ScriptBlock { param($TaskName) Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } -ErrorAction SilentlyContinue | Out-Null
+        }
+        Remove-PSSession -Session $session -ErrorAction SilentlyContinue
+    }
+}
+
 function Restore-FirewallState {
     if (-not (Test-Path -LiteralPath $firewallStatePath)) { return $true }
     $firewallState = Get-Content -LiteralPath $firewallStatePath -Raw | ConvertFrom-Json
@@ -522,6 +699,13 @@ if ($Phase -eq 'Prepare') {
 if (-not (Test-Path -LiteralPath $statePath)) { throw 'M3A_SPLIT_HOST_STATE_MISSING.' }
 $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
 if ($state.candidateCommit -ne $CandidateCommit -or $state.hostAddress -ne $HostHyperVAddress -or $state.vmAddress -ne $VmAddress) { throw 'M3A_SPLIT_STATE_MISMATCH.' }
+if ($Phase -eq 'ExecuteVm') {
+    if ($VmId -eq [guid]::Empty -or [string]$state.vmId -ne [string]$VmId) { throw 'M3A_SPLIT_VM_ID_MISMATCH.' }
+    if ($null -eq $VmCredential) { throw 'M3A_SPLIT_VM_CREDENTIAL_REQUIRED.' }
+    $result = Invoke-M3AExecuteVmPhase -ExactVmId $VmId -Credential $VmCredential -TimeoutMinutes $VmExecutionTimeoutMinutes
+    $result | ConvertTo-Json -Depth 8 -Compress
+    exit 0
+}
 if ([string]::IsNullOrWhiteSpace($VmResultDirectory) -or -not (Test-Path -LiteralPath $VmResultDirectory -PathType Container)) { throw 'M3A_SPLIT_VM_RESULT_REQUIRED.' }
 $vmManifestPath = Join-Path $VmResultDirectory 'vm-manifest.json'
 $legacyReportPath = Join-Path $VmResultDirectory 'legacy-simulator.json'

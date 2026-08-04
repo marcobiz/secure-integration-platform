@@ -90,6 +90,25 @@ function Set-InstallAcl {
     [IO.Directory]::SetAccessControl($Path, $security)
 }
 
+function Assert-InstallAclLeastPrivilege {
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $ServiceSid,
+        [Parameter(Mandatory)] [string] $LegacySid
+    )
+    $allowed = @($ServiceSid, $LegacySid, 'S-1-5-18', 'S-1-5-32-544')
+    $acl = [IO.Directory]::GetAccessControl($Path)
+    if (-not $acl.AreAccessRulesProtected) { throw 'M3A_SPLIT_VM_INSTALL_ACL_INHERITANCE_ENABLED.' }
+    $rules = @($acl.GetAccessRules($true, $false, [Security.Principal.SecurityIdentifier]))
+    if (@($rules | Where-Object { $allowed -notcontains $_.IdentityReference.Value -or $_.AccessControlType -ne 'Allow' }).Count -ne 0) {
+        throw 'M3A_SPLIT_VM_INSTALL_ACL_TOO_PERMISSIVE.'
+    }
+    $legacyRules = @($rules | Where-Object IdentityReference -eq $LegacySid)
+    if ($legacyRules.Count -ne 1 -or ($legacyRules[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::Write) -ne 0 -or ($legacyRules[0].FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadAndExecute) -ne [Security.AccessControl.FileSystemRights]::ReadAndExecute) {
+        throw 'M3A_SPLIT_VM_LEGACY_INSTALL_ACL_INVALID.'
+    }
+}
+
 function Remove-OwnedM0M1ServiceCollision {
     $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
     if ($null -eq $service) { return }
@@ -118,7 +137,8 @@ function Invoke-SimulatorTask {
         [Parameter(Mandatory)] [string] $Executable,
         [Parameter(Mandatory)] [string] $OutputPath,
         [Parameter(Mandatory)] [string] $PipeName,
-        [Parameter(Mandatory)] [string] $PayloadCanary
+        [Parameter(Mandatory)] [string] $PayloadCanary,
+        [Parameter(Mandatory)] [string] $ExpectedUserSid
     )
     $taskName = $taskPrefix + [Guid]::NewGuid().ToString('N')
     $wrapper = Join-Path $exchangeRoot ($taskName + '.ps1')
@@ -138,6 +158,8 @@ exit `$LASTEXITCODE
         Register-ScheduledTask -TaskName $taskName -Action $action -User $Credential.UserName -Password $password -RunLevel Limited -Force | Out-Null
         $registered = Get-ScheduledTask -TaskName $taskName
         if ($registered.Principal.RunLevel -ne 'Limited') { throw 'M3A_SPLIT_VM_TASK_NOT_LIMITED.' }
+        $principalSid = ([Security.Principal.NTAccount]::new([string]$registered.Principal.UserId)).Translate([Security.Principal.SecurityIdentifier]).Value
+        if ($principalSid -ne $ExpectedUserSid -or $principalSid -eq 'S-1-5-18') { throw 'M3A_SPLIT_VM_LEGACY_TASK_IDENTITY_INVALID.' }
         Start-ScheduledTask -TaskName $taskName
         $deadline = [DateTime]::UtcNow.AddSeconds(90)
         do {
@@ -147,7 +169,7 @@ exit `$LASTEXITCODE
         if ($task.State -eq 'Running') { Stop-ScheduledTask -TaskName $taskName; throw 'M3A_SPLIT_VM_SIMULATOR_TIMEOUT.' }
         $result = (Get-ScheduledTaskInfo -TaskName $taskName).LastTaskResult
         if (-not (Test-Path -LiteralPath $OutputPath)) { throw "M3A_SPLIT_VM_SIMULATOR_NO_REPORT: task result $result." }
-        return [ordered]@{ taskResult = [int64]$result; runLevel = 'Limited'; user = $Credential.UserName }
+        return [ordered]@{ taskResult = [int64]$result; runLevel = 'Limited'; user = $Credential.UserName; userSid = $principalSid }
     }
     finally {
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
@@ -170,10 +192,12 @@ function Remove-VmResources {
         while ((Get-Service -Name $serviceName -ErrorAction SilentlyContinue) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 250 }
     }
     $userName = if ($null -ne $state) { [string]$state.legacyUser } elseif ($null -ne $createdUser) { [string]$createdUser } else { $null }
+    $batchRightRevoked = $true
     if ($userName) {
         $account = Get-LocalUser -Name $userName -ErrorAction SilentlyContinue
         if ($null -ne $account -and [string]$account.Description -eq $ownedUserDescription) {
             Revoke-LiveMatrixBatchLogonRight -Sid $account.Sid.Value
+            $batchRightRevoked = -not (Test-LiveMatrixBatchLogonRight -Sid $account.Sid.Value)
             Remove-LocalUser -Name $userName
         }
     }
@@ -187,10 +211,11 @@ function Remove-VmResources {
         }
     }
     return [ordered]@{
-        status = if (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) -and @(Get-ScheduledTask -TaskName ($taskPrefix + '*') -ErrorAction SilentlyContinue).Count -eq 0) { 'PASS' } else { 'FAIL' }
+        status = if (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) -and @(Get-ScheduledTask -TaskName ($taskPrefix + '*') -ErrorAction SilentlyContinue).Count -eq 0 -and $batchRightRevoked) { 'PASS' } else { 'FAIL' }
         remainingServices = @(Get-Service -Name $serviceName -ErrorAction SilentlyContinue).Count
         remainingTasks = @(Get-ScheduledTask -TaskName ($taskPrefix + '*') -ErrorAction SilentlyContinue).Count
         remainingUsers = if ($userName) { @(Get-LocalUser -Name $userName -ErrorAction SilentlyContinue).Count } else { 0 }
+        batchLogonRightRevoked = [bool]$batchRightRevoked
     }
 }
 
@@ -219,7 +244,8 @@ if ([string]$bootstrap.gatewayBaseAddress -match 'localhost|127\.0\.0\.1|\[::1\]
 $gatewayUri = [Uri]$bootstrap.gatewayBaseAddress
 if (-not $gatewayUri.IsAbsoluteUri -or $gatewayUri.Scheme -ne 'https') { throw 'M3A_SPLIT_VM_GATEWAY_MUST_BE_HTTPS.' }
 if (& git -C $RepositoryRoot status --porcelain) { throw 'M3A_SPLIT_VM_WORKTREE_NOT_CLEAN.' }
-Invoke-NativeChecked -FilePath 'git.exe' -Arguments @('-C', $RepositoryRoot, 'fetch', '--prune', 'origin')
+& git.exe -C $RepositoryRoot cat-file -e ([string]$bootstrap.candidateCommit + '^{commit}') *> $null
+if ($LASTEXITCODE -ne 0) { Invoke-NativeChecked -FilePath 'git.exe' -Arguments @('-C', $RepositoryRoot, 'fetch', '--prune', 'origin') }
 Invoke-NativeChecked -FilePath 'git.exe' -Arguments @('-C', $RepositoryRoot, 'cat-file', '-e', ([string]$bootstrap.candidateCommit + '^{commit}'))
 Invoke-NativeChecked -FilePath 'git.exe' -Arguments @('-C', $RepositoryRoot, 'switch', '--detach', [string]$bootstrap.candidateCommit)
 $head = (& git -C $RepositoryRoot rev-parse HEAD).Trim()
@@ -287,6 +313,7 @@ $serviceCreated = $true
 Invoke-NativeChecked -FilePath 'sc.exe' -Arguments @('sidtype', $serviceName, 'unrestricted')
 $serviceSid = ([Security.Principal.NTAccount]::new('NT SERVICE\SecureIntegrationBroker')).Translate([Security.Principal.SecurityIdentifier]).Value
 Set-InstallAcl -Path $installRoot -ServiceSid $serviceSid -LegacySid $legacyUser.Sid
+Assert-InstallAclLeastPrivilege -Path $installRoot -ServiceSid $serviceSid -LegacySid $legacyUser.Sid
 $installedRoot = Import-Certificate -FilePath $caPath -CertStoreLocation Cert:\LocalMachine\Root
 $rootThumbprint = $installedRoot.Thumbprint
 $serviceRegistry = 'HKLM:\SYSTEM\CurrentControlSet\Services\' + $serviceName
@@ -302,13 +329,13 @@ $startedAt = Get-Date
     $dataAcl = Test-FileSystemAclExact -Path $brokerData -AllowedSid @($serviceSid, $wellKnown.System, $wellKnown.Administrators) -RequireProtected
     $installAcl = [IO.Directory]::GetAccessControl($installRoot).GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::All)
     $legacyOutput = Join-Path $exchangeRoot 'legacy-simulator.json'
-    $positiveTask = Invoke-SimulatorTask -Credential $legacyUser.Credential -Executable $legacyExecutable -OutputPath $legacyOutput -PipeName $pipeName -PayloadCanary ([string]$bootstrap.payloadCanary)
+    $positiveTask = Invoke-SimulatorTask -Credential $legacyUser.Credential -Executable $legacyExecutable -OutputPath $legacyOutput -PipeName $pipeName -PayloadCanary ([string]$bootstrap.payloadCanary) -ExpectedUserSid $legacyUser.Sid
     $legacyReport = Get-Content -LiteralPath $legacyOutput -Raw | ConvertFrom-Json
     if ($positiveTask.taskResult -ne 0 -or -not $legacyReport.passed) { throw 'M3A_SPLIT_VM_P02_FAILED.' }
     Remove-ItemProperty -Path $serviceRegistry -Name Environment -ErrorAction Stop
     Remove-Item -LiteralPath $bootstrapPath -Force
     $unauthorizedOutput = Join-Path $exchangeRoot 'unauthorized-simulator.json'
-    $negativeTask = Invoke-SimulatorTask -Credential $legacyUser.Credential -Executable $unauthorizedExecutable -OutputPath $unauthorizedOutput -PipeName $pipeName -PayloadCanary ([string]$bootstrap.payloadCanary)
+    $negativeTask = Invoke-SimulatorTask -Credential $legacyUser.Credential -Executable $unauthorizedExecutable -OutputPath $unauthorizedOutput -PipeName $pipeName -PayloadCanary ([string]$bootstrap.payloadCanary) -ExpectedUserSid $legacyUser.Sid
     $unauthorizedReport = Get-Content -LiteralPath $unauthorizedOutput -Raw | ConvertFrom-Json
     if ($negativeTask.taskResult -eq 0 -or $unauthorizedReport.passed) { throw 'M3A_SPLIT_VM_UNAUTHORIZED_APP_SUCCEEDED.' }
     Start-Sleep -Seconds 2
