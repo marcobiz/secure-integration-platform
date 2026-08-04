@@ -213,7 +213,8 @@ function Get-FirewallProfileStates {
 function Resolve-HostFirewallSelection {
     param([Parameter(Mandatory)] $AddressRecord)
 
-    $connectionProfiles = @(Get-NetConnectionProfile -ErrorAction Stop)
+    $upIndices = @(Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object -ExpandProperty InterfaceIndex)
+    $connectionProfiles = @(Get-NetConnectionProfile -ErrorAction Stop | Where-Object { $upIndices -contains [uint32]$_.InterfaceIndex })
     $firewallProfiles = Get-FirewallProfileStates
     return Resolve-M3AFirewallProfileSelection -InterfaceIndex ([uint32]$AddressRecord.InterfaceIndex) -ConnectionProfiles $connectionProfiles -FirewallProfiles $firewallProfiles
 }
@@ -291,6 +292,59 @@ function Assert-FirewallRuleEnforced {
         $portFilter.LocalPort -notcontains ([string]$Port) -or
         $interfaceFilter.InterfaceAlias -notcontains [string]$Selection.InterfaceAlias
     ) { throw 'M3A_SPLIT_FIREWALL_RULE_NOT_ENFORCED.' }
+}
+
+function Assert-VmExposureContract {
+    param(
+        [Parameter(Mandatory)] [guid] $ExactVmId,
+        [Parameter(Mandatory)] [Management.Automation.PSCredential] $Credential,
+        [Parameter(Mandatory)] [string] $DedicatedHostAddress,
+        [Parameter(Mandatory)] [string] $DedicatedVmAddress,
+        [Parameter(Mandatory)] [int] $Port,
+        [Parameter(Mandatory)] [string] $SwitchName
+    )
+    $attached = @(Get-VMNetworkAdapter -All | Where-Object { [string]$_.SwitchName -eq $SwitchName })
+    if ($attached.Count -ne 1 -or [guid]$attached[0].VMId -ne $ExactVmId -or [string]$attached[0].Name -ne $IsolatedVmNicName) {
+        throw 'M3A_SPLIT_ISOLATED_SWITCH_HAS_UNEXPECTED_PORT.'
+    }
+    $defaultSwitchAddress = Get-NetIPAddress -AddressFamily IPv4 | Where-Object InterfaceAlias -eq 'vEthernet (Default Switch)' | Select-Object -First 1 -ExpandProperty IPAddress
+    $lanAddresses = @(Get-NetConnectionProfile | Where-Object { [string]$_.NetworkCategory -in @('Public', '0') } | ForEach-Object {
+        Get-NetIPAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254.*' } | Select-Object -ExpandProperty IPAddress
+    })
+    $session = New-PSSession -VMId $ExactVmId -Credential $Credential
+    try {
+        $probe = Invoke-Command -Session $session -ArgumentList $DedicatedHostAddress, $DedicatedVmAddress, $Port, $defaultSwitchAddress, $lanAddresses -ScriptBlock {
+            param($HostAddress, $VmAddress, $GatewayPort, $DefaultSwitchAddress, $LanAddresses)
+            function CanConnect([string]$Address, [int]$TargetPort) {
+                if ([string]::IsNullOrWhiteSpace($Address)) { return $false }
+                $client = [Net.Sockets.TcpClient]::new()
+                try {
+                    $pending = $client.BeginConnect($Address, $TargetPort, $null, $null)
+                    if (-not $pending.AsyncWaitHandle.WaitOne(3000)) { return $false }
+                    $client.EndConnect($pending)
+                    return $client.Connected
+                }
+                catch { return $false }
+                finally { $client.Dispose() }
+            }
+            $dedicatedIp = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $VmAddress -ErrorAction Stop
+            $defaultRoutes = @(Get-NetRoute -InterfaceIndex $dedicatedIp.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object DestinationPrefix -eq '0.0.0.0/0')
+            [pscustomobject]@{
+                gateway = CanConnect $HostAddress $GatewayPort
+                defaultSwitchGatewayPort = CanConnect $DefaultSwitchAddress $GatewayPort
+                lanGatewayPort = @($LanAddresses | Where-Object { CanConnect $_ $GatewayPort }).Count -ne 0
+                postgres = CanConnect $HostAddress 15432
+                vault = CanConnect $HostAddress 18444
+                vendor = CanConnect $HostAddress 18445
+                dedicatedDefaultGatewayCount = $defaultRoutes.Count
+            }
+        }
+    }
+    finally { Remove-PSSession -Session $session -ErrorAction SilentlyContinue }
+    if (-not $probe.gateway -or $probe.defaultSwitchGatewayPort -or $probe.lanGatewayPort -or $probe.postgres -or $probe.vault -or $probe.vendor -or $probe.dedicatedDefaultGatewayCount -ne 0) {
+        throw 'M3A_SPLIT_VM_EXPOSURE_CONTRACT_FAILED.'
+    }
+    return $probe
 }
 
 function Restore-FirewallState {
@@ -383,6 +437,7 @@ if ($Phase -eq 'Prepare') {
     $network = New-M3AIsolatedNetwork -VmId $VmId -VmCredential $VmCredential -SwitchName $IsolatedSwitchName -VmNicName $IsolatedVmNicName -NetworkAddress $IsolatedNetworkAddress -HostAddress $HostHyperVAddress -VmAddress $VmAddress -PrefixLength $IsolatedPrefixLength -StatePath $networkStatePath -InventoryPath $networkInventoryPath -RollbackPath $networkRollbackPath -RollbackTaskName $networkRollbackTask -CheckpointName $checkpointName
     $addressRecord = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $HostHyperVAddress -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($null -eq $addressRecord -or [string]$addressRecord.InterfaceAlias -ne ('vEthernet (' + $IsolatedSwitchName + ')')) { throw 'M3A_SPLIT_HOST_ADDRESS_NOT_ASSIGNED_TO_ISOLATED_SWITCH.' }
+    $tailscaleIsolation = Disable-M3ATailscaleForIsolation -StatePath $networkStatePath -DedicatedInterfaceIndex ([uint32]$addressRecord.InterfaceIndex)
     $firewallSelection = Resolve-HostFirewallSelection -AddressRecord $addressRecord
     Assert-PortFree -Address $HostHyperVAddress -Port $GatewayPort
     foreach ($port in 15432, 18444, 18445) { Assert-PortFree -Address '127.0.0.1' -Port $port }
@@ -395,6 +450,7 @@ if ($Phase -eq 'Prepare') {
         Install-FirewallFailSafe -Selection $firewallSelection
         Enable-SelectedFirewallProfile -Selection $firewallSelection
         New-NetFirewallRule -DisplayName $firewallName -Direction Inbound -Action Allow -Protocol TCP -LocalAddress $HostHyperVAddress -RemoteAddress $VmAddress -LocalPort $GatewayPort -Profile ([string]$firewallSelection.ProfileName) -InterfaceAlias ([string]$firewallSelection.InterfaceAlias) | Out-Null
+        Set-M3ANetworkFirewallRuleState -StatePath $networkStatePath -FirewallRule $firewallName
         Assert-FirewallRuleEnforced -Selection $firewallSelection -HostAddress $HostHyperVAddress -RemoteAddress $VmAddress -Port $GatewayPort
         Invoke-NativeChecked -FilePath 'docker.exe' -Arguments (Get-ComposeArguments -Arguments @('config', '--quiet'))
         Invoke-NativeChecked -FilePath 'docker.exe' -Arguments (Get-ComposeArguments -Arguments @('up', '--build', '--detach'))
@@ -406,13 +462,14 @@ if ($Phase -eq 'Prepare') {
         Wait-ComposeServiceState -Service 'migrations' -ExpectedState 'exited'
         Wait-ComposeServiceState -Service 'provisioner' -ExpectedState 'exited'
         $listener = Get-NetTCPConnection -State Listen -LocalPort $GatewayPort -ErrorAction Stop
-        if (@($listener | Where-Object LocalAddress -eq $HostHyperVAddress).Count -eq 0 -or @($listener | Where-Object LocalAddress -in @('0.0.0.0', '::')).Count -ne 0) {
+        if (@($listener | Where-Object LocalAddress -eq $HostHyperVAddress).Count -eq 0 -or @($listener | Where-Object LocalAddress -ne $HostHyperVAddress).Count -ne 0) {
             throw 'M3A_SPLIT_GATEWAY_BIND_NOT_RESTRICTED.'
         }
         foreach ($port in 15432, 18444, 18445) {
             $internalListener = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction Stop
             if (@($internalListener | Where-Object LocalAddress -ne '127.0.0.1').Count -ne 0) { throw "M3A_SPLIT_INTERNAL_PORT_EXPOSED: $port." }
         }
+        $exposure = Assert-VmExposureContract -ExactVmId $VmId -Credential $VmCredential -DedicatedHostAddress $HostHyperVAddress -DedicatedVmAddress $VmAddress -Port $GatewayPort -SwitchName $IsolatedSwitchName
         $provisioning = Get-Content -LiteralPath $provisioningPath -Raw | ConvertFrom-Json
         $vmInput = Join-Path $rawRoot 'vm-input'
         New-Item -ItemType Directory -Path $vmInput -Force | Out-Null
@@ -441,6 +498,7 @@ if ($Phase -eq 'Prepare') {
             firewallRollbackTask = $firewallRollbackTask; hostRootThumbprint = $rootThumbprint
             vmId = [string]$VmId; isolatedSwitch = $IsolatedSwitchName; isolatedVmNic = $IsolatedVmNicName
             isolatedVmNicMac = [string]$network.vmNicMacAddress; checkpoint = [string]$network.checkpointName
+            tailscaleTemporarilyDisabled = [bool]$tailscaleIsolation.disabled; exposureContract = $exposure
             preparedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
         })
         [pscustomobject]@{ runId = $RunId; status = 'AWAITING_VM'; commit = $CandidateCommit; vmInput = $archive; vmInputSha256 = $archiveHash; gateway = "https://${HostHyperVAddress}:${GatewayPort}/" } | ConvertTo-Json -Compress

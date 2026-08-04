@@ -77,6 +77,37 @@ function Test-M3ANetworkStateRestored {
     return $true
 }
 
+function Disable-M3ATailscaleForIsolation {
+    param([Parameter(Mandatory)] [string] $StatePath, [Parameter(Mandatory)] [uint32] $DedicatedInterfaceIndex)
+    $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+    if ([bool]$state.tailscale.present -and [bool]$state.tailscale.wasEnabled) {
+        Disable-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -Confirm:$false
+        $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+        do {
+            $tailscale = Get-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -ErrorAction SilentlyContinue
+            if ($null -ne $tailscale -and [string]$tailscale.Status -ne 'Up' -and [string]$tailscale.AdminStatus -ne 'Up') { break }
+            Start-Sleep -Milliseconds 500
+        } while ([DateTimeOffset]::UtcNow -lt $deadline)
+        if ($null -eq $tailscale -or [string]$tailscale.AdminStatus -eq 'Up') { throw 'M3A_SPLIT_TAILSCALE_DISABLE_FAILED.' }
+        $state.tailscale | Add-Member -NotePropertyName temporarilyDisabled -NotePropertyValue $true -Force
+        Write-M3ANetworkJson $state $StatePath
+    }
+
+    $upIndices = @(Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object -ExpandProperty InterfaceIndex)
+    $privateProfiles = @(Get-NetConnectionProfile | Where-Object { [string]$_.NetworkCategory -in @('Private', '1') -and $upIndices -contains [uint32]$_.InterfaceIndex })
+    if ($privateProfiles.Count -ne 1 -or [uint32]$privateProfiles[0].InterfaceIndex -ne $DedicatedInterfaceIndex) {
+        throw 'M3A_SPLIT_PRIVATE_PROFILE_SHARED_BY_ACTIVE_INTERFACE.'
+    }
+    return [pscustomobject]@{ disabled = [bool]$state.tailscale.wasEnabled; activePrivateInterfaceIndex = [uint32]$privateProfiles[0].InterfaceIndex }
+}
+
+function Set-M3ANetworkFirewallRuleState {
+    param([Parameter(Mandatory)] [string] $StatePath, [Parameter(Mandatory)] [string] $FirewallRule)
+    $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+    $state.firewallRule = $FirewallRule
+    Write-M3ANetworkJson $state $StatePath
+}
+
 function New-M3ANetworkRollback {
     param(
         [Parameter(Mandatory)] [string] $StatePath,
@@ -265,7 +296,15 @@ function Remove-M3AIsolatedNetwork {
     $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
     if ($state.firewallRule) { Get-NetFirewallRule -DisplayName ([string]$state.firewallRule) -ErrorAction SilentlyContinue | Remove-NetFirewallRule }
     foreach ($profile in @($state.originalFirewallProfiles)) { Set-NetFirewallProfile -Name ([string]$profile.Name) -Enabled ([bool]$profile.Enabled) }
-    if ([bool]$state.tailscale.wasEnabled) { Enable-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -Confirm:$false -ErrorAction SilentlyContinue }
+    if ([bool]$state.tailscale.wasEnabled) {
+        Enable-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -Confirm:$false -ErrorAction SilentlyContinue
+        $tailscaleDeadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+        do {
+            $tailscaleStatus = Get-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -ErrorAction SilentlyContinue
+            if ($null -ne $tailscaleStatus -and [string]$tailscaleStatus.AdminStatus -eq 'Up' -and [string]$tailscaleStatus.Status -eq 'Up') { break }
+            Start-Sleep -Milliseconds 500
+        } while ([DateTimeOffset]::UtcNow -lt $tailscaleDeadline)
+    }
     $vm = Get-VM -Id ([guid]$state.vmId) -ErrorAction SilentlyContinue
     if ($null -ne $vm) {
         Get-VMNetworkAdapter -VM $vm -Name ([string]$state.vmNicName) -ErrorAction SilentlyContinue | Where-Object { [string]$_.SwitchName -eq [string]$state.switchName } | Remove-VMNetworkAdapter -Confirm:$false
@@ -281,4 +320,4 @@ function Remove-M3AIsolatedNetwork {
     return $restored
 }
 
-Export-ModuleMember -Function Test-M3AAddressInSubnet, Assert-M3AIsolatedAddressContract, Assert-M3AIsolatedSubnetAvailable, Assert-M3AInternalSwitch, Test-M3ANetworkStateRestored, Save-M3ANetworkInventory, New-M3AIsolatedNetwork, Remove-M3AIsolatedNetwork
+Export-ModuleMember -Function Test-M3AAddressInSubnet, Assert-M3AIsolatedAddressContract, Assert-M3AIsolatedSubnetAvailable, Assert-M3AInternalSwitch, Test-M3ANetworkStateRestored, Disable-M3ATailscaleForIsolation, Set-M3ANetworkFirewallRuleState, Save-M3ANetworkInventory, New-M3AIsolatedNetwork, Remove-M3AIsolatedNetwork
