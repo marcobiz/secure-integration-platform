@@ -198,7 +198,7 @@ if ($Phase -eq 'Prepare') {
     New-Item -ItemType Directory -Path $rawRoot, $redactedRoot -Force | Out-Null
     $dotnet = Get-DotnetPath
     Invoke-NativeChecked -FilePath $dotnet -Arguments @('run', '--project', (Join-Path $repositoryRoot 'tools\m3\FixtureGenerator\FixtureGenerator.csproj'), '-c', 'Release', '--', $rawRoot, $HostHyperVAddress)
-    [IO.File]::AppendAllLines($environmentPath, @(
+    $hostBindings = @(
         'M3_GATEWAY_BIND_IP=' + $HostHyperVAddress,
         'M3_GATEWAY_PORT=' + $GatewayPort,
         'M3_POSTGRES_BIND_IP=127.0.0.1',
@@ -207,7 +207,8 @@ if ($Phase -eq 'Prepare') {
         'M3_VAULT_PORT=18444',
         'M3_VENDOR_BIND_IP=127.0.0.1',
         'M3_VENDOR_PORT=18445'
-    ), [Text.UTF8Encoding]::new($false))
+    )
+    [IO.File]::AppendAllText($environmentPath, (($hostBindings -join [Environment]::NewLine) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
     $installed = Import-Certificate -FilePath (Join-Path $rawRoot 'certificates\ca.crt') -CertStoreLocation Cert:\LocalMachine\Root
     $rootThumbprint = $installed.Thumbprint
     try {
