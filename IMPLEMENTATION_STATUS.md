@@ -75,11 +75,15 @@ Esito conclusivo: **GO per M2**. La lineage live è stata integrata linearmente:
 - Broker production invoker con enrollment Installation, PoP/firma BGW1 e chiave CNG ECDSA P-256 non esportabile sotto la service identity;
 - stack deterministico con Gateway container reale, PostgreSQL 18, synthetic Vault HTTPS e vendor mock HTTPS/mTLS, tutti alimentati da certificati e canary per-run;
 - matrice automatica M3-P01/P03-P07 e M3-N01..N15, inclusi revoca, firma invalida, replay, tenant/URL/secret reference client-side, grant, SSRF/DNS, redirect, certificato errato, Vault/PostgreSQL indisponibili e log redaction;
-- orchestratore Windows elevato per installare il Broker come vero servizio ed eseguire il Legacy Simulator senza vendor secret;
+- runner VM e script operatore revisionato per installare il Broker come vero servizio ed eseguire il Legacy Simulator standard user senza vendor secret;
 - workflow Azure manuale protetto, federato OIDC, con Managed Identity, Key Vault reale, PostgreSQL 18 e App Service mTLS;
 - evidence CI redatta con manifest, digest immagini, versione PostgreSQL, scenari e sidecar SHA-256; raw evidence esclusa da Git.
 
-Il gate non è chiuso: sul repository GitHub non sono configurati runner Windows elevati né l'environment `azure-dev`. Di conseguenza M3-P02 non è ancora PASS-LIVE nel nuovo slice e M3B non è stata eseguita. Nessun tag M3 è stato creato e M4 resta vietata. Review: `docs/reviews/M3-GATE-REVIEW.md`.
+Il gate non è chiuso: M3-P02 deve ancora essere eseguito live con la procedura operatore
+revisionata e l'environment `azure-dev` non è configurato. Non è richiesto un runner Codex
+elevato o un executor SYSTEM generico: queste automazioni di laboratorio sono rinviate
+alla qualificazione di release. Nessun tag M3 è stato creato e M4 resta vietata. Review:
+`docs/reviews/M3-GATE-REVIEW.md`.
 
 La run split-host `m3a-live-20260804-131718` è stata classificata **BLOCKED — PRE-HANDOFF INFRASTRUCTURE VALIDATION**: live/readiness erano HTTP 200, ma Docker health falliva per SAN incompatibile e i profili Windows Firewall erano disabilitati. Il runner VM non è stato eseguito e P02 non è stato testato. Cleanup PASS ha lasciato zero risorse della run e ha rimosso l'handoff non utilizzato. I fix health/TLS e firewall reversibile sono implementati. Il runner predispone ora un secondo switch Hyper-V Internal e una NIC VM `M3A-Isolated`, senza NAT/gateway/DNS/forwarding, con rollback SYSTEM, isolamento del profilo Private e probe VM→HOST pre-handoff. La nuova prova live resta PENDING. Dettagli: `docs/reviews/M3A-BLOCKED-RUN-20260804-131718.md`.
 
@@ -93,6 +97,14 @@ Legacy SID, usa versione `3.0.0` e separa risultati `PASS` da failure `BLOCKED`.
 Dettagli: `docs/reviews/M3A-SPLIT-HOST-BLOCKED-20260804.md`. Una nuova run resta
 PENDING e deve usare materiale e RunId nuovi.
 
+Il gate M3A è stato semplificato in HOST `Prepare` → `WAITING_FOR_OPERATOR` → singolo
+script PowerShell 5.1 amministrativo nella VM → `RESULT.json` → HOST `Finalize` e cleanup.
+Le proprietà bloccanti restano quelle del prodotto (vero service account, Legacy standard
+user, P02 e controlli security); automazione Codex/SYSTEM, rollback perfetto, gestione
+Tailscale e ricreazione dinamica del laboratorio non sono criteri M3. Il prototipo SYSTEM
+interrotto è conservato solo nel branch `experimental/m3a-system-executor` al commit
+`b081c527186d4b66b1c03511c0c17856b9ea217a`.
+
 ## Test ed esiti
 
 | Suite/comando | Esito atteso dell'ultima verifica | Copertura |
@@ -103,11 +115,11 @@ PENDING e deve usare materiale e RunId nuovi.
 | `eng/scan-secrets.ps1` | PASS | repository escluso materiale sorgente riservato |
 | `eng/generate-sbom.ps1` | PASS | SBOM SPDX degli artefatti |
 | `Broker.Core.Tests` | 26 PASS | lifecycle/grant, AEAD/nonce/AAD/version, framing e hard limits |
-| `Broker.Integration.Tests` | 23 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction e chiave CNG non esportabile |
+| `Broker.Integration.Tests` | 27 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction, CNG e regressioni harness M3 |
 | `VerticalSlice.Tests` | 1 PASS | vertical slice e negative/security path |
 | `Gateway.Unit.Tests` | 25 PASS | enrollment/PoP/replay/renew/revoke/version, tenant/grant, Vault/cache/auth modes, SSRF, retry, redaction e confini M3 |
 | `Gateway.Integration.Tests` | 7 PASS ordinari | API/Problem/health, startup M3Testing, schema/RLS statico; test PostgreSQL condizionali |
-| Totale suite ordinarie | 82 PASS | 26 Broker Core + 23 Broker integration + 25 Gateway unit + 7 Gateway integration + 1 E2E |
+| Totale suite ordinarie | 86 PASS | 26 Broker Core + 27 Broker integration + 25 Gateway unit + 7 Gateway integration + 1 E2E |
 | CI `m3-deterministic-container-slice` | PASS, run `30903757495`, commit `91963ce` | Gateway/PostgreSQL 18/Vault/vendor reali, matrice positiva/negativa, non-root/read-only, redazione, cleanup ed evidence SHA-256 `A52CACB8…FCA30` |
 | PostgreSQL 18 effimero locale | 2 PASS | migration, FORCE RLS, registry enrollment/grant/replay/revoca |
 | CI `gateway-postgresql-18` | PASS | run `30896803567`: PostgreSQL 18, migration apply/no-op, checksum, ruoli, FORCE RLS, tenant isolation e cleanup |
@@ -161,7 +173,8 @@ Per M3, AC-001/006/007/009/010/011/012/013/021/023 hanno nuova evidenza containe
 - Key Vault/Managed Identity è implementato ma non provato live senza ambiente Azure;
 - non esiste ancora idempotency record/runtime deduplication: l'envelope valida la key e il retry è limitato alle operation server-side idempotenti; la semantica completa resta nel runtime Connector M4;
 - Gateway HTTP v1 e IPC v1 restano provvisori fino al gate M3.
-- il workflow M3A container prova il Gateway e i servizi reali ma non sostituisce l'esecuzione elevata del Broker Windows Service; serve un runner Windows effimero con Docker Linux;
+- il workflow M3A container prova Gateway e servizi reali ma non sostituisce il P02 live;
+  la fase VM richiede una console amministrativa dell'operatore, non Codex elevato;
 - M3B è implementata ma non eseguita: mancano environment GitHub protetto, federazione OIDC e subscription Azure dev autorizzata;
 - la rete Default Switch resta esclusa dal gate; la rete interna M3A dedicata è automatizzata ma deve ancora superare la prova live e il rollback reale sull'HOST/VM;
 - le action `checkout@v4`/`upload-artifact@v4` producono un warning di runtime Node 20 deprecato sul runner corrente; non altera l'esito ma richiede upgrade quando disponibile.

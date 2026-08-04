@@ -54,7 +54,8 @@ non redatti sono vietati in Git e coperti da `.gitignore`/secret scan.
 
 ## Dipendenze operative non sostituibili
 
-- runner Windows elevato con Docker/engine Linux e label concordata;
+- laboratorio split-host con Docker Linux sull'HOST e singolo script revisionato eseguito
+  manualmente da console amministrativa VM;
 - GitHub Environment `azure-dev` con federazione OIDC e reviewer/protection rules;
 - subscription/resource group Azure dev autorizzati;
 - DNS pubblico o endpoint di mock dev compatibile mTLS.

@@ -22,12 +22,35 @@ fuori dal repository e verificato.
 Restano due blocker non sostituibili con simulazioni:
 
 1. M3A deve ancora essere eseguita con il Broker installato come vero Windows Service e
-   il Legacy Simulator come processo autorizzato; GitHub non ha runner self-hosted/elevati.
+   il Legacy Simulator come utente standard attraverso la procedura operatore revisionata.
 2. M3B deve ancora essere eseguita in Azure dev; il repository non ha environment
    `azure-dev`, variabili OIDC o subscription autorizzata.
 
 Per questo non sono stati creati tag/baseline M3, non è stato aggiornato `main` e M4 non
 è stata avviata.
+
+## Perimetro del gate M3A semplificato
+
+La Gate Review distingue le proprietà del prodotto dall'automazione del laboratorio. Il
+gate non misura la capacità di Codex di acquisire un token elevato né richiede un
+orchestratore privilegiato generico.
+
+| Classe | Contenuto | Effetto sul gate |
+|---|---|---|
+| A — prodotto obbligatorio | vero Windows Service, StartName `NT SERVICE\SecureIntegrationBroker`, service SID effettivo, Legacy standard user, P02 completo, installation authentication, tenant server-side, operation grant, revoca, replay, API key/mTLS solo Gateway, rifiuto URL/secret reference client-side, redazione e cleanup | ogni voce deve avere evidenza live PASS; una failure blocca M3A |
+| B — laboratorio utile | checkpoint Hyper-V, rete isolata, firewall mirato, rollback assistito, Tailscale pre-disabilitato, handoff e sidecar | aumenta ripetibilità e sicurezza operativa; un limite di automazione non invalida il prodotto se isolamento e cleanup sono verificati manualmente |
+| C — automazione futura | Codex VM autonomo, executor SYSTEM generico, rollback completamente automatico, gestione Tailscale/profili firewall perfettamente automatizzata, laboratorio ricreato a ogni run, evidence formale di ogni tentativo preparatorio | rinviata alla qualificazione di release; non è blocker M3 |
+
+Il flusso approvato è HOST `Prepare` → `WAITING_FOR_OPERATOR` → singolo script PowerShell
+5.1 eseguito manualmente in console amministrativa VM → acquisizione `RESULT.json` e ZIP
+redatto → HOST `Finalize` → cleanup. Lo script è prodotto dal repository, trasferito con
+SHA-256, non contiene segreti, non stampa il bootstrap ed esegue `ValidateVm` prima di
+`Run`. Il checkpoint Hyper-V è la recovery primaria.
+
+Il prototipo di executor SYSTEM, interrotto prima di diventare requisito, è preservato
+senza riscritture nel branch `experimental/m3a-system-executor`, commit
+`b081c527186d4b66b1c03511c0c17856b9ea217a`. Non appartiene al candidate commit M3 e
+non è richiesto per dichiarare M3A PASS.
 
 ## Lineage e review dei commit
 
@@ -48,6 +71,7 @@ La storia da M2 è lineare e non contiene merge, rebase o squash.
 | `dd3602e` | bundle CI redatto conservato prima del cleanup, con scope dichiarato e digest |
 | `953b7a7` | evidence vincolata a `CANDIDATE_COMMIT_SHA` e assert sul checkout; il merge SHA sintetico PR non è più usato come identità del prodotto |
 | `91963ce` | manifest arricchito e ZIP finalizzato soltanto dopo cleanup PASS con zero container/volumi residui |
+| `d88be56` | handoff operatore verificato con SHA-256, `WAITING_FOR_OPERATOR`, script VM unico e test regressivo; nessun executor SYSTEM |
 
 I fix derivano tutti da run bloccate preservate (`30900135811`, `30900263348`,
 `30901085026`, `30901570191`, `30902042566`, `30902477494`). Nessuno introduce bypass
@@ -152,7 +176,7 @@ PENDING-LIVE e non viene rappresentato come eseguito.
 | Controllo sul commit `91963ce` | Risultato |
 |---|---|
 | build Release | PASS, 0 warning/error locale e CI |
-| suite ordinarie | PASS, 82/82 |
+| suite ordinarie | PASS, 86/86 sul branch corrente |
 | Gateway PostgreSQL 18 | PASS, migration apply/no-op, checksum, ruoli, FORCE RLS, tenant isolation, cleanup |
 | `m3-deterministic-container-slice` | PASS, run `30903757495` |
 | container hardening/SBOM | PASS, non-root, read-only, health/readiness, fail-closed, shutdown e digest |
@@ -164,7 +188,8 @@ PENDING-LIVE e non viene rappresentato come eseguito.
 
 ## Blocker per la baseline M3
 
-- runner Windows elevato ed effimero con Docker Linux per `tools/m3/Invoke-M3A.ps1 -Phase Run`;
+- esecuzione manuale M3A dello script revisionato con P02 attraverso il vero Broker
+  Service e acquisizione di `RESULT.json`/evidence redatta PASS;
 - environment GitHub `azure-dev`, OIDC federato e variabili elencate nel runbook;
 - smoke Azure PASS con Managed Identity/Key Vault reali e bundle redatto verificato.
 

@@ -7,6 +7,12 @@ Questo runbook prepara il gate manuale M3A; non autorizza M3B, M4, il merge dell
 SHA completo scritto da `Prepare` nel pacchetto VM. Una run è valida soltanto se HOST e
 VM attestano quello stesso SHA.
 
+Il gate adotta deliberatamente un handoff manuale: `Prepare` si ferma in
+`WAITING_FOR_OPERATOR` e un operatore esegue nella VM un unico script revisionato. Un
+executor generico SYSTEM, l'autonomia di Codex VM e la ricreazione perfetta del laboratorio
+non sono criteri M3; l'eventuale automazione appartiene alla qualificazione di release.
+Il checkpoint Hyper-V creato prima della run è la recovery primaria del laboratorio.
+
 ```mermaid
 flowchart LR
     subgraph VM[Windows 11 Hyper-V]
@@ -134,7 +140,8 @@ $vmCredential = Get-Credential -UserName 'LabAdmin' `
     -IsolatedSwitchName 'M3A-Isolated' `
     -IsolatedVmNicName 'M3A-Isolated' `
     -IsolatedNetworkAddress '192.168.250.0' `
-    -IsolatedPrefixLength 29
+    -IsolatedPrefixLength 29 `
+    -RollbackTimeoutMinutes 150
 $vmCredential = $null
 ```
 
@@ -154,7 +161,8 @@ $vmCredential = $null
   prova che dalla VM siano raggiungibili soltanto HOST `192.168.250.1:28443`, non la
   stessa porta su Default Switch/LAN né PostgreSQL, vault e vendor mock;
 - produce `C:\SecureEvidence\<RunId>\<RunId>-vm-input.zip` e sidecar;
-- restituisce `AWAITING_VM`, non un PASS.
+- trasferisce handoff e script revisionato, verifica gli hash nella VM e restituisce
+  `WAITING_FOR_OPERATOR`, non un PASS.
 
 Il ZIP VM contiene activation code monouso ed è materiale raw temporaneo. Non
 caricarlo su GitHub, non inserirlo in evidence redatta e non copiarlo nel repository.
@@ -163,38 +171,33 @@ default): completare l'handoff e il test VM entro tale finestra oppure eseguire
 cleanup e iniziare una nuova run con nuovi certificati e activation code. Non
 posticipare task di run già avviate.
 
-## Trasferimento HOST → VM
+Riservare 60–75 minuti continui per preparazione, esecuzione VM, acquisizione risultato,
+Finalize e cleanup. La finestra da 150 minuti lascia margine per l'inserimento manuale e
+per un cleanup controllato; non iniziare l'esecuzione VM con meno di 45 minuti residui.
 
-Usare l'integrazione Hyper-V Guest Service Interface, senza PowerShell Direct e senza
-eseguire comandi nella VM dall'HOST:
+## Handoff e stato WAITING_FOR_OPERATOR
 
-```powershell
-$guestService = $vm | Get-VMIntegrationService |
-    Where-Object Name -EQ 'Guest Service Interface'
-if (-not $guestService.Enabled) {
-    throw 'Abilitare Guest Service Interface solo dopo approvazione operativa.'
-}
-$source = "C:\SecureEvidence\$runId\$runId-vm-input.zip"
-$sidecar = $source + '.sha256'
-Copy-VMFile -VM $vm -SourcePath $source `
-    -DestinationPath "C:\Lab\M3A\$runId\input.zip" `
-    -FileSource Host -CreateFullPath
-Copy-VMFile -VM $vm -SourcePath $sidecar `
-    -DestinationPath "C:\Lab\M3A\$runId\input.zip.sha256" `
-    -FileSource Host -CreateFullPath
-```
+`Prepare` usa PowerShell Direct con il solo `VMId` esatto e la credenziale `LabAdmin`
+mantenuta in memoria per copiare, senza eseguirli:
 
-Non abilitare servizi d'integrazione, checkpoint o sessioni remote automaticamente.
-Se Guest Service Interface non è già abilitato, fermarsi per la decisione del
-responsabile VM.
+- ZIP e sidecar dell'input sintetico;
+- `Invoke-M3ASplitVmOperator.ps1` e relativo sidecar SHA-256;
+- `RUNID.txt`.
 
-## Esecuzione Codex VM
+La destinazione è `C:\Lab\M3A\<RunId>`. Gli hash vengono ricalcolati nella VM; il runner
+restituisce `WAITING_FOR_OPERATOR`, `operatorScriptSha256` e `operatorCommand`. A questo
+punto l'HOST non avvia alcun task privilegiato e mantiene lo stack in esecuzione.
 
-Seguire senza variazioni [M3A split-host — istruzioni Codex
-VM](M3A-SPLIT-HOST-CODEX-VM.md). Il risultato accettabile è un archivio **redatto**
-con sidecar, `vm-manifest.json`, `legacy-simulator.json` e cleanup PASS. Il Broker deve
-essere stato osservato Running con process token del service SID; un processo legacy
-deve aver attraversato realmente la Named Pipe e il Gateway HOST.
+## Esecuzione manuale VM
+
+Seguire [M3A split-host — esecuzione manuale nella VM](M3A-SPLIT-HOST-CODEX-VM.md).
+L'operatore apre Windows PowerShell 5.1 come amministratore ed esegue un solo comando,
+quello restituito da `Prepare`. Non è necessario avviare Codex come amministratore.
+
+Il risultato accettabile è `RESULT.json` PASS e un archivio **redatto** con sidecar,
+`vm-manifest.json`, `legacy-simulator.json` e cleanup PASS. Il Broker deve essere stato
+osservato Running con process token del service SID; il Legacy Simulator deve essere
+un utente standard e deve aver attraversato realmente Named Pipe e Gateway HOST.
 
 Il risultato VM può essere trasferito tramite asset di una release privata temporanea
 GitHub o un canale amministrativo approvato. Non committare evidence. Per una release

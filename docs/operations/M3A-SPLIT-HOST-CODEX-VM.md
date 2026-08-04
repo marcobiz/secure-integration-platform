@@ -1,144 +1,94 @@
-# M3A split-host — istruzioni esatte per Codex VM
+# M3A split-host — esecuzione manuale nella VM
 
 ## Mandato
 
-Operare esclusivamente nella VM Windows 11. Non avviare M3B/M4, non modificare la PR
-#3 e non dichiarare PASS senza attraversamento reale del Windows Service. Non usare
-PowerShell Direct. Non pubblicare `input.zip`, `bootstrap.json`, activation code, raw
-Event Log, canary o materiale CNG/DPAPI.
+Questa procedura non richiede Codex elevato nella VM. Un operatore apre una console
+**Windows PowerShell 5.1 come amministratore** ed esegue un solo script revisionato,
+generato e trasferito dal repository candidato. SYSTEM non è usato per orchestrare la
+fase VM: l'identità privilegiata serve soltanto a installare il vero Windows Service e a
+creare l'utente standard di test.
 
-## 1. Preflight e pacchetto
+Non avviare M3B/M4, non modificare o unire la PR #3 e non dichiarare PASS senza
+`RESULT.json` PASS e attraversamento reale del Broker.
 
-Aprire **Windows PowerShell 5.1 come amministratore** nella VM:
+## Handoff atteso
 
-```powershell
-$runId = '<RUN-ID-RICEVUTO-DALL-HOST>'
-$packageRoot = "C:\Lab\M3A\$runId"
-$inputZip = Join-Path $packageRoot 'input.zip'
-$sidecar = $inputZip + '.sha256'
+`Prepare` crea e verifica nella VM la directory:
 
-if (-not (Test-Path $inputZip) -or -not (Test-Path $sidecar)) {
-    throw 'Pacchetto o sidecar mancante'
-}
-$expected = ((Get-Content $sidecar -Raw) -split '\s+')[0].ToUpperInvariant()
-$actual = (Get-FileHash $inputZip -Algorithm SHA256).Hash
-if ($actual -ne $expected) { throw 'SHA-256 pacchetto VM non corrispondente' }
-
-$input = Join-Path $packageRoot 'input'
-New-Item -ItemType Directory -Path $input -Force | Out-Null
-Expand-Archive -LiteralPath $inputZip -DestinationPath $input -Force
-$bootstrap = Get-Content (Join-Path $input 'bootstrap.json') -Raw | ConvertFrom-Json
-if ($bootstrap.runId -ne $runId) { throw 'RunId non corrispondente' }
-if ($bootstrap.gatewayBaseAddress -match 'localhost|127\.0\.0\.1|\[::1\]') {
-    throw 'Endpoint Gateway loopback vietato'
-}
-Remove-Item -LiteralPath $inputZip, $sidecar -Force
+```text
+C:\Lab\M3A\<RUN-ID>\
+  input.zip
+  input.zip.sha256
+  Invoke-M3ASplitVmOperator.ps1
+  Invoke-M3ASplitVmOperator.ps1.sha256
+  RUNID.txt
 ```
 
-Non stampare `$bootstrap`, perché contiene l'activation code. Registrare lo SHA
-completo soltanto in memoria:
+`input.zip` contiene materiale sintetico raw per-run e non deve essere aperto, stampato,
+committato o trasferito altrove. Lo script operatore non contiene segreti. Il suo hash
+SHA-256 viene restituito da `Prepare` e deve essere usato nel comando, così una modifica
+allo script o al sidecar causa un arresto fail-closed.
+
+## Comando unico
+
+Dalla console amministrativa nella VM eseguire esattamente il valore `operatorCommand`
+restituito da `Prepare`. La forma è:
 
 ```powershell
-$candidate = [string]$bootstrap.candidateCommit
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `
+  -File "C:\Lab\M3A\<RUN-ID>\Invoke-M3ASplitVmOperator.ps1" `
+  -RunId <RUN-ID> `
+  -ExpectedScriptSha256 <SHA-256-SCRIPT>
 ```
 
-## 2. Repository e collisioni
+Non aggiungere activation code, password o contenuto del bootstrap alla command line.
 
-```powershell
-Set-Location C:\Lab\broker-gateway
-if (git status --porcelain) { throw 'Worktree VM non pulito' }
-git fetch --prune origin
-git cat-file -e "$candidate^{commit}"
-if ($LASTEXITCODE -ne 0) { throw 'Commit candidato non disponibile' }
+## Contratto dello script
 
-Get-CimInstance Win32_Service -Filter "Name='SecureIntegrationBroker'" |
-    Select-Object Name,State,StartName,PathName
-```
+Lo script:
 
-Se il servizio appartiene alla matrice M0/M1, il runner ne verifica binary path,
-ownership marker e RunId e invoca il cleanup ufficiale senza eliminare le evidenze.
-Un servizio non riconosciuto resta un blocker fail-closed. Non usare `sc delete` alla
-cieca e non aggirare il controllo con un launcher esterno.
+1. richiede una console amministrativa e verifica RunId, hash proprio, hash ZIP e sidecar;
+2. estrae l'handoff senza stampare o serializzare `bootstrap.json`;
+3. rifiuta endpoint Gateway loopback e una finestra residua inferiore a 45 minuti;
+4. richiede worktree VM pulito, esegue `fetch` e passa al candidate commit in detached HEAD;
+5. avvia `ValidateVm` in un processo PowerShell 5.1 separato;
+6. soltanto dopo `ValidateVm` PASS avvia `Run` con la stessa RunId, lo stesso input, lo
+   stesso commit e lo stesso output;
+7. lascia al runner l'installazione del Broker come vero servizio con StartName
+   `NT SERVICE\SecureIntegrationBroker` e l'esecuzione del Legacy Simulator con utente
+   standard e task `RunLevel Limited`;
+8. produce sempre il risultato canonico
+   `C:\SecureEvidence\<RUN-ID>\RESULT.json`, con soli codici redatti;
+9. restituisce exit code zero soltanto quando anche il `RESULT.json` del runner e
+   `vm-manifest.json` attestano PASS sul candidate commit.
 
-Preflight del runner:
+Un `BLOCKED`, un exit code non zero o l'assenza di uno dei due manifest impedisce il PASS.
 
-```powershell
-.\tools\m3\split-host\Invoke-M3ASplitVm.ps1 `
-    -Phase ValidateVm -RunId $runId -RepositoryRoot C:\Lab\broker-gateway
-```
+## Handoff risultato
 
-## 3. Run VM
-
-```powershell
-$output = "C:\SecureEvidence\$runId\vm-redacted"
-.\tools\m3\split-host\Invoke-M3ASplitVm.ps1 `
-    -Phase Run `
-    -RunId $runId `
-    -InputDirectory $input `
-    -OutputDirectory $output `
-    -RepositoryRoot C:\Lab\broker-gateway
-```
-
-Il runner autonomamente:
-
-1. esegue fetch e detached checkout dello SHA esatto ricevuto;
-2. pubblica Broker e Legacy Simulator dal commit;
-3. crea un utente locale standard per-run, mai membro Administrators;
-4. concede e verifica `SeBatchLogonRight` all'utente per-run e lo revoca al cleanup;
-5. installa `SecureIntegrationBroker` con
-   `NT SERVICE\SecureIntegrationBroker`, service SID unrestricted e ACL protette;
-6. concede al Legacy SID soltanto `ReadAndExecute` sull'installazione protetta;
-7. importa soltanto la CA sintetica pubblica;
-8. esegue il Legacy Simulator mediante task temporaneo `RunLevel Limited`;
-9. dimostra P02 e il grant denial attraverso Broker→Gateway HOST;
-10. esegue una copia non registrata dello stesso eseguibile sotto lo stesso utente e
-   richiede il diniego path-policy con audit `application_not_authorized`;
-11. rimuove activation code da registry e disco subito dopo l'enrollment;
-12. produce sempre `RESULT.json`: `PASS` soltanto dopo tutti i controlli, altrimenti
-    un archive separato `BLOCKED` contenente esclusivamente il risultato redatto;
-13. scansiona report/Event Log, produce evidence redatta e completa il cleanup.
-
-Il runner fallisce se il service token SID non coincide, l'utente è amministratore,
-le ACL storage includono altri principal, P02 non passa, l'app non autorizzata passa,
-una canary compare o il cleanup non è completo.
-
-## 4. Verifica risultato
-
-```powershell
-$archive = "C:\SecureEvidence\$runId\$runId-vm-redacted.zip"
-$archiveSidecar = $archive + '.sha256'
-$expected = ((Get-Content $archiveSidecar -Raw) -split '\s+')[0].ToUpperInvariant()
-$actual = (Get-FileHash $archive -Algorithm SHA256).Hash
-if ($actual -ne $expected) { throw 'SHA-256 risultato VM non corrispondente' }
-
-$manifest = Get-Content (Join-Path $output 'vm-manifest.json') -Raw | ConvertFrom-Json
-if ($manifest.status -ne 'PASS' -or $manifest.commitSha -ne $candidate) { throw 'Manifest VM non valido' }
-if ($manifest.cleanup.status -ne 'PASS' -or $manifest.cleanup.remainingServices -ne 0 -or $manifest.cleanup.remainingTasks -ne 0) {
-    throw 'Cleanup VM incompleto'
-}
-Get-Service SecureIntegrationBroker -ErrorAction SilentlyContinue
-Get-ScheduledTask -TaskName "SecureIntegration-M3A-$runId-*" -ErrorAction SilentlyContinue
-git status --short
-```
-
-Le prime due query devono restituire zero elementi; il worktree deve essere pulito.
-Non cancellare il risultato redatto finché l'HOST non ne verifica sidecar e contenuto.
-
-## 5. Handoff all'HOST
-
-Trasferire esclusivamente:
+In caso di PASS, trasferire all'HOST soltanto:
 
 - `<RunId>-vm-redacted.zip`;
-- `<RunId>-vm-redacted.zip.sha256`.
+- `<RunId>-vm-redacted.zip.sha256`;
+- il `RESULT.json` canonico.
 
-È ammesso un asset di release **privata** temporanea, mai un commit Git. Prima
-dell'upload ispezionare l'archivio e confermare che contenga soltanto:
+Non trasferire input, bootstrap, PFX, Event Log raw, canary, DPAPI/CNG o directory di
+build. L'HOST verifica sidecar e manifest, esegue `Finalize`, correla gli scenari Gateway e
+completa il cleanup.
 
-- `vm-manifest.json`;
-- `RESULT.json`;
-- `legacy-simulator.json`;
-- `unauthorized-application.json`;
-- `broker-events-redacted.json`.
+## Cleanup VM
 
-Non caricare la directory input o output raw. Conservare branch remoto e PR #3; non
-fare merge, tag baseline, rebase, squash o force push.
+Il runner rimuove servizio, utente, diritto `SeBatchLogonRight`, certificato sintetico,
+task e directory protette appartenenti alla RunId. Dopo che l'HOST ha acquisito il
+risultato, l'operatore rimuove la sola directory handoff:
+
+```powershell
+$runId = '<RUN-ID>'
+Set-Location C:\Lab\broker-gateway
+.\tools\m3\split-host\Invoke-M3ASplitVm.ps1 -Phase Cleanup -RunId $runId
+Remove-Item -LiteralPath ("C:\Lab\M3A\" + $runId) -Recurse -Force
+```
+
+Se il cleanup fallisce, ripristinare il checkpoint Hyper-V pre-run. Il checkpoint è la
+recovery primaria del laboratorio; i cleanup automatici esistenti sono difesa operativa,
+non proprietà di sicurezza del prodotto né criterio bloccante autonomo di M3.

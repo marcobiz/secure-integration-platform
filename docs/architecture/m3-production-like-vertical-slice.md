@@ -101,12 +101,14 @@ manifest, risultati, configurazione pubblica, hash e log redatti.
 
 M3 non è `Done` finché lo stesso commit non ha:
 
-1. M3A PASS su un runner Windows elevato capace di eseguire il vero servizio Broker e
-   lo stack Linux container;
+1. M3A PASS sul laboratorio split-host: stack Linux container sull'HOST e script
+   revisionato eseguito manualmente da console amministrativa VM per il vero Broker;
 2. M3B PASS nell'Environment GitHub `azure-dev` mediante OIDC, senza secret Azure
    persistenti;
 3. build, test, scan, SBOM, evidence validation e review del diff PASS;
 4. commit di configurazione sintetica ed evidence redatta separati dal commit prodotto.
 
-Al 4 agosto 2026 il repository GitHub non espone runner self-hosted né Environment
-`azure-dev`: è una dipendenza operativa, non un motivo per simulare le evidenze.
+Al 4 agosto 2026 M3A usa un handoff operatore verificato con SHA-256; un runner
+self-hosted o un executor SYSTEM generico non è requisito del prodotto. L'Environment
+`azure-dev` resta invece una dipendenza operativa di M3B, non un motivo per simulare le
+evidenze.

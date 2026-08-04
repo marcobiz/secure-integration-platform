@@ -8,16 +8,17 @@
 - directory raw sotto `.artifacts/m3/<run-id>`;
 - clock sincronizzato e outbound HTTPS controllato.
 
-## M3A — runner Windows elevato
+## M3A — laboratorio split-host con operatore VM
 
-Il runner deve avere Windows Service Control Manager accessibile, Docker con container
-Linux, almeno 8 GiB liberi e label GitHub `self-hosted`, `Windows`, `X64`, `m3-e2e`.
+L'HOST usa Docker Linux; la VM espone Windows Service Control Manager. La fase elevata è
+un singolo script PowerShell revisionato eseguito manualmente dall'operatore, non un
+runner Codex o un executor SYSTEM generico. Vedere `M3A-SPLIT-HOST-RUNBOOK.md`.
 
 1. eseguire preflight e verificare elevazione, engine, porte e commit;
 2. generare CA, certificato Gateway/mock e certificati client esclusivamente sintetici;
 3. avviare PostgreSQL 18, migration runner, synthetic Vault, mock vendor e Gateway;
 4. applicare seed Tenant/Application/Installation/activation/grant con tool separato;
-5. installare Broker come `NT SERVICE\\BrokerGateway` e verificare service identity/ACL;
+5. installare Broker come `NT SERVICE\\SecureIntegrationBroker` e verificare service identity/ACL;
 6. eseguire il Legacy Simulator sotto l'identità autorizzata;
 7. eseguire P01–P07 e N01–N15, controllando contatori Vault/mock e audit;
 8. fermare servizio/container, redigere i log, cercare tutte le canary;
