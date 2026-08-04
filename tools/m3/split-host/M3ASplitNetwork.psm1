@@ -103,13 +103,24 @@ function Disable-M3ATailscaleForIsolation {
     $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
     if ([bool]$state.tailscale.present -and [bool]$state.tailscale.wasEnabled) {
         Get-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -ErrorAction Stop | Disable-NetAdapter -Confirm:$false
-        $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+        $deadline = [DateTimeOffset]::UtcNow.AddSeconds(5)
         do {
             $tailscale = Get-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -ErrorAction SilentlyContinue
             if ($null -ne $tailscale -and [string]$tailscale.Status -ne 'Up' -and [string]$tailscale.AdminStatus -ne 'Up') { break }
             Start-Sleep -Milliseconds 500
         } while ([DateTimeOffset]::UtcNow -lt $deadline)
-        if ($null -eq $tailscale -or [string]$tailscale.AdminStatus -eq 'Up') { throw 'M3A_SPLIT_TAILSCALE_DISABLE_FAILED.' }
+        if ($null -eq $tailscale -or [string]$tailscale.AdminStatus -eq 'Up') {
+            if ([string]::IsNullOrWhiteSpace([string]$state.tailscale.pnpDeviceId)) { throw 'M3A_SPLIT_TAILSCALE_PNP_ID_MISSING.' }
+            Disable-PnpDevice -InstanceId ([string]$state.tailscale.pnpDeviceId) -Confirm:$false
+            $deadline = [DateTimeOffset]::UtcNow.AddSeconds(15)
+            do {
+                $tailscale = Get-NetAdapter -Name Tailscale -ErrorAction SilentlyContinue
+                if ($null -eq $tailscale -or [string]$tailscale.AdminStatus -ne 'Up' -or [string]$tailscale.Status -ne 'Up') { break }
+                Start-Sleep -Milliseconds 500
+            } while ([DateTimeOffset]::UtcNow -lt $deadline)
+            $state.tailscale | Add-Member -NotePropertyName disableMethod -NotePropertyValue 'PnPDevice' -Force
+        }
+        if ($null -ne $tailscale -and ([string]$tailscale.AdminStatus -eq 'Up' -or [string]$tailscale.Status -eq 'Up')) { throw 'M3A_SPLIT_TAILSCALE_DISABLE_FAILED.' }
         $state.tailscale | Add-Member -NotePropertyName temporarilyDisabled -NotePropertyValue $true -Force
         Write-M3ANetworkJson $state $StatePath
     }
@@ -142,7 +153,10 @@ function New-M3ANetworkRollback {
 `$state = Get-Content -LiteralPath '$escapedState' -Raw | ConvertFrom-Json
 if (`$state.firewallRule) { Get-NetFirewallRule -DisplayName ([string]`$state.firewallRule) -ErrorAction SilentlyContinue | Remove-NetFirewallRule }
 foreach (`$profile in @(`$state.originalFirewallProfiles)) { Set-NetFirewallProfile -Name ([string]`$profile.Name) -Enabled ([string]`$profile.Enabled) }
-if ([bool]`$state.tailscale.wasEnabled) { Get-NetAdapter -InterfaceIndex ([uint32]`$state.tailscale.interfaceIndex) -ErrorAction SilentlyContinue | Enable-NetAdapter -Confirm:`$false }
+if ([bool]`$state.tailscale.wasEnabled) {
+    if (`$state.tailscale.pnpDeviceId) { Enable-PnpDevice -InstanceId ([string]`$state.tailscale.pnpDeviceId) -Confirm:`$false -ErrorAction SilentlyContinue }
+    Get-NetAdapter -Name 'Tailscale' -ErrorAction SilentlyContinue | Enable-NetAdapter -Confirm:`$false
+}
 `$vm = Get-VM -Id ([guid]`$state.vmId) -ErrorAction SilentlyContinue
 if (`$null -ne `$vm) {
     Get-VMNetworkAdapter -VM `$vm -Name ([string]`$state.vmNicName) -ErrorAction SilentlyContinue |
@@ -216,7 +230,7 @@ function New-M3AIsolatedNetwork {
         checkpointName = $CheckpointName; checkpointCreated = $false; switchCreated = $false; vmNicCreated = $false
         firewallRule = $null
         originalFirewallProfiles = @($inventory.firewallProfiles | ForEach-Object { [pscustomobject]@{ Name = [string]$_.Name; Enabled = [bool]$_.Enabled } })
-        tailscale = [ordered]@{ present = $null -ne $tailscale; interfaceIndex = if ($tailscale) { [uint32]$tailscale.InterfaceIndex } else { 0 }; wasEnabled = $null -ne $tailscale -and [string]$tailscale.AdminStatus -eq 'Up'; status = if ($tailscale) { [string]$tailscale.Status } else { 'Missing' } }
+        tailscale = [ordered]@{ present = $null -ne $tailscale; interfaceIndex = if ($tailscale) { [uint32]$tailscale.InterfaceIndex } else { 0 }; pnpDeviceId = if ($tailscale) { [string]$tailscale.PnPDeviceID } else { $null }; wasEnabled = $null -ne $tailscale -and [string]$tailscale.AdminStatus -eq 'Up'; status = if ($tailscale) { [string]$tailscale.Status } else { 'Missing' } }
         rollbackTask = $RollbackTaskName; preparedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
     }
     Write-M3ANetworkJson $state $StatePath
@@ -331,10 +345,11 @@ function Remove-M3AIsolatedNetwork {
     if ($state.firewallRule) { Get-NetFirewallRule -DisplayName ([string]$state.firewallRule) -ErrorAction SilentlyContinue | Remove-NetFirewallRule }
     foreach ($profile in @($state.originalFirewallProfiles)) { Set-NetFirewallProfile -Name ([string]$profile.Name) -Enabled ([string]$profile.Enabled) }
     if ([bool]$state.tailscale.wasEnabled) {
-        Get-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -ErrorAction SilentlyContinue | Enable-NetAdapter -Confirm:$false
+        if ($state.tailscale.pnpDeviceId) { Enable-PnpDevice -InstanceId ([string]$state.tailscale.pnpDeviceId) -Confirm:$false -ErrorAction SilentlyContinue }
+        Get-NetAdapter -Name Tailscale -ErrorAction SilentlyContinue | Enable-NetAdapter -Confirm:$false
         $tailscaleDeadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
         do {
-            $tailscaleStatus = Get-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -ErrorAction SilentlyContinue
+            $tailscaleStatus = Get-NetAdapter -Name Tailscale -ErrorAction SilentlyContinue
             if ($null -ne $tailscaleStatus -and [string]$tailscaleStatus.AdminStatus -eq 'Up' -and [string]$tailscaleStatus.Status -eq 'Up') { break }
             Start-Sleep -Milliseconds 500
         } while ([DateTimeOffset]::UtcNow -lt $tailscaleDeadline)
@@ -354,7 +369,7 @@ function Remove-M3AIsolatedNetwork {
     $switches = @(Get-VMSwitch -ErrorAction SilentlyContinue)
     $adapters = if ($null -ne $vm) { @(Get-VMNetworkAdapter -VM $vm) } else { @() }
     $profiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore -Name Domain,Private,Public | ForEach-Object { [pscustomobject]@{ Name = [string]$_.Name; Enabled = [bool]$_.Enabled } })
-    $tailscale = Get-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -ErrorAction SilentlyContinue
+    $tailscale = Get-NetAdapter -Name Tailscale -ErrorAction SilentlyContinue
     $restored = Test-M3ANetworkStateRestored $state $switches $adapters $profiles $tailscale
     if ($restored) {
         Unregister-ScheduledTask -TaskName ([string]$state.rollbackTask) -Confirm:$false -ErrorAction SilentlyContinue

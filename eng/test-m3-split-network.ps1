@@ -79,6 +79,8 @@ foreach ($required in @(
     'M3A_SPLIT_HOST_ISOLATION_CONTRACT_INVALID',
     'M3A_SPLIT_HOST_TO_VM_LAYER2_CONNECTIVITY_FAILED',
     'M3A_SPLIT_PRIVATE_PROFILE_SHARED_BY_ACTIVE_INTERFACE',
+    'Disable-PnpDevice -InstanceId',
+    'Enable-PnpDevice -InstanceId',
     'Register-ScheduledTask',
     'Remove-VMNetworkAdapter',
     'Test-M3ANetworkStateRestored'
