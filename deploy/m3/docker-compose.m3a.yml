@@ -70,6 +70,8 @@ services:
     networks:
       m3:
         ipv4_address: 172.29.44.5
+        aliases:
+          - vault.m3.test
     ports:
       - "18444:8443"
 
@@ -92,6 +94,8 @@ services:
     networks:
       m3:
         ipv4_address: 172.29.44.6
+        aliases:
+          - vendor.m3.test
     ports:
       - "18445:8443"
 
@@ -106,6 +110,7 @@ services:
       ASPNETCORE_URLS: https://+:8443
       ASPNETCORE_Kestrel__Certificates__Default__Path: /run/m3-certs/gateway.pfx
       ASPNETCORE_Kestrel__Certificates__Default__Password: ${M3_CERTIFICATE_PASSWORD:?required}
+      GATEWAY_HEALTH_URL: https://localhost:8443/health/live
       SSL_CERT_FILE: /run/m3-certs/ca.crt
       ConnectionStrings__GatewayDatabase: Host=postgres;Port=5432;Database=broker_gateway_m3;Username=m3_gateway_runtime;Password=${M3_POSTGRES_RUNTIME_PASSWORD:?required};SSL Mode=Disable
       Gateway__SyntheticVaultUri: https://vault.m3.test:8443/
