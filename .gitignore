@@ -22,7 +22,21 @@ appsettings.Local.json
 *.key
 *.pem
 *.secrets.json
+*.cer
+*.crt
+*.der
+*.jks
+*.keystore
+*.kubeconfig
+*.tfstate
+*.tfstate.*
+**/raw-evidence/
+**/evidence-raw/
+**/m3-evidence-raw/
+**/*-evidence.zip
+**/*-evidence.zip.sha256
+azureProfile.json
+TokenCache.dat
 
 # Reserved source material: contains sensitive assessment evidence
 input-docs/
-
