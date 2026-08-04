@@ -258,7 +258,7 @@ function New-M3AIsolatedNetwork {
     Add-VMNetworkAdapter -VM $vm -Name $VmNicName -SwitchName $SwitchName
     $vmNic = Get-VMNetworkAdapter -VM $vm -Name $VmNicName -ErrorAction Stop
     $mac = [string]$vmNic.MacAddress
-    Set-VMNetworkAdapter -VMNetworkAdapter $vmNic -StaticMacAddress $mac -DhcpGuard On -RouterGuard On -MacAddressSpoofing Off
+    Set-VMNetworkAdapter -VMNetworkAdapter $vmNic -DhcpGuard On -RouterGuard On -MacAddressSpoofing Off
     $state.vmNicCreated = $true; $state.vmNicMacAddress = $mac; $state.hostInterfaceIndex = [uint32]$hostAdapter.InterfaceIndex; $state.hostInterfaceAlias = [string]$hostAdapter.Name
     Write-M3ANetworkJson $state $StatePath
 

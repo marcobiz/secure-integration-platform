@@ -90,6 +90,7 @@ foreach ($required in @(
 if ($module -match 'New-NetNat|Set-NetIPInterface[^\r\n]+Forwarding\s+Enabled') { throw 'Isolated network must not create NAT or enable forwarding.' }
 if ($module -match '(Enable|Disable)-NetAdapter\s+-InterfaceIndex') { throw 'Windows PowerShell 5.1 requires NetAdapter pipeline binding for InterfaceIndex.' }
 if (($module + $runner) -match 'Set-NetFirewallProfile[^\r\n]+-Enabled\s+\(\[bool\]') { throw 'Windows PowerShell 5.1 requires the GpoBoolean string value during rollback.' }
+if ($module -match 'Set-VMNetworkAdapter[^\r\n]+-StaticMacAddress') { throw 'A running VM NIC must retain its assigned MAC instead of attempting an unsupported static conversion.' }
 if ($runner -match 'LocalAddress\s+0\.0\.0\.0|-Profile\s+Any') { throw 'Broad listener or firewall profile accepted.' }
 
 Write-Output 'M3A_SPLIT_NETWORK_TEST_PASS'
