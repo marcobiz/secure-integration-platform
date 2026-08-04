@@ -284,6 +284,35 @@ jobs:
           for canary in "${canaries[@]}"; do
             if grep -Fq -- "$canary" "$logs"; then echo 'A sensitive canary was found in container logs.' >&2; exit 1; fi
           done
+      - name: Package redacted M3 deterministic evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          env_file=.artifacts/m3/ci/raw-evidence/m3a.env
+          redacted=.artifacts/m3/ci/redacted-evidence
+          gateway_container="$(docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml ps -q gateway)"
+          vault_container="$(docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml ps -q vault)"
+          vendor_container="$(docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml ps -q vendor)"
+          gateway_digest="$(docker inspect "$gateway_container" --format '{{.Image}}')"
+          vault_digest="$(docker inspect "$vault_container" --format '{{.Image}}')"
+          vendor_digest="$(docker inspect "$vendor_container" --format '{{.Image}}')"
+          postgres_version="$(docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml exec -T postgres postgres --version)"
+          cp .artifacts/m3/ci/raw-evidence/fixture-public.json "$redacted/fixture-public.json"
+          jq -n --arg runId "$GITHUB_RUN_ID" --arg commit "$GITHUB_SHA" \
+            --arg gatewayDigest "$gateway_digest" --arg vaultDigest "$vault_digest" --arg vendorDigest "$vendor_digest" \
+            --arg postgresVersion "$postgres_version" --slurpfile scenarios "$redacted/security-scenarios.json" \
+            '{schemaVersion:1,environment:"M3A-CI",scope:"gateway-container-only",runId:$runId,commitSha:$commit,gatewayImageDigest:$gatewayDigest,vaultImageDigest:$vaultDigest,vendorImageDigest:$vendorDigest,postgresVersion:$postgresVersion,brokerWindowsServiceVerified:false,azureVerified:false,canaryScan:"PASS",scenarios:$scenarios[0]}' >"$redacted/manifest.json"
+          (cd "$redacted" && zip -q -r "$RUNNER_TEMP/m3a-ci-$GITHUB_RUN_ID-redacted-evidence.zip" .)
+          sha256sum "$RUNNER_TEMP/m3a-ci-$GITHUB_RUN_ID-redacted-evidence.zip" >"$RUNNER_TEMP/m3a-ci-$GITHUB_RUN_ID-redacted-evidence.zip.sha256"
+      - name: Upload redacted M3 deterministic evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: m3a-ci-${{ github.sha }}-redacted-evidence
+          path: |
+            ${{ runner.temp }}/m3a-ci-${{ github.run_id }}-redacted-evidence.zip
+            ${{ runner.temp }}/m3a-ci-${{ github.run_id }}-redacted-evidence.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
       - name: Collect diagnostics and clean M3 deterministic stack
         if: always()
         shell: bash
