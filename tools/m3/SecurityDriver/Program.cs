@@ -130,11 +130,13 @@ async Task SetDatabaseAvailabilityAsync(bool available)
     NpgsqlConnectionStringBuilder builder = new(adminConnection) { Database = "postgres" };
     await using NpgsqlConnection connection = new(builder.ConnectionString);
     await connection.OpenAsync().ConfigureAwait(false);
-    string sql = available
-        ? "ALTER DATABASE broker_gateway_m3 WITH ALLOW_CONNECTIONS true"
-        : "ALTER DATABASE broker_gateway_m3 WITH ALLOW_CONNECTIONS false; SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='broker_gateway_m3'";
-    await using NpgsqlCommand command = new(sql, connection);
-    await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+    await using (NpgsqlCommand availability = new($"ALTER DATABASE broker_gateway_m3 WITH ALLOW_CONNECTIONS {available.ToString().ToLowerInvariant()}", connection))
+        await availability.ExecuteNonQueryAsync().ConfigureAwait(false);
+    if (!available)
+    {
+        await using NpgsqlCommand terminate = new("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='broker_gateway_m3'", connection);
+        await terminate.ExecuteNonQueryAsync().ConfigureAwait(false);
+    }
     if (available) await Task.Delay(500).ConfigureAwait(false);
 }
 
@@ -148,10 +150,15 @@ async Task RevokeAsync()
         context.Parameters.AddWithValue(tenantId.ToString("D"));
         await context.ExecuteNonQueryAsync().ConfigureAwait(false);
     }
-    await using (NpgsqlCommand command = new("UPDATE gateway.installation SET status='revoked',revoked_at=now(),revocation_reason='m3 negative scenario' WHERE id=$1; UPDATE gateway.installation_credential SET status='revoked',revoked_at=now() WHERE installation_id=$1", connection, transaction))
+    await using (NpgsqlCommand installation = new("UPDATE gateway.installation SET status='revoked',revoked_at=now(),revocation_reason='m3 negative scenario' WHERE id=$1", connection, transaction))
     {
-        command.Parameters.AddWithValue(installationId);
-        await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+        installation.Parameters.AddWithValue(installationId);
+        await installation.ExecuteNonQueryAsync().ConfigureAwait(false);
+    }
+    await using (NpgsqlCommand credential = new("UPDATE gateway.installation_credential SET status='revoked',revoked_at=now() WHERE installation_id=$1", connection, transaction))
+    {
+        credential.Parameters.AddWithValue(installationId);
+        await credential.ExecuteNonQueryAsync().ConfigureAwait(false);
     }
     await transaction.CommitAsync().ConfigureAwait(false);
 }
