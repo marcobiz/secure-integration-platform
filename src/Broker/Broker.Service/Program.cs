@@ -32,6 +32,10 @@ builder.Services.AddSingleton<IDataKeyRepository>(provider => new FileDataKeyRep
 builder.Services.AddSingleton(provider => new AeadDataProtector(provider.GetRequiredService<IDataKeyRepository>(), brokerOptions.InstallationId));
 builder.Services.AddSingleton<IBrokerAuditSink, LoggerAuditSink>();
 builder.Services.AddSingleton(new ApplicationAuthorizer(brokerOptions.Applications));
+if (brokerOptions.Gateway.Enabled)
+{
+    builder.Services.AddSingleton<IGatewayInvoker>(_ => new ProductionGatewayInvoker(brokerOptions.Gateway, brokerOptions.DataDirectory));
+}
 builder.Services.AddSingleton<BrokerApplicationService>(provider => new BrokerApplicationService(
     provider.GetRequiredService<ILocalSecretRepository>(),
     provider.GetRequiredService<ILocalProtectionProvider>(),

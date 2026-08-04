@@ -13,6 +13,16 @@ public sealed class GatewayHostOptions
     public string? ActivationHmacKeyBase64 { get; init; }
     /// <summary>Azure Key Vault logical reference for the production activation HMAC key.</summary>
     public string? ActivationHmacSecretReference { get; init; }
+    /// <summary>HTTPS endpoint for the deterministic M3 synthetic Vault; rejected outside M3Testing.</summary>
+    public string? SyntheticVaultUri { get; init; }
+    /// <summary>Environment variable containing the per-run synthetic Vault access token.</summary>
+    public string SyntheticVaultTokenEnvironmentVariable { get; init; } = "M3_SYNTHETIC_VAULT_TOKEN";
+    /// <summary>Exact synthetic vendor host allowed on a private M3 test network.</summary>
+    public string? M3PrivateMockHost { get; init; }
+    /// <summary>Private CIDR containing only the synthetic vendor fixture.</summary>
+    public string? M3PrivateMockCidr { get; init; }
+    /// <summary>Trust App Service's X-ARR-ClientCert boundary; valid only inside Azure App Service.</summary>
+    public bool TrustAzureAppServiceClientCertificateForwarding { get; init; }
     /// <summary>Server-owned operation allowlist.</summary>
     public List<GatewayOperationConfiguration> Operations { get; init; } = [];
 }

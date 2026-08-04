@@ -47,6 +47,8 @@ public sealed class SystemRestrictedTransport : IRestrictedTransport
         if (clientCertificate is not null) handler.SslOptions.ClientCertificates = [clientCertificate];
         using HttpClient client = new(handler) { Timeout = timeout };
         using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        if ((int)response.StatusCode is >= 300 and < 400) throw new GatewayException("BGW-EGRESS-REDIRECT-DENIED", 502);
+        if ((int)response.StatusCode is < 200 or >= 300) throw new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502);
         if (response.Content.Headers.ContentLength > maximumResponseBytes) throw new GatewayException("BGW-EGRESS-RESPONSE-TOO-LARGE", 502);
         await using Stream input = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using MemoryStream output = new();

@@ -6,7 +6,7 @@ using SecureIntegration.Gateway.Domain;
 namespace SecureIntegration.Gateway.Infrastructure;
 
 /// <summary>Deterministic registry for unit/API tests and Development only.</summary>
-public sealed class InMemoryGatewayRegistry : IGatewayRegistry
+public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null) : IGatewayRegistry
 {
     private readonly object gate = new();
     private readonly Dictionary<Guid, TenantRecord> tenants = [];
@@ -183,7 +183,8 @@ public sealed class InMemoryGatewayRegistry : IGatewayRegistry
         cancellationToken.ThrowIfCancellationRequested();
         lock (gate)
         {
-            foreach (string expired in nonces.Where(item => item.Value <= DateTimeOffset.UtcNow).Select(item => item.Key).ToArray()) nonces.Remove(expired);
+            DateTimeOffset now = clock?.UtcNow ?? DateTimeOffset.UtcNow;
+            foreach (string expired in nonces.Where(item => item.Value <= now).Select(item => item.Key).ToArray()) nonces.Remove(expired);
             return Task.FromResult(nonces.TryAdd(installationId.ToString("N") + ':' + Convert.ToHexString(nonceSha256), expiresAt));
         }
     }

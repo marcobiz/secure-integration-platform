@@ -75,6 +75,13 @@ public interface IHostResolver
     Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken);
 }
 
+/// <summary>Optional, narrowly scoped M3 test-network exception for one synthetic host.</summary>
+public interface IPrivateDestinationAllowance
+{
+    /// <summary>Returns true only for the configured synthetic host and network.</summary>
+    bool IsAllowed(string host, IPAddress address);
+}
+
 /// <summary>Restricted HTTP transport. Implementations must not follow redirects or use ambient proxy settings.</summary>
 public interface IRestrictedTransport
 {

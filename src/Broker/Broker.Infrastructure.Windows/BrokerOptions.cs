@@ -11,6 +11,27 @@ public sealed class BrokerOptions
     public string DataDirectory { get; set; } = string.Empty;
     /// <summary>Registered applications.</summary>
     public List<ApplicationPolicy> Applications { get; set; } = [];
+    /// <summary>Production Gateway installation-authentication settings.</summary>
+    public GatewayInstallationOptions Gateway { get; set; } = new();
+}
+
+/// <summary>Fixed central Gateway and Installation credential settings.</summary>
+public sealed class GatewayInstallationOptions
+{
+    /// <summary>Enables the production authenticated Gateway client.</summary>
+    public bool Enabled { get; set; }
+    /// <summary>Fixed HTTPS Gateway origin. Paths are always constructed by the Broker.</summary>
+    public string BaseAddress { get; set; } = string.Empty;
+    /// <summary>Opaque one-time activation record identifier provisioned out of band.</summary>
+    public string ActivationCodeId { get; set; } = string.Empty;
+    /// <summary>Name of the process environment variable containing the one-time code.</summary>
+    public string ActivationCodeEnvironmentVariable { get; set; } = "BROKER_GATEWAY_ACTIVATION_CODE";
+    /// <summary>Persisted CNG key name. The key is created non-exportable under the service identity.</summary>
+    public string CngKeyName { get; set; } = "SecureIntegration.Broker.Installation.v1";
+    /// <summary>Broker semantic version sent during enrollment.</summary>
+    public string BrokerVersion { get; set; } = "1.0.0";
+    /// <summary>Bounded request timeout.</summary>
+    public int TimeoutSeconds { get; set; } = 30;
 }
 
 /// <summary>Deny-by-default policy for one local application.</summary>

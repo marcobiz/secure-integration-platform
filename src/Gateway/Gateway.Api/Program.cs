@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using Azure.Core;
 using Azure.Identity;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Npgsql;
 using SecureIntegration.Gateway.Api;
@@ -37,11 +38,20 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 GatewayHostOptions hostOptions = builder.Configuration.GetSection("Gateway").Get<GatewayHostOptions>() ?? new();
+bool useAzureCertificateForwarding = hostOptions.TrustAzureAppServiceClientCertificateForwarding;
+if (useAzureCertificateForwarding)
+{
+    if (!builder.Environment.IsProduction() || string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WEBSITE_INSTANCE_ID")))
+        throw new InvalidOperationException("Azure App Service certificate forwarding is valid only in the Production App Service boundary.");
+    builder.Services.AddCertificateForwarding(options => options.CertificateHeader = "X-ARR-ClientCert");
+}
 builder.Services.AddSingleton(hostOptions);
 builder.Services.AddSingleton<IGatewayClock, SystemGatewayClock>();
 builder.Services.AddSingleton<IEnrollmentChallengeStore, InMemoryEnrollmentChallengeStore>();
 builder.Services.AddSingleton<IHostResolver, SystemHostResolver>();
 builder.Services.AddSingleton<IRestrictedTransport, SystemRestrictedTransport>();
+if (builder.Environment.IsEnvironment("M3Testing") && !string.IsNullOrWhiteSpace(hostOptions.M3PrivateMockHost) && !string.IsNullOrWhiteSpace(hostOptions.M3PrivateMockCidr))
+    builder.Services.AddSingleton<IPrivateDestinationAllowance>(new M3PrivateDestinationAllowance(hostOptions.M3PrivateMockHost, hostOptions.M3PrivateMockCidr));
 builder.Services.AddSingleton<IGatewayOperationCatalog>(_ => new GatewayOperationCatalog(hostOptions.Operations.Select(value => value.ToDefinition())));
 
 string? connectionString = builder.Configuration.GetConnectionString("GatewayDatabase");
@@ -58,7 +68,14 @@ else
 }
 
 ISecretProvider secretProvider;
-if (Uri.TryCreate(hostOptions.KeyVaultUri, UriKind.Absolute, out Uri? vaultUri) && vaultUri.Scheme == Uri.UriSchemeHttps)
+if (builder.Environment.IsEnvironment("M3Testing") && Uri.TryCreate(hostOptions.SyntheticVaultUri, UriKind.Absolute, out Uri? syntheticVaultUri) && syntheticVaultUri.Scheme == Uri.UriSchemeHttps)
+{
+    string? token = Environment.GetEnvironmentVariable(hostOptions.SyntheticVaultTokenEnvironmentVariable, EnvironmentVariableTarget.Process);
+    if (string.IsNullOrWhiteSpace(token)) throw new InvalidOperationException("The M3 synthetic Vault token is required in M3Testing.");
+    secretProvider = new SyntheticVaultSecretProvider(syntheticVaultUri, token);
+    builder.Services.AddSingleton(secretProvider);
+}
+else if (Uri.TryCreate(hostOptions.KeyVaultUri, UriKind.Absolute, out Uri? vaultUri) && vaultUri.Scheme == Uri.UriSchemeHttps)
 {
     TokenCredential tokenCredential = string.IsNullOrWhiteSpace(hostOptions.ManagedIdentityClientId)
         ? new ManagedIdentityCredential(ManagedIdentityId.SystemAssigned)
@@ -92,6 +109,7 @@ builder.Services.AddSingleton<RuntimeIdentityService>();
 builder.Services.AddSingleton<RestrictedEgressService>();
 
 WebApplication app = builder.Build();
+if (useAzureCertificateForwarding) app.UseCertificateForwarding();
 ILogger gatewayLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SecureIntegration.Gateway.Requests");
 app.Use(async (context, next) =>
 {

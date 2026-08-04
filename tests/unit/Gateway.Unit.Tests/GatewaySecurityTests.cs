@@ -151,6 +151,43 @@ public sealed class GatewaySecurityTests
     }
 
     [Fact]
+    public async Task M3_UT_EGR_API_key_and_mTLS_are_both_server_side()
+    {
+        using Fixture fixture = await Fixture.CreateAsync();
+        RegisteredInstallationIdentity identity = await fixture.EnrollAsync();
+        await fixture.AddGrantAsync();
+        RecordingTransport transport = new();
+        InMemorySecretProvider provider = new(
+            new Dictionary<string, string> { ["api-key"] = "server-api-key" },
+            new Dictionary<string, byte[]> { ["client-cert"] = fixture.Certificate.Export(X509ContentType.Pkcs12) });
+        RestrictedEgressService service = fixture.CreateEgress(new StaticResolver(IPAddress.Parse("1.1.1.1")), transport, GatewayAuthenticationKind.ApiKeyAndMutualTls, provider);
+
+        await service.InvokeAsync(new(identity, Guid.NewGuid()), "vendor", "send", Invoke(), TestContext.Current.CancellationToken);
+
+        Assert.Equal("server-api-key", transport.ApiKey);
+        Assert.True(transport.ClientCertificatePresented);
+    }
+
+    [Fact]
+    public async Task M3_UT_EGR_Private_fixture_allowance_is_exact_host_and_narrow_CIDR()
+    {
+        using Fixture fixture = await Fixture.CreateAsync();
+        RegisteredInstallationIdentity identity = await fixture.EnrollAsync();
+        await fixture.AddGrantAsync();
+        RecordingTransport transport = new();
+        M3PrivateDestinationAllowance allowance = new("vendor.example.test", "172.29.44.0/28");
+        RestrictedEgressService allowed = new(fixture.Registry, new GatewayOperationCatalog([Operation(GatewayAuthenticationKind.None)]), new InMemorySecretProvider(new Dictionary<string, string>()), new StaticResolver(IPAddress.Parse("172.29.44.6")), transport, fixture.Clock, allowance);
+        await allowed.InvokeAsync(new(identity, Guid.NewGuid()), "vendor", "send", Invoke(), TestContext.Current.CancellationToken);
+        Assert.Equal(1, transport.CallCount);
+
+        RestrictedEgressService metadata = new(fixture.Registry, new GatewayOperationCatalog([Operation(GatewayAuthenticationKind.None)]), new InMemorySecretProvider(new Dictionary<string, string>()), new StaticResolver(IPAddress.Parse("169.254.169.254")), transport, fixture.Clock, allowance);
+        GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => metadata.InvokeAsync(new(identity, Guid.NewGuid()), "vendor", "send", Invoke(), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-EGRESS-DESTINATION-DENIED", denied.Code);
+        Assert.False(allowance.IsAllowed("attacker.example.test", IPAddress.Parse("172.29.44.6")));
+        Assert.False(allowance.IsAllowed("vendor.example.test", IPAddress.Parse("172.29.45.6")));
+    }
+
+    [Fact]
     public async Task UT_GTW_Renewal_allows_seven_day_overlap_then_expires_old_credential()
     {
         using Fixture fixture = await Fixture.CreateAsync();
@@ -258,6 +295,18 @@ public sealed class GatewaySecurityTests
         Assert.Equal("BGW-VAULT-REFERENCE-DENIED", denied.Code);
     }
 
+    [Fact]
+    public async Task M3_UT_VLT_Synthetic_provider_is_fixed_origin_authenticated_and_reference_scoped()
+    {
+        RecordingVaultHandler handler = new();
+        using SyntheticVaultSecretProvider provider = new(new Uri("https://vault.m3.test/"), new string('t', 32), handler);
+        Assert.Equal("synthetic-vendor-value", await provider.GetSecretAsync("synthetic-vault://vault.m3.test/vendor-api-key", TestContext.Current.CancellationToken));
+        Assert.Equal(new string('t', 32), handler.Token);
+        Assert.Equal(new Uri("https://vault.m3.test/v1/secrets/vendor-api-key"), handler.Uri);
+        GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => provider.GetSecretAsync("synthetic-vault://other.m3.test/vendor-api-key", TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-VAULT-REFERENCE-DENIED", denied.Code);
+    }
+
     [Theory]
     [InlineData("+")]
     [InlineData("AA==")]
@@ -269,8 +318,8 @@ public sealed class GatewaySecurityTests
     private static GatewayOperationDefinition Operation(GatewayAuthenticationKind authentication, Uri? endpoint = null) => new(
         "vendor", "send", "1.0.0", endpoint ?? new Uri("https://vendor.example.test/fixed"), HttpMethod.Post, "application/octet-stream", authentication,
         authentication == GatewayAuthenticationKind.Basic ? "user" : null, authentication == GatewayAuthenticationKind.Basic ? "pass" : null,
-        authentication == GatewayAuthenticationKind.ApiKey ? "api-key" : null, authentication == GatewayAuthenticationKind.ApiKey ? "X-Api-Key" : null,
-        authentication == GatewayAuthenticationKind.MutualTls ? "client-cert" : null, 5_000, 1024, 1024, false);
+        authentication is GatewayAuthenticationKind.ApiKey or GatewayAuthenticationKind.ApiKeyAndMutualTls ? "api-key" : null, authentication is GatewayAuthenticationKind.ApiKey or GatewayAuthenticationKind.ApiKeyAndMutualTls ? "X-Api-Key" : null,
+        authentication is GatewayAuthenticationKind.MutualTls or GatewayAuthenticationKind.ApiKeyAndMutualTls ? "client-cert" : null, 5_000, 1024, 1024, false);
 
     private static X509Certificate2 CreateCertificate(ECDsa key, DateTimeOffset now)
     {
@@ -329,7 +378,7 @@ public sealed class GatewaySecurityTests
             ECDsa key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
             X509Certificate2 certificate = CreateCertificate(key, clock.UtcNow);
             byte[] spki = key.ExportSubjectPublicKeyInfo();
-            InMemoryGatewayRegistry registry = new();
+            InMemoryGatewayRegistry registry = new(clock);
             Guid tenantId = Guid.NewGuid();
             Guid applicationId = Guid.NewGuid();
             Guid environmentId = Guid.NewGuid();
@@ -419,5 +468,17 @@ public sealed class GatewaySecurityTests
     {
         public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken) => throw new InvalidOperationException("Credential must not be used for a denied reference.");
         public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken) => throw new InvalidOperationException("Credential must not be used for a denied reference.");
+    }
+
+    private sealed class RecordingVaultHandler : HttpMessageHandler
+    {
+        public string? Token { get; private set; }
+        public Uri? Uri { get; private set; }
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Token = request.Headers.GetValues("X-M3-Vault-Token").Single();
+            Uri = request.RequestUri;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{\"value\":\"synthetic-vendor-value\"}", System.Text.Encoding.UTF8, "application/json") });
+        }
     }
 }

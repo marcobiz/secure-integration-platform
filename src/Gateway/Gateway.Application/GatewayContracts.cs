@@ -64,7 +64,9 @@ public enum GatewayAuthenticationKind
     /// <summary>Header API key populated from a server-side secret.</summary>
     ApiKey,
     /// <summary>TLS client certificate populated from a server-side secret.</summary>
-    MutualTls
+    MutualTls,
+    /// <summary>Header API key and TLS client certificate, both resolved server-side.</summary>
+    ApiKeyAndMutualTls
 }
 
 /// <summary>Server-owned operation definition. No field is copied from an invoke request.</summary>

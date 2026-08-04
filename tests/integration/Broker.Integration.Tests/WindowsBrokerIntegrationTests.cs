@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
@@ -15,6 +16,47 @@ namespace SecureIntegration.Broker.Integration.Tests;
 
 public sealed class WindowsBrokerIntegrationTests
 {
+    [Fact]
+    public void M3_IT_BRK_Installation_credential_uses_nonexportable_CNG_P256_key()
+    {
+        using TestDirectory temporary = new();
+        string keyName = "SecureIntegration.M3.Tests." + Guid.NewGuid().ToString("N");
+        GatewayInstallationOptions options = new()
+        {
+            Enabled = true,
+            BaseAddress = "https://gateway.example.test/",
+            ActivationCodeId = Guid.NewGuid().ToString("D"),
+            CngKeyName = keyName,
+            BrokerVersion = "1.0.0"
+        };
+        string? thumbprint = null;
+        try
+        {
+            using ProductionGatewayInvoker invoker = new(options, temporary.Path);
+            using X509Certificate2 certificate = invoker.LoadOrCreateCertificate();
+            thumbprint = certificate.Thumbprint;
+            Assert.True(certificate.HasPrivateKey);
+            using ECDsaCng key = Assert.IsType<ECDsaCng>(certificate.GetECDsaPrivateKey());
+            Assert.Equal(256, key.KeySize);
+            Assert.Equal(CngExportPolicies.None, key.Key.ExportPolicy);
+            Assert.ThrowsAny<CryptographicException>(() => key.ExportPkcs8PrivateKey());
+        }
+        finally
+        {
+            if (thumbprint is not null)
+            {
+                using X509Store store = new(StoreName.My, StoreLocation.CurrentUser);
+                store.Open(OpenFlags.ReadWrite);
+                foreach (X509Certificate2 certificate in store.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, false)) store.Remove(certificate);
+            }
+            if (CngKey.Exists(keyName, CngProvider.MicrosoftSoftwareKeyStorageProvider))
+            {
+                using CngKey key = CngKey.Open(keyName, CngProvider.MicrosoftSoftwareKeyStorageProvider);
+                key.Delete();
+            }
+        }
+    }
+
     [Fact]
     public async Task Named_pipe_caller_identity_is_captured_from_the_kernel()
     {

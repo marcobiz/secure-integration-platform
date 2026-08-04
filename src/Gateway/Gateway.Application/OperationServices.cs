@@ -51,6 +51,8 @@ public sealed class GatewayOperationCatalog : IGatewayOperationCatalog
             throw new InvalidOperationException("API key authentication requires a safe header and server-side secret reference.");
         if (value.Authentication == GatewayAuthenticationKind.MutualTls && string.IsNullOrWhiteSpace(value.ClientCertificateReference))
             throw new InvalidOperationException("mTLS authentication requires a server-side certificate reference.");
+        if (value.Authentication == GatewayAuthenticationKind.ApiKeyAndMutualTls && (string.IsNullOrWhiteSpace(value.ApiKeySecretReference) || !IsHeaderName(value.ApiKeyHeaderName) || string.IsNullOrWhiteSpace(value.ClientCertificateReference)))
+            throw new InvalidOperationException("Combined API key and mTLS authentication requires server-side secret references and a safe header.");
     }
 
     private static bool IsIdentifier(string value) => value.Length is > 0 and <= 100 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
@@ -64,7 +66,8 @@ public sealed class RestrictedEgressService(
     ISecretProvider secrets,
     IHostResolver resolver,
     IRestrictedTransport transport,
-    IGatewayClock clock)
+    IGatewayClock clock,
+    IPrivateDestinationAllowance? privateDestinationAllowance = null)
 {
     /// <summary>Authorizes and invokes a server-owned external operation.</summary>
     public async Task<GatewayInvokeResponse> InvokeAsync(AuthenticatedInstallation authenticated, string connectorId, string operationId, GatewayInvokeRequest request, CancellationToken cancellationToken)
@@ -97,7 +100,7 @@ public sealed class RestrictedEgressService(
             throw new GatewayException("BGW-PROTOCOL-PAYLOAD", 413);
 
         IPAddress[] addresses = await resolver.ResolveAsync(operation.Endpoint.DnsSafeHost, cancellationToken).ConfigureAwait(false);
-        if (addresses.Length == 0 || addresses.Any(IsForbiddenAddress))
+        if (addresses.Length == 0 || addresses.Any(address => IsForbiddenAddress(address) && privateDestinationAllowance?.IsAllowed(operation.Endpoint.DnsSafeHost, address) != true))
             throw new GatewayException("BGW-EGRESS-DESTINATION-DENIED", 403);
 
         int attempts = operation.MaximumRetries + 1;
@@ -138,6 +141,10 @@ public sealed class RestrictedEgressService(
                 request.Headers.TryAddWithoutValidation(operation.ApiKeyHeaderName!, key);
                 return null;
             case GatewayAuthenticationKind.MutualTls:
+                return await secrets.GetClientCertificateAsync(operation.ClientCertificateReference!, cancellationToken).ConfigureAwait(false);
+            case GatewayAuthenticationKind.ApiKeyAndMutualTls:
+                string combinedKey = await secrets.GetSecretAsync(operation.ApiKeySecretReference!, cancellationToken).ConfigureAwait(false);
+                request.Headers.TryAddWithoutValidation(operation.ApiKeyHeaderName!, combinedKey);
                 return await secrets.GetClientCertificateAsync(operation.ClientCertificateReference!, cancellationToken).ConfigureAwait(false);
             default:
                 throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 500);
