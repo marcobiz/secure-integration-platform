@@ -77,12 +77,15 @@ foreach ($required in @(
     '-DhcpGuard On -RouterGuard On -MacAddressSpoofing Off',
     'M3A_SPLIT_GUEST_ISOLATION_CONTRACT_INVALID',
     'M3A_SPLIT_HOST_ISOLATION_CONTRACT_INVALID',
+    'M3A_SPLIT_HOST_TO_VM_LAYER2_CONNECTIVITY_FAILED',
     'M3A_SPLIT_PRIVATE_PROFILE_SHARED_BY_ACTIVE_INTERFACE',
     'Register-ScheduledTask',
     'Remove-VMNetworkAdapter',
     'Test-M3ANetworkStateRestored'
 )) { if ($module.IndexOf($required, [StringComparison]::Ordinal) -lt 0) { throw "Missing isolated network control: $required" } }
 if ($module -match 'New-NetNat|Set-NetIPInterface[^\r\n]+Forwarding\s+Enabled') { throw 'Isolated network must not create NAT or enable forwarding.' }
+if ($module -match '(Enable|Disable)-NetAdapter\s+-InterfaceIndex') { throw 'Windows PowerShell 5.1 requires NetAdapter pipeline binding for InterfaceIndex.' }
+if (($module + $runner) -match 'Set-NetFirewallProfile[^\r\n]+-Enabled\s+\(\[bool\]') { throw 'Windows PowerShell 5.1 requires the GpoBoolean string value during rollback.' }
 if ($runner -match 'LocalAddress\s+0\.0\.0\.0|-Profile\s+Any') { throw 'Broad listener or firewall profile accepted.' }
 
 Write-Output 'M3A_SPLIT_NETWORK_TEST_PASS'

@@ -102,7 +102,7 @@ function Disable-M3ATailscaleForIsolation {
     param([Parameter(Mandatory)] [string] $StatePath, [Parameter(Mandatory)] [uint32] $DedicatedInterfaceIndex)
     $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
     if ([bool]$state.tailscale.present -and [bool]$state.tailscale.wasEnabled) {
-        Disable-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -Confirm:$false
+        Get-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -ErrorAction Stop | Disable-NetAdapter -Confirm:$false
         $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
         do {
             $tailscale = Get-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -ErrorAction SilentlyContinue
@@ -141,8 +141,8 @@ function New-M3ANetworkRollback {
 `$ErrorActionPreference = 'Continue'
 `$state = Get-Content -LiteralPath '$escapedState' -Raw | ConvertFrom-Json
 if (`$state.firewallRule) { Get-NetFirewallRule -DisplayName ([string]`$state.firewallRule) -ErrorAction SilentlyContinue | Remove-NetFirewallRule }
-foreach (`$profile in @(`$state.originalFirewallProfiles)) { Set-NetFirewallProfile -Name ([string]`$profile.Name) -Enabled ([bool]`$profile.Enabled) }
-if ([bool]`$state.tailscale.wasEnabled) { Enable-NetAdapter -InterfaceIndex ([uint32]`$state.tailscale.interfaceIndex) -Confirm:`$false -ErrorAction SilentlyContinue }
+foreach (`$profile in @(`$state.originalFirewallProfiles)) { Set-NetFirewallProfile -Name ([string]`$profile.Name) -Enabled ([string]`$profile.Enabled) }
+if ([bool]`$state.tailscale.wasEnabled) { Get-NetAdapter -InterfaceIndex ([uint32]`$state.tailscale.interfaceIndex) -ErrorAction SilentlyContinue | Enable-NetAdapter -Confirm:`$false }
 `$vm = Get-VM -Id ([guid]`$state.vmId) -ErrorAction SilentlyContinue
 if (`$null -ne `$vm) {
     Get-VMNetworkAdapter -VM `$vm -Name ([string]`$state.vmNicName) -ErrorAction SilentlyContinue |
@@ -152,6 +152,8 @@ if (`$null -ne `$vm) {
 Get-VMSwitch -Name ([string]`$state.switchName) -ErrorAction SilentlyContinue |
     Where-Object { [string]`$_.SwitchType -eq 'Internal' } |
     Remove-VMSwitch -Force
+`$removalDeadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+do { Start-Sleep -Milliseconds 500 } while ((Get-VMSwitch -Name ([string]`$state.switchName) -ErrorAction SilentlyContinue) -and [DateTimeOffset]::UtcNow -lt `$removalDeadline)
 Unregister-ScheduledTask -TaskName '$escapedTask' -Confirm:`$false -ErrorAction SilentlyContinue
 "@
     [IO.File]::WriteAllText($RollbackPath, $script, [Text.UTF8Encoding]::new($false))
@@ -299,7 +301,18 @@ function New-M3AIsolatedNetwork {
     $hostIpInterface = Get-NetIPInterface -InterfaceIndex $hostAdapter.InterfaceIndex -AddressFamily IPv4
     $nat = @(Get-NetNat -ErrorAction SilentlyContinue | Where-Object { [string]$_.InternalIPInterfaceAddressPrefix -eq "$NetworkAddress/$PrefixLength" })
     Assert-M3ANetworkEndpointContract -DefaultGatewayCount $hostDefault.Count -DnsServerCount $hostDns.Count -Forwarding ([string]$hostIpInterface.Forwarding) -NatCount $nat.Count -ErrorCode 'M3A_SPLIT_HOST_ISOLATION_CONTRACT_INVALID.'
-    if (-not (Test-Connection -ComputerName $VmAddress -Count 2 -Quiet)) { throw 'M3A_SPLIT_HOST_TO_VM_CONNECTIVITY_FAILED.' }
+    $client = [Net.Sockets.TcpClient]::new()
+    try {
+        $pending = $client.BeginConnect($VmAddress, 9, $null, $null)
+        $null = $pending.AsyncWaitHandle.WaitOne(1500)
+    }
+    catch { }
+    finally { $client.Dispose() }
+    Start-Sleep -Milliseconds 500
+    $neighbor = Get-NetNeighbor -InterfaceIndex $hostAdapter.InterfaceIndex -IPAddress $VmAddress -ErrorAction SilentlyContinue
+    $expectedMac = ([string]$mac -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+    $actualMac = if ($neighbor) { ([string]$neighbor.LinkLayerAddress -replace '[^0-9A-Fa-f]', '').ToUpperInvariant() } else { '' }
+    if ($null -eq $neighbor -or [string]$neighbor.State -in @('Unreachable', 'Incomplete') -or $actualMac -ne $expectedMac) { throw 'M3A_SPLIT_HOST_TO_VM_LAYER2_CONNECTIVITY_FAILED.' }
     $state.hostConnectionProfile = 'Private'; $state.hostToVmConnectivity = 'PASS'; $state.vmManagementInternet = 'PASS'
     Write-M3ANetworkJson $state $StatePath
     return [pscustomobject]$state
@@ -316,9 +329,9 @@ function Remove-M3AIsolatedNetwork {
     if (-not (Test-Path -LiteralPath $StatePath)) { return $true }
     $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
     if ($state.firewallRule) { Get-NetFirewallRule -DisplayName ([string]$state.firewallRule) -ErrorAction SilentlyContinue | Remove-NetFirewallRule }
-    foreach ($profile in @($state.originalFirewallProfiles)) { Set-NetFirewallProfile -Name ([string]$profile.Name) -Enabled ([bool]$profile.Enabled) }
+    foreach ($profile in @($state.originalFirewallProfiles)) { Set-NetFirewallProfile -Name ([string]$profile.Name) -Enabled ([string]$profile.Enabled) }
     if ([bool]$state.tailscale.wasEnabled) {
-        Enable-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -Confirm:$false -ErrorAction SilentlyContinue
+        Get-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -ErrorAction SilentlyContinue | Enable-NetAdapter -Confirm:$false
         $tailscaleDeadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
         do {
             $tailscaleStatus = Get-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -ErrorAction SilentlyContinue
@@ -331,13 +344,22 @@ function Remove-M3AIsolatedNetwork {
         Get-VMNetworkAdapter -VM $vm -Name ([string]$state.vmNicName) -ErrorAction SilentlyContinue | Where-Object { [string]$_.SwitchName -eq [string]$state.switchName } | Remove-VMNetworkAdapter -Confirm:$false
     }
     Get-VMSwitch -Name ([string]$state.switchName) -ErrorAction SilentlyContinue | Where-Object { [string]$_.SwitchType -eq 'Internal' } | Remove-VMSwitch -Force
-    Unregister-ScheduledTask -TaskName ([string]$state.rollbackTask) -Confirm:$false -ErrorAction SilentlyContinue
+    $removalDeadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+    do {
+        $remainingSwitch = Get-VMSwitch -Name ([string]$state.switchName) -ErrorAction SilentlyContinue
+        $remainingVmNic = if ($null -ne $vm) { Get-VMNetworkAdapter -VM $vm -Name ([string]$state.vmNicName) -ErrorAction SilentlyContinue } else { $null }
+        if ($null -eq $remainingSwitch -and $null -eq $remainingVmNic) { break }
+        Start-Sleep -Milliseconds 500
+    } while ([DateTimeOffset]::UtcNow -lt $removalDeadline)
     $switches = @(Get-VMSwitch -ErrorAction SilentlyContinue)
     $adapters = if ($null -ne $vm) { @(Get-VMNetworkAdapter -VM $vm) } else { @() }
     $profiles = @(Get-NetFirewallProfile -PolicyStore ActiveStore -Name Domain,Private,Public | ForEach-Object { [pscustomobject]@{ Name = [string]$_.Name; Enabled = [bool]$_.Enabled } })
     $tailscale = Get-NetAdapter -InterfaceIndex ([uint32]$state.tailscale.interfaceIndex) -ErrorAction SilentlyContinue
     $restored = Test-M3ANetworkStateRestored $state $switches $adapters $profiles $tailscale
-    if ($restored) { Remove-Item -LiteralPath $RollbackPath -Force -ErrorAction SilentlyContinue }
+    if ($restored) {
+        Unregister-ScheduledTask -TaskName ([string]$state.rollbackTask) -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $RollbackPath -Force -ErrorAction SilentlyContinue
+    }
     return $restored
 }
 

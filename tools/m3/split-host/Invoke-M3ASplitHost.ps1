@@ -243,7 +243,7 @@ function Install-FirewallFailSafe {
 `$state = Get-Content -LiteralPath '$escapedStatePath' -Raw | ConvertFrom-Json
 Get-NetFirewallRule -DisplayName ([string]`$state.firewallRule) -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 foreach (`$profile in @(`$state.originalProfiles)) {
-    Set-NetFirewallProfile -Name ([string]`$profile.Name) -Enabled ([bool]`$profile.Enabled)
+    Set-NetFirewallProfile -Name ([string]`$profile.Name) -Enabled ([string]`$profile.Enabled)
 }
 Unregister-ScheduledTask -TaskName '$escapedTaskName' -Confirm:`$false -ErrorAction SilentlyContinue
 "@
@@ -352,7 +352,7 @@ function Restore-FirewallState {
     $firewallState = Get-Content -LiteralPath $firewallStatePath -Raw | ConvertFrom-Json
     Get-NetFirewallRule -DisplayName ([string]$firewallState.firewallRule) -ErrorAction SilentlyContinue | Remove-NetFirewallRule
     foreach ($profile in @($firewallState.originalProfiles)) {
-        Set-NetFirewallProfile -Name ([string]$profile.Name) -Enabled ([bool]$profile.Enabled)
+        Set-NetFirewallProfile -Name ([string]$profile.Name) -Enabled ([string]$profile.Enabled)
     }
     Unregister-ScheduledTask -TaskName ([string]$firewallState.rollbackTask) -Confirm:$false -ErrorAction SilentlyContinue
     $restored = Test-M3AFirewallProfileStateRestored -OriginalStates @($firewallState.originalProfiles) -CurrentProfiles (Get-FirewallProfileStates)
