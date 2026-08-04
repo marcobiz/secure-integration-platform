@@ -303,8 +303,10 @@ function Assert-VmExposureContract {
         [Parameter(Mandatory)] [int] $Port,
         [Parameter(Mandatory)] [string] $SwitchName
     )
-    $attached = @(Get-VMNetworkAdapter -All | Where-Object { [string]$_.SwitchName -eq $SwitchName })
-    if ($attached.Count -ne 1 -or [guid]$attached[0].VMId -ne $ExactVmId -or [string]$attached[0].Name -ne $IsolatedVmNicName) {
+    $exactVm = Get-VM -Id $ExactVmId -ErrorAction Stop
+    $expectedPort = @(Get-VMNetworkAdapter -VM $exactVm -Name $IsolatedVmNicName -ErrorAction SilentlyContinue | Where-Object { [string]$_.SwitchName -eq $SwitchName })
+    $allPorts = @(Get-VMNetworkAdapter -All | Where-Object { [string]$_.SwitchName -eq $SwitchName })
+    if ($expectedPort.Count -ne 1 -or $allPorts.Count -ne 1) {
         throw 'M3A_SPLIT_ISOLATED_SWITCH_HAS_UNEXPECTED_PORT.'
     }
     $defaultSwitchAddress = Get-NetIPAddress -AddressFamily IPv4 | Where-Object InterfaceAlias -eq 'vEthernet (Default Switch)' | Select-Object -First 1 -ExpandProperty IPAddress
