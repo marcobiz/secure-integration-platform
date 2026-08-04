@@ -86,7 +86,7 @@ function Test-M3ANetworkStateRestored {
         [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $Switches,
         [Parameter(Mandatory)] [AllowEmptyCollection()] [object[]] $VmAdapters,
         [Parameter(Mandatory)] [object[]] $FirewallProfiles,
-        [Parameter(Mandatory)] $TailscaleAdapter
+        [Parameter(Mandatory)] [AllowNull()] $TailscaleAdapter
     )
     if (@($Switches | Where-Object { [string]$_.Name -eq [string]$State.switchName }).Count -ne 0) { return $false }
     if (@($VmAdapters | Where-Object { [string]$_.Name -eq [string]$State.vmNicName }).Count -ne 0) { return $false }
@@ -144,7 +144,8 @@ function New-M3ANetworkRollback {
     param(
         [Parameter(Mandatory)] [string] $StatePath,
         [Parameter(Mandatory)] [string] $RollbackPath,
-        [Parameter(Mandatory)] [string] $TaskName
+        [Parameter(Mandatory)] [string] $TaskName,
+        [Parameter(Mandatory)] [DateTime] $RollbackAt
     )
     $escapedState = $StatePath.Replace("'", "''")
     $escapedTask = $TaskName.Replace("'", "''")
@@ -172,7 +173,7 @@ Unregister-ScheduledTask -TaskName '$escapedTask' -Confirm:`$false -ErrorAction 
 "@
     [IO.File]::WriteAllText($RollbackPath, $script, [Text.UTF8Encoding]::new($false))
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $RollbackPath + '"')
-    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(30)
+    $trigger = New-ScheduledTaskTrigger -Once -At $RollbackAt
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -User SYSTEM -RunLevel Highest -Force | Out-Null
     if ($null -eq (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)) { throw 'M3A_SPLIT_NETWORK_ROLLBACK_TASK_NOT_REGISTERED.' }
 }
@@ -210,7 +211,8 @@ function New-M3AIsolatedNetwork {
         [Parameter(Mandatory)] [string] $InventoryPath,
         [Parameter(Mandatory)] [string] $RollbackPath,
         [Parameter(Mandatory)] [string] $RollbackTaskName,
-        [Parameter(Mandatory)] [string] $CheckpointName
+        [Parameter(Mandatory)] [string] $CheckpointName,
+        [ValidateRange(30, 180)] [int] $RollbackTimeoutMinutes = 30
     )
     Assert-M3AIsolatedAddressContract $NetworkAddress $HostAddress $VmAddress $PrefixLength
     Assert-M3AIsolatedSubnetAvailable $NetworkAddress $PrefixLength
@@ -223,6 +225,7 @@ function New-M3AIsolatedNetwork {
 
     $inventory = Save-M3ANetworkInventory -VmId $VmId -Path $InventoryPath
     $tailscale = Get-NetAdapter -Name Tailscale -ErrorAction SilentlyContinue
+    $rollbackAt = (Get-Date).AddMinutes($RollbackTimeoutMinutes)
     $state = [ordered]@{
         schemaVersion = 1; vmId = [string]$VmId; vmName = [string]$vm.Name
         switchName = $SwitchName; vmNicName = $VmNicName; networkAddress = $NetworkAddress
@@ -231,10 +234,13 @@ function New-M3AIsolatedNetwork {
         firewallRule = $null
         originalFirewallProfiles = @($inventory.firewallProfiles | ForEach-Object { [pscustomobject]@{ Name = [string]$_.Name; Enabled = [bool]$_.Enabled } })
         tailscale = [ordered]@{ present = $null -ne $tailscale; interfaceIndex = if ($tailscale) { [uint32]$tailscale.InterfaceIndex } else { 0 }; pnpDeviceId = if ($tailscale) { [string]$tailscale.PnPDeviceID } else { $null }; wasEnabled = $null -ne $tailscale -and [string]$tailscale.AdminStatus -eq 'Up'; status = if ($tailscale) { [string]$tailscale.Status } else { 'Missing' } }
-        rollbackTask = $RollbackTaskName; preparedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+        rollbackTask = $RollbackTaskName
+        rollbackTimeoutMinutes = $RollbackTimeoutMinutes
+        rollbackDeadlineUtc = ([DateTimeOffset]$rollbackAt).ToUniversalTime().ToString('O')
+        preparedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
     }
     Write-M3ANetworkJson $state $StatePath
-    New-M3ANetworkRollback -StatePath $StatePath -RollbackPath $RollbackPath -TaskName $RollbackTaskName
+    New-M3ANetworkRollback -StatePath $StatePath -RollbackPath $RollbackPath -TaskName $RollbackTaskName -RollbackAt $rollbackAt
 
     try {
     Checkpoint-VM -VM $vm -SnapshotName $CheckpointName | Out-Null

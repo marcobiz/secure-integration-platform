@@ -15,7 +15,8 @@ param(
     [string] $IsolatedSwitchName = 'M3A-Isolated',
     [string] $IsolatedVmNicName = 'M3A-Isolated',
     [string] $IsolatedNetworkAddress = '192.168.250.0',
-    [ValidateRange(29, 30)] [int] $IsolatedPrefixLength = 29
+    [ValidateRange(29, 30)] [int] $IsolatedPrefixLength = 29,
+    [ValidateRange(30, 180)] [int] $RollbackTimeoutMinutes = 30
 )
 
 Set-StrictMode -Version Latest
@@ -220,9 +221,13 @@ function Resolve-HostFirewallSelection {
 }
 
 function Install-FirewallFailSafe {
-    param([Parameter(Mandatory)] $Selection)
+    param(
+        [Parameter(Mandatory)] $Selection,
+        [ValidateRange(30, 180)] [int] $TimeoutMinutes
+    )
 
     $profileStates = Get-FirewallProfileStates
+    $rollbackAt = (Get-Date).AddMinutes($TimeoutMinutes)
     Write-JsonFile -Path $firewallStatePath -Value ([ordered]@{
         schemaVersion = 1
         runId = $RunId
@@ -233,6 +238,8 @@ function Install-FirewallFailSafe {
         networkCategory = [string]$Selection.NetworkCategory
         selectedProfile = [string]$Selection.ProfileName
         originalProfiles = $profileStates
+        rollbackTimeoutMinutes = $TimeoutMinutes
+        rollbackDeadlineUtc = ([DateTimeOffset]$rollbackAt).ToUniversalTime().ToString('O')
         recordedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
     })
 
@@ -250,7 +257,7 @@ Unregister-ScheduledTask -TaskName '$escapedTaskName' -Confirm:`$false -ErrorAct
     [IO.File]::WriteAllText($firewallRollbackPath, $rollback, [Text.UTF8Encoding]::new($false))
 
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $firewallRollbackPath + '"')
-    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(30)
+    $trigger = New-ScheduledTaskTrigger -Once -At $rollbackAt
     Register-ScheduledTask -TaskName $firewallRollbackTask -Action $action -Trigger $trigger -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
     if ($null -eq (Get-ScheduledTask -TaskName $firewallRollbackTask -ErrorAction SilentlyContinue)) {
         throw 'M3A_SPLIT_FIREWALL_ROLLBACK_TASK_NOT_REGISTERED.'
@@ -436,7 +443,7 @@ if ($Phase -eq 'Prepare') {
     if ($null -eq $VmCredential) { throw 'M3A_SPLIT_VM_CREDENTIAL_REQUIRED.' }
     try {
     $checkpointName = 'pre-m3a-isolated-network-' + (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
-    $network = New-M3AIsolatedNetwork -VmId $VmId -VmCredential $VmCredential -SwitchName $IsolatedSwitchName -VmNicName $IsolatedVmNicName -NetworkAddress $IsolatedNetworkAddress -HostAddress $HostHyperVAddress -VmAddress $VmAddress -PrefixLength $IsolatedPrefixLength -StatePath $networkStatePath -InventoryPath $networkInventoryPath -RollbackPath $networkRollbackPath -RollbackTaskName $networkRollbackTask -CheckpointName $checkpointName
+    $network = New-M3AIsolatedNetwork -VmId $VmId -VmCredential $VmCredential -SwitchName $IsolatedSwitchName -VmNicName $IsolatedVmNicName -NetworkAddress $IsolatedNetworkAddress -HostAddress $HostHyperVAddress -VmAddress $VmAddress -PrefixLength $IsolatedPrefixLength -StatePath $networkStatePath -InventoryPath $networkInventoryPath -RollbackPath $networkRollbackPath -RollbackTaskName $networkRollbackTask -CheckpointName $checkpointName -RollbackTimeoutMinutes $RollbackTimeoutMinutes
     $addressRecord = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $HostHyperVAddress -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($null -eq $addressRecord -or [string]$addressRecord.InterfaceAlias -ne ('vEthernet (' + $IsolatedSwitchName + ')')) { throw 'M3A_SPLIT_HOST_ADDRESS_NOT_ASSIGNED_TO_ISOLATED_SWITCH.' }
     $tailscaleIsolation = Disable-M3ATailscaleForIsolation -StatePath $networkStatePath -DedicatedInterfaceIndex ([uint32]$addressRecord.InterfaceIndex)
@@ -449,7 +456,7 @@ if ($Phase -eq 'Prepare') {
     Add-HostBindingsToEnvironmentFile -Path $environmentPath -HostAddress $HostHyperVAddress -Port $GatewayPort
     $installed = Import-Certificate -FilePath (Join-Path $rawRoot 'certificates\ca.crt') -CertStoreLocation Cert:\LocalMachine\Root
     $rootThumbprint = $installed.Thumbprint
-        Install-FirewallFailSafe -Selection $firewallSelection
+        Install-FirewallFailSafe -Selection $firewallSelection -TimeoutMinutes $RollbackTimeoutMinutes
         Enable-SelectedFirewallProfile -Selection $firewallSelection
         New-NetFirewallRule -DisplayName $firewallName -Direction Inbound -Action Allow -Protocol TCP -LocalAddress $HostHyperVAddress -RemoteAddress $VmAddress -LocalPort $GatewayPort -Profile ([string]$firewallSelection.ProfileName) -InterfaceAlias ([string]$firewallSelection.InterfaceAlias) | Out-Null
         Set-M3ANetworkFirewallRuleState -StatePath $networkStatePath -FirewallRule $firewallName

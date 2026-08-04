@@ -84,7 +84,11 @@ o scollegata. La configurazione predefinita, subordinata al controllo conflitti,
 
 Il runner registra inventario e checkpoint prima della mutazione. Un task SYSTEM
 per-run ripristina profili firewall e Tailscale e rimuove esclusivamente la NIC e lo
-switch M3A dopo 30 minuti. Il Default Switch è fuori dai target di rollback.
+switch M3A. Il timeout predefinito è 30 minuti; `-RollbackTimeoutMinutes`, validato
+fra 30 e 180 minuti, consente di riservare esplicitamente una finestra operativa più
+lunga per una nuova run. La deadline UTC è registrata negli state file prima della
+mutazione. Il parametro non estende né sostituisce task di run già avviate. Il
+Default Switch è fuori dai target di rollback.
 
 Verificare anche l'associazione firewall, senza mutazioni:
 
@@ -154,9 +158,10 @@ $vmCredential = $null
 
 Il ZIP VM contiene activation code monouso ed è materiale raw temporaneo. Non
 caricarlo su GitHub, non inserirlo in evidence redatta e non copiarlo nel repository.
-Il task fail-safe scade 30 minuti dopo `Prepare`: completare l'handoff e il test VM
-entro tale finestra oppure eseguire cleanup e iniziare una nuova run con nuovi
-certificati e activation code.
+Il task fail-safe scade dopo il timeout scelto durante `Prepare` (30 minuti per
+default): completare l'handoff e il test VM entro tale finestra oppure eseguire
+cleanup e iniziare una nuova run con nuovi certificati e activation code. Non
+posticipare task di run già avviate.
 
 ## Trasferimento HOST → VM
 
@@ -264,6 +269,6 @@ identificarne proprietà e ownership prima di rimuoverlo con il relativo harness
 Il cleanup HOST rimuove regola, container, volumi e network, ripristina i tre stati
 firewall dal record per-run, riabilita Tailscale se originariamente attivo, rimuove
 soltanto la NIC VM e lo switch `M3A-Isolated` e cancella i task di rollback. Se la
-sessione termina prima, il task SYSTEM esegue lo stesso ripristino dopo 30 minuti
-senza password persistite. Un esito con `firewallProfileRestored=false` o
+sessione termina prima, il task SYSTEM esegue lo stesso ripristino alla deadline
+registrata, senza password persistite. Un esito con `firewallProfileRestored=false` o
 `isolatedNetworkRestored=false` non è PASS.
