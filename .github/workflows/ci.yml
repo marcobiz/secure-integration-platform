@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  M2_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
 jobs:
   build-test:
     strategy:
@@ -16,6 +19,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.M2_COMMIT_SHA }}
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
@@ -52,6 +57,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ env.M2_COMMIT_SHA }}
       - uses: gitleaks/gitleaks-action@v2
 
   gateway-postgresql-18:
@@ -76,6 +82,8 @@ jobs:
       EXPECTED_MIGRATION_SHA256: 182CC690E16BB986638A4B52EE1554A4B540A8E58FD673F2111A79D194C66A98
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.M2_COMMIT_SHA }}
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
@@ -128,19 +136,22 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.M2_COMMIT_SHA }}
       - name: Build Gateway container
         id: image
         shell: bash
         run: |
           set -euo pipefail
-          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" -f src/Gateway/Gateway.Api/Dockerfile -t broker-gateway:m2 .
-          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" -f src/Gateway/Gateway.Migrations/Dockerfile -t broker-gateway-migrations:m2 .
+          test "$(git rev-parse HEAD)" = "$M2_COMMIT_SHA"
+          docker build --label "org.opencontainers.image.revision=$M2_COMMIT_SHA" -f src/Gateway/Gateway.Api/Dockerfile -t broker-gateway:m2 .
+          docker build --label "org.opencontainers.image.revision=$M2_COMMIT_SHA" -f src/Gateway/Gateway.Migrations/Dockerfile -t broker-gateway-migrations:m2 .
           image_digest="$(docker image inspect broker-gateway:m2 --format '{{.Id}}')"
           migration_digest="$(docker image inspect broker-gateway-migrations:m2 --format '{{.Id}}')"
           [[ "$image_digest" == sha256:* ]]
           [[ "$migration_digest" == sha256:* ]]
-          test "$(docker image inspect broker-gateway:m2 | jq -r '.[0].Config.Labels["org.opencontainers.image.revision"]')" = "$GITHUB_SHA"
-          printf 'gateway_image=%s\nmigration_image=%s\ncommit=%s\n' "$image_digest" "$migration_digest" "$GITHUB_SHA" | tee gateway-image-digests.txt
+          test "$(docker image inspect broker-gateway:m2 | jq -r '.[0].Config.Labels["org.opencontainers.image.revision"]')" = "$M2_COMMIT_SHA"
+          printf 'gateway_image=%s\nmigration_image=%s\ncommit=%s\n' "$image_digest" "$migration_digest" "$M2_COMMIT_SHA" | tee gateway-image-digests.txt
           echo "digest=$image_digest" >> "$GITHUB_OUTPUT"
       - name: Verify executable, non-root, read-only, health, readiness and clean shutdown
         shell: bash
@@ -185,10 +196,10 @@ jobs:
           image: broker-gateway:m2
           format: spdx-json
           output-file: gateway-image.spdx.json
-          artifact-name: gateway-image-sbom-${{ github.sha }}.spdx.json
+          artifact-name: gateway-image-sbom-${{ env.M2_COMMIT_SHA }}.spdx.json
       - name: Upload image digest evidence
         uses: actions/upload-artifact@v4
         with:
-          name: gateway-image-digest-${{ github.sha }}
+          name: gateway-image-digest-${{ env.M2_COMMIT_SHA }}
           path: gateway-image-digests.txt
           if-no-files-found: error
