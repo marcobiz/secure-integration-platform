@@ -11,7 +11,7 @@ services:
       m3:
         ipv4_address: 172.29.44.3
     ports:
-      - "15432:5432"
+      - "${M3_POSTGRES_BIND_IP:-127.0.0.1}:${M3_POSTGRES_PORT:-15432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d broker_gateway_m3"]
       interval: 3s
@@ -73,7 +73,7 @@ services:
         aliases:
           - vault.m3.test
     ports:
-      - "18444:8443"
+      - "${M3_VAULT_BIND_IP:-127.0.0.1}:${M3_VAULT_PORT:-18444}:8443"
 
   vendor:
     build:
@@ -97,14 +97,14 @@ services:
         aliases:
           - vendor.m3.test
     ports:
-      - "18445:8443"
+      - "${M3_VENDOR_BIND_IP:-127.0.0.1}:${M3_VENDOR_PORT:-18445}:8443"
 
   gateway:
     build:
       context: ../..
       dockerfile: src/Gateway/Gateway.Api/Dockerfile
     ports:
-      - "18443:8443"
+      - "${M3_GATEWAY_BIND_IP:-127.0.0.1}:${M3_GATEWAY_PORT:-18443}:8443"
     environment:
       ASPNETCORE_ENVIRONMENT: M3Testing
       ASPNETCORE_URLS: https://+:8443

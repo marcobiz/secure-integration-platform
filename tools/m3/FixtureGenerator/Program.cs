@@ -2,8 +2,10 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 
-if (args.Length != 1) throw new InvalidOperationException("Usage: FixtureGenerator <raw-evidence-directory>");
+if (args.Length is < 1 or > 2) throw new InvalidOperationException("Usage: FixtureGenerator <raw-evidence-directory> [gateway-host]");
 string rawDirectory = Path.GetFullPath(args[0]);
+string gatewayHost = args.Length == 2 ? args[1] : "localhost";
+if (string.IsNullOrWhiteSpace(gatewayHost) || gatewayHost.Any(char.IsWhiteSpace)) throw new InvalidOperationException("Gateway host must be a DNS name or IP address without whitespace.");
 string certificateDirectory = Path.Combine(rawDirectory, "certificates");
 Directory.CreateDirectory(certificateDirectory);
 
@@ -23,7 +25,7 @@ caRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.
 caRequest.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(caRequest.PublicKey, false));
 using X509Certificate2 ca = caRequest.CreateSelfSigned(now.AddMinutes(-5), now.AddDays(2));
 
-using X509Certificate2 gateway = CreateIssued("CN=gateway.m3.test", ["gateway.m3.test", "localhost"], false, ca, now);
+using X509Certificate2 gateway = CreateIssued("CN=gateway.m3.test", ["gateway.m3.test", gatewayHost], false, ca, now);
 using X509Certificate2 vault = CreateIssued("CN=vault.m3.test", ["vault.m3.test", "localhost"], false, ca, now);
 using X509Certificate2 vendorServer = CreateIssued("CN=vendor.m3.test", ["vendor.m3.test"], false, ca, now);
 using X509Certificate2 vendorClient = CreateIssued("CN=M3 Synthetic Vendor Client", [], true, ca, now);
@@ -58,6 +60,7 @@ await File.WriteAllTextAsync(Path.Combine(rawDirectory, "fixture-public.json"), 
     schemaVersion = 1,
     generatedAtUtc = now,
     expiresAtUtc = now.AddDays(2),
+    gatewayHost,
     caSha256 = Convert.ToHexString(SHA256.HashData(ca.RawData)),
     gatewayCertificateSha256 = Convert.ToHexString(SHA256.HashData(gateway.RawData)),
     vaultCertificateSha256 = Convert.ToHexString(SHA256.HashData(vault.RawData)),
@@ -68,7 +71,7 @@ await File.WriteAllTextAsync(Path.Combine(rawDirectory, "fixture-public.json"), 
 }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true })).ConfigureAwait(false);
 Console.WriteLine(JsonSerializer.Serialize(new { status = "generated", rawDirectory, environmentPath }));
 
-static X509Certificate2 CreateIssued(string subject, string[] dnsNames, bool client, X509Certificate2 issuer, DateTimeOffset now)
+static X509Certificate2 CreateIssued(string subject, string[] names, bool client, X509Certificate2 issuer, DateTimeOffset now)
 {
     ECDsa key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
     CertificateRequest request = new(subject, key, HashAlgorithmName.SHA256);
@@ -76,10 +79,14 @@ static X509Certificate2 CreateIssued(string subject, string[] dnsNames, bool cli
     request.CertificateExtensions.Add(new X509KeyUsageExtension(client ? X509KeyUsageFlags.DigitalSignature : X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, true));
     OidCollection eku = [new Oid(client ? "1.3.6.1.5.5.7.3.2" : "1.3.6.1.5.5.7.3.1")];
     request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(eku, true));
-    if (dnsNames.Length != 0)
+    if (names.Length != 0)
     {
         SubjectAlternativeNameBuilder san = new();
-        foreach (string dns in dnsNames) san.AddDnsName(dns);
+        foreach (string name in names)
+        {
+            if (System.Net.IPAddress.TryParse(name, out System.Net.IPAddress? address)) san.AddIpAddress(address);
+            else san.AddDnsName(name);
+        }
         request.CertificateExtensions.Add(san.Build());
     }
     X509Certificate2 publicCertificate = request.Create(issuer, now.AddMinutes(-5), now.AddDays(2), RandomNumberGenerator.GetBytes(16));

@@ -34,6 +34,16 @@ jobs:
       - name: Test
         shell: pwsh
         run: ./eng/test.ps1
+      - name: Parse M3 split-host runners with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $scripts = Get-ChildItem tools/m3/split-host -Filter *.ps1
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -ne 0) { throw "$($script.Name): $($errors[0].Message)" }
+          }
       - name: Validate documentation
         shell: pwsh
         run: ./eng/validate-docs.ps1
@@ -237,6 +247,9 @@ jobs:
           set -euo pipefail
           env_file=.artifacts/m3/ci/raw-evidence/m3a.env
           docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml config --quiet
+          split_config="$(M3_GATEWAY_BIND_IP=192.0.2.10 M3_GATEWAY_PORT=28443 docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml config --format json)"
+          jq -e '.services.gateway.ports[0].host_ip == "192.0.2.10" and .services.gateway.ports[0].published == "28443"' <<<"$split_config"
+          jq -e '[.services.postgres,.services.vault,.services.vendor] | all(.ports[0].host_ip == "127.0.0.1")' <<<"$split_config"
           docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml up --build --detach
           for attempt in {1..90}; do
             if curl --fail --silent https://localhost:18443/health/ready >/dev/null && test -f .artifacts/m3/ci/raw-evidence/provisioning.json; then exit 0; fi

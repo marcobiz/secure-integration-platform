@@ -1,0 +1,205 @@
+# M3A live gate — split-host runbook
+
+## Stato e confini
+
+Questo runbook prepara il gate manuale M3A; non autorizza M3B, M4, il merge della PR
+#3 o l'uso di un runner GitHub self-hosted permanente. Il commit candidato è sempre lo
+SHA completo scritto da `Prepare` nel pacchetto VM. Una run è valida soltanto se HOST e
+VM attestano quello stesso SHA.
+
+```mermaid
+flowchart LR
+    subgraph VM[Windows 11 Hyper-V]
+        L[Legacy Simulator<br/>utente standard] -->|Named Pipe ACL| B[Local Broker<br/>Windows Service<br/>NT SERVICE\\SecureIntegrationBroker]
+    end
+    subgraph HOST[Windows 10 + Docker Desktop WSL 2]
+        G[Gateway HTTPS] --> P[(PostgreSQL 18)]
+        G --> V[Synthetic vault HTTPS]
+        G -->|API key + mTLS| M[Vendor mock HTTPS/mTLS]
+    end
+    B -->|installation auth + PoP<br/>solo IP Hyper-V:porta Gateway| G
+    F[Windows Firewall<br/>VM IP + Gateway port] -. limita .-> G
+```
+
+PostgreSQL, vault e mock sono pubblicati soltanto su `127.0.0.1` dell'HOST. Il
+Gateway è associato esclusivamente all'IPv4 dell'adattatore Hyper-V. Il firewall
+consente TCP in ingresso soltanto dall'IPv4 della VM e soltanto sulla porta Gateway.
+Il pacchetto VM non contiene indirizzi di PostgreSQL, vault o mock.
+
+## Prerequisiti HOST
+
+- Windows 10 22H2 supportato, virtualizzazione e WSL 2 attivi;
+- Docker Desktop avviato con Linux containers e backend WSL 2;
+- PowerShell 5.1 elevato per firewall e trust store;
+- branch `m3/production-like-vertical-slice` pulito e sincronizzato;
+- VM Windows 11 Running e IPv4 stabile sulla rete Hyper-V;
+- `C:\SecureEvidence` fuori dal repository.
+
+Verifica non mutante:
+
+```powershell
+Set-Location C:\Codice\broker-gateway
+$runId = 'm3a-split-' + (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
+.\tools\m3\split-host\Invoke-M3ASplitHost.ps1 -Phase ValidateHost -RunId $runId
+```
+
+Se compare `M3A_SPLIT_DOCKER_DESKTOP_NOT_INSTALLED`, fermarsi. Scaricare solo
+l'installer dalla [pagina ufficiale Docker Desktop per
+Windows](https://docs.docker.com/desktop/setup/install/windows-install/), verificare i
+requisiti e ottenere l'approvazione dell'utente per licenza, installer ed eventuale
+UAC. Per il requisito di questo gate scegliere backend WSL 2 e Linux containers. Non
+usare `--accept-license` senza approvazione esplicita. Dopo l'avvio, selezionare **Use
+WSL 2 based engine** come indicato dalla [documentazione ufficiale
+WSL](https://docs.docker.com/desktop/features/wsl/) e rieseguire `ValidateHost`.
+
+## Selezione rete e VM
+
+Non usare il nome VM come identificatore. In una console Hyper-V elevata:
+
+```powershell
+$vmId = [guid]'<VM-ID-UNIVOCO>'
+$vm = Get-VM -Id $vmId -ErrorAction Stop
+$vm | Format-List Name,Id,State,Status,ConfigurationLocation,Path,Uptime
+$vm | Get-VMNetworkAdapter | Format-Table Name,SwitchName,Status,IPAddresses
+Get-NetIPAddress -AddressFamily IPv4 |
+    Where-Object InterfaceAlias -Like 'vEthernet*' |
+    Format-Table InterfaceAlias,IPAddress,PrefixLength
+```
+
+Registrare un IPv4 HOST dell'adattatore Hyper-V e l'IPv4 VM sulla stessa rete. Non
+usare loopback, NAT Docker o un indirizzo LAN differente. Riservare `28443/TCP` al
+Gateway; il runner fallisce se la porta è già occupata.
+
+## Prepare HOST
+
+```powershell
+Set-Location C:\Codice\broker-gateway
+git fetch --prune origin
+git switch m3/production-like-vertical-slice
+git pull --ff-only
+$candidate = (git rev-parse HEAD).Trim()
+if (git status --porcelain) { throw 'Worktree non pulito' }
+
+$hostHyperVAddress = '<IP-HOST-HYPERV>'
+$vmAddress = '<IP-VM>'
+.\tools\m3\split-host\Invoke-M3ASplitHost.ps1 `
+    -Phase Prepare `
+    -RunId $runId `
+    -CandidateCommit $candidate `
+    -HostHyperVAddress $hostHyperVAddress `
+    -VmAddress $vmAddress `
+    -GatewayPort 28443
+```
+
+`Prepare`:
+
+- genera CA e certificati sintetici per-run; il SAN Gateway contiene l'IP HOST;
+- avvia Gateway, PostgreSQL 18, vault e mock con un Compose project per-run;
+- verifica bind e firewall fail-closed;
+- produce `C:\SecureEvidence\<RunId>\<RunId>-vm-input.zip` e sidecar;
+- restituisce `AWAITING_VM`, non un PASS.
+
+Il ZIP VM contiene activation code monouso ed è materiale raw temporaneo. Non
+caricarlo su GitHub, non inserirlo in evidence redatta e non copiarlo nel repository.
+
+## Trasferimento HOST → VM
+
+Usare l'integrazione Hyper-V Guest Service Interface, senza PowerShell Direct e senza
+eseguire comandi nella VM dall'HOST:
+
+```powershell
+$guestService = $vm | Get-VMIntegrationService |
+    Where-Object Name -EQ 'Guest Service Interface'
+if (-not $guestService.Enabled) {
+    throw 'Abilitare Guest Service Interface solo dopo approvazione operativa.'
+}
+$source = "C:\SecureEvidence\$runId\$runId-vm-input.zip"
+$sidecar = $source + '.sha256'
+Copy-VMFile -VM $vm -SourcePath $source `
+    -DestinationPath "C:\Lab\M3A\$runId\input.zip" `
+    -FileSource Host -CreateFullPath
+Copy-VMFile -VM $vm -SourcePath $sidecar `
+    -DestinationPath "C:\Lab\M3A\$runId\input.zip.sha256" `
+    -FileSource Host -CreateFullPath
+```
+
+Non abilitare servizi d'integrazione, checkpoint o sessioni remote automaticamente.
+Se Guest Service Interface non è già abilitato, fermarsi per la decisione del
+responsabile VM.
+
+## Esecuzione Codex VM
+
+Seguire senza variazioni [M3A split-host — istruzioni Codex
+VM](M3A-SPLIT-HOST-CODEX-VM.md). Il risultato accettabile è un archivio **redatto**
+con sidecar, `vm-manifest.json`, `legacy-simulator.json` e cleanup PASS. Il Broker deve
+essere stato osservato Running con process token del service SID; un processo legacy
+deve aver attraversato realmente la Named Pipe e il Gateway HOST.
+
+Il risultato VM può essere trasferito tramite asset di una release privata temporanea
+GitHub o un canale amministrativo approvato. Non committare evidence. Per una release
+privata:
+
+```powershell
+# nella VM, dopo aver verificato che l'archivio sia soltanto redatto
+$tag = "evidence-$runId"
+gh release create $tag --repo marcobiz/secure-integration-platform `
+    --prerelease --title "Redacted $runId" --notes "M3A VM redacted evidence only"
+gh release upload $tag "C:\SecureEvidence\$runId\$runId-vm-redacted.zip" `
+    "C:\SecureEvidence\$runId\$runId-vm-redacted.zip.sha256" `
+    --repo marcobiz/secure-integration-platform
+```
+
+Sul HOST scaricare in `C:\SecureEvidence\<RunId>\vm-transfer`, verificare il sidecar
+e decomprimere in `vm-result`. Il repository Git resta estraneo al trasferimento.
+
+## Finalize HOST
+
+```powershell
+$vmResult = "C:\SecureEvidence\$runId\vm-result"
+.\tools\m3\split-host\Invoke-M3ASplitHost.ps1 `
+    -Phase Finalize `
+    -RunId $runId `
+    -CandidateCommit $candidate `
+    -HostHyperVAddress $hostHyperVAddress `
+    -VmAddress $vmAddress `
+    -GatewayPort 28443 `
+    -VmResultDirectory $vmResult
+```
+
+`Finalize` verifica il manifest VM, esegue sullo stack reale N01–N14 con il
+SecurityDriver, scansiona log e report usando tutte le canary note all'HOST, registra
+digest immagini, checksum migration, fingerprint pubblici, SID, firewall e scenari,
+quindi esegue il cleanup prima di creare il bundle redatto.
+
+PASS richiede contemporaneamente:
+
+- P02 e operation-grant denial attraverso il vero Broker Service;
+- applicazione locale non autorizzata negata e auditata;
+- N01 revoca, N03 replay, N04 tenant alterato, N07 URL arbitrario, N10 secret
+  reference arbitraria e gli altri scenari SecurityDriver PASS;
+- nessun activation code, vendor key, token, password o payload canary nei log;
+- zero container e volumi del project, zero regole firewall temporanee;
+- attestazione VM con zero servizi e task di test residui.
+
+Il risultato è `C:\SecureEvidence\<RunId>\<RunId>-redacted-evidence.zip` con sidecar
+SHA-256. Raw evidence rimane fuori Git e soggetta alla retention del laboratorio.
+
+## Cleanup di emergenza
+
+HOST:
+
+```powershell
+.\tools\m3\split-host\Invoke-M3ASplitHost.ps1 -Phase Cleanup -RunId $runId
+```
+
+VM, dentro una console elevata:
+
+```powershell
+Set-Location C:\Lab\broker-gateway
+.\tools\m3\split-host\Invoke-M3ASplitVm.ps1 -Phase Cleanup -RunId $runId
+```
+
+Gli script rifiutano di eliminare un servizio con binary path esterno alla directory
+della run. Una collisione con un `SecureIntegrationBroker` preesistente è un blocker:
+identificarne proprietà e ownership prima di rimuoverlo con il relativo harness.
+
