@@ -10,7 +10,8 @@ Aggiornato: 2026-08-04
 | M1 — Local Broker minimo | Implementato; **gate live tecnico PASS** | run `m0-m1-20260803-232955`; AC-002/004 PASS-LIVE sul commit testato |
 | Primo vertical slice E2E | Completato come harness ripetibile | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` |
 | M2 — Gateway minimo | **Done** | gate CI `30896803567`: build/test, PostgreSQL 18, container hardening, Gitleaks e SBOM PASS |
-| M3 e milestone successive | Non iniziate | nessun nuovo vertical slice, Connector lifecycle, Admin o adapter nativo |
+| M3 — vertical slice production-like | **Implementato, gate aperto** | M3A container CI PASS; esecuzione Windows Service completa e M3B Azure ancora PENDING |
+| M4 e milestone successive | Non iniziate | nessun Connector lifecycle, Admin o adapter nativo |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
 ## Gate Review prima di M2
@@ -69,6 +70,17 @@ Esito conclusivo: **GO per M2**. La lineage live è stata integrata linearmente:
 - API health/readiness, Problem Details redatti, Docker non-root/read-only-compatible, health probe e Bicep contract skeleton;
 - architettura, runbook, piano e report in `docs/architecture/m2-gateway-architecture.md`, `docs/operations/M2-GATEWAY-RUNBOOK.md`, `docs/implementation/M2-IMPLEMENTATION-PLAN.md` e `docs/testing/M2-IMPLEMENTATION-REPORT.md`.
 
+### M3 — vertical slice production-like
+
+- Broker production invoker con enrollment Installation, PoP/firma BGW1 e chiave CNG ECDSA P-256 non esportabile sotto la service identity;
+- stack deterministico con Gateway container reale, PostgreSQL 18, synthetic Vault HTTPS e vendor mock HTTPS/mTLS, tutti alimentati da certificati e canary per-run;
+- matrice automatica M3-P01/P03-P07 e M3-N01..N15, inclusi revoca, firma invalida, replay, tenant/URL/secret reference client-side, grant, SSRF/DNS, redirect, certificato errato, Vault/PostgreSQL indisponibili e log redaction;
+- orchestratore Windows elevato per installare il Broker come vero servizio ed eseguire il Legacy Simulator senza vendor secret;
+- workflow Azure manuale protetto, federato OIDC, con Managed Identity, Key Vault reale, PostgreSQL 18 e App Service mTLS;
+- evidence CI redatta con manifest, digest immagini, versione PostgreSQL, scenari e sidecar SHA-256; raw evidence esclusa da Git.
+
+Il gate non è chiuso: sul repository GitHub non sono configurati runner Windows elevati né l'environment `azure-dev`. Di conseguenza M3-P02 non è ancora PASS-LIVE nel nuovo slice e M3B non è stata eseguita. Nessun tag M3 è stato creato e M4 resta vietata. Review: `docs/reviews/M3-GATE-REVIEW.md`.
+
 ## Test ed esiti
 
 | Suite/comando | Esito atteso dell'ultima verifica | Copertura |
@@ -79,10 +91,12 @@ Esito conclusivo: **GO per M2**. La lineage live è stata integrata linearmente:
 | `eng/scan-secrets.ps1` | PASS | repository escluso materiale sorgente riservato |
 | `eng/generate-sbom.ps1` | PASS | SBOM SPDX degli artefatti |
 | `Broker.Core.Tests` | 26 PASS | lifecycle/grant, AEAD/nonce/AAD/version, framing e hard limits |
-| `Broker.Integration.Tests` | 22 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction |
+| `Broker.Integration.Tests` | 23 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction e chiave CNG non esportabile |
 | `VerticalSlice.Tests` | 1 PASS | vertical slice e negative/security path |
-| `Gateway.Unit.Tests` | 22 PASS | enrollment/PoP/replay/renew/revoke/version, tenant/grant, Vault/cache/auth modes, SSRF, retry, redaction |
-| `Gateway.Integration.Tests` | 6 PASS ordinari | API/Problem/health, schema/RLS statico; test PostgreSQL condizionali |
+| `Gateway.Unit.Tests` | 25 PASS | enrollment/PoP/replay/renew/revoke/version, tenant/grant, Vault/cache/auth modes, SSRF, retry, redaction e confini M3 |
+| `Gateway.Integration.Tests` | 7 PASS ordinari | API/Problem/health, startup M3Testing, schema/RLS statico; test PostgreSQL condizionali |
+| Totale suite ordinarie | 82 PASS | 26 Broker Core + 23 Broker integration + 25 Gateway unit + 7 Gateway integration + 1 E2E |
+| CI `m3-deterministic-container-slice` | PASS, run `30903757495`, commit `91963ce` | Gateway/PostgreSQL 18/Vault/vendor reali, matrice positiva/negativa, non-root/read-only, redazione, cleanup ed evidence SHA-256 `A52CACB8…FCA30` |
 | PostgreSQL 18 effimero locale | 2 PASS | migration, FORCE RLS, registry enrollment/grant/replay/revoca |
 | CI `gateway-postgresql-18` | PASS | run `30896803567`: PostgreSQL 18, migration apply/no-op, checksum, ruoli, FORCE RLS, tenant isolation e cleanup |
 | CI `gateway-container` | PASS | run `30896803567`: build/esecuzione, non-root/read-only, live/ready, fail-closed, secret scan, SBOM e shutdown |
@@ -117,6 +131,8 @@ La matrice live A-F è PASS sulla VM `DESKTOP-5T30P6J` con RunId `m0-m1-20260803
 - **AC-023:** esempio Secure Layer eseguito dalla suite E2E.
 - **AC-027:** generazione SBOM SPDX verificata.
 
+Per M3, AC-001/006/007/009/010/011/012/013/021/023 hanno nuova evidenza container deterministica. Il percorso attraverso il vero Broker Windows Service e lo smoke Azure restano PENDING; pertanto M3 non è Done e non esiste una baseline M3.
+
 **AC-002 e AC-004 restano PASS-LIVE sul commit testato invariato. M2 è Done.** Il gate indipendente M2 è PASS sul commit candidato `b6e1e46aebbd005d1bacf20943b358f6ccb6ea1a`; il tag annotato di baseline viene applicato soltanto dopo la replica verde sul commit documentale conclusivo.
 
 ## Debito tecnico noto
@@ -133,6 +149,10 @@ La matrice live A-F è PASS sulla VM `DESKTOP-5T30P6J` con RunId `m0-m1-20260803
 - Key Vault/Managed Identity è implementato ma non provato live senza ambiente Azure;
 - non esiste ancora idempotency record/runtime deduplication: l'envelope valida la key e il retry è limitato alle operation server-side idempotenti; la semantica completa resta nel runtime Connector M4;
 - Gateway HTTP v1 e IPC v1 restano provvisori fino al gate M3.
+- il workflow M3A container prova il Gateway e i servizi reali ma non sostituisce l'esecuzione elevata del Broker Windows Service; serve un runner Windows effimero con Docker Linux;
+- M3B è implementata ma non eseguita: mancano environment GitHub protetto, federazione OIDC e subscription Azure dev autorizzata;
+- i container migration/provisioner segnalano l'assenza opzionale di `libgssapi_krb5` pur completando con successo l'autenticazione PostgreSQL a password; il warning va eliminato prima della baseline M3;
+- le action `checkout@v4`/`upload-artifact@v4` producono un warning di runtime Node 20 deprecato sul runner corrente; non altera l'esito ma richiede upgrade quando disponibile.
 
 ## Decisioni ancora aperte
 

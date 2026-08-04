@@ -60,6 +60,12 @@ PostgreSQL 18, container hardening, secret scan e SBOM; review conclusiva in
 
 ## M3 — Primo vertical slice
 
+**Stato:** implementazione completata sul branch `m3/production-like-vertical-slice`; gate
+aperto. La matrice deterministica Gateway/PostgreSQL 18/synthetic Vault/vendor è PASS in
+CI. Restano obbligatorie l'esecuzione M3A con Broker come vero Windows Service e la M3B
+su Azure dev con OIDC/Managed Identity/Key Vault reali. Nessun tag M3 e nessun avvio M4
+finché entrambe non sono verdi.
+
 **Obiettivo:** prova end-to-end senza GetSecret.
 
 **Scenario:** legacy simulator → Broker → Gateway → Vault synthetic provider/test Vault → mock REST; API key vendor e mTLS applicati centralmente; body JSON pre-costruito.
