@@ -10,7 +10,7 @@ Aggiornato: 2026-08-04
 | M1 — Local Broker minimo | Implementato; **gate live tecnico PASS** | run `m0-m1-20260803-232955`; AC-002/004 PASS-LIVE sul commit testato |
 | Primo vertical slice E2E | Completato come harness ripetibile | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` |
 | M2 — Gateway minimo | **Done** | gate CI `30896803567`: build/test, PostgreSQL 18, container hardening, Gitleaks e SBOM PASS |
-| M3 — vertical slice production-like | **Implementato, gate aperto** | M3A container CI PASS; esecuzione Windows Service completa e M3B Azure ancora PENDING |
+| M3 — vertical slice production-like | **Implementato, gate aperto** | M3A container CI PASS; prima run split-host BLOCKED pre-handoff, P02 e M3B ancora PENDING |
 | M4 e milestone successive | Non iniziate | nessun Connector lifecycle, Admin o adapter nativo |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
@@ -80,6 +80,8 @@ Esito conclusivo: **GO per M2**. La lineage live è stata integrata linearmente:
 - evidence CI redatta con manifest, digest immagini, versione PostgreSQL, scenari e sidecar SHA-256; raw evidence esclusa da Git.
 
 Il gate non è chiuso: sul repository GitHub non sono configurati runner Windows elevati né l'environment `azure-dev`. Di conseguenza M3-P02 non è ancora PASS-LIVE nel nuovo slice e M3B non è stata eseguita. Nessun tag M3 è stato creato e M4 resta vietata. Review: `docs/reviews/M3-GATE-REVIEW.md`.
+
+La run split-host `m3a-live-20260804-131718` è stata classificata **BLOCKED — PRE-HANDOFF INFRASTRUCTURE VALIDATION**: live/readiness erano HTTP 200, ma Docker health falliva per SAN incompatibile e i profili Windows Firewall erano disabilitati. Il runner VM non è stato eseguito e P02 non è stato testato. Cleanup PASS ha lasciato zero risorse della run e ha rimosso l'handoff non utilizzato. I fix health/TLS e firewall reversibile sono implementati; la topologia corrente `vEthernet (Default Switch)` non ha un profilo di rete associato e richiede una rete Hyper-V interna dedicata prima di una nuova run. Dettagli: `docs/reviews/M3A-BLOCKED-RUN-20260804-131718.md`.
 
 ## Test ed esiti
 
@@ -151,7 +153,7 @@ Per M3, AC-001/006/007/009/010/011/012/013/021/023 hanno nuova evidenza containe
 - Gateway HTTP v1 e IPC v1 restano provvisori fino al gate M3.
 - il workflow M3A container prova il Gateway e i servizi reali ma non sostituisce l'esecuzione elevata del Broker Windows Service; serve un runner Windows effimero con Docker Linux;
 - M3B è implementata ma non eseguita: mancano environment GitHub protetto, federazione OIDC e subscription Azure dev autorizzata;
-- i container migration/provisioner segnalano l'assenza opzionale di `libgssapi_krb5` pur completando con successo l'autenticazione PostgreSQL a password; il warning va eliminato prima della baseline M3;
+- la rete Hyper-V Default Switch dell'HOST non espone un profilo Windows Firewall risolvibile: il nuovo preflight blocca correttamente la run finché non viene predisposta una rete interna dedicata e verificata;
 - le action `checkout@v4`/`upload-artifact@v4` producono un warning di runtime Node 20 deprecato sul runner corrente; non altera l'esito ma richiede upgrade quando disponibile.
 
 ## Decisioni ancora aperte

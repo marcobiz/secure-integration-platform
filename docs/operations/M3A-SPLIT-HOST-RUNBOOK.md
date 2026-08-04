@@ -26,6 +26,12 @@ Gateway è associato esclusivamente all'IPv4 dell'adattatore Hyper-V. Il firewal
 consente TCP in ingresso soltanto dall'IPv4 della VM e soltanto sulla porta Gateway.
 Il pacchetto VM non contiene indirizzi di PostgreSQL, vault o mock.
 
+Il profilo Windows Firewall non è dedotto dal nome della VM o da un profilo scelto
+manualmente: deve esistere un solo `Get-NetConnectionProfile` per l'`InterfaceIndex`
+dell'IPv4 HOST. Il runner rifiuta l'interfaccia se il profilo non è risolvibile o se
+lo stesso profilo è usato da un'altra connessione attiva. Una regola appartenente a
+un profilo disabilitato non costituisce enforcement.
+
 ## Prerequisiti HOST
 
 - Windows 10 22H2 supportato, virtualizzazione e WSL 2 attivi;
@@ -70,6 +76,23 @@ Registrare un IPv4 HOST dell'adattatore Hyper-V e l'IPv4 VM sulla stessa rete. N
 usare loopback, NAT Docker o un indirizzo LAN differente. Riservare `28443/TCP` al
 Gateway; il runner fallisce se la porta è già occupata.
 
+Verificare anche l'associazione firewall, senza mutazioni:
+
+```powershell
+$hostAddress = '<IP-HOST-HYPERV>'
+$hostNic = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $hostAddress
+Get-NetConnectionProfile -InterfaceIndex $hostNic.InterfaceIndex
+Get-NetFirewallProfile -PolicyStore ActiveStore -Name Domain,Private,Public |
+    Format-Table Name,Enabled
+```
+
+`M3A_SPLIT_FIREWALL_PROFILE_UNRESOLVED_DEDICATED_SWITCH_REQUIRED` e
+`M3A_SPLIT_FIREWALL_PROFILE_SHARED_DEDICATED_SWITCH_REQUIRED` sono blocker
+pre-handoff. Non aggirarli con `-Profile Any` o abilitando tutti i profili. Predisporre
+una rete Hyper-V interna dedicata e sottoporla a nuova verifica; se il relativo profilo
+è condiviso con una rete necessaria all'HOST, valutarne prima l'impatto o rendere la
+categoria realmente isolata.
+
 ## Prepare HOST
 
 ```powershell
@@ -93,9 +116,14 @@ $vmAddress = '<IP-VM>'
 
 `Prepare`:
 
-- genera CA e certificati sintetici per-run; il SAN Gateway contiene l'IP HOST;
+- genera CA e certificati sintetici per-run; il SAN Gateway contiene l'IP HOST e le
+  identità realmente usate dal probe interno (`localhost` e `127.0.0.1`);
 - avvia Gateway, PostgreSQL 18, vault e mock con un Compose project per-run;
-- verifica bind e firewall fail-closed;
+- richiede `healthy` per Gateway/PostgreSQL oltre a live/readiness HTTP 200;
+- salva gli stati originali Domain/Private/Public, crea un rollback SYSTEM a scadenza,
+  abilita soltanto il profilo associato e crea una regola limitata a interfaccia, IP VM,
+  IP HOST e porta Gateway;
+- verifica la regola nell'`ActiveStore` e rifiuta un profilo non enforcing;
 - produce `C:\SecureEvidence\<RunId>\<RunId>-vm-input.zip` e sidecar;
 - restituisce `AWAITING_VM`, non un PASS.
 
@@ -179,6 +207,8 @@ PASS richiede contemporaneamente:
   reference arbitraria e gli altri scenari SecurityDriver PASS;
 - nessun activation code, vendor key, token, password o payload canary nei log;
 - zero container e volumi del project, zero regole firewall temporanee;
+- zero network e task rollback temporanei e ripristino esatto degli stati originali
+  Domain/Private/Public;
 - attestazione VM con zero servizi e task di test residui.
 
 Il risultato è `C:\SecureEvidence\<RunId>\<RunId>-redacted-evidence.zip` con sidecar
@@ -203,3 +233,7 @@ Gli script rifiutano di eliminare un servizio con binary path esterno alla direc
 della run. Una collisione con un `SecureIntegrationBroker` preesistente è un blocker:
 identificarne proprietà e ownership prima di rimuoverlo con il relativo harness.
 
+Il cleanup HOST rimuove regola, container, volumi e network, ripristina i tre stati
+firewall dal record per-run e cancella il task di rollback. Se la sessione termina
+prima, il task SYSTEM esegue lo stesso ripristino dopo 30 minuti senza password
+persistite. Un esito con `firewallProfileRestored=false` non è PASS.
