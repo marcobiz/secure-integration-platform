@@ -20,11 +20,15 @@ $runRoot = Join-Path ([IO.Path]::GetFullPath($EvidenceRoot)) $RunId
 $rawRoot = Join-Path $runRoot 'raw'
 $redactedRoot = Join-Path $runRoot 'redacted'
 $statePath = Join-Path $runRoot 'host-state.json'
+$firewallStatePath = Join-Path $runRoot 'firewall-state.json'
+$firewallRollbackPath = Join-Path $runRoot 'firewall-rollback.ps1'
 $environmentPath = Join-Path $rawRoot 'm3a.env'
 $provisioningPath = Join-Path $rawRoot 'provisioning.json'
 $firewallName = 'SecureIntegration M3A split ' + $RunId
 $projectName = ($RunId.ToLowerInvariant() -replace '[^a-z0-9_-]', '-')
+$firewallRollbackTask = 'SecureIntegration-M3A-FirewallRollback-' + ($RunId -replace '[^A-Za-z0-9_-]', '-')
 $rootThumbprint = $null
+Import-Module (Join-Path $PSScriptRoot 'M3ASplitFirewall.psm1') -Force
 
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -189,11 +193,114 @@ function Wait-ComposeServiceState {
     throw "M3A_SPLIT_REQUIRED_CONTAINER_STATE_TIMEOUT: $Service expected $ExpectedState/$ExpectedHealth."
 }
 
+function Get-FirewallProfileStates {
+    return @(Get-NetFirewallProfile -PolicyStore ActiveStore -Name Domain, Private, Public | ForEach-Object {
+        [pscustomobject]@{ Name = [string]$_.Name; Enabled = [bool]$_.Enabled }
+    })
+}
+
+function Resolve-HostFirewallSelection {
+    param([Parameter(Mandatory)] $AddressRecord)
+
+    $connectionProfiles = @(Get-NetConnectionProfile -ErrorAction Stop)
+    $firewallProfiles = Get-FirewallProfileStates
+    return Resolve-M3AFirewallProfileSelection -InterfaceIndex ([uint32]$AddressRecord.InterfaceIndex) -ConnectionProfiles $connectionProfiles -FirewallProfiles $firewallProfiles
+}
+
+function Install-FirewallFailSafe {
+    param([Parameter(Mandatory)] $Selection)
+
+    $profileStates = Get-FirewallProfileStates
+    Write-JsonFile -Path $firewallStatePath -Value ([ordered]@{
+        schemaVersion = 1
+        runId = $RunId
+        firewallRule = $firewallName
+        rollbackTask = $firewallRollbackTask
+        interfaceAlias = [string]$Selection.InterfaceAlias
+        interfaceIndex = [uint32]$Selection.InterfaceIndex
+        networkCategory = [string]$Selection.NetworkCategory
+        selectedProfile = [string]$Selection.ProfileName
+        originalProfiles = $profileStates
+        recordedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+    })
+
+    $escapedStatePath = $firewallStatePath.Replace("'", "''")
+    $escapedTaskName = $firewallRollbackTask.Replace("'", "''")
+    $rollback = @"
+`$ErrorActionPreference = 'Continue'
+`$state = Get-Content -LiteralPath '$escapedStatePath' -Raw | ConvertFrom-Json
+Get-NetFirewallRule -DisplayName ([string]`$state.firewallRule) -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+foreach (`$profile in @(`$state.originalProfiles)) {
+    Set-NetFirewallProfile -Name ([string]`$profile.Name) -Enabled ([bool]`$profile.Enabled)
+}
+Unregister-ScheduledTask -TaskName '$escapedTaskName' -Confirm:`$false -ErrorAction SilentlyContinue
+"@
+    [IO.File]::WriteAllText($firewallRollbackPath, $rollback, [Text.UTF8Encoding]::new($false))
+
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $firewallRollbackPath + '"')
+    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(30)
+    Register-ScheduledTask -TaskName $firewallRollbackTask -Action $action -Trigger $trigger -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+    if ($null -eq (Get-ScheduledTask -TaskName $firewallRollbackTask -ErrorAction SilentlyContinue)) {
+        throw 'M3A_SPLIT_FIREWALL_ROLLBACK_TASK_NOT_REGISTERED.'
+    }
+}
+
+function Enable-SelectedFirewallProfile {
+    param([Parameter(Mandatory)] $Selection)
+
+    if (-not [bool]$Selection.OriginallyEnabled) {
+        Set-NetFirewallProfile -Name ([string]$Selection.ProfileName) -Enabled True
+    }
+    $profile = Get-NetFirewallProfile -PolicyStore ActiveStore -Name ([string]$Selection.ProfileName)
+    if (-not [bool]$profile.Enabled) { throw 'M3A_SPLIT_FIREWALL_PROFILE_NOT_ENFORCING.' }
+}
+
+function Assert-FirewallRuleEnforced {
+    param(
+        [Parameter(Mandatory)] $Selection,
+        [Parameter(Mandatory)] [string] $HostAddress,
+        [Parameter(Mandatory)] [string] $RemoteAddress,
+        [Parameter(Mandatory)] [int] $Port
+    )
+
+    $profile = Get-NetFirewallProfile -PolicyStore ActiveStore -Name ([string]$Selection.ProfileName)
+    $rule = Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName $firewallName -ErrorAction Stop
+    $addressFilter = $rule | Get-NetFirewallAddressFilter
+    $portFilter = $rule | Get-NetFirewallPortFilter
+    $interfaceFilter = $rule | Get-NetFirewallInterfaceFilter
+    if (
+        -not [bool]$profile.Enabled -or
+        [string]$rule.Enabled -ne 'True' -or
+        [string]$rule.Direction -ne 'Inbound' -or
+        [string]$rule.Action -ne 'Allow' -or
+        [string]$rule.PrimaryStatus -ne 'OK' -or
+        [string]$rule.Profile -notmatch ([regex]::Escape([string]$Selection.ProfileName)) -or
+        $addressFilter.LocalAddress -notcontains $HostAddress -or
+        $addressFilter.RemoteAddress -notcontains $RemoteAddress -or
+        $portFilter.LocalPort -notcontains ([string]$Port) -or
+        $interfaceFilter.InterfaceAlias -notcontains [string]$Selection.InterfaceAlias
+    ) { throw 'M3A_SPLIT_FIREWALL_RULE_NOT_ENFORCED.' }
+}
+
+function Restore-FirewallState {
+    if (-not (Test-Path -LiteralPath $firewallStatePath)) { return $true }
+    $firewallState = Get-Content -LiteralPath $firewallStatePath -Raw | ConvertFrom-Json
+    Get-NetFirewallRule -DisplayName ([string]$firewallState.firewallRule) -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    foreach ($profile in @($firewallState.originalProfiles)) {
+        Set-NetFirewallProfile -Name ([string]$profile.Name) -Enabled ([bool]$profile.Enabled)
+    }
+    Unregister-ScheduledTask -TaskName ([string]$firewallState.rollbackTask) -Confirm:$false -ErrorAction SilentlyContinue
+    $restored = Test-M3AFirewallProfileStateRestored -OriginalStates @($firewallState.originalProfiles) -CurrentProfiles (Get-FirewallProfileStates)
+    if ($restored) { Remove-Item -LiteralPath $firewallRollbackPath -Force -ErrorAction SilentlyContinue }
+    return $restored
+}
+
 function Remove-HostResources {
     $state = if (Test-Path -LiteralPath $statePath) { Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json } else { $null }
     if (Test-Path -LiteralPath $environmentPath) {
-        & docker compose -p $projectName --env-file $environmentPath -f $composeFile down --volumes --remove-orphans 2>$null | Out-Null
+        try { Invoke-NativeChecked -FilePath 'docker.exe' -Arguments (Get-ComposeArguments -Arguments @('down', '--volumes', '--remove-orphans')) } catch { Write-Warning $_ }
     }
+    $firewallRestored = Restore-FirewallState
     Get-NetFirewallRule -DisplayName $firewallName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
     $thumbprint = if ($null -ne $state) { [string]$state.hostRootThumbprint } else { [string]$rootThumbprint }
     if ($thumbprint) {
@@ -201,12 +308,17 @@ function Remove-HostResources {
     }
     $remainingContainers = @(& docker ps -aq --filter ('label=com.docker.compose.project=' + $projectName) 2>$null)
     $remainingVolumes = @(& docker volume ls -q --filter ('label=com.docker.compose.project=' + $projectName) 2>$null)
+    $remainingNetworks = @(& docker network ls -q --filter ('label=com.docker.compose.project=' + $projectName) 2>$null)
     $remainingRules = @(Get-NetFirewallRule -DisplayName $firewallName -ErrorAction SilentlyContinue)
+    $remainingTasks = @(Get-ScheduledTask -TaskName $firewallRollbackTask -ErrorAction SilentlyContinue)
     return [ordered]@{
-        status = if ($remainingContainers.Count -eq 0 -and $remainingVolumes.Count -eq 0 -and $remainingRules.Count -eq 0) { 'PASS' } else { 'FAIL' }
+        status = if ($remainingContainers.Count -eq 0 -and $remainingVolumes.Count -eq 0 -and $remainingNetworks.Count -eq 0 -and $remainingRules.Count -eq 0 -and $remainingTasks.Count -eq 0 -and $firewallRestored) { 'PASS' } else { 'FAIL' }
         remainingContainers = $remainingContainers.Count
         remainingVolumes = $remainingVolumes.Count
+        remainingNetworks = $remainingNetworks.Count
         remainingFirewallRules = $remainingRules.Count
+        remainingFirewallRollbackTasks = $remainingTasks.Count
+        firewallProfileRestored = [bool]$firewallRestored
     }
 }
 
@@ -250,6 +362,7 @@ if ($Phase -eq 'Prepare') {
     if ($LASTEXITCODE -ne 0) { throw 'M3A_SPLIT_M2_BASELINE_MISSING.' }
     $addressRecord = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $HostHyperVAddress -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($null -eq $addressRecord) { throw 'M3A_SPLIT_HOST_ADDRESS_NOT_ASSIGNED.' }
+    $firewallSelection = Resolve-HostFirewallSelection -AddressRecord $addressRecord
     Assert-PortFree -Address $HostHyperVAddress -Port $GatewayPort
     foreach ($port in 15432, 18444, 18445) { Assert-PortFree -Address '127.0.0.1' -Port $port }
     if (Test-Path -LiteralPath $runRoot) { throw 'M3A_SPLIT_RUN_DIRECTORY_ALREADY_EXISTS.' }
@@ -260,13 +373,10 @@ if ($Phase -eq 'Prepare') {
     $installed = Import-Certificate -FilePath (Join-Path $rawRoot 'certificates\ca.crt') -CertStoreLocation Cert:\LocalMachine\Root
     $rootThumbprint = $installed.Thumbprint
     try {
-        New-NetFirewallRule -DisplayName $firewallName -Direction Inbound -Action Allow -Protocol TCP -LocalAddress $HostHyperVAddress -RemoteAddress $VmAddress -LocalPort $GatewayPort -Profile Any | Out-Null
-        $rule = Get-NetFirewallRule -DisplayName $firewallName -ErrorAction Stop
-        $addressFilter = $rule | Get-NetFirewallAddressFilter
-        $portFilter = $rule | Get-NetFirewallPortFilter
-        if ($rule.Enabled -ne 'True' -or $rule.Action -ne 'Allow' -or $addressFilter.LocalAddress -notcontains $HostHyperVAddress -or $addressFilter.RemoteAddress -notcontains $VmAddress -or $portFilter.LocalPort -notcontains ([string]$GatewayPort)) {
-            throw 'M3A_SPLIT_FIREWALL_SCOPE_INVALID.'
-        }
+        Install-FirewallFailSafe -Selection $firewallSelection
+        Enable-SelectedFirewallProfile -Selection $firewallSelection
+        New-NetFirewallRule -DisplayName $firewallName -Direction Inbound -Action Allow -Protocol TCP -LocalAddress $HostHyperVAddress -RemoteAddress $VmAddress -LocalPort $GatewayPort -Profile ([string]$firewallSelection.ProfileName) -InterfaceAlias ([string]$firewallSelection.InterfaceAlias) | Out-Null
+        Assert-FirewallRuleEnforced -Selection $firewallSelection -HostAddress $HostHyperVAddress -RemoteAddress $VmAddress -Port $GatewayPort
         Invoke-NativeChecked -FilePath 'docker.exe' -Arguments (Get-ComposeArguments -Arguments @('config', '--quiet'))
         Invoke-NativeChecked -FilePath 'docker.exe' -Arguments (Get-ComposeArguments -Arguments @('up', '--build', '--detach'))
         Wait-Gateway -Address ("https://${HostHyperVAddress}:${GatewayPort}/health/ready")
@@ -308,7 +418,8 @@ if ($Phase -eq 'Prepare') {
             schemaVersion = 1; runId = $RunId; candidateCommit = $CandidateCommit
             hostAddress = $HostHyperVAddress; vmAddress = $VmAddress; gatewayPort = $GatewayPort
             interfaceAlias = [string]$addressRecord.InterfaceAlias; composeProject = $projectName
-            firewallRule = $firewallName; hostRootThumbprint = $rootThumbprint
+            firewallRule = $firewallName; firewallProfile = [string]$firewallSelection.ProfileName
+            firewallRollbackTask = $firewallRollbackTask; hostRootThumbprint = $rootThumbprint
             preparedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
         })
         [pscustomobject]@{ runId = $RunId; status = 'AWAITING_VM'; commit = $CandidateCommit; vmInput = $archive; vmInputSha256 = $archiveHash; gateway = "https://${HostHyperVAddress}:${GatewayPort}/" } | ConvertTo-Json -Compress

@@ -37,13 +37,14 @@ jobs:
       - name: Parse M3 split-host runners with Windows PowerShell 5.1
         shell: powershell
         run: |
-          $scripts = Get-ChildItem tools/m3/split-host -Filter *.ps1
+          $scripts = Get-ChildItem tools/m3/split-host -Include *.ps1,*.psm1 -Recurse
           foreach ($script in $scripts) {
             $tokens = $null
             $errors = $null
             [void][Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors)
             if ($errors.Count -ne 0) { throw "$($script.Name): $($errors[0].Message)" }
           }
+          ./eng/test-m3-split-firewall.ps1
       - name: Validate documentation
         shell: pwsh
         run: ./eng/validate-docs.ps1
