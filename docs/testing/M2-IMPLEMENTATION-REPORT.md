@@ -16,9 +16,9 @@ servizio PostgreSQL installato.
 | Gateway unit tests | PASS, 22 test |
 | Gateway API/integration | PASS, 6 test ordinari |
 | M0/M1 regression suites | PASS: 26 unit + 22 integration + 1 E2E |
-| PostgreSQL 18 reale | PASS: 2 test su cluster effimero 18.x; CI indipendente predisposta |
+| PostgreSQL 18 reale | PASS: 2 test locali e job CI indipendente `gateway-postgresql-18` |
 | Migration runner | PASS due esecuzioni; seconda no-op; SHA-256 `182CC690E16BB986638A4B52EE1554A4B540A8E58FD673F2111A79D194C66A98` |
-| Docker build/smoke | PENDING CI `gateway-container` |
+| Docker build/smoke | PASS CI `gateway-container`, run `30896803567` |
 | document/secret scan | PASS |
 | dependency vulnerability scan | PASS, nessun package vulnerabile rilevato |
 | SBOM SPDX | PASS |
@@ -71,6 +71,6 @@ attiva contro PostgreSQL 18 reale.
 ## Limiti dell'evidenza
 
 - Azure Key Vault/Managed Identity è implementato ma non provato live senza subscription;
-- PostgreSQL RLS reale è PASS localmente; container e CI indipendente devono ancora passare prima di dichiarare M2 Done;
+- PostgreSQL RLS reale e container hardening sono PASS nel gate CI indipendente; M2 è Done;
 - M3 non è stato avviato e non esiste ancora un E2E Broker→Gateway M2;
 - Gateway HTTP v1 e IPC v1 restano provvisori fino alla validazione M3.

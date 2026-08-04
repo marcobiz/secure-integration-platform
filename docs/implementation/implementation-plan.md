@@ -40,6 +40,10 @@ Un containment track esterno parte in parallelo: rotazione dei segreti noti, TLS
 
 ## M2 — Gateway minimo
 
+**Stato:** **Done il 2026-08-04**. Gate CI indipendente `30896803567` PASS per build/test,
+PostgreSQL 18, container hardening, secret scan e SBOM; review conclusiva in
+`docs/reviews/M2-GATE-REVIEW.md`. M3 non è stata avviata durante la chiusura.
+
 **Obiettivo:** identità Installation e invocazione centrale sicura.
 
 **Task:** Gateway host; PostgreSQL/migrations/RLS; Tenant/Application/Installation; activation/challenge/PoP; mTLS/signature/replay; revocation; Azure Key Vault; Basic/API key/mTLS; restricted egress; Docker.
@@ -163,4 +167,3 @@ M0 → IPC v1 → M1 → M2 → M3 → M4
 ```
 
 M5, M6 e parte di M7 possono procedere in parallelo dopo la stabilizzazione dei rispettivi contratti.
-

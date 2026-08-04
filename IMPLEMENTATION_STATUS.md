@@ -9,7 +9,7 @@ Aggiornato: 2026-08-04
 | M0 — fondamenta repository | Implementato; baseline congelata | commit `7f68442`, tag `baseline-m0-m1-vslice-2026-08-03` |
 | M1 — Local Broker minimo | Implementato; **gate live tecnico PASS** | run `m0-m1-20260803-232955`; AC-002/004 PASS-LIVE sul commit testato |
 | Primo vertical slice E2E | Completato come harness ripetibile | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` |
-| M2 — Gateway minimo | Implementato; gate container/CI pendente | build/test HOST e PostgreSQL 18 reale PASS; Docker smoke predisposto in CI |
+| M2 — Gateway minimo | **Done** | gate CI `30896803567`: build/test, PostgreSQL 18, container hardening, Gitleaks e SBOM PASS |
 | M3 e milestone successive | Non iniziate | nessun nuovo vertical slice, Connector lifecycle, Admin o adapter nativo |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
@@ -84,8 +84,8 @@ Esito conclusivo: **GO per M2**. La lineage live è stata integrata linearmente:
 | `Gateway.Unit.Tests` | 22 PASS | enrollment/PoP/replay/renew/revoke/version, tenant/grant, Vault/cache/auth modes, SSRF, retry, redaction |
 | `Gateway.Integration.Tests` | 6 PASS ordinari | API/Problem/health, schema/RLS statico; test PostgreSQL condizionali |
 | PostgreSQL 18 effimero locale | 2 PASS | migration, FORCE RLS, registry enrollment/grant/replay/revoca |
-| CI `gateway-postgresql-18` | PENDING indipendente | replica migration/RLS/registry su service container |
-| CI `gateway-container` | PENDING | build e health smoke Docker |
+| CI `gateway-postgresql-18` | PASS | run `30896803567`: PostgreSQL 18, migration apply/no-op, checksum, ruoli, FORCE RLS, tenant isolation e cleanup |
+| CI `gateway-container` | PASS | run `30896803567`: build/esecuzione, non-root/read-only, live/ready, fail-closed, secret scan, SBOM e shutdown |
 | parsing `tools/live-matrix/*.ps1/*.psm1` | 9 PASS | sintassi PowerShell dell'intero harness |
 | prerequisite check non elevato | expected FAIL con `LIVE_MATRIX_REQUIRES_ELEVATION` | fail-closed prima di qualsiasi modifica di sistema |
 | probe command non valido | expected exit 1 con report redatto `unknown_probe_command` | contratto di errore machine-readable |
@@ -111,13 +111,13 @@ La matrice live A-F è PASS sulla VM `DESKTOP-5T30P6J` con RunId `m0-m1-20260803
 - **AC-011:** il Gateway M2 deriva Tenant/Application/Installation dal digest del certificato registrato.
 - **AC-012:** grant cross-Tenant e input Tenant client-side sono negati; FORCE RLS PASS su PostgreSQL 18 reale locale.
 - **AC-013:** revoca verificata prima di grant, Vault, DNS e dispatch; il gate E2E completo resta M3.
-- **AC-018:** Dockerfile e smoke job implementati; PASS CI ancora necessario.
+- **AC-018:** PASS CI; immagine eseguibile non-root/read-only, health/readiness, fail-closed, secret scan, SBOM e shutdown verificati.
 - **AC-020:** sorgenti, toolchain pinned e istruzioni build/test presenti.
 - **AC-021:** E2E ripetibile interamente con servizi e certificati sintetici.
 - **AC-023:** esempio Secure Layer eseguito dalla suite E2E.
 - **AC-027:** generazione SBOM SPDX verificata.
 
-**AC-002 e AC-004 restano PASS-LIVE sul commit testato invariato.** L'implementazione M2 e PostgreSQL 18 reale locale sono completi, ma M2 non è ancora dichiarata Done finché container smoke e gate CI indipendente non risultano verdi.
+**AC-002 e AC-004 restano PASS-LIVE sul commit testato invariato. M2 è Done.** Il gate indipendente M2 è PASS sul commit candidato `b6e1e46aebbd005d1bacf20943b358f6ccb6ea1a`; il tag annotato di baseline viene applicato soltanto dopo la replica verde sul commit documentale conclusivo.
 
 ## Debito tecnico noto
 
@@ -129,7 +129,7 @@ La matrice live A-F è PASS sulla VM `DESKTOP-5T30P6J` con RunId `m0-m1-20260803
 - log/wire redaction copre normal, denied, invalid payload e crypto failure anche nel Windows Event Log live; crash non gestiti e telemetry futura restano aperti;
 - il Gateway del vertical slice è un harness, non implementa identity Installation, revoca, replay distribuito, Vault reale o restricted egress production.
 - il challenge store M2 è in-memory/single-node come consentito da ADR-0008; prima dello scale-out servirà storage TTL condiviso o challenge stateless firmata;
-- i locator PostgreSQL e le funzioni RLS sono PASS su un cluster PostgreSQL 18 effimero locale; resta la replica CI indipendente;
+- i locator PostgreSQL e le funzioni RLS sono PASS sia sul cluster PostgreSQL 18 effimero locale sia nel service container CI indipendente;
 - Key Vault/Managed Identity è implementato ma non provato live senza ambiente Azure;
 - non esiste ancora idempotency record/runtime deduplication: l'envelope valida la key e il retry è limitato alle operation server-side idempotenti; la semantica completa resta nel runtime Connector M4;
 - Gateway HTTP v1 e IPC v1 restano provvisori fino al gate M3.

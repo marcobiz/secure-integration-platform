@@ -31,7 +31,7 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 |---|---|
 | NFR-001 | `UT_SEC_Audit_is_metadata_only_and_excludes_payload_and_credentials`, `IT_GTW_Invalid_JSON_does_not_echo_canary_or_exception_details`, repository secret scan; M0/M1 Event Log 11-canary PASS-LIVE |
 | NFR-002 | `UT_EGR_Ungranted_operation_is_denied_before_DNS_vault_or_transport`, `UT_EGR_Private_or_loopback_destination_is_rejected_before_transport`, cross-Tenant grant test |
-| NFR-003 | M2 transport TLS 1.2/1.3 + hostname validation; vertical-slice TLS failure test; container/Key Vault live resta ambientale |
+| NFR-003 | M2 transport TLS 1.2/1.3, hostname validation, DNS pinning e CI container PASS; Key Vault live resta ambientale |
 | NFR-004 | IPC exact boundary/oversize pass; aggregate stream/backpressure aperti |
 | NFR-005 | M1 deadline/cancel/idempotent delete; M2 `UT_EGR_Transient_retry_occurs_only_for_idempotent_operation`; circuit breaker resta M7 |
 | NFR-006 | M2 correlation ID firmato/auditato e `traceparent` obbligatorio su invoke; propagazione E2E completa resta M3 |
@@ -55,13 +55,13 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | AC-009 | `UT_GTW_Invoke_contract_has_no_client_controlled_endpoint_or_secret_reference`, fixed-endpoint e SSRF tests |
 | AC-010 | stesso API-surface test + `UT_EGR_Ungranted_operation_is_denied_before_DNS_vault_or_transport` |
 | AC-011 | `UT_GTW_Enrollment_PoP_derives_tenant_and_replay_is_rejected` |
-| AC-012 | `UT_GTW_Cross_tenant_grant_is_rejected`, `IT_DAT_PostgreSQL18_migration_and_RLS_isolate_tenants_when_configured` PASS su PostgreSQL 18 locale |
+| AC-012 | `UT_GTW_Cross_tenant_grant_is_rejected`, `IT_DAT_PostgreSQL18_migration_and_RLS_isolate_tenants_when_configured`; PASS locale e CI PostgreSQL 18 run `30896803567` |
 | AC-013 | `UT_GTW_Revocation_is_immediate_for_runtime_and_grants`; E2E Broker→Gateway previsto nel gate M3 |
 | AC-014 | ConnectorVersion persistence/API test |
 | AC-015 | atomic rollback and cache invalidation E2E |
 | AC-016 | JSON Schema/semantic/security validation corpus |
 | AC-017 | Draft/Validated/Retired runtime denial tests |
-| AC-018 | Dockerfile non-root/read-only-compatible e job CI `gateway-container`; PASS esterno ancora richiesto |
+| AC-018 | PASS `gateway-container` run `30896803567`: build/esecuzione, non-root, read-only, live/ready, fail-closed, secret scan, SBOM e shutdown |
 | AC-019 | ADR-0017 Accepted; MSI install/upgrade/repair/uninstall/reinstall matrix prevista in M9 |
 | AC-020 | `eng/build.ps1`, pinned toolchain e istruzioni root |
 | AC-021 | `docs/testing/first-vertical-slice-report.md` |

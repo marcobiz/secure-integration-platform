@@ -28,7 +28,7 @@ Questa directory è la fonte di verità architetturale del prodotto. Le decision
 22. [Gate Review M0/M1](reviews/M0-M1-GATE-REVIEW.md) e [matrice requisito-test-evidenza](reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md)
 23. [Runbook matrice live M0/M1](operations/M0-M1-LIVE-MATRIX-RUNBOOK.md)
 24. [Architettura implementata M2](architecture/m2-gateway-architecture.md)
-25. [Piano M2](implementation/M2-IMPLEMENTATION-PLAN.md), [runbook M2](operations/M2-GATEWAY-RUNBOOK.md) e [report M2](testing/M2-IMPLEMENTATION-REPORT.md)
+25. [Piano M2](implementation/M2-IMPLEMENTATION-PLAN.md), [runbook M2](operations/M2-GATEWAY-RUNBOOK.md), [report M2](testing/M2-IMPLEMENTATION-REPORT.md) e [Gate Review M2](reviews/M2-GATE-REVIEW.md)
 
 ## Deliverable coperti
 
@@ -47,7 +47,7 @@ Questa directory è la fonte di verità architetturale del prodotto. Le decision
 | Definition of Done | `implementation/definition-of-done.md` |
 | Gate Review prima di M2 | `reviews/` |
 | Harness live M0/M1 e runbook VM | `../tools/live-matrix/`, `operations/M0-M1-LIVE-MATRIX-RUNBOOK.md` |
-| Gateway minimo M2 | `architecture/m2-gateway-architecture.md`, `implementation/M2-IMPLEMENTATION-PLAN.md`, `operations/M2-GATEWAY-RUNBOOK.md`, `testing/M2-IMPLEMENTATION-REPORT.md` |
+| Gateway minimo M2 | `architecture/m2-gateway-architecture.md`, `implementation/M2-IMPLEMENTATION-PLAN.md`, `operations/M2-GATEWAY-RUNBOOK.md`, `testing/M2-IMPLEMENTATION-REPORT.md`, `reviews/M2-GATE-REVIEW.md` |
 
 ## Regole di manutenzione
 
