@@ -49,3 +49,141 @@ jobs:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
 
+  gateway-postgresql-18:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: broker_gateway_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d broker_gateway_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      GATEWAY_POSTGRES_ADMIN_CONNECTION: Host=127.0.0.1;Port=5432;Database=broker_gateway_test;Username=postgres;SSL Mode=Disable
+      GATEWAY_MIGRATION_CONNECTION: Host=127.0.0.1;Port=5432;Database=broker_gateway_test;Username=postgres;SSL Mode=Disable
+      EXPECTED_MIGRATION_SHA256: 182CC690E16BB986638A4B52EE1554A4B540A8E58FD673F2111A79D194C66A98
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+      - name: Restore Gateway integration tests
+        run: dotnet restore tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj --locked-mode
+      - name: Restore and build migration runner
+        run: |
+          dotnet restore src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj --locked-mode
+          dotnet build src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release --no-restore
+      - name: Verify migration checksum and idempotency from an empty database
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(sha256sum src/Gateway/Gateway.Infrastructure/Persistence/Migrations/0001_gateway_m2.sql | awk '{print toupper($1)}')"
+          test "$actual_sha" = "$EXPECTED_MIGRATION_SHA256"
+          first_output="$(dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release --no-build -- apply)"
+          grep -F "Applied 0001_gateway_m2.sql ($EXPECTED_MIGRATION_SHA256)" <<<"$first_output"
+          second_output="$(dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release --no-build -- apply)"
+          if grep -Fq "Applied " <<<"$second_output"; then
+            echo "Second migration application was not a no-op." >&2
+            exit 1
+          fi
+      - name: Verify roles, forced RLS and runtime least privilege
+        shell: bash
+        env:
+          POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          psql_cmd=(docker exec "$POSTGRES_SERVICE_ID" psql -v ON_ERROR_STOP=1 -U postgres -d broker_gateway_test -At)
+          test "$("${psql_cmd[@]}" -c "SELECT count(*) FROM pg_roles WHERE rolname IN ('gateway_runtime','gateway_admin','gateway_readonly') AND NOT rolcanlogin AND NOT rolsuper AND NOT rolcreaterole AND NOT rolcreatedb;")" = "3"
+          test "$("${psql_cmd[@]}" -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='gateway' AND c.relrowsecurity AND c.relforcerowsecurity AND c.relname IN ('installation','installation_credential','activation_code','installation_connector_grant','replay_nonce','audit_event','invocation_event');")" = "7"
+          test "$("${psql_cmd[@]}" -c "SELECT has_schema_privilege('gateway_runtime','gateway','CREATE');")" = "f"
+          test "$("${psql_cmd[@]}" -c "SELECT has_table_privilege('gateway_runtime','gateway.schema_migration','SELECT') OR has_table_privilege('gateway_runtime','gateway.schema_migration','INSERT') OR has_table_privilege('gateway_runtime','gateway.schema_migration','UPDATE') OR has_table_privilege('gateway_runtime','gateway.schema_migration','DELETE');")" = "f"
+      - name: Build Gateway integration tests
+        run: dotnet build tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj -c Release --no-restore
+      - name: Run PostgreSQL and API integration tests
+        run: dotnet test tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj -c Release --no-build --no-restore
+      - name: Clean PostgreSQL test schema
+        if: always()
+        shell: bash
+        env:
+          POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+        run: docker exec "$POSTGRES_SERVICE_ID" psql -v ON_ERROR_STOP=1 -U postgres -d broker_gateway_test -c "DROP SCHEMA IF EXISTS gateway CASCADE;"
+
+  gateway-container:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Gateway container
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" -f src/Gateway/Gateway.Api/Dockerfile -t broker-gateway:m2 .
+          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" -f src/Gateway/Gateway.Migrations/Dockerfile -t broker-gateway-migrations:m2 .
+          image_digest="$(docker image inspect broker-gateway:m2 --format '{{.Id}}')"
+          migration_digest="$(docker image inspect broker-gateway-migrations:m2 --format '{{.Id}}')"
+          [[ "$image_digest" == sha256:* ]]
+          [[ "$migration_digest" == sha256:* ]]
+          test "$(docker image inspect broker-gateway:m2 --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}')" = "$GITHUB_SHA"
+          printf 'gateway_image=%s\nmigration_image=%s\ncommit=%s\n' "$image_digest" "$migration_digest" "$GITHUB_SHA" | tee gateway-image-digests.txt
+          echo "digest=$image_digest" >> "$GITHUB_OUTPUT"
+      - name: Verify executable, non-root, read-only, health, readiness and clean shutdown
+        shell: bash
+        run: |
+          set -euo pipefail
+          cleanup() { docker rm -f broker-gateway-m2 gateway-failclosed >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          configured_user="$(docker image inspect broker-gateway:m2 --format '{{.Config.User}}')"
+          test -n "$configured_user"
+          test "$configured_user" != "0"
+          docker run -d --name broker-gateway-m2 --read-only --tmpfs /tmp:size=64m,mode=1777 -p 18080:8080 -e ASPNETCORE_ENVIRONMENT=Development broker-gateway:m2
+          test "$(docker inspect broker-gateway-m2 --format '{{.HostConfig.ReadonlyRootfs}}')" = "true"
+          test "$(docker inspect broker-gateway-m2 --format '{{len .Mounts}}')" = "0"
+          test "$(docker exec broker-gateway-m2 id -u)" != "0"
+          ready=false
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:18080/health/live >/dev/null && curl --fail --silent http://127.0.0.1:18080/health/ready >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = "true"
+          docker stop --time 15 broker-gateway-m2
+          test "$(docker inspect broker-gateway-m2 --format '{{.State.ExitCode}}')" = "0"
+          if docker run --name gateway-failclosed -e ASPNETCORE_ENVIRONMENT=Production broker-gateway:m2; then
+            echo "Production container started without mandatory configuration." >&2
+            exit 1
+          fi
+          test "$(docker inspect gateway-failclosed --format '{{.State.ExitCode}}')" != "0"
+      - name: Scan image for embedded secrets
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: broker-gateway:m2
+          scanners: secret
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+      - name: Generate image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: broker-gateway:m2
+          format: spdx-json
+          output-file: gateway-image.spdx.json
+          artifact-name: gateway-image-sbom-${{ github.sha }}.spdx.json
+      - name: Upload image digest evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-image-digest-${{ github.sha }}
+          path: gateway-image-digests.txt
+          if-no-files-found: error

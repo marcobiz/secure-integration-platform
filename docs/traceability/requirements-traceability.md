@@ -6,13 +6,13 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 
 | Req | Milestone | Test/evidence prevista |
 |---|---|---|
-| FR-001 | M2 | `IT-DAT-RegistryCrud`, RLS integration report |
-| FR-002 | M2 | `E2E-IDN-EnrollmentRenewRevoke` |
+| FR-001 | M2 | `IT_DAT_PostgreSQL18_migration_and_RLS_isolate_tenants_when_configured`, provisioning exercised by all `GatewaySecurityTests` |
+| FR-002 | M2 | `UT_GTW_Enrollment_PoP_derives_tenant_and_replay_is_rejected`, `UT_GTW_Renewal_allows_seven_day_overlap_then_expires_old_credential`, `UT_GTW_Revocation_is_immediate_for_runtime_and_grants` |
 | FR-003 | M1 | `IT_BRK_Authorized_application_uses_pipe_and_unauthorized_hash_is_denied`, pipe ACL, HMAC/grant negative; live identities aperte |
 | FR-004 | M1 | `UT_BRK_LocalSecretLifecycle`, idempotent/cross-Application test, forbidden classes, API surface |
 | FR-005 | M1 | AEAD roundtrip/tamper/rotation + nonce/AAD/unknown-version/malformed suite + Installation differentiation |
 | FR-006 | M1/M7 | M1 HMAC lifecycle/grant/reopen; firma/certificato: M7 |
-| FR-007 | M2 | `SEC-TENANT-ClientTenantIgnored`, `SEC-TENANT-CrossTenantDenied` |
+| FR-007 | M2 | `UT_GTW_Enrollment_PoP_derives_tenant_and_replay_is_rejected`, `UT_GTW_Invoke_contract_has_no_client_controlled_endpoint_or_secret_reference`, `UT_GTW_Cross_tenant_grant_is_rejected` |
 | FR-008 | M3 | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` |
 | FR-009 | M8 | `E2E-CON-ManagedConnector` |
 | FR-010 | M7/M8 | local/gateway/hybrid sequence suites |
@@ -21,7 +21,7 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | FR-013 | M4 | `IT-CON-AtomicPublishRollback` |
 | FR-014 | M5 | Playwright RBAC/four-eyes suite |
 | FR-015 | M1/M6 | M1 SDK: Windows pipe/E2E suite; COM/C ABI/CLI: M6 |
-| FR-016 | M2/M5 | audit append/redaction/role tests |
+| FR-016 | M2/M5 | M2: `UT_SEC_Audit_is_metadata_only_and_excludes_payload_and_credentials`, API Problem redaction tests; admin audit/RBAC: M5 |
 | FR-017 | M5/M9 | health/metrics/tracing/diagnostics tests |
 | FR-018 | M1 | DPAPI roundtrip, offline corruption e repository reopen; service identity live aperta |
 
@@ -29,39 +29,39 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 
 | Req | Test/evidence prevista |
 |---|---|
-| NFR-001 | secret scan + wire/audit four-path redaction; EventLog live aperto |
-| NFR-002 | deny-by-default authorization/egress/binding/plugin tests |
-| NFR-003 | TLS invalid cert/hostname/version tests |
+| NFR-001 | `UT_SEC_Audit_is_metadata_only_and_excludes_payload_and_credentials`, `IT_GTW_Invalid_JSON_does_not_echo_canary_or_exception_details`, repository secret scan; M0/M1 Event Log 11-canary PASS-LIVE |
+| NFR-002 | `UT_EGR_Ungranted_operation_is_denied_before_DNS_vault_or_transport`, `UT_EGR_Private_or_loopback_destination_is_rejected_before_transport`, cross-Tenant grant test |
+| NFR-003 | M2 transport TLS 1.2/1.3 + hostname validation; vertical-slice TLS failure test; container/Key Vault live resta ambientale |
 | NFR-004 | IPC exact boundary/oversize pass; aggregate stream/backpressure aperti |
-| NFR-005 | M1 deadline/cancel/idempotent delete; retry/circuit isolation da M2+ |
-| NFR-006 | correlation Broker-Gateway E2E; W3C distributed trace aperto |
+| NFR-005 | M1 deadline/cancel/idempotent delete; M2 `UT_EGR_Transient_retry_occurs_only_for_idempotent_operation`; circuit breaker resta M7 |
+| NFR-006 | M2 correlation ID firmato/auditato e `traceparent` obbligatorio su invoke; propagazione E2E completa resta M3 |
 | NFR-007 | canonical checksum/immutability/tamper tests |
 | NFR-008 | clean build, SBOM, signature verification report |
 | NFR-009 | Windows and adapter compatibility matrix |
-| NFR-010 | persistence inspection and payload deletion assertion |
+| NFR-010 | schema M2 contiene solo metadata redatti e nessun response body/secret value; test `IT_DAT_Migration_forces_RLS_and_contains_no_secret_value_columns` |
 
 ## Acceptance criteria
 
 | AC | Test/evidence |
 |---|---|
 | AC-001 | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` + secret scan |
-| AC-002 | **OPEN/BLOCKER:** static service contract passa; `tools/live-matrix` predisposto ma vera Windows Service matrix non eseguita |
-| AC-003 | automatic policy/grant suite passa; probe path/SID distinti predisposti, live PASS ancora aperto |
-| AC-004 | **OPEN/BLOCKER:** DPAPI/ACL descriptor passano; `dpapi-denied` cross-identity predisposto ma non eseguito su VM |
+| AC-002 | **PASS-LIVE:** run `m0-m1-20260803-232955`, tag `m0-m1-live-pass-20260803-232955` |
+| AC-003 | **PASS-LIVE:** processo autorizzato/non autorizzato sotto identità distinte nella stessa run |
+| AC-004 | **PASS-LIVE:** ACL pipe/storage e DPAPI cross-identity nella stessa run |
 | AC-005 | `AC005_Installation_key_and_ciphertext_differentiation` |
-| AC-006 | wire/audit four-path redaction + vertical slice; Event Log/canary scan automatizzato ma live PASS aperto |
-| AC-007 | Vertical slice response/secret-absence assertion; Gateway production aperto |
+| AC-006 | **PASS-LIVE M0/M1** Event Log/11 canary; M2 audit metadata-only e Problem redaction automatizzati |
+| AC-007 | `UT_EGR_Server_owned_endpoint_and_API_key_are_used_without_secret_disclosure`, Basic/mTLS equivalenti, secret scan |
 | AC-008 | M1 project dependency boundary + vertical slice through `IGatewayInvoker` |
-| AC-009 | `InvokeGatewayRequest` API-surface assertion + fixed HTTPS BaseAddress/TLS negative test |
-| AC-010 | fixed Gateway grant negative path nel vertical slice |
-| AC-011 | server-side identity binding assertion |
-| AC-012 | RLS/composite FK/cross-Tenant suite |
-| AC-013 | revocation propagation E2E |
+| AC-009 | `UT_GTW_Invoke_contract_has_no_client_controlled_endpoint_or_secret_reference`, fixed-endpoint e SSRF tests |
+| AC-010 | stesso API-surface test + `UT_EGR_Ungranted_operation_is_denied_before_DNS_vault_or_transport` |
+| AC-011 | `UT_GTW_Enrollment_PoP_derives_tenant_and_replay_is_rejected` |
+| AC-012 | `UT_GTW_Cross_tenant_grant_is_rejected`, `IT_DAT_PostgreSQL18_migration_and_RLS_isolate_tenants_when_configured` PASS su PostgreSQL 18 locale |
+| AC-013 | `UT_GTW_Revocation_is_immediate_for_runtime_and_grants`; E2E Broker→Gateway previsto nel gate M3 |
 | AC-014 | ConnectorVersion persistence/API test |
 | AC-015 | atomic rollback and cache invalidation E2E |
 | AC-016 | JSON Schema/semantic/security validation corpus |
 | AC-017 | Draft/Validated/Retired runtime denial tests |
-| AC-018 | container smoke/health suite |
+| AC-018 | Dockerfile non-root/read-only-compatible e job CI `gateway-container`; PASS esterno ancora richiesto |
 | AC-019 | ADR-0017 Accepted; MSI install/upgrade/repair/uninstall/reinstall matrix prevista in M9 |
 | AC-020 | `eng/build.ps1`, pinned toolchain e istruzioni root |
 | AC-021 | `docs/testing/first-vertical-slice-report.md` |

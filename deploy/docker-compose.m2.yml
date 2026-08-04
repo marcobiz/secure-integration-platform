@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: broker_gateway
+      POSTGRES_USER: gateway_local
+      POSTGRES_PASSWORD: ${GATEWAY_LOCAL_DB_PASSWORD:?set GATEWAY_LOCAL_DB_PASSWORD}
+    volumes:
+      - gateway-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway_local -d broker_gateway"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: src/Gateway/Gateway.Api/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__GatewayDatabase: Host=postgres;Port=5432;Database=broker_gateway;Username=gateway_local;Password=${GATEWAY_LOCAL_DB_PASSWORD:?set GATEWAY_LOCAL_DB_PASSWORD};SSL Mode=Disable
+      Gateway__ActivationHmacKeyBase64: ${GATEWAY_LOCAL_ACTIVATION_HMAC_KEY:?set GATEWAY_LOCAL_ACTIVATION_HMAC_KEY}
+    ports:
+      - "8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+
+  migrations:
+    build:
+      context: ..
+      dockerfile: src/Gateway/Gateway.Migrations/Dockerfile
+    environment:
+      GATEWAY_MIGRATION_CONNECTION: Host=postgres;Port=5432;Database=broker_gateway;Username=gateway_local;Password=${GATEWAY_LOCAL_DB_PASSWORD:?set GATEWAY_LOCAL_DB_PASSWORD};SSL Mode=Disable
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  gateway-postgres:

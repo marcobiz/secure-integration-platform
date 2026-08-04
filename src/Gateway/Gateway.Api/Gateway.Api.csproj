@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>SecureIntegration.Gateway.Api</AssemblyName>
+    <RootNamespace>SecureIntegration.Gateway.Api</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Gateway.Application\Gateway.Application.csproj" />
+    <ProjectReference Include="..\Gateway.Infrastructure\Gateway.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>
