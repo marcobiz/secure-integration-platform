@@ -46,6 +46,24 @@ function Invoke-NativeChecked {
     if ($LASTEXITCODE -ne 0) { throw "M3A_SPLIT_VM_NATIVE_FAILED: $FilePath exited with $LASTEXITCODE." }
 }
 
+function New-VmEvidenceArchive {
+    param(
+        [Parameter(Mandatory)] [string] $Suffix,
+        [Parameter(Mandatory)] $Result,
+        [switch] $ResultOnly
+    )
+    $evidenceDirectory = if ($ResultOnly) { $OutputDirectory + '-failure' } else { $OutputDirectory }
+    New-Item -ItemType Directory -Path $evidenceDirectory -Force | Out-Null
+    Write-JsonFile -Path (Join-Path $evidenceDirectory 'RESULT.json') -Value $Result
+    $archiveName = $RunId + '-vm-redacted' + $Suffix + '.zip'
+    $archivePath = Join-Path (Split-Path -Parent $OutputDirectory) $archiveName
+    if (Test-Path -LiteralPath $archivePath) { throw 'M3A_SPLIT_VM_RESULT_ARCHIVE_EXISTS.' }
+    Compress-Archive -Path (Join-Path $evidenceDirectory '*') -DestinationPath $archivePath -CompressionLevel Optimal
+    $archiveHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
+    [IO.File]::WriteAllText(($archivePath + '.sha256'), ($archiveHash + '  ' + $archiveName + [Environment]::NewLine), [Text.Encoding]::ASCII)
+    return [pscustomobject]@{ Path = $archivePath; Hash = $archiveHash }
+}
+
 function Get-DotnetPath {
     $local = Join-Path $RepositoryRoot '.dotnet\dotnet.exe'
     if (Test-Path -LiteralPath $local) { return $local }
@@ -53,17 +71,45 @@ function Get-DotnetPath {
 }
 
 function Set-InstallAcl {
-    param([Parameter(Mandatory)] [string] $Path, [Parameter(Mandatory)] [string] $ServiceSid)
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $ServiceSid,
+        [Parameter(Mandatory)] [string] $LegacySid
+    )
     $security = [Security.AccessControl.DirectorySecurity]::new()
     $security.SetAccessRuleProtection($true, $false)
     $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
     $systemSid = [Security.Principal.SecurityIdentifier]::new([Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
     $adminSid = [Security.Principal.SecurityIdentifier]::new([Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
     $serviceIdentifier = [Security.Principal.SecurityIdentifier]::new($ServiceSid)
+    $legacyIdentifier = [Security.Principal.SecurityIdentifier]::new($LegacySid)
     [void]$security.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($systemSid, 'FullControl', $inherit, 'None', 'Allow'))
     [void]$security.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($adminSid, 'FullControl', $inherit, 'None', 'Allow'))
     [void]$security.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($serviceIdentifier, 'ReadAndExecute', $inherit, 'None', 'Allow'))
+    [void]$security.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($legacyIdentifier, 'ReadAndExecute', $inherit, 'None', 'Allow'))
     [IO.Directory]::SetAccessControl($Path, $security)
+}
+
+function Remove-OwnedM0M1ServiceCollision {
+    $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'" -ErrorAction SilentlyContinue
+    if ($null -eq $service) { return }
+
+    $expectedInstall = [IO.Path]::GetFullPath((Join-Path $env:ProgramFiles 'SecureIntegration\LiveMatrix\Broker')).TrimEnd('\') + '\'
+    $servicePath = [string]$service.PathName
+    if ($servicePath.IndexOf($expectedInstall, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        throw 'M3A_SPLIT_VM_REFUSE_FOREIGN_SERVICE_COLLISION.'
+    }
+
+    $liveMatrixRoot = Join-Path $env:ProgramData 'SecureIntegration\LiveMatrix'
+    $ownershipMarker = Join-Path $liveMatrixRoot 'harness-owned-service.marker'
+    if (-not (Test-Path -LiteralPath $ownershipMarker)) { throw 'M3A_SPLIT_VM_M0_M1_OWNERSHIP_MARKER_MISSING.' }
+    $ownerRunId = [IO.File]::ReadAllText($ownershipMarker).Trim()
+    if ($ownerRunId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{5,39}$') { throw 'M3A_SPLIT_VM_M0_M1_OWNER_RUN_ID_INVALID.' }
+
+    $cleanupScript = Join-Path $RepositoryRoot 'tools\live-matrix\Remove-LiveMatrix.ps1'
+    if (-not (Test-Path -LiteralPath $cleanupScript)) { throw 'M3A_SPLIT_VM_M0_M1_CLEANUP_MISSING.' }
+    & $cleanupScript -RunId $ownerRunId -Confirm:$false
+    if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) { throw 'M3A_SPLIT_VM_M0_M1_CLEANUP_INCOMPLETE.' }
 }
 
 function Invoke-SimulatorTask {
@@ -126,7 +172,10 @@ function Remove-VmResources {
     $userName = if ($null -ne $state) { [string]$state.legacyUser } elseif ($null -ne $createdUser) { [string]$createdUser } else { $null }
     if ($userName) {
         $account = Get-LocalUser -Name $userName -ErrorAction SilentlyContinue
-        if ($null -ne $account -and [string]$account.Description -eq $ownedUserDescription) { Remove-LocalUser -Name $userName }
+        if ($null -ne $account -and [string]$account.Description -eq $ownedUserDescription) {
+            Revoke-LiveMatrixBatchLogonRight -Sid $account.Sid.Value
+            Remove-LocalUser -Name $userName
+        }
     }
     $thumbprint = if ($null -ne $state) { [string]$state.rootThumbprint } else { [string]$rootThumbprint }
     if ($thumbprint) { Get-ChildItem Cert:\LocalMachine\Root | Where-Object Thumbprint -eq $thumbprint | Remove-Item -Force }
@@ -177,7 +226,8 @@ $head = (& git -C $RepositoryRoot rev-parse HEAD).Trim()
 if ($head -ne [string]$bootstrap.candidateCommit) { throw 'M3A_SPLIT_VM_HEAD_MISMATCH.' }
 & git -C $RepositoryRoot merge-base --is-ancestor m2-gateway-baseline-2026-08-04 $head
 if ($LASTEXITCODE -ne 0) { throw 'M3A_SPLIT_VM_M2_BASELINE_MISSING.' }
-if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) { throw 'M3A_SPLIT_VM_SERVICE_COLLISION: remove only a previously verified lab-owned Broker service, then rerun.' }
+Remove-OwnedM0M1ServiceCollision
+if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) { throw 'M3A_SPLIT_VM_SERVICE_COLLISION.' }
 if (Test-Path -LiteralPath $OutputDirectory) { throw 'M3A_SPLIT_VM_OUTPUT_ALREADY_EXISTS.' }
 
 $success = $false
@@ -204,6 +254,8 @@ $userName = 'M3Legacy' + $runIdToken.Substring($runIdToken.Length - $suffixLengt
 $createdUser = $userName
 $credentialPath = Join-Path $runRoot 'legacy-user.credential.dpapi'
 $legacyUser = Ensure-LiveMatrixLocalUser -Name $userName -CredentialPath $credentialPath -Description $ownedUserDescription
+Grant-LiveMatrixBatchLogonRight -Sid $legacyUser.Sid
+if (-not (Test-LiveMatrixBatchLogonRight -Sid $legacyUser.Sid)) { throw 'M3A_SPLIT_VM_LEGACY_BATCH_LOGON_RIGHT_MISSING.' }
 $adminMembers = @(Get-LocalGroupMember -SID 'S-1-5-32-544' | ForEach-Object { $_.SID.Value })
 if ($adminMembers -contains $legacyUser.Sid) { throw 'M3A_SPLIT_VM_LEGACY_USER_IS_ADMIN.' }
 $wellKnown = Get-WellKnownLiveMatrixSids
@@ -215,7 +267,7 @@ $configuration = [ordered]@{
         Gateway = [ordered]@{
             Enabled = $true; BaseAddress = [string]$bootstrap.gatewayBaseAddress; ActivationCodeId = [string]$bootstrap.activationCodeId
             ActivationCodeEnvironmentVariable = 'BROKER_GATEWAY_ACTIVATION_CODE'; CngKeyName = ('SecureIntegration.Broker.M3.Split.' + $RunId)
-            BrokerVersion = '3.0.0-m3'; TimeoutSeconds = 45
+            BrokerVersion = '3.0.0'; TimeoutSeconds = 45
         }
         Applications = @([ordered]@{
             RegistrationId = 'm3-legacy-simulator'; AllowedUserSids = @($legacyUser.Sid); ExecutablePaths = @($legacyExecutable)
@@ -234,7 +286,7 @@ Invoke-NativeChecked -FilePath 'sc.exe' -Arguments @('create', $serviceName, 'bi
 $serviceCreated = $true
 Invoke-NativeChecked -FilePath 'sc.exe' -Arguments @('sidtype', $serviceName, 'unrestricted')
 $serviceSid = ([Security.Principal.NTAccount]::new('NT SERVICE\SecureIntegrationBroker')).Translate([Security.Principal.SecurityIdentifier]).Value
-Set-InstallAcl -Path $installRoot -ServiceSid $serviceSid
+Set-InstallAcl -Path $installRoot -ServiceSid $serviceSid -LegacySid $legacyUser.Sid
 $installedRoot = Import-Certificate -FilePath $caPath -CertStoreLocation Cert:\LocalMachine\Root
 $rootThumbprint = $installedRoot.Thumbprint
 $serviceRegistry = 'HKLM:\SYSTEM\CurrentControlSet\Services\' + $serviceName
@@ -275,7 +327,7 @@ $startedAt = Get-Date
     $manifestBase = [ordered]@{
         schemaVersion = 1; environment = 'M3A-SPLIT-VM'; runId = $RunId; commitSha = $head; hostName = $env:COMPUTERNAME
         status = 'PASS'; brokerService = $serviceEvidence; brokerSid = $serviceSid
-        legacyIdentity = [ordered]@{ user = $userName; sid = $legacyUser.Sid; standardUser = $true; taskRunLevel = $positiveTask.runLevel }
+        legacyIdentity = [ordered]@{ user = $userName; sid = $legacyUser.Sid; standardUser = $true; taskRunLevel = $positiveTask.runLevel; batchLogonRight = $true }
         brokerStorageAclSddl = $dataAcl.Sddl; brokerInstallAclSddl = $installAcl
         scenarios = @(
             [ordered]@{ id = 'M3-P02'; status = 'PASS'; path = 'Legacy Simulator -> SDK -> Windows Service -> HOST Gateway' },
@@ -293,14 +345,39 @@ finally {
     Remove-Item -LiteralPath $bootstrapPath -Force -ErrorAction SilentlyContinue
     try { $cleanup = Remove-VmResources } catch { $cleanup = [ordered]@{ status = 'FAIL'; remainingServices = -1; remainingTasks = -1; detail = $_.Exception.Message } }
 }
-if (-not $success) { throw $failure }
-if ($cleanup.status -ne 'PASS') { throw 'M3A_SPLIT_VM_CLEANUP_FAILED.' }
+if (-not $success -or $cleanup.status -ne 'PASS') {
+    $errorCode = if ($null -ne $failure -and [string]$failure.Exception.Message -match '^(M3A_[A-Z0-9_]+)') { $Matches[1] } elseif ($null -ne $failure) { $failure.Exception.GetType().Name } else { 'M3A_SPLIT_VM_CLEANUP_FAILED' }
+    $failureResult = [ordered]@{
+        schemaVersion = 1
+        environment = 'M3A-SPLIT-VM'
+        runId = $RunId
+        commitSha = $head
+        status = 'BLOCKED'
+        classification = 'VM_RUN_FAILED'
+        errorCode = $errorCode
+        cleanup = [ordered]@{
+            status = [string]$cleanup.status
+            remainingServices = if ($cleanup.Contains('remainingServices')) { [int]$cleanup.remainingServices } else { -1 }
+            remainingTasks = if ($cleanup.Contains('remainingTasks')) { [int]$cleanup.remainingTasks } else { -1 }
+        }
+        completedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+    }
+    [void](New-VmEvidenceArchive -Suffix '-failure' -Result $failureResult -ResultOnly)
+    if ($null -ne $failure) { throw $failure }
+    throw 'M3A_SPLIT_VM_CLEANUP_FAILED.'
+}
 $manifestBase['cleanup'] = $cleanup
 $manifestBase['completedAtUtc'] = [DateTimeOffset]::UtcNow.ToString('O')
 Write-JsonFile -Path (Join-Path $OutputDirectory 'vm-manifest.json') -Value $manifestBase
-$archive = Join-Path (Split-Path -Parent $OutputDirectory) ($RunId + '-vm-redacted.zip')
-if (Test-Path -LiteralPath $archive) { throw 'M3A_SPLIT_VM_RESULT_ARCHIVE_EXISTS.' }
-Compress-Archive -Path (Join-Path $OutputDirectory '*') -DestinationPath $archive -CompressionLevel Optimal
-$hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
-[IO.File]::WriteAllText(($archive + '.sha256'), ($hash + '  ' + [IO.Path]::GetFileName($archive) + [Environment]::NewLine), [Text.Encoding]::ASCII)
-[pscustomobject]@{ runId = $RunId; status = 'PASS'; commit = $head; evidence = $archive; sha256 = $hash; cleanup = $cleanup } | ConvertTo-Json -Depth 7 -Compress
+$successResult = [ordered]@{
+    schemaVersion = 1
+    environment = 'M3A-SPLIT-VM'
+    runId = $RunId
+    commitSha = $head
+    status = 'PASS'
+    classification = 'COMPLETED'
+    cleanup = $cleanup
+    completedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
+}
+$archive = New-VmEvidenceArchive -Suffix '' -Result $successResult
+[pscustomobject]@{ runId = $RunId; status = 'PASS'; commit = $head; evidence = $archive.Path; sha256 = $archive.Hash; cleanup = $cleanup } | ConvertTo-Json -Depth 7 -Compress

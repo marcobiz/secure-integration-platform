@@ -247,6 +247,11 @@ PASS richiede contemporaneamente:
 Il risultato è `C:\SecureEvidence\<RunId>\<RunId>-redacted-evidence.zip` con sidecar
 SHA-256. Raw evidence rimane fuori Git e soggetta alla retention del laboratorio.
 
+Il runner VM produce inoltre `RESULT.json`. Un percorso completato usa `PASS`; una
+failure runtime produce un archive distinto `*-vm-redacted-failure.zip` con stato
+`BLOCKED` e solo codice errore, cleanup e metadati redatti. File parziali non vengono
+inclusi e non possono essere interpretati come PASS.
+
 ## Cleanup di emergenza
 
 HOST:

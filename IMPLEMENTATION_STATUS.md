@@ -83,6 +83,16 @@ Il gate non è chiuso: sul repository GitHub non sono configurati runner Windows
 
 La run split-host `m3a-live-20260804-131718` è stata classificata **BLOCKED — PRE-HANDOFF INFRASTRUCTURE VALIDATION**: live/readiness erano HTTP 200, ma Docker health falliva per SAN incompatibile e i profili Windows Firewall erano disabilitati. Il runner VM non è stato eseguito e P02 non è stato testato. Cleanup PASS ha lasciato zero risorse della run e ha rimosso l'handoff non utilizzato. I fix health/TLS e firewall reversibile sono implementati. Il runner predispone ora un secondo switch Hyper-V Internal e una NIC VM `M3A-Isolated`, senza NAT/gateway/DNS/forwarding, con rollback SYSTEM, isolamento del profilo Private e probe VM→HOST pre-handoff. La nuova prova live resta PENDING. Dettagli: `docs/reviews/M3A-BLOCKED-RUN-20260804-131718.md`.
 
+La successiva run `m3a-live-20260804-153103` è **BLOCKED — ROLLBACK WINDOW EXPIRED**:
+il runner VM ha incontrato collisione col servizio M0/M1, diritto batch mancante, ACL
+installazione insufficiente e versione Broker non parsabile; P02 non è accettato e
+non esistono `RESULT.json` o archive completi. Cleanup HOST/VM e invalidazione del
+materiale di attivazione sono PASS. L'harness ora risolve soltanto collisioni M0/M1
+con ownership verificata, gestisce `SeBatchLogonRight`, concede `ReadAndExecute` al
+Legacy SID, usa versione `3.0.0` e separa risultati `PASS` da failure `BLOCKED`.
+Dettagli: `docs/reviews/M3A-SPLIT-HOST-BLOCKED-20260804.md`. Una nuova run resta
+PENDING e deve usare materiale e RunId nuovi.
+
 ## Test ed esiti
 
 | Suite/comando | Esito atteso dell'ultima verifica | Copertura |

@@ -55,8 +55,10 @@ Get-CimInstance Win32_Service -Filter "Name='SecureIntegrationBroker'" |
     Select-Object Name,State,StartName,PathName
 ```
 
-Se il servizio esiste, fermarsi. Rimuoverlo soltanto con il cleanup dell'harness che
-lo possiede, dopo aver verificato il binary path. Non usare `sc delete` alla cieca.
+Se il servizio appartiene alla matrice M0/M1, il runner ne verifica binary path,
+ownership marker e RunId e invoca il cleanup ufficiale senza eliminare le evidenze.
+Un servizio non riconosciuto resta un blocker fail-closed. Non usare `sc delete` alla
+cieca e non aggirare il controllo con un launcher esterno.
 
 Preflight del runner:
 
@@ -82,15 +84,19 @@ Il runner autonomamente:
 1. esegue fetch e detached checkout dello SHA esatto ricevuto;
 2. pubblica Broker e Legacy Simulator dal commit;
 3. crea un utente locale standard per-run, mai membro Administrators;
-4. installa `SecureIntegrationBroker` con
+4. concede e verifica `SeBatchLogonRight` all'utente per-run e lo revoca al cleanup;
+5. installa `SecureIntegrationBroker` con
    `NT SERVICE\SecureIntegrationBroker`, service SID unrestricted e ACL protette;
-5. importa soltanto la CA sintetica pubblica;
-6. esegue il Legacy Simulator mediante task temporaneo `RunLevel Limited`;
-7. dimostra P02 e il grant denial attraverso Broker→Gateway HOST;
-8. esegue una copia non registrata dello stesso eseguibile sotto lo stesso utente e
+6. concede al Legacy SID soltanto `ReadAndExecute` sull'installazione protetta;
+7. importa soltanto la CA sintetica pubblica;
+8. esegue il Legacy Simulator mediante task temporaneo `RunLevel Limited`;
+9. dimostra P02 e il grant denial attraverso Broker→Gateway HOST;
+10. esegue una copia non registrata dello stesso eseguibile sotto lo stesso utente e
    richiede il diniego path-policy con audit `application_not_authorized`;
-9. rimuove activation code da registry e disco subito dopo l'enrollment;
-10. scansiona report/Event Log, produce evidence redatta e completa il cleanup.
+11. rimuove activation code da registry e disco subito dopo l'enrollment;
+12. produce sempre `RESULT.json`: `PASS` soltanto dopo tutti i controlli, altrimenti
+    un archive separato `BLOCKED` contenente esclusivamente il risultato redatto;
+13. scansiona report/Event Log, produce evidence redatta e completa il cleanup.
 
 Il runner fallisce se il service token SID non coincide, l'utente è amministratore,
 le ACL storage includono altri principal, P02 non passa, l'app non autorizzata passa,
@@ -129,6 +135,7 @@ Trasferire esclusivamente:
 dell'upload ispezionare l'archivio e confermare che contenga soltanto:
 
 - `vm-manifest.json`;
+- `RESULT.json`;
 - `legacy-simulator.json`;
 - `unauthorized-application.json`;
 - `broker-events-redacted.json`.

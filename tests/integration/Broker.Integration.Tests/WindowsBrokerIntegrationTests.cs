@@ -564,6 +564,60 @@ public sealed class WindowsBrokerIntegrationTests
         }
     }
 
+    [Fact]
+    public void M3_split_VM_harness_grants_batch_logon_and_install_execute_rights()
+    {
+        string repositoryRoot = FindRepositoryRoot();
+        string runner = File.ReadAllText(System.IO.Path.Combine(repositoryRoot, "tools", "m3", "split-host", "Invoke-M3ASplitVm.ps1"));
+
+        Assert.Contains("Grant-LiveMatrixBatchLogonRight -Sid $legacyUser.Sid", runner, StringComparison.Ordinal);
+        Assert.Contains("Test-LiveMatrixBatchLogonRight -Sid $legacyUser.Sid", runner, StringComparison.Ordinal);
+        Assert.Contains("Revoke-LiveMatrixBatchLogonRight -Sid $account.Sid.Value", runner, StringComparison.Ordinal);
+        Assert.Contains("[Parameter(Mandatory)] [string] $LegacySid", runner, StringComparison.Ordinal);
+        Assert.Contains("$legacyIdentifier, 'ReadAndExecute'", runner, StringComparison.Ordinal);
+        Assert.Contains("Set-InstallAcl -Path $installRoot -ServiceSid $serviceSid -LegacySid $legacyUser.Sid", runner, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void M3_split_VM_harness_resolves_only_marker_owned_M0_M1_service_collisions()
+    {
+        string repositoryRoot = FindRepositoryRoot();
+        string runner = File.ReadAllText(System.IO.Path.Combine(repositoryRoot, "tools", "m3", "split-host", "Invoke-M3ASplitVm.ps1"));
+
+        Assert.Contains("function Remove-OwnedM0M1ServiceCollision", runner, StringComparison.Ordinal);
+        Assert.Contains("SecureIntegration\\LiveMatrix\\Broker", runner, StringComparison.Ordinal);
+        Assert.Contains("harness-owned-service.marker", runner, StringComparison.Ordinal);
+        Assert.Contains("M3A_SPLIT_VM_REFUSE_FOREIGN_SERVICE_COLLISION", runner, StringComparison.Ordinal);
+        Assert.Contains("& $cleanupScript -RunId $ownerRunId -Confirm:$false", runner, StringComparison.Ordinal);
+        Assert.DoesNotContain("$cleanupScript -RunId $ownerRunId -PurgeEvidence", runner, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void M3_split_VM_harness_uses_System_Version_compatible_broker_version()
+    {
+        string repositoryRoot = FindRepositoryRoot();
+        string runner = File.ReadAllText(System.IO.Path.Combine(repositoryRoot, "tools", "m3", "split-host", "Invoke-M3ASplitVm.ps1"));
+
+        Assert.True(Version.TryParse("3.0.0", out _));
+        Assert.False(Version.TryParse("3.0.0-m3", out _));
+        Assert.Contains("BrokerVersion = '3.0.0'", runner, StringComparison.Ordinal);
+        Assert.DoesNotContain("BrokerVersion = '3.0.0-m3'", runner, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void M3_split_VM_harness_emits_explicit_PASS_or_BLOCKED_result_archives()
+    {
+        string repositoryRoot = FindRepositoryRoot();
+        string runner = File.ReadAllText(System.IO.Path.Combine(repositoryRoot, "tools", "m3", "split-host", "Invoke-M3ASplitVm.ps1"));
+
+        Assert.Contains("Join-Path $evidenceDirectory 'RESULT.json'", runner, StringComparison.Ordinal);
+        Assert.Contains("status = 'BLOCKED'", runner, StringComparison.Ordinal);
+        Assert.Contains("classification = 'VM_RUN_FAILED'", runner, StringComparison.Ordinal);
+        Assert.Contains("New-VmEvidenceArchive -Suffix '-failure' -Result $failureResult -ResultOnly", runner, StringComparison.Ordinal);
+        Assert.Contains("status = 'PASS'", runner, StringComparison.Ordinal);
+        Assert.Contains("classification = 'COMPLETED'", runner, StringComparison.Ordinal);
+    }
+
     private sealed class NullAudit : IBrokerAuditSink
     {
         public Task WriteAsync(string operation, string applicationId, Guid correlationId, bool succeeded, string? errorCode, CancellationToken cancellationToken) => Task.CompletedTask;
