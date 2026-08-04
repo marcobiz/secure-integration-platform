@@ -94,9 +94,9 @@ else
 
 byte[] activationKey;
 string? encodedActivationKey = hostOptions.ActivationHmacKeyBase64;
-if (!builder.Environment.IsDevelopment() && !builder.Environment.IsEnvironment("Testing"))
+if (!builder.Environment.IsDevelopment() && !builder.Environment.IsEnvironment("Testing") && !builder.Environment.IsEnvironment("M3Testing"))
 {
-    if (string.IsNullOrWhiteSpace(hostOptions.ActivationHmacSecretReference)) throw new InvalidOperationException("Gateway activation HMAC Key Vault reference is required outside Development/Testing.");
+    if (string.IsNullOrWhiteSpace(hostOptions.ActivationHmacSecretReference)) throw new InvalidOperationException("Gateway activation HMAC Key Vault reference is required outside Development/Testing/M3Testing.");
     encodedActivationKey = await secretProvider.GetSecretAsync(hostOptions.ActivationHmacSecretReference, CancellationToken.None).ConfigureAwait(false);
 }
 try { activationKey = string.IsNullOrWhiteSpace(encodedActivationKey) ? RandomNumberGenerator.GetBytes(32) : Convert.FromBase64String(encodedActivationKey); }

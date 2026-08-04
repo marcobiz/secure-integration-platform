@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -50,6 +51,34 @@ public sealed class GatewayApiTests : IClassFixture<GatewayApiFactory>
         Assert.DoesNotContain("JsonException", body, StringComparison.Ordinal);
         Assert.Contains("BGW-PROTOCOL", body, StringComparison.Ordinal);
         Assert.DoesNotContain(canary, string.Join('\n', factory.Logs), StringComparison.Ordinal);
+    }
+}
+
+public sealed class GatewayM3TestingStartupTests
+{
+    [Fact]
+    public async Task IT_M3_Gateway_starts_with_per_run_HMAC_only_in_explicit_M3Testing_environment()
+    {
+        const string tokenVariable = "M3_REGRESSION_SYNTHETIC_VAULT_TOKEN";
+        Environment.SetEnvironmentVariable(tokenVariable, Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)), EnvironmentVariableTarget.Process);
+        try
+        {
+            await using WebApplicationFactory<Program> factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+            {
+                builder.UseEnvironment("M3Testing");
+                builder.UseSetting("ConnectionStrings:GatewayDatabase", "Host=127.0.0.1;Port=1;Database=m3_regression;Username=unused;Password=unused;Timeout=1");
+                builder.UseSetting("Gateway:SyntheticVaultUri", "https://vault.m3.test/");
+                builder.UseSetting("Gateway:SyntheticVaultTokenEnvironmentVariable", tokenVariable);
+                builder.UseSetting("Gateway:ActivationHmacKeyBase64", Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
+            });
+            using HttpClient client = factory.CreateClient();
+            using HttpResponseMessage response = await client.GetAsync("/health/live", TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(tokenVariable, null, EnvironmentVariableTarget.Process);
+        }
     }
 }
 
