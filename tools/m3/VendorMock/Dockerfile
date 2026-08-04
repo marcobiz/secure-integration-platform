@@ -2,7 +2,8 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS build
 WORKDIR /src
 COPY ["global.json", "Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props", "NuGet.config", "./"]
 COPY ["tools/m3/VendorMock/VendorMock.csproj", "tools/m3/VendorMock/"]
-RUN dotnet restore tools/m3/VendorMock/VendorMock.csproj --locked-mode=false
+COPY ["tools/m3/VendorMock/packages.lock.json", "tools/m3/VendorMock/"]
+RUN dotnet restore tools/m3/VendorMock/VendorMock.csproj --locked-mode
 COPY tools/m3/VendorMock/ tools/m3/VendorMock/
 RUN dotnet publish tools/m3/VendorMock/VendorMock.csproj -c Release --no-restore -o /app /p:UseAppHost=false
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine
