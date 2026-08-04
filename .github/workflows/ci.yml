@@ -217,9 +217,10 @@ jobs:
           global-json-file: global.json
           cache: true
           cache-dependency-path: '**/packages.lock.json'
-      - uses: azure/setup-bicep@v2
       - name: Validate M3 Azure template
-        run: bicep build deploy/azure-bicep/m3-dev.bicep --stdout >/dev/null
+        run: |
+          az bicep install
+          az bicep build --file deploy/azure-bicep/m3-dev.bicep --stdout >/dev/null
       - name: Generate per-run synthetic fixture
         shell: bash
         run: |
