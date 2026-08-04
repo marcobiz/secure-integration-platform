@@ -65,6 +65,25 @@ function Write-JsonFile {
     [IO.File]::WriteAllText($Path, ($Value | ConvertTo-Json -Depth 16), [Text.UTF8Encoding]::new($false))
 }
 
+function Add-HostBindingsToEnvironmentFile {
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $HostAddress,
+        [Parameter(Mandatory)] [int] $Port
+    )
+    $hostBindings = @(
+        ('M3_GATEWAY_BIND_IP=' + $HostAddress)
+        ('M3_GATEWAY_PORT=' + $Port)
+        'M3_POSTGRES_BIND_IP=127.0.0.1'
+        'M3_POSTGRES_PORT=15432'
+        'M3_VAULT_BIND_IP=127.0.0.1'
+        'M3_VAULT_PORT=18444'
+        'M3_VENDOR_BIND_IP=127.0.0.1'
+        'M3_VENDOR_PORT=18445'
+    )
+    [IO.File]::AppendAllText($Path, (($hostBindings -join [Environment]::NewLine) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+}
+
 function Assert-OutsideRepository {
     $repo = [IO.Path]::GetFullPath($repositoryRoot).TrimEnd('\') + '\'
     $target = [IO.Path]::GetFullPath($runRoot).TrimEnd('\') + '\'
@@ -164,6 +183,15 @@ function Remove-HostResources {
 Assert-OutsideRepository
 if ($Phase -eq 'ValidateHost') {
     $prerequisites = Assert-HostPrerequisites
+    $bindingProbe = [IO.Path]::GetTempFileName()
+    try {
+        Add-HostBindingsToEnvironmentFile -Path $bindingProbe -HostAddress '192.0.2.10' -Port 28443
+        $bindingLines = [IO.File]::ReadAllLines($bindingProbe)
+        if ($bindingLines.Count -ne 8 -or $bindingLines[0] -ne 'M3_GATEWAY_BIND_IP=192.0.2.10' -or $bindingLines[7] -ne 'M3_VENDOR_PORT=18445') {
+            throw 'M3A_SPLIT_HOST_BINDING_SERIALIZATION_INVALID.'
+        }
+    }
+    finally { Remove-Item -LiteralPath $bindingProbe -Force -ErrorAction SilentlyContinue }
     [pscustomobject]@{ phase = $Phase; runId = $RunId; status = 'PASS'; prerequisites = $prerequisites } | ConvertTo-Json -Depth 6
     exit 0
 }
@@ -198,17 +226,7 @@ if ($Phase -eq 'Prepare') {
     New-Item -ItemType Directory -Path $rawRoot, $redactedRoot -Force | Out-Null
     $dotnet = Get-DotnetPath
     Invoke-NativeChecked -FilePath $dotnet -Arguments @('run', '--project', (Join-Path $repositoryRoot 'tools\m3\FixtureGenerator\FixtureGenerator.csproj'), '-c', 'Release', '--', $rawRoot, $HostHyperVAddress)
-    $hostBindings = @(
-        'M3_GATEWAY_BIND_IP=' + $HostHyperVAddress,
-        'M3_GATEWAY_PORT=' + $GatewayPort,
-        'M3_POSTGRES_BIND_IP=127.0.0.1',
-        'M3_POSTGRES_PORT=15432',
-        'M3_VAULT_BIND_IP=127.0.0.1',
-        'M3_VAULT_PORT=18444',
-        'M3_VENDOR_BIND_IP=127.0.0.1',
-        'M3_VENDOR_PORT=18445'
-    )
-    [IO.File]::AppendAllText($environmentPath, (($hostBindings -join [Environment]::NewLine) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+    Add-HostBindingsToEnvironmentFile -Path $environmentPath -HostAddress $HostHyperVAddress -Port $GatewayPort
     $installed = Import-Certificate -FilePath (Join-Path $rawRoot 'certificates\ca.crt') -CertStoreLocation Cert:\LocalMachine\Root
     $rootThumbprint = $installed.Thumbprint
     try {
