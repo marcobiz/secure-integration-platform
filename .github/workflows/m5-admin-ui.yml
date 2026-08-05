@@ -128,6 +128,7 @@ jobs:
           first="$(dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release -- apply)"
           grep -F 'Applied 0005_admin_sessions_m5.sql' <<<"$first"
           grep -F 'Applied 0006_admin_role_revocation_m5.sql' <<<"$first"
+          grep -F 'Applied 0007_binding_bundle_immutability_m5.sql' <<<"$first"
           second="$(dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release --no-build -- apply)"
           ! grep -Fq 'Applied ' <<<"$second"
       - name: Exercise real M5 PostgreSQL stores and fault boundaries
@@ -188,9 +189,9 @@ jobs:
         with: { global-json-file: global.json }
       - uses: actions/setup-node@v6
         with: { node-version: 22.22.1, cache: npm, cache-dependency-path: src/Admin/Admin.Web/package-lock.json }
-      - name: Start and verify clean-clone stack
+      - name: Exercise clean-clone import-to-runtime workflow
         shell: pwsh
-        run: ./tools/m5/Invoke-M5Quickstart.ps1 -Phase Start
+        run: ./tools/m5/Invoke-M5Quickstart.ps1 -Phase Workflow
       - name: Stop and verify cleanup
         if: always()
         shell: pwsh
@@ -228,8 +229,18 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}', fetch-depth: 0 }
-      - shell: pwsh
-        run: ./eng/scan-secrets.ps1
+      - name: Prove scanner rejects a synthetic negative fixture, then scan clean tree
+        shell: pwsh
+        run: |
+          $fixture = 'tests/.m5-secret-scanner-negative-fixture.txt'
+          try {
+            Set-Content -LiteralPath $fixture -Value 'client_secret=negative-fixture-credential-123456789' -NoNewline
+            & pwsh -NoLogo -NoProfile -File ./eng/scan-secrets.ps1 *> $null
+            if ($LASTEXITCODE -eq 0) { throw 'M5_SECRET_SCANNER_NEGATIVE_FIXTURE_NOT_DETECTED' }
+          }
+          finally { Remove-Item -LiteralPath $fixture -Force -ErrorAction SilentlyContinue }
+          & pwsh -NoLogo -NoProfile -File ./eng/scan-secrets.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'M5_SECRET_SCANNER_CLEAN_TREE_FAILED' }
 
   sbom:
     runs-on: ubuntu-latest

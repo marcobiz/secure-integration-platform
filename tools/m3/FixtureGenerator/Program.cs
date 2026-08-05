@@ -37,6 +37,9 @@ await File.WriteAllBytesAsync(Path.Combine(certificateDirectory, "gateway.pfx"),
 await File.WriteAllBytesAsync(Path.Combine(certificateDirectory, "vault.pfx"), vault.Export(X509ContentType.Pkcs12, certificatePassword)).ConfigureAwait(false);
 await File.WriteAllBytesAsync(Path.Combine(certificateDirectory, "vendor-server.pfx"), vendorServer.Export(X509ContentType.Pkcs12, certificatePassword)).ConfigureAwait(false);
 await File.WriteAllBytesAsync(Path.Combine(certificateDirectory, "security-driver.pfx"), securityDriver.Export(X509ContentType.Pkcs12, certificatePassword)).ConfigureAwait(false);
+await File.WriteAllTextAsync(Path.Combine(certificateDirectory, "security-driver.crt"), securityDriver.ExportCertificatePem()).ConfigureAwait(false);
+using (ECDsa securityDriverKey = securityDriver.GetECDsaPrivateKey() ?? throw new InvalidOperationException("Synthetic installation key is missing."))
+    await File.WriteAllTextAsync(Path.Combine(certificateDirectory, "security-driver.key"), securityDriverKey.ExportPkcs8PrivateKeyPem()).ConfigureAwait(false);
 
 Dictionary<string, string> values = new(StringComparer.Ordinal)
 {

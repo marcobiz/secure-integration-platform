@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Validate', 'Start', 'Stop')]
+    [ValidateSet('Validate', 'Start', 'Workflow', 'Stop')]
     [string] $Phase = 'Start',
     [switch] $SkipBuild
 )
@@ -26,6 +26,13 @@ function Invoke-Checked {
 function ComposeArguments {
     param([string[]] $Tail)
     return @('compose', '--project-name', $project, '--env-file', $envFile, '--file', $baseCompose, '--file', $overlayCompose) + $Tail
+}
+
+if ($Phase -eq 'Workflow') {
+    & (Join-Path $PSScriptRoot 'Invoke-M5FullStack.ps1') -UseExistingImages:$SkipBuild
+    if ($LASTEXITCODE -ne 0) { throw 'M5_QUICKSTART_WORKFLOW_FAILED' }
+    Write-Host 'M5_QUICKSTART_WORKFLOW_PASS'
+    exit 0
 }
 
 if ($Phase -eq 'Validate') {

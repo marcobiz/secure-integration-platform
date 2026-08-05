@@ -1,5 +1,7 @@
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { createHash, createPrivateKey, randomBytes, randomUUID, sign } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 type ApiResult<T> = { status: number; body: T; etag: string | null };
 
@@ -39,6 +41,20 @@ async function api<T>(page: Page, path: string, method = 'GET', body?: unknown, 
   }, { path, method, body, headers });
 }
 
+async function invokeRuntime(context: BrowserContext, connectorId: string, operationId: string, correlationId: string) {
+  const target = `/v1/connectors/${encodeURIComponent(connectorId)}/operations/${encodeURIComponent(operationId)}:invoke`;
+  const body = JSON.stringify({ protocolVersion: '1.0', payload: { contentType: 'application/json', encoding: 'base64', data: Buffer.from('{"synthetic":true}').toString('base64') }, correlationId });
+  const timestamp = new Date().toISOString();
+  const nonce = randomBytes(16).toString('base64url');
+  const digest = createHash('sha256').update(body).digest('base64url');
+  const privateKey = createPrivateKey(readFileSync(process.env.M5_FULLSTACK_CLIENT_KEY ?? '/m3-fixture/certificates/security-driver.key'));
+  const signature = sign('sha256', Buffer.from(['BGW1', 'POST', target, timestamp, nonce, digest].join('\n')), { key: privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url');
+  const baseUrl = process.env.M5_FULLSTACK_BASE_URL ?? 'https://localhost:8443/admin/';
+  const response = await context.request.post(new URL(target, baseUrl).toString(), { data: body, headers: { 'Content-Type': 'application/json', 'X-BG-Timestamp': timestamp, 'X-BG-Nonce': nonce, 'X-BG-Content-SHA256': digest, 'X-BG-Signature': signature } });
+  const text = await response.text();
+  return { status: response.status(), body: text ? JSON.parse(text) as Record<string, unknown> : {} };
+}
+
 test('FULLSTACK-01 production Admin build persists and governs the connector lifecycle', async ({ browser }) => {
   const editorContext = await browser.newContext({ ignoreHTTPSErrors: true });
   const approverContext = await browser.newContext({ ignoreHTTPSErrors: true });
@@ -48,6 +64,14 @@ test('FULLSTACK-01 production Admin build persists and governs the connector lif
   const approver = await login(approverContext, 'approver');
   const security = await login(securityContext, 'security-admin');
   const operator = await login(operatorContext, 'operator');
+  const browserEvidence: { console: string[]; network: string[] } = { console: [], network: [] };
+  for (const observed of [editor, approver, security, operator]) {
+    observed.on('console', message => browserEvidence.console.push(message.text()));
+    observed.on('response', async response => {
+      const pathname = new URL(response.url()).pathname;
+      if ((pathname.startsWith('/admin/api/') || pathname.startsWith('/v1/')) && browserEvidence.network.length < 500) browserEvidence.network.push(await response.text().catch(() => ''));
+    });
+  }
 
   const sample = await api<Record<string, unknown>>(editor, '/admin/api/v1/connectors/sample');
   expect(sample.status).toBe(200);
@@ -77,12 +101,12 @@ test('FULLSTACK-01 production Admin build persists and governs the connector lif
   expect(binding.status).toBe(200);
   expect(binding.body.revision).toBe(1);
 
-  const requested = await api<{ status: string }>(editor, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approval-requests', 'POST');
+  const requested = await api<{ status: string; bindingDigestSha256: string }>(editor, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approval-requests', 'POST');
   expect(requested.status).toBe(200);
-  const selfApproval = await api<{ code: string }>(editor, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approvals', 'POST');
+  const selfApproval = await api<{ code: string }>(editor, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approvals', 'POST', { bindingDigestSha256: requested.body.bindingDigestSha256 });
   expect(selfApproval.status).toBe(403);
   expect(selfApproval.body.code).toMatch(/^BGW-/);
-  const approved = await api<{ status: string }>(approver, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approvals', 'POST');
+  const approved = await api<{ status: string }>(approver, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approvals', 'POST', { bindingDigestSha256: requested.body.bindingDigestSha256 });
   expect(approved.status).toBe(200);
 
   const connectors = await api<{ items: Array<{ connectorId: string; publicationRevision: number }> }>(approver, '/admin/api/v1/connectors?offset=0&limit=50');
@@ -117,16 +141,27 @@ test('FULLSTACK-01 production Admin build persists and governs the connector lif
   const grant = await api<Record<string, unknown>>(security, '/admin/api/v1/grants', 'POST', { tenantId, installationId: enrolled!.id, connectorId: 'sample-secure-service', operationId: 'submit' });
   expect(grant.status).toBe(201);
 
-  const rolledBack = await api<typeof published.body>(approver, '/admin/api/v1/connectors/sample-secure-service:rollback', 'POST', { targetVersion: '1.0.0', expectedActiveRowVersion: published.body.rowVersion });
-  expect(rolledBack.status).toBe(200);
-  expect(rolledBack.body.version).toBe('1.0.0');
+  const runtimeContext = await browser.newContext({
+    ignoreHTTPSErrors: true,
+    clientCertificates: [{ origin: 'https://localhost:8443', certPath: process.env.M5_FULLSTACK_CLIENT_CERT ?? '/m3-fixture/certificates/security-driver.crt', keyPath: process.env.M5_FULLSTACK_CLIENT_KEY ?? '/m3-fixture/certificates/security-driver.key' }]
+  });
+  const correlationId = randomUUID();
+  const invoked = await invokeRuntime(runtimeContext, 'sample-secure-service', 'submit', correlationId);
+  expect(invoked.status).toBe(200);
+  expect(invoked.body.connectorVersion).toBe('2.0.0');
+  const sanitized = JSON.stringify(invoked.body);
+  expect(sanitized).not.toMatch(/api.?key|certificate|secret|synthetic-vault/i);
+
   const v2 = await api<typeof published.body>(security, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0');
   const retired = await api<typeof published.body>(security, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0:retire', 'POST', undefined, { 'If-Match': `"${v2.body.rowVersion}"` });
   expect(retired.status).toBe(200);
   expect(retired.body.state).toBe('Retired');
-  const audit = await api<{ total: number }>(security, `/admin/api/v1/audit?tenantId=${tenantId}&offset=0&limit=50`);
+  const deniedAfterRetire = await invokeRuntime(runtimeContext, 'sample-secure-service', 'submit', randomUUID());
+  expect(deniedAfterRetire.status).not.toBe(200);
+  const audit = await api<{ total: number; items: Array<{ correlationId: string; action: string }> }>(security, `/admin/api/v1/audit?tenantId=${tenantId}&offset=0&limit=100`);
   expect(audit.status).toBe(200);
   expect(audit.body.total).toBeGreaterThan(0);
+  expect(audit.body.items).toContainEqual(expect.objectContaining({ correlationId, action: 'operation.invoke' }));
 
   await security.goto('./connectors');
   await expect(security.getByRole('heading', { name: 'Connectors' })).toBeVisible();
@@ -141,5 +176,11 @@ test('FULLSTACK-01 production Admin build persists and governs the connector lif
   const replay = await replayContext.request.get(new URL('/admin/auth/me', editor.url()).toString(), { headers: { Accept: 'application/json' }, maxRedirects: 0 });
   expect(replay.status()).toBe(401);
 
-  await Promise.all([editorContext.close(), approverContext.close(), securityContext.close(), operatorContext.close(), replayContext.close()]);
+  writeFileSync('test-results/browser-redaction-surfaces.json', JSON.stringify({
+    dom: await Promise.all([editor, approver, security, operator].map(value => value.locator('body').innerText())),
+    console: browserEvidence.console,
+    network: browserEvidence.network
+  }));
+
+  await Promise.all([editorContext.close(), approverContext.close(), securityContext.close(), operatorContext.close(), runtimeContext.close(), replayContext.close()]);
 });

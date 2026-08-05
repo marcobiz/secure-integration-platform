@@ -10,8 +10,8 @@ export default defineConfig({
   use: {
     baseURL: process.env.M5_FULLSTACK_BASE_URL ?? 'https://localhost:18443/admin/',
     ignoreHTTPSErrors: true,
-    trace: 'retain-on-failure',
-    screenshot: 'only-on-failure',
+    trace: 'on',
+    screenshot: 'on',
     video: 'off'
   },
   projects: [{ name: 'chromium-full-stack', use: { ...devices['Desktop Chrome'] } }]

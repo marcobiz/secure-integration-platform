@@ -35,8 +35,9 @@ try {
     }
     $webMount = ($web -replace '\\', '/')
     $resultsMount = ($results -replace '\\', '/')
+    $fixtureMount = ((Join-Path $root '.artifacts\m5\quickstart\raw') -replace '\\', '/')
     & docker run --rm --name "$project-playwright" --network "container:$gateway" `
-        --volume "${webMount}:/work:ro" --volume "${nodeVolume}:/work/node_modules" --volume "${resultsMount}:/work/test-results" `
+        --volume "${webMount}:/work:ro" --volume "${nodeVolume}:/work/node_modules" --volume "${resultsMount}:/work/test-results" --volume "${fixtureMount}:/m3-fixture:ro" `
         --workdir /work --env M5_FULLSTACK_BASE_URL=https://localhost:8443/admin/ `
         mcr.microsoft.com/playwright:v1.62.1-noble `
         /bin/bash -lc 'npm ci --ignore-scripts --loglevel=error && npx playwright test --config playwright.fullstack.config.ts'
@@ -46,12 +47,21 @@ try {
     & docker compose --project-name $project --env-file $envFile --file (Join-Path $root 'deploy\m3\docker-compose.m3a.yml') --file (Join-Path $root 'deploy\m5\docker-compose.m5.yml') logs --no-color *> $containerLog
     if ($LASTEXITCODE -ne 0) { throw 'M5_FULLSTACK_LOG_COLLECTION_FAILED' }
     $sensitiveNames = @('M3_VENDOR_API_KEY','M3_SYNTHETIC_VAULT_TOKEN','M3_VENDOR_CONTROL_TOKEN','M3_POSTGRES_ADMIN_PASSWORD','M3_POSTGRES_RUNTIME_PASSWORD','M3_CERTIFICATE_PASSWORD','M3_ACTIVATION_HMAC_BASE64','M5_POSTGRES_ADMIN_API_PASSWORD')
-    $canaries = foreach ($line in Get-Content -LiteralPath $envFile) {
+    $canaries = @(foreach ($line in Get-Content -LiteralPath $envFile) {
         $separator = $line.IndexOf('=')
         if ($separator -gt 0 -and $line.Substring(0, $separator) -in $sensitiveNames) {
             [pscustomobject]@{ Name = $line.Substring(0, $separator); Value = $line.Substring($separator + 1) }
         }
+    })
+    $provisioningPath = Join-Path $root '.artifacts\m5\quickstart\raw\provisioning.json'
+    if (Test-Path -LiteralPath $provisioningPath) {
+        $provisioningCanary = Get-Content -LiteralPath $provisioningPath -Raw | ConvertFrom-Json
+        $canaries += [pscustomobject]@{ Name = 'M3_ACTIVATION_CODE'; Value = [string]$provisioningCanary.securityActivationCode }
     }
+    $canaries += @(
+        [pscustomobject]@{ Name = 'M5_SECRET_BINDING_REFERENCE'; Value = 'synthetic-vault://vault.m3.test/vendor-api-key' },
+        [pscustomobject]@{ Name = 'M5_CERTIFICATE_BINDING_REFERENCE'; Value = 'synthetic-vault://vault.m3.test/vendor-client-certificate' }
+    )
     $redactedFiles = Get-ChildItem -LiteralPath $results -File -Recurse
     foreach ($canary in $canaries) {
         if ([string]::IsNullOrWhiteSpace($canary.Value) -or $canary.Value.Length -lt 8) { continue }
@@ -59,6 +69,11 @@ try {
             if (Select-String -LiteralPath $file.FullName -SimpleMatch $canary.Value -Quiet -ErrorAction SilentlyContinue) {
                 throw "M5_FULLSTACK_REDACTION_FAILED:$($canary.Name):$($file.Name)"
             }
+        }
+    }
+    foreach ($file in $redactedFiles) {
+        if (Select-String -LiteralPath $file.FullName -Pattern '__Host-SecureIntegration\.Admin=[^;\s]+' -Quiet -ErrorAction SilentlyContinue) {
+            throw "M5_FULLSTACK_REDACTION_FAILED:ADMIN_SESSION_HANDLE:$($file.Name)"
         }
     }
     Write-Host 'M5_FULLSTACK_REDACTION_PASS'
