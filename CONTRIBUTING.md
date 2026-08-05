@@ -1,14 +1,29 @@
 # Contributing
 
-Il progetto è in preparazione per una preview open source. Prima di proporre modifiche:
+The project is preparing a private open-source preview. Before proposing a change:
 
-1. aprire un issue o descrivere chiaramente scope e threat model impact;
-2. mantenere Domain/Application e contratti pubblici provider-neutral;
-3. non aggiungere segreti, evidence raw, certificati privati o connector proprietari;
-4. aggiungere test positivi e negativi proporzionati al rischio;
-5. eseguire `eng/build.ps1`, `eng/test.ps1`, `eng/validate-docs.ps1`, `eng/scan-secrets.ps1` e `eng/generate-sbom.ps1`;
-6. usare commit revisionabili e non riscrivere una baseline attestata.
+1. describe scope and threat-model impact;
+2. keep Domain/Application and public contracts provider-neutral;
+3. never add secrets, raw evidence, private certificates or proprietary connectors;
+4. add positive and negative tests proportional to risk;
+5. run build, test, docs, secret, license and SBOM gates;
+6. use reviewable commits and never rewrite an attested baseline.
 
-I Connector Definition devono usare riferimenti logici: URI, credential e provider reference appartengono ai binding server-side. Nuovi provider cloud o connector commerciali devono vivere in pack separati dal Core.
+## Setup
 
-Le contribution non implicano ancora una licenza definitiva: vedere [LICENSE-PENDING.md](LICENSE-PENDING.md).
+```powershell
+./eng/build.ps1
+./eng/test.ps1
+cd src/Admin/Admin.Web
+npm ci --ignore-scripts
+npm run lint
+npm test
+npm run build
+npm run test:e2e
+```
+
+TypeScript is strict. Application text belongs in i18n. Do not add CDNs, analytics, unsafe HTML rendering or sensitive browser storage. Change the OpenAPI first and run `npm run check:api`. Every mutating API needs authentication, CSRF, RBAC, tenant scope, audit and concurrency tests where applicable.
+
+Branches start from an approved baseline; pull requests and commits should have a focused scope, security rationale, tests and no raw artefacts. Connector contributions include a synthetic sample and negative validation corpus; endpoint URLs and secret values remain server-side bindings.
+
+New cloud providers, vertical connectors and commercial adapters belong in separate packs and may depend on Core contracts, never the reverse. Inbound DCO/CLA policy remains pending with the final license; see [LICENSE-PENDING.md](LICENSE-PENDING.md) and [the license decision](docs/legal/OPEN-SOURCE-LICENSE-DECISION.md).

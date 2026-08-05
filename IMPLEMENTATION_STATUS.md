@@ -12,7 +12,8 @@ Aggiornato: 2026-08-05
 | M2 — Gateway minimo | **Done** | gate CI `30896803567`: build/test, PostgreSQL 18, container hardening, Gitleaks e SBOM PASS |
 | M3 — vertical slice production-like | **M3A product gate PASS** | tag `m3a-product-gate-pass-20260805`; M3B PENDING non bloccante per il Core |
 | M4 — Connector Configuration MVP | **Done** | PR #4 CI `30992487718`: 6/6 job PASS; schema v1, lifecycle, PG18, Published runtime, CLI, sample E2E e quick start |
-| M5 e milestone successive | Non iniziate | nessuna Admin UI o funzionalità fuori perimetro M4 |
+| M5 — Admin UI MVP | Implementata; gate finale in corso su PR #5 | OIDC/cookie/CSRF, RBAC, four-eyes, React UI, PG admin role, Compose, 20 Playwright |
+| M3B, M6 e milestone successive | Non iniziate | nessun cloud reale, connector sanitario o adapter commerciale |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
 ## Gate Review prima di M2
@@ -101,7 +102,19 @@ Review: `docs/reviews/M3-GATE-REVIEW.md` e `docs/reviews/M3A-PRODUCT-GATE-202608
 - quick start Compose completabile senza Azure e cleanup deterministico;
 - ADR-0018, API/CLI/SDK docs, CONTRIBUTING, SECURITY e placeholder licenza.
 
-M3B, M5, UI, YAML, plugin, provider aggiuntivi, connector reali e adapter COM/C/Java non sono iniziati.
+M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java non sono iniziati. M5 introduce esclusivamente Admin UI/API e separazione fisica provider; non anticipa M6.
+
+### M5 — Admin UI MVP
+
+- Core provider-neutral compilabile tramite `BrokerGateway.Core.slnx`; Azure resta pack opzionale escluso dall'export.
+- OIDC Authorization Code server-side con PKCE/state/nonce, cookie `__Host-` sicuro, CSRF, logout e DevelopmentAuth fail-closed in Production.
+- RBAC globale/tenant-scoped e principal `(issuer, subject)`; five roles e bootstrap SecurityAdministrator controllato.
+- Four-eyes checksum-specific con self/requester/creator denial e publish enforcement nell'application service.
+- Admin API paginata con ProblemDetails/correlation, ETag/If-Match, audit e DTO privi di secret.
+- React/TypeScript strict same-origin con dashboard, risorse, connector lifecycle, binding, grant, approval, audit, health, IT/EN e light/dark/system.
+- Migrazione `0003_admin_ui_m5.sql` SHA-256 `B16A2A2813843D291026DF491247FBF0E5B158857D1F7507ABE7B960FFB5358A` e pool amministrativo separato dal runtime.
+- Container non-root include asset hashati/CSP nonce; quickstart locale usa PostgreSQL 18 e Synthetic Provider senza cloud.
+- Gate CI/evidence finale e merge PR #5 restano da concludere; nessuna dichiarazione Done prima di quei risultati.
 
 La run split-host `m3a-live-20260804-131718` è stata classificata **BLOCKED — PRE-HANDOFF INFRASTRUCTURE VALIDATION**: live/readiness erano HTTP 200, ma Docker health falliva per SAN incompatibile e i profili Windows Firewall erano disabilitati. Il runner VM non è stato eseguito e P02 non è stato testato. Cleanup PASS ha lasciato zero risorse della run e ha rimosso l'handoff non utilizzato. I fix health/TLS e firewall reversibile sono implementati. Il runner predispone ora un secondo switch Hyper-V Internal e una NIC VM `M3A-Isolated`, senza NAT/gateway/DNS/forwarding, con rollback SYSTEM, isolamento del profilo Private e probe VM→HOST pre-handoff. La run è storica ed è superata dal PASS product gate `m3a-live-20260805-094131`. Dettagli: `docs/reviews/M3A-BLOCKED-RUN-20260804-131718.md`.
 

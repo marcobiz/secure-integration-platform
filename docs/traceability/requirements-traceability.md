@@ -19,10 +19,10 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | FR-011 | M4 | `M4_UT_Published_runtime_resolves_only_server_side_bindings_and_rejects_stale_cache`, `M4_E2E_sample_secure_service_uses_Published_definition_and_server_side_bindings`, secret scan |
 | FR-012 | M4 | `M4_UT_Lifecycle_is_immutable_concurrent_and_rollback_reactivates_prior_publication`, `M4_UT_Runtime_denies_Draft_Validated_Retired_missing_and_missing_bindings` |
 | FR-013 | M4 | `M4_IT_DAT_PostgreSQL18_connector_publication_binding_and_rollback_when_configured`, `M4_IT_Admin_API_requires_key_and_supports_import_validate_publish_export_and_test` |
-| FR-014 | M5 | Playwright RBAC/four-eyes suite |
+| FR-014 | M5 | `M5_UT_Editor_or_requester_cannot_approve_own_checksum`, `M5_UT_Distinct_approval_is_checksum_specific_and_enables_policy`, `AdminApiSecurityTests`, Playwright E2E-04/05/06/07 |
 | FR-015 | M1/M6 | M1 SDK: Windows pipe/E2E suite; COM/C ABI/CLI: M6 |
-| FR-016 | M2/M5 | M2: `UT_SEC_Audit_is_metadata_only_and_excludes_payload_and_credentials`, API Problem redaction tests; admin audit/RBAC: M5 |
-| FR-017 | M5/M9 | health/metrics/tracing/diagnostics tests |
+| FR-016 | M2/M5 | M2 metadata-only audit; M5 `M5_IT_Viewer_cannot_mutate_but_can_read`, activation one-time, Audit UI E2E-16 and canary/secret scan |
+| FR-017 | M5/M9 | provider-neutral Dashboard/Health UI, E2E-17; metrics/tracing/advanced diagnostics remain M9 |
 | FR-018 | M1 | DPAPI roundtrip, offline corruption e repository reopen; service identity live aperta |
 
 ## Requisiti non funzionali
@@ -74,6 +74,19 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | AC-028 | signature/tamper verification suite |
 | AC-029 | pilot rotation/revocation evidence |
 | AC-030 | pilot code/package/network bypass evidence |
+
+## M5 Admin plane
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| OIDC/session/CSRF/logout | `M5_IT_Anonymous_is_denied_and_security_headers_are_present`, `M5_IT_Mutation_without_CSRF_is_denied`, `M5_IT_Logout_invalidates_cookie_session`, Production startup negative | PASS |
+| RBAC and tenant scope | `M5_UT_RBAC_honors_global_and_tenant_scoped_roles`, Viewer integration negative, E2E role rendering | PASS |
+| Four-eyes/checksum | `AdminSecurityTests` self/requester/stale/invalidation suite, publish policy integration, E2E-04–07 | PASS |
+| Installation/activation/revoke | Admin API integration plus E2E-12/13; activation absent from list | PASS |
+| Connector lifecycle/concurrency | M4 unit/PG tests plus E2E-02/03/07/10/11/14 | PASS |
+| Binding/grant/controlled test | Application validation, E2E-08/09/15, no arbitrary URL unit | PASS |
+| i18n/theme/a11y | Vitest and E2E-18/19/20 with axe critical/serious = 0 | PASS |
+| Packaging/open-source boundary | Gateway container, clean-clone M5 quickstart, Core export build/test/license/secret gates | Gate pending final CI |
 
 ## Security threats
 

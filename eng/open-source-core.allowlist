@@ -2,6 +2,10 @@
 .editorconfig
 .gitattributes
 .gitignore
+.github/workflows/ci.yml
+.github/workflows/m5-admin-ui.yml
+ARCHITECTURE.md
+CODE_OF_CONDUCT.md
 BrokerGateway.Core.slnx
 CONTRIBUTING.md
 Directory.Build.props
@@ -9,11 +13,13 @@ Directory.Build.targets
 Directory.Packages.props
 global.json
 LICENSE-PENDING.md
+OPEN_SOURCE_BOUNDARIES.md
 NuGet.config
 README.md
 SECURITY.md
 deploy/m3/
 deploy/m4/
+deploy/m5/
 deploy/windows/
 docs/README.md
 docs/adr/
@@ -53,3 +59,4 @@ tools/m3/VendorMock/
 tools/m3/Invoke-M3A.ps1
 tools/m3/split-host/
 tools/m4/
+tools/m5/

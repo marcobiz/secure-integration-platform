@@ -51,6 +51,20 @@
 | TM-023 | T/E | Versione Draft/Retired o cache stale invocata dopo revoca. | Published-only catalog, stamp store a ogni invoke, TTL, invalidazione e no stale-on-error. | PostgreSQL indisponibile causa fail-closed/disponibilità ridotta. |
 | TM-024 | T/R | Publish concorrenti o modifica di una versione già Published. | Row version, publication revision, unique Published e trigger DB di immutabilità. | Un amministratore DB privilegiato resta parte della TCB. |
 | TM-025 | I/E | Connector/export/client seleziona URI o provider reference arbitrari. | Definition solo logica, binding server-side, export senza binding, runtime request chiusa. | Un amministratore binding autorizzato può configurare destinazioni approvate errate. |
+| TM-026 | S/I | Furto o fixation della sessione Admin. | Cookie `__Host-`, HttpOnly/Secure/SameSite, session expiry/sliding, state/nonce/PKCE e logout server-side. | Browser o account amministrativo compromesso restano rischio residuo. |
+| TM-027 | T/E | CSRF induce una mutazione amministrativa. | Antiforgery cookie/header same-origin su tutte le mutazioni e niente CORS permissivo. | Mitigato salvo compromissione same-origin/XSS. |
+| TM-028 | T/I | XSS o stored XSS in nomi/commenti/JSON. | React escaping, niente raw HTML/markdown, CSP nonce/self, no `eval`, output DTO. | Parziale: dipendenze frontend richiedono patching continuo. |
+| TM-029 | E | Clickjacking dell'Admin UI. | CSP `frame-ancestors 'none'` e frame policy. | Mitigato nei browser conformi. |
+| TM-030 | S/E | OIDC misconfiguration/open redirect/claim spoofing. | Authority/client/callback espliciti, issuer/audience/signature/lifetime/state/nonce validation, local return path. | Configurazione del provider e recovery account sono deployment risk. |
+| TM-031 | E | Ruolo inviato dal frontend o email usata per escalation. | Autorizzazione server-side da `(issuer, subject)` e assignment persistito; UI è solo presentation. | Amministratore ruoli compromesso può abusare dei privilegi. |
+| TM-032 | E/R | Bypass four-eyes o self-approval. | Approval separata checksum-specific; creator/editor/requester distinti; publish ricontrolla in application service. | Collusione fra due account privilegiati non è eliminata. |
+| TM-033 | E/I | Tenant scope bypass tramite query/body. | Scope verificato server-side su ogni risorsa; test cross-tenant; RLS defense in depth. | Nuove API richiedono la stessa review. |
+| TM-034 | I | Export/audit/UI espongono secret, cookie o activation code. | DTO allowlist, activation one-time/no-store, audit metadata-only, canary/secret scans. | Compromissione memoria del Gateway/browser resta fuori dalla garanzia. |
+| TM-035 | T/R | Audit alterato o operazione non auditata. | Audit append-only applicativo/DB e correlation ID per mutazioni. | DBA/host privilegiato è parte della TCB; firma notarile fuori scope. |
+| TM-036 | T/D | Connector JSON malevolo o oversized. | Limiti body, JSON Schema 2020-12, canonicalization, no executable content, stable errors. | Parser/runtime dependencies devono restare aggiornati. |
+| TM-037 | E | Operator usa il test connector come proxy arbitrario. | API accetta solo connector/environment/operation id e risolve Published binding server-side. | Un binding amministrativo già compromesso resta utilizzabile. |
+| TM-038 | E | Autorizzazione stale dopo revoca ruolo. | Assignment riletto server-side per richiesta e sessione breve. | Finestra di cookie/OIDC provider e cache future da rivalutare. |
+| TM-039 | S/E | DevelopmentAuth raggiunge produzione. | Abilitazione esplicita, identità fisse, host locale e startup failure in Production. | Errore di classificazione ambiente non-Production richiede controllo deployment. |
 
 ## Analisi degli scenari obbligatori
 
@@ -72,7 +86,7 @@ La firma prova provenienza, non innocuità. Un plugin approvato viene trattato c
 
 ### Insider amministrativo
 
-M4 applica autenticazione al confine Admin, optimistic concurrency, immutabilità e audit redatto, ma il Core non implementa ancora four-eyes. Il Deployment Pack di produzione deve aggiungere OIDC/RBAC e separazione editor/approver. Un amministratore autorizzato dei binding può comunque deviare traffico verso una destinazione permessa: review e audit restano necessari.
+M5 applica OIDC provider-neutral, RBAC server-side, tenant scope, optimistic concurrency, four-eyes checksum-specific e audit redatto. Un amministratore autorizzato dei binding può comunque configurare una destinazione approvata errata e due account privilegiati possono colludere: review operativa e audit restano necessari.
 
 ## Criteri di revisione
 

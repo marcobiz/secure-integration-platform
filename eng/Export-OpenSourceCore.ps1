@@ -85,6 +85,23 @@ if (-not $SkipVerification) {
     if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_BUILD_FAILED' }
     & $dotnet test (Join-Path $destination 'BrokerGateway.Core.slnx') --configuration Release --no-restore --no-build
     if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_TEST_FAILED' }
+    $web = Join-Path $destination 'src\Admin\Admin.Web'
+    if (Test-Path -LiteralPath (Join-Path $web 'package-lock.json')) {
+        Push-Location $web
+        try {
+            & npm ci --ignore-scripts
+            if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_FRONTEND_RESTORE_FAILED' }
+            & npm run lint
+            if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_FRONTEND_LINT_FAILED' }
+            & npm test
+            if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_FRONTEND_TEST_FAILED' }
+            & npm run build
+            if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_FRONTEND_BUILD_FAILED' }
+            & node (Join-Path $destination 'tools\m5\check-frontend-licenses.mjs')
+            if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_FRONTEND_LICENSE_FAILED' }
+        }
+        finally { Pop-Location }
+    }
 }
 
 [pscustomobject]@{

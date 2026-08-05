@@ -99,6 +99,8 @@ Una approvazione è una registrazione separata e immutabile, legata a version id
 
 ## Deployment locale
 
+Il frontend usa React 19, TypeScript strict, Vite, TanStack Query, React Hook Form, AJV 2020-12, CodeMirror 6, MUI Community, Lucide, i18next, Vitest, Testing Library, Playwright e axe. Il routing MVP usa collegamenti same-origin e un piccolo dispatcher di path: React Router è stato escluso perché la famiglia di versioni valutata introduceva advisory npm nel lockfile. La decisione è reversibile quando una versione compatibile e priva di advisory sarà disponibile. Nessun CDN, font remoto, analytics, PWA o source map di produzione.
+
 ```mermaid
 flowchart TB
   subgraph Browser
@@ -127,4 +129,3 @@ Solo la porta HTTPS del Gateway è pubblicata. PostgreSQL, provider sintetico e 
 ## Confini open source
 
 L'export OSS usa una allowlist versionata, crea una directory temporanea, ricalcola un manifest SHA-256, esegue scansioni license/secret e compila/testa la soluzione Core esportata. Sono esclusi pack Azure, futuri pack sanitari, adapter commerciali, raw evidence e report interni. L'export non pubblica repository remoti.
-

@@ -93,6 +93,8 @@ alla qualificazione dell'Azure Deployment Pack e non blocca il Core o M4.
 
 ## M5 — Admin UI
 
+**Stato 2026-08-05:** implementazione completa sul branch `m5/admin-ui-mvp`; gate CI/evidence e review PR #5 in corso. M3B e M6+ non sono iniziati.
+
 **Obiettivo:** amministrazione sicura senza accesso ai valori Vault.
 
 **Task:** OIDC standard server-side; RBAC provider-neutral; Tenant/Application/Installation; enrollment/revocation; editor JSON; validation; four-eyes; publish/rollback; binding metadata; audit; health; separazione fisica Core/provider pack.

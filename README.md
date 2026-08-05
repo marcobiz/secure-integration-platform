@@ -1,51 +1,54 @@
 # Secure Integration Platform
 
-Core provider-neutral di una piattaforma di integrazione sicura per software on-premise e legacy.
+Provider-neutral integration platform for on-premise and legacy software, with a Windows Local Broker, central Gateway, Connector Runtime and React administration console.
 
-La piattaforma rimuove segreti hardcoded e credenziali distribuite con il minor numero possibile di modifiche ai prodotti esistenti. Il core è vendor-neutral; il sanitario costituisce il primo caso d'uso e il primo Connector Pack.
+The platform removes hard-coded secrets and distributed credentials while minimizing changes to existing products. Healthcare is a future vertical pack, not a dependency of the Core.
 
-## Stato
+## Status
 
-M0–M2 e il product gate M3A sono conclusi. M4 Connector Configuration MVP è implementato sul branch dedicato e in gate. M3B resta una qualificazione separata dell'Azure Deployment Pack. Lo stato verificabile è in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+M0–M4 and the M3A product gate are complete. M5 Admin UI MVP is in the PR #5 gate. M3B remains a separate Azure Deployment Pack qualification and is not required by the Core. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
 
-## Quick start M4 senza Azure
+## Local quick start, no cloud account
 
-Con Docker Linux containers, .NET SDK e PowerShell:
-
-```powershell
-./tools/m4/Invoke-M4Quickstart.ps1 -Phase Validate
-./tools/m4/Invoke-M4Quickstart.ps1 -Phase Start
-./tools/m4/Invoke-M4Quickstart.ps1 -Phase Stop
-```
-
-Avvia PostgreSQL 18, Gateway, Synthetic Vault e mock HTTPS/mTLS, quindi verifica tramite CLI il Connector Published `sample-secure-service`. Dettagli: [M4 local quick start](docs/operations/M4-QUICKSTART.md).
-
-## Build e test
-
-Su Windows PowerShell, dalla root:
+With Docker Linux containers, .NET SDK, Node 22 and PowerShell:
 
 ```powershell
-.\eng\build.ps1
-.\eng\test.ps1
-.\eng\validate-docs.ps1
-.\eng\scan-secrets.ps1
-.\eng\generate-sbom.ps1
+./tools/m5/Invoke-M5Quickstart.ps1 -Phase Validate
+./tools/m5/Invoke-M5Quickstart.ps1 -Phase Start
+# UI: https://localhost:18443/admin/
+./tools/m5/Invoke-M5Quickstart.ps1 -Phase Stop
 ```
 
-La toolchain è fissata da `global.json`; se presente, gli script preferiscono l'SDK repository-local in `.dotnet`.
+This starts PostgreSQL 18, a non-root Gateway with Admin UI, Synthetic Provider and HTTPS/mTLS mock. DevelopmentAuth exposes only fixed local synthetic identities. See [the M5 runbook](docs/operations/M5-ADMIN-QUICKSTART.md).
 
-## Documentazione
+## Components
 
-L'indice completo e l'ordine di lettura sono in [docs/README.md](docs/README.md).
+- Local Broker: Windows Service with Named Pipe, ACL, DPAPI/CNG and deny-by-default application policy.
+- Gateway: Installation authentication, server-side tenant binding, grants, replay protection and restricted egress.
+- Connector Runtime/SDK: versioned JSON definitions, logical server-owned bindings and Published-only execution.
+- Admin UI/API: server-side OIDC, secure cookie, CSRF, RBAC, four-eyes, audit and health.
+- Provider abstractions and Synthetic Provider: a Core that builds and runs without cloud SDKs.
 
-I documenti sotto `input-docs/` sono riservati e costituiscono materiale sorgente. Non devono essere copiati in artefatti pubblici o riprodotti nella documentazione derivata con segreti, dati personali o PoC.
+See [ARCHITECTURE.md](ARCHITECTURE.md) and [OPEN_SOURCE_BOUNDARIES.md](OPEN_SOURCE_BOUNDARIES.md). Current non-goals include M3B cloud qualification, real healthcare connectors, commercial legacy adapters, marketplace, billing, HA/DR and M6+.
 
-## Principi invarianti
+## Build and test
 
-- Nessun Vendor Secret nel legacy o nel Local Broker.
-- Nessun endpoint generico per ottenere segreti o invocare URL arbitrari.
-- Tenant e Installation derivati dall'identità autenticata, non da parametri client.
-- Operazioni locali protette dal Local Broker sotto una service identity Windows dedicata.
-- Configurazioni Connector validate, versionate, Published immutabili e reversibili.
-- Il Local Broker non è una difesa completa contro un amministratore locale o SYSTEM.
-- Secure Layer è il percorso di migrazione iniziale; Managed Connector si adotta quando porta riuso concreto.
+```powershell
+./eng/build.ps1
+./eng/test.ps1
+./eng/validate-docs.ps1
+./eng/scan-secrets.ps1
+./eng/generate-sbom.ps1
+```
+
+Admin Web pins Node/npm and all dependencies in its lockfile; its lint, unit, Playwright, accessibility and license gates are in `.github/workflows/m5-admin-ui.yml`.
+
+## Security and licensing
+
+No vendor secret passes through legacy software or the Broker; the browser never receives provider secret values or private keys. Endpoints and provider references are resolved server-side. Report vulnerabilities through [SECURITY.md](SECURITY.md), never in a public issue with exploitable details.
+
+The definitive open-source license is still [under legal/business review](docs/legal/OPEN-SOURCE-LICENSE-DECISION.md). Reserved source documents and raw evidence are excluded from the repeatable Core export.
+
+## Documentation
+
+The complete index and reading order are in [docs/README.md](docs/README.md). Documents under `input-docs/` are reserved source material and are never part of a public export.
