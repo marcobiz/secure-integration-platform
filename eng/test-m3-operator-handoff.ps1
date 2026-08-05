@@ -58,6 +58,10 @@ if ($operator -match 'Register-ScheduledTask|New-ScheduledTaskPrincipal|NT AUTHO
 if ($operator -match '&\s+git\.exe[^\r\n]+\*>\s*\$null') {
     throw 'Raw git invocation may not rely on PowerShell 5.1 stderr redirection.'
 }
+if ($operator.IndexOf('[Parameter(Mandatory)] [AllowEmptyString()] [string] $ErrorCode', [StringComparison]::Ordinal) -lt 0 -or
+    $operator.IndexOf("Write-CanonicalResult -Status 'PASS' -ErrorCode ''", [StringComparison]::Ordinal) -lt 0) {
+    throw 'VM operator must allow the empty error code used by its canonical PASS result.'
+}
 if ($hostRunner -match "ValidateSet\([^\)]*ExecuteVm") {
     throw 'SYSTEM ExecuteVm phase must remain outside the M3 gate branch.'
 }

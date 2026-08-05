@@ -29,7 +29,7 @@ $stage = 'INITIALIZE'
 function Write-CanonicalResult {
     param(
         [Parameter(Mandatory)] [string] $Status,
-        [Parameter(Mandatory)] [string] $ErrorCode
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $ErrorCode
     )
     New-Item -ItemType Directory -Path $runEvidenceRoot -Force | Out-Null
     $document = [ordered]@{
