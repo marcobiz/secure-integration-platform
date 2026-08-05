@@ -4,6 +4,8 @@ Provider-neutral integration platform for on-premise and legacy software, with a
 
 The platform removes hard-coded secrets and distributed credentials while minimizing changes to existing products. Healthcare is a future vertical pack, not a dependency of the Core.
 
+![Sanitized Admin UI dashboard](docs/images/admin-dashboard.png)
+
 ## Status
 
 M0–M4 and the M3A product gate are complete. M5 Admin UI MVP is in the PR #5 gate. M3B remains a separate Azure Deployment Pack qualification and is not required by the Core. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).

@@ -14,7 +14,8 @@
     "test:a11y": "vitest run src/accessibility.test.tsx",
     "test:e2e": "playwright test",
     "generate:api": "openapi-typescript ../../../docs/api/gateway-openapi.yaml -o src/api/schema.d.ts",
-    "check:api": "npm run generate:api && git diff --exit-code -- src/api/schema.d.ts"
+    "check:api": "npm run generate:api && git diff --exit-code -- src/api/schema.d.ts",
+    "capture:screenshot": "node tests/capture-sanitized-screenshot.mjs"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",
