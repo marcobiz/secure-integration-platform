@@ -127,7 +127,7 @@ public sealed class InMemoryConnectorConfigurationStore : IConnectorConfiguratio
     }
 
     /// <inheritdoc />
-    public Task<ConnectorVersionRecord> RollbackAsync(string connectorId, string targetVersion, long expectedActiveRowVersion, string actor, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<ConnectorVersionRecord> RollbackAsync(string connectorId, string targetVersion, long expectedActiveRowVersion, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (gate)
@@ -147,7 +147,7 @@ public sealed class InMemoryConnectorConfigurationStore : IConnectorConfiguratio
     }
 
     /// <inheritdoc />
-    public Task<ConnectorVersionRecord> RetireAsync(Guid versionId, long expectedRowVersion, string actor, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<ConnectorVersionRecord> RetireAsync(Guid versionId, long expectedRowVersion, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (gate)
@@ -167,7 +167,7 @@ public sealed class InMemoryConnectorConfigurationStore : IConnectorConfiguratio
     }
 
     /// <inheritdoc />
-    public Task<ConnectorBindingSet> PutBindingsAsync(ConnectorBindingSet bindings, long? expectedRevision, CancellationToken cancellationToken)
+    public Task<ConnectorBindingSet> PutBindingsAsync(ConnectorBindingSet bindings, long? expectedRevision, Guid correlationId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (gate)
@@ -182,6 +182,19 @@ public sealed class InMemoryConnectorConfigurationStore : IConnectorConfiguratio
             ConnectorBindingSet saved = Clone(bindings with { Revision = current + 1 });
             revisions.Add(saved);
             return Task.FromResult(Clone(saved));
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<AdminPage<ConnectorBindingSet>> ListBindingsPageAsync(Guid connectorVersionId, int offset, int limit, Guid? environmentId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            ConnectorBindingSet[] values = bindingSets.Values.SelectMany(value => value)
+                .Where(value => value.ConnectorVersionId == connectorVersionId && (environmentId is null || value.EnvironmentId == environmentId))
+                .OrderBy(value => value.EnvironmentId).ThenByDescending(value => value.Revision).Select(Clone).ToArray();
+            return Task.FromResult(new AdminPage<ConnectorBindingSet>(values.Skip(offset).Take(limit).ToArray(), offset, limit, values.Length));
         }
     }
 

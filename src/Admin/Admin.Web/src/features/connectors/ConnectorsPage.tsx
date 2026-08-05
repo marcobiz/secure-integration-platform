@@ -7,6 +7,7 @@ import { hasRole, useSession } from '../../auth/SessionContext';
 import { DataTable } from '../../components/DataTable';
 import { ErrorState, LoadingState } from '../../components/AsyncState';
 import { PageTitle } from '../../components/PageTitle';
+import { PaginationControls } from '../../components/PaginationControls';
 import { validateConnectorDefinition, type ConnectorValidationIssue } from './connectorDefinitionValidation';
 
 const CodeMirror = lazy(() => import('@uiw/react-codemirror'));
@@ -43,10 +44,13 @@ export function ConnectorsPage() {
   const [operationId, setOperation] = useState('');
   const [testResult, setTestResult] = useState('');
   const [clientIssues, setClientIssues] = useState<ConnectorValidationIssue[]>([]);
+  const [connectorOffset, setConnectorOffset] = useState(0);
+  const [versionOffset, setVersionOffset] = useState(0);
+  const [filter, setFilter] = useState('');
   const [validation, setValidation] = useState<{ valid: boolean; checksumSha256: string | null; issues: ConnectorValidationIssue[] }>();
 
-  const query = useQuery({ queryKey: ['connectors'], queryFn: adminApi.connectors });
-  const versions = useQuery({ queryKey: ['connector-versions', selected], queryFn: () => adminApi.connectorVersions(selected), enabled: Boolean(selected) });
+  const query = useQuery({ queryKey: ['connectors', connectorOffset, filter], queryFn: () => adminApi.connectors(connectorOffset, 50, filter) });
+  const versions = useQuery({ queryKey: ['connector-versions', selected, versionOffset], queryFn: () => adminApi.connectorVersions(selected, versionOffset), enabled: Boolean(selected) });
   const environments = useQuery({ queryKey: ['environments'], queryFn: () => adminApi.environments() });
   const schema = useQuery({ queryKey: ['connector-schema'], queryFn: adminApi.connectorSchema });
   const sample = useQuery({ queryKey: ['connector-sample'], queryFn: adminApi.connectorSample });
@@ -63,7 +67,8 @@ export function ConnectorsPage() {
       const issues = validateConnectorDefinition(schema.data, parsed);
       setClientIssues(issues);
       if (issues.length > 0) return { valid: false, checksumSha256: null, issues };
-      return adminApi.validateConnector(parsed as object);
+      const result = await adminApi.validateConnector(parsed as object);
+      return { ...result, checksumSha256: result.checksumSha256 ?? null };
     },
     onSuccess: setValidation,
   });
@@ -78,12 +83,12 @@ export function ConnectorsPage() {
     mutationFn: async ({ action, version }: { action: 'validate' | 'publish' | 'retire' | 'rollback'; version: ConnectorVersion }) => {
       if (action === 'validate') return adminApi.validateStored(selected, version);
       if (action === 'publish') {
-        const connector = query.data?.find(value => value.connectorId === selected);
+        const connector = query.data?.items.find(value => value.connectorId === selected);
         if (!connector) throw new Error('connector-required');
         return adminApi.publish(selected, version, connector.publicationRevision);
       }
       if (action === 'rollback') {
-        const active = versions.data?.find(value => value.state === 'Published');
+        const active = versions.data?.items.find(value => value.state === 'Published');
         if (!active) throw new Error('published-version-required');
         return adminApi.rollback(selected, version.version, active.rowVersion);
       }
@@ -103,16 +108,18 @@ export function ConnectorsPage() {
 
   return <>
     <PageTitle title={t('connectors')} />
-    <DataTable rows={query.data} label={t('connectors')} columns={[
-      { key: 'id', label: t('code'), render: (row: ConnectorSummary) => <Button onClick={() => setSelected(row.connectorId)}>{row.connectorId}</Button> },
+    <TextField label="Filter connectors" value={filter} onChange={event => { setFilter(event.target.value); setConnectorOffset(0); }} sx={{ mb: 2 }} />
+    <DataTable rows={query.data.items} label={t('connectors')} columns={[
+      { key: 'id', label: t('code'), render: (row: ConnectorSummary) => <Button onClick={() => { setSelected(row.connectorId); setVersionOffset(0); }}>{row.connectorId}</Button> },
       { key: 'name', label: t('name'), render: row => row.displayName },
       { key: 'version', label: t('published'), render: row => row.publishedVersion ?? '—' },
       { key: 'total', label: t('total'), render: row => row.versions },
     ]} />
+    <PaginationControls page={query.data} onOffset={setConnectorOffset} />
     {selected && <Card sx={{ mt: 3 }}><CardContent>
       <Typography variant="h2">{t('versionTimeline')}: {selected}</Typography>
       {versions.isPending ? <LoadingState /> : versions.error ? <ErrorState error={versions.error} /> : <>
-        <DataTable rows={versions.data ?? []} label={t('versionTimeline')} columns={[
+        <DataTable rows={versions.data?.items ?? []} label={t('versionTimeline')} columns={[
           { key: 'version', label: t('version'), render: value => value.version },
           { key: 'state', label: t('status'), render: value => <Chip label={value.state} size="small" /> },
           { key: 'checksum', label: t('checksum'), render: value => value.checksumSha256.slice(0, 12) },
@@ -124,7 +131,8 @@ export function ConnectorsPage() {
             {canRetire && value.state !== 'Retired' && <Button size="small" color="error" onClick={() => transition.mutate({ action: 'retire', version: value })}>{t('retire')}</Button>}
           </Stack> },
         ]} />
-        <VersionComparison connectorId={selected} versions={versions.data ?? []} />
+        <PaginationControls page={versions.data} onOffset={setVersionOffset} />
+        <VersionComparison connectorId={selected} versions={versions.data?.items ?? []} />
       </>}
       {canTest && <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mt: 3 }}>
         <FormControl sx={{ minWidth: 220 }}><InputLabel id="connector-test-environment">{t('environment')}</InputLabel><Select labelId="connector-test-environment" label={t('environment')} value={environmentId} onChange={event => setEnvironment(event.target.value)}>{(environments.data?.items ?? []).map(value => <MenuItem key={value.id} value={value.id}>{value.displayName}</MenuItem>)}</Select></FormControl>

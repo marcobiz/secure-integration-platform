@@ -292,6 +292,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["beginAdminLogin"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/auth/csrf": {
         parameters: {
             query?: never;
@@ -318,6 +334,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["logoutAdmin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/auth/development/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["developmentAdminLogin"];
         delete?: never;
         options?: never;
         head?: never;
@@ -404,6 +436,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/api/v1/installations/{installationId}:revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["revokeInstallation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/api/v1/grants": {
         parameters: {
             query?: never;
@@ -413,7 +461,7 @@ export interface paths {
         };
         get: operations["listGrants"];
         put?: never;
-        post?: never;
+        post: operations["createGrant"];
         delete?: never;
         options?: never;
         head?: never;
@@ -452,7 +500,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/api/v1/role-assignments": {
+    "/admin/api/v1/connectors/schema": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getConnectorDefinitionSchema"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/connectors/sample": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getConnectorDefinitionSample"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/connectors:validate": {
         parameters: {
             query?: never;
             header?: never;
@@ -461,8 +541,72 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        post: operations["validateConnectorDefinition"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/connectors:import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["importConnectorDefinition"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/bootstrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["bootstrapAdmin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/role-assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAdminRoleAssignments"];
+        put?: never;
         post: operations["assignAdminRole"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/role-assignments/{assignmentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["revokeAdminRoleAssignment"];
         options?: never;
         head?: never;
         patch?: never;
@@ -484,6 +628,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/api/v1/connectors/{connectorId}/versions/{version}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAdminConnectorVersion"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/api/v1/connectors/{connectorId}/versions/{version}/definition": {
         parameters: {
             query?: never;
@@ -492,6 +652,102 @@ export interface paths {
             cookie?: never;
         };
         get: operations["getAdminConnectorDefinition"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/connectors/{connectorId}/versions/{version}:validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["validateStoredAdminConnectorVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/connectors/{connectorId}/versions/{version}:publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["publishAdminConnectorVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/connectors/{connectorId}/versions/{version}:retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["retireAdminConnectorVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/connectors/{connectorId}:rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["rollbackAdminConnectorVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/connectors/{connectorId}/bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["putAdminConnectorBindings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/connectors/{connectorId}/versions/{version}/bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listAdminConnectorBindings"];
         put?: never;
         post?: never;
         delete?: never;
@@ -763,6 +1019,16 @@ export interface components {
         GrantPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Grant"][];
         };
+        CreateGrant: {
+            /** Format: uuid */
+            tenantId: string;
+            /** Format: uuid */
+            installationId: string;
+            connectorId: string;
+            operationId: string;
+            /** Format: date-time */
+            validUntil?: string | null;
+        };
         AuditEvent: {
             /** Format: uuid */
             id: string;
@@ -785,6 +1051,137 @@ export interface components {
             versions: number;
             publishedVersion?: string | null;
             publicationRevision: number;
+        };
+        ConnectorPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["ConnectorSummary"][];
+        };
+        ConnectorVersion: {
+            connectorId: string;
+            version: string;
+            schemaVersion: string;
+            state: string;
+            checksumSha256: string;
+            rowVersion: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            publishedAt?: string | null;
+        };
+        ConnectorVersionPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["ConnectorVersion"][];
+        };
+        ConnectorValidationIssue: {
+            code: string;
+            location: string;
+            message: string;
+        };
+        ConnectorValidationResult: {
+            valid: boolean;
+            checksumSha256?: string | null;
+            issues: components["schemas"]["ConnectorValidationIssue"][];
+        };
+        ConnectorBindingRequest: {
+            /** Format: uuid */
+            environmentId: string;
+            connectorVersion?: string | null;
+            endpoints: {
+                [key: string]: string;
+            };
+            secretReferences: {
+                [key: string]: string;
+            };
+            certificateReferences?: {
+                [key: string]: string;
+            };
+            /**
+             * @deprecated
+             * @description If-Match is authoritative.
+             */
+            expectedRevision?: number | null;
+        };
+        ConnectorBinding: {
+            /** Format: uuid */
+            id: string;
+            connectorId: string;
+            /** Format: uuid */
+            connectorVersionId: string;
+            /** Format: uuid */
+            environmentId: string;
+            endpoints: {
+                [key: string]: string;
+            };
+            secretReferences: {
+                [key: string]: string;
+            };
+            certificateReferences: {
+                [key: string]: string;
+            };
+            revision: number;
+            checksumSha256: string;
+            state: string;
+            /** Format: date-time */
+            updatedAt: string;
+            updatedBy: string;
+        };
+        ConnectorBindingPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["ConnectorBinding"][];
+        };
+        Approval: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            connectorVersionId: string;
+            checksumSha256: string;
+            bindingDigestSha256: string;
+            /** Format: uuid */
+            requestedBy: string;
+            /** Format: uuid */
+            approvedBy?: string | null;
+            /** Format: uuid */
+            rejectedBy?: string | null;
+            status: string;
+            /** Format: date-time */
+            requestedAt: string;
+        };
+        ApprovalPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["Approval"][];
+        };
+        RoleAssignment: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            principalId: string;
+            role: components["schemas"]["AdminRole"];
+            /** Format: uuid */
+            tenantId?: string | null;
+            /** Format: uuid */
+            grantedBy: string;
+            /** Format: date-time */
+            grantedAt: string;
+        };
+        RoleAssignmentPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["RoleAssignment"][];
+        };
+        RoleAssignmentRequest: {
+            principal: {
+                /** Format: uri */
+                issuer: string;
+                subject: string;
+                displayName: string;
+                /** Format: email */
+                email?: string | null;
+            };
+            role: components["schemas"]["AdminRole"];
+            /** Format: uuid */
+            tenantId?: string | null;
+        };
+        ApprovalDecisionRequest: {
+            comment?: string | null;
+        };
+        ConnectorTestRequest: {
+            /** Format: uuid */
+            environmentId: string;
+            operationId: string;
         };
         InvokeRequest: {
             /** Format: uuid */
@@ -832,6 +1229,12 @@ export interface components {
         TenantId: string;
         Offset: number;
         Limit: number;
+        Filter: string;
+        /** @description Opaque token obtained from /admin/auth/csrf. */
+        Csrf: string;
+        IfMatch: string;
+        /** @description Omit only for create; mandatory for update. */
+        IfMatchOptional: string;
     };
     requestBodies: {
         ConnectorImport: {
@@ -1236,6 +1639,25 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    beginAdminLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redirect to the configured OIDC provider or development login page. */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            404: components["responses"]["Problem"];
+        };
+    };
     getCsrfToken: {
         parameters: {
             query?: never;
@@ -1261,13 +1683,44 @@ export interface operations {
     logoutAdmin: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
             /** @description Session invalidated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    developmentAdminLogin: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    userName: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Loopback-only synthetic session created. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1325,7 +1778,10 @@ export interface operations {
     createTenant: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1374,7 +1830,10 @@ export interface operations {
     createApplication: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1443,7 +1902,10 @@ export interface operations {
     createInstallation: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1461,6 +1923,38 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ProvisionedActivation"];
                 };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    revokeInstallation: {
+        parameters: {
+            query: {
+                tenantId: components["parameters"]["TenantId"];
+            };
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path: {
+                installationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    reason: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Installation and credentials revoked atomically. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Problem"];
         };
@@ -1485,6 +1979,34 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GrantPage"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    createGrant: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateGrant"];
+            };
+        };
+        responses: {
+            /** @description Grant and audit committed atomically */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Grant"];
                 };
             };
             default: components["responses"]["Problem"];
@@ -1517,6 +2039,31 @@ export interface operations {
     };
     listAdminConnectors: {
         parameters: {
+            query?: {
+                offset?: components["parameters"]["Offset"];
+                limit?: components["parameters"]["Limit"];
+                filter?: components["parameters"]["Filter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Connector summary page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorPage"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getConnectorDefinitionSchema: {
+        parameters: {
             query?: never;
             header?: never;
             path?: never;
@@ -1524,13 +2071,127 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Connector summaries */
+            /** @description Authoritative Draft 2020-12 Connector Definition schema. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getConnectorDefinitionSample: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Canonical valid Connector Definition sample. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    validateConnectorDefinition: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ConnectorImport"];
+        responses: {
+            /** @description Preliminary validation result */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ConnectorSummary"][];
+                    "application/json": components["schemas"]["ConnectorValidationResult"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    importConnectorDefinition: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["ConnectorImport"];
+        responses: {
+            /** @description Draft persisted */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorVersion"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    bootstrapAdmin: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+                "X-Bootstrap-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One-time bootstrap and audit committed atomically. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listAdminRoleAssignments: {
+        parameters: {
+            query?: {
+                offset?: components["parameters"]["Offset"];
+                limit?: components["parameters"]["Limit"];
+                principalId?: string;
+                tenantId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Role assignment page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleAssignmentPage"];
                 };
             };
             default: components["responses"]["Problem"];
@@ -1539,11 +2200,18 @@ export interface operations {
     assignAdminRole: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleAssignmentRequest"];
+            };
+        };
         responses: {
             /** @description Provider-neutral role assignment created or returned idempotently. */
             200: {
@@ -1555,9 +2223,37 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
-    listAdminConnectorVersions: {
+    revokeAdminRoleAssignment: {
         parameters: {
             query?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path: {
+                assignmentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Assignment revoked and sessions invalidated. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listAdminConnectorVersions: {
+        parameters: {
+            query?: {
+                offset?: components["parameters"]["Offset"];
+                limit?: components["parameters"]["Limit"];
+                filter?: components["parameters"]["Filter"];
+            };
             header?: never;
             path: {
                 connectorId: components["parameters"]["ConnectorId"];
@@ -1566,12 +2262,39 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Redacted version timeline. */
+            /** @description Redacted version timeline */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ConnectorVersionPage"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getAdminConnectorVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connectorId: components["parameters"]["ConnectorId"];
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version metadata with ETag */
+            200: {
+                headers: {
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorVersion"];
+                };
             };
             default: components["responses"]["Problem"];
         };
@@ -1600,10 +2323,184 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    validateStoredAdminConnectorVersion: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": components["parameters"]["IfMatch"];
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path: {
+                connectorId: components["parameters"]["ConnectorId"];
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Draft transitioned with ETag */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorVersion"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    publishAdminConnectorVersion: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": components["parameters"]["IfMatch"];
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path: {
+                connectorId: components["parameters"]["ConnectorId"];
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VersionActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Exact approved connector and binding digest published atomically. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    retireAdminConnectorVersion: {
+        parameters: {
+            query?: never;
+            header: {
+                "If-Match": components["parameters"]["IfMatch"];
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path: {
+                connectorId: components["parameters"]["ConnectorId"];
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version retired atomically with audit. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    rollbackAdminConnectorVersion: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path: {
+                connectorId: components["parameters"]["ConnectorId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RollbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Published version rolled back atomically with audit. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    putAdminConnectorBindings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Omit only for create; mandatory for update. */
+                "If-Match"?: components["parameters"]["IfMatchOptional"];
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path: {
+                connectorId: components["parameters"]["ConnectorId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectorBindingRequest"];
+            };
+        };
+        responses: {
+            /** @description Immutable binding revision created; update requires If-Match. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            428: components["responses"]["Problem"];
+            default: components["responses"]["Problem"];
+        };
+    };
+    listAdminConnectorBindings: {
+        parameters: {
+            query?: {
+                offset?: components["parameters"]["Offset"];
+                limit?: components["parameters"]["Limit"];
+                environmentId?: string;
+            };
+            header?: never;
+            path: {
+                connectorId: components["parameters"]["ConnectorId"];
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Immutable binding revision page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorBindingPage"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
     requestAdminConnectorApproval: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
             path: {
                 connectorId: components["parameters"]["ConnectorId"];
                 version: components["parameters"]["Version"];
@@ -1624,7 +2521,10 @@ export interface operations {
     };
     listAdminConnectorApprovals: {
         parameters: {
-            query?: never;
+            query?: {
+                offset?: components["parameters"]["Offset"];
+                limit?: components["parameters"]["Limit"];
+            };
             header?: never;
             path: {
                 connectorId: components["parameters"]["ConnectorId"];
@@ -1634,12 +2534,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Redacted approval decisions. */
+            /** @description Redacted approval decision page */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApprovalPage"];
+                };
             };
             default: components["responses"]["Problem"];
         };
@@ -1647,7 +2549,10 @@ export interface operations {
     approveAdminConnectorVersion: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
             path: {
                 connectorId: components["parameters"]["ConnectorId"];
                 version: components["parameters"]["Version"];
@@ -1669,14 +2574,21 @@ export interface operations {
     rejectAdminConnectorVersion: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
             path: {
                 connectorId: components["parameters"]["ConnectorId"];
                 version: components["parameters"]["Version"];
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalDecisionRequest"];
+            };
+        };
         responses: {
             /** @description Exact checksum rejected by a distinct principal. */
             200: {
@@ -1691,13 +2603,20 @@ export interface operations {
     testAdminConnector: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
             path: {
                 connectorId: components["parameters"]["ConnectorId"];
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectorTestRequest"];
+            };
+        };
         responses: {
             /** @description Controlled server-side Connector resolution result. */
             200: {

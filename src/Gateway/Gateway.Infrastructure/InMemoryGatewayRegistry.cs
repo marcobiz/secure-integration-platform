@@ -91,6 +91,21 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null) : IGate
     }
 
     /// <inheritdoc />
+    public Task AddInstallationActivationWithAuditAsync(InstallationRecord installation, ActivationCodeRecord activationCode, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            if (!tenants.ContainsKey(installation.TenantId) || !applications.ContainsKey(installation.ApplicationId) || !environments.ContainsKey(installation.EnvironmentId)) throw new GatewayException("BGW-VALIDATION-REGISTRY-REFERENCE", 400);
+            if (installations.ContainsKey(installation.Id) || activationCodes.ContainsKey(activationCode.Id)) throw new GatewayException("BGW-VALIDATION-INSTALLATION-DUPLICATE", 409);
+            installations.Add(installation.Id, installation);
+            activationCodes.Add(activationCode.Id, Clone(activationCode));
+            auditEvents.Add(auditEvent);
+        }
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
     public Task AddGrantAsync(InstallationGrantRecord grant, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -98,6 +113,19 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null) : IGate
         {
             if (!installations.TryGetValue(grant.InstallationId, out InstallationRecord? installation) || installation.TenantId != grant.TenantId) throw new GatewayException("BGW-AUTHZ-CROSS-TENANT-GRANT", 403);
             if (grants.Values.Any(item => item.InstallationId == grant.InstallationId && item.ConnectorId == grant.ConnectorId && item.OperationId == grant.OperationId) || !grants.TryAdd(grant.Id, grant)) throw new GatewayException("BGW-AUTHZ-GRANT-DUPLICATE", 409);
+        }
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task AddGrantWithAuditAsync(InstallationGrantRecord grant, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            if (!installations.TryGetValue(grant.InstallationId, out InstallationRecord? installation) || installation.TenantId != grant.TenantId) throw new GatewayException("BGW-AUTHZ-CROSS-TENANT-GRANT", 403);
+            if (grants.Values.Any(item => item.InstallationId == grant.InstallationId && item.ConnectorId == grant.ConnectorId && item.OperationId == grant.OperationId) || !grants.TryAdd(grant.Id, grant)) throw new GatewayException("BGW-AUTHZ-GRANT-DUPLICATE", 409);
+            auditEvents.Add(auditEvent);
         }
         return Task.CompletedTask;
     }
@@ -176,6 +204,14 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null) : IGate
             foreach (Guid credentialId in credentials.Values.Where(item => item.InstallationId == installationId && item.Status is CredentialStatus.Active or CredentialStatus.Overlap).Select(item => item.Id).ToArray()) credentials[credentialId] = credentials[credentialId] with { Status = CredentialStatus.Revoked, RevokedAt = now };
             return Task.FromResult(true);
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> RevokeInstallationWithAuditAsync(Guid installationId, string reason, DateTimeOffset now, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        bool revoked = await RevokeInstallationAsync(installationId, reason, now, cancellationToken).ConfigureAwait(false);
+        if (revoked) { lock (gate) auditEvents.Add(auditEvent); }
+        return revoked;
     }
 
     /// <inheritdoc />

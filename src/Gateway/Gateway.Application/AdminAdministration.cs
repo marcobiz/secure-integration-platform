@@ -32,6 +32,29 @@ public sealed record AdminRoleAssignmentRecord(Guid Id, Guid PrincipalId, AdminR
 /// <summary>Role assignment request identifying the target by immutable external identity.</summary>
 public sealed record AdminRoleAssignmentRequest(AdminExternalIdentity Principal, AdminRole Role, Guid? TenantId);
 
+/// <summary>Opaque, server-side administrative session resolved from a hashed browser handle.</summary>
+public sealed record AdminSessionRecord(
+    Guid Id,
+    AdminPrincipalRecord Principal,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset AbsoluteExpiresAt,
+    DateTimeOffset IdleExpiresAt,
+    DateTimeOffset LastSeenAt,
+    DateTimeOffset? RevokedAt);
+
+/// <summary>Creates, validates and revokes administrative sessions. Implementations never persist the clear handle.</summary>
+public interface IAdminSessionStore
+{
+    /// <summary>Creates a fresh random session and returns its one-time clear handle.</summary>
+    Task<(string Handle, AdminSessionRecord Session)> CreateAsync(AdminExternalIdentity identity, DateTimeOffset now, TimeSpan absoluteLifetime, TimeSpan idleLifetime, CancellationToken cancellationToken);
+    /// <summary>Validates and touches a session without extending it past its absolute expiry.</summary>
+    Task<AdminSessionRecord?> ValidateAsync(string handle, DateTimeOffset now, TimeSpan idleLifetime, CancellationToken cancellationToken);
+    /// <summary>Revokes exactly one session.</summary>
+    Task RevokeAsync(string handle, DateTimeOffset now, CancellationToken cancellationToken);
+    /// <summary>Revokes every session for a principal after a sensitive privilege mutation.</summary>
+    Task RevokePrincipalAsync(Guid principalId, DateTimeOffset now, CancellationToken cancellationToken);
+}
+
 /// <summary>Bounded administrative result page.</summary>
 public sealed record AdminPage<T>(IReadOnlyList<T> Items, int Offset, int Limit, int Total);
 
@@ -101,22 +124,28 @@ public interface IAdminSecurityStore
     Task<AdminPrincipalRecord> EnsurePrincipalAsync(AdminExternalIdentity identity, CancellationToken cancellationToken);
     /// <summary>Gets active role assignments for one principal.</summary>
     Task<IReadOnlyList<AdminRoleAssignmentRecord>> GetAssignmentsAsync(Guid principalId, CancellationToken cancellationToken);
+    /// <summary>Lists role assignments in a stable bounded page.</summary>
+    Task<AdminPage<AdminRoleAssignmentRecord>> ListAssignmentsAsync(int offset, int limit, Guid? principalId, Guid? tenantId, CancellationToken cancellationToken);
     /// <summary>Atomically claims the one-time Security Administrator bootstrap.</summary>
-    Task<bool> TryBootstrapSecurityAdministratorAsync(Guid principalId, DateTimeOffset now, CancellationToken cancellationToken);
+    Task<bool> TryBootstrapSecurityAdministratorAsync(Guid principalId, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Assigns a role through an audited Security Administrator action.</summary>
-    Task<AdminRoleAssignmentRecord> AssignRoleAsync(Guid principalId, AdminRole role, Guid? tenantId, Guid grantedBy, DateTimeOffset now, CancellationToken cancellationToken);
+    Task<AdminRoleAssignmentRecord> AssignRoleAsync(Guid principalId, AdminRole role, Guid? tenantId, Guid grantedBy, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
+    /// <summary>Revokes one exact role assignment and its active sessions in the same transaction.</summary>
+    Task<bool> RevokeRoleAsync(Guid assignmentId, Guid revokedBy, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Creates or replaces a request for the exact version checksum.</summary>
-    Task<ConnectorApprovalRecord> RequestApprovalAsync(ConnectorVersionRecord version, byte[] bindingDigestSha256, Guid requester, DateTimeOffset now, CancellationToken cancellationToken);
+    Task<ConnectorApprovalRecord> RequestApprovalAsync(ConnectorVersionRecord version, byte[] bindingDigestSha256, Guid requester, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Approves the current request when approver and editor identities are distinct.</summary>
-    Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid approver, DateTimeOffset now, CancellationToken cancellationToken);
+    Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid approver, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Rejects the current exact-checksum request as a distinct approver.</summary>
-    Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid rejector, string? comment, DateTimeOffset now, CancellationToken cancellationToken);
+    Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid rejector, string? comment, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Checks for a current approval by a distinct principal.</summary>
     Task<bool> HasValidApprovalAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string actor, CancellationToken cancellationToken);
     /// <summary>Invalidates current approvals after an approval-relevant mutation.</summary>
     Task InvalidateApprovalsAsync(Guid connectorVersionId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Lists redacted approval metadata for a Connector version.</summary>
     Task<IReadOnlyList<ConnectorApprovalRecord>> ListApprovalsAsync(Guid connectorVersionId, CancellationToken cancellationToken);
+    /// <summary>Lists approval history in a stable bounded page.</summary>
+    Task<AdminPage<ConnectorApprovalRecord>> ListApprovalsPageAsync(Guid connectorVersionId, int offset, int limit, CancellationToken cancellationToken);
 }
 
 /// <summary>Policy hook applied inside the Connector service, not only at the HTTP endpoint.</summary>
@@ -138,21 +167,17 @@ public sealed class FourEyesConnectorApprovalPolicy(IAdminSecurityStore store) :
 }
 
 /// <summary>Resolves claims and enforces provider-neutral RBAC with optional tenant scope.</summary>
-public sealed class AdminAccessService(IAdminSecurityStore store)
+public sealed class AdminAccessService(IAdminSecurityStore store, IAdminSessionStore sessions, IGatewayClock clock)
 {
     /// <summary>Resolves the authenticated identity using issuer and subject only.</summary>
     public async Task<AdminAccessContext> ResolveAsync(ClaimsPrincipal claimsPrincipal, CancellationToken cancellationToken)
     {
         if (claimsPrincipal.Identity?.IsAuthenticated != true) throw new GatewayException("BGW-ADMIN-AUTHENTICATION", 401);
-        string issuer = claimsPrincipal.FindFirst("iss")?.Value ?? claimsPrincipal.FindFirst(ClaimTypes.NameIdentifier)?.Issuer ?? string.Empty;
-        string subject = claimsPrincipal.FindFirst("sub")?.Value ?? claimsPrincipal.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
-        if (!Uri.TryCreate(issuer, UriKind.Absolute, out Uri? issuerUri) || issuerUri.Scheme != Uri.UriSchemeHttps || string.IsNullOrWhiteSpace(subject) || subject.Length > 256)
-            throw new GatewayException("BGW-ADMIN-IDENTITY", 401);
-        string displayName = claimsPrincipal.FindFirst("name")?.Value ?? subject;
-        if (displayName.Length > 256) displayName = displayName[..256];
-        string? email = claimsPrincipal.FindFirst("email")?.Value;
-        if (email?.Length > 320) email = null;
-        AdminPrincipalRecord principal = await store.EnsurePrincipalAsync(new(issuer, subject, displayName, email), cancellationToken).ConfigureAwait(false);
+        string? sessionHandle = claimsPrincipal.FindFirst("sid")?.Value;
+        if (string.IsNullOrWhiteSpace(sessionHandle)) throw new GatewayException("BGW-ADMIN-SESSION", 401);
+        AdminSessionRecord session = await sessions.ValidateAsync(sessionHandle, clock.UtcNow, TimeSpan.FromMinutes(20), cancellationToken).ConfigureAwait(false)
+            ?? throw new GatewayException("BGW-ADMIN-SESSION", 401);
+        AdminPrincipalRecord principal = session.Principal;
         if (!principal.Active) throw new GatewayException("BGW-ADMIN-PRINCIPAL-DISABLED", 403);
         return new(principal, await store.GetAssignmentsAsync(principal.Id, cancellationToken).ConfigureAwait(false));
     }
@@ -169,33 +194,33 @@ public sealed class AdminAccessService(IAdminSecurityStore store)
 public sealed class ConnectorApprovalService(IAdminSecurityStore store, IConnectorConfigurationStore connectors, IGatewayClock clock)
 {
     /// <summary>Requests approval for the current Validated checksum.</summary>
-    public async Task<ConnectorApprovalRecord> RequestAsync(string connectorId, string version, AdminAccessContext actor, CancellationToken cancellationToken)
+    public async Task<ConnectorApprovalRecord> RequestAsync(string connectorId, string version, AdminAccessContext actor, Guid correlationId, CancellationToken cancellationToken)
     {
         AdminAccessService.Require(actor, null, AdminRole.ConnectorEditor, AdminRole.SecurityAdministrator);
         ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
         if (current.State != ConnectorVersionState.Validated) throw new GatewayException("BGW-CONNECTOR-STATE", 409);
         byte[] bindingDigest = await connectors.GetBindingBundleDigestAsync(current.Id, cancellationToken).ConfigureAwait(false);
-        return await store.RequestApprovalAsync(current, bindingDigest, actor.Principal.Id, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+        return await store.RequestApprovalAsync(current, bindingDigest, actor.Principal.Id, correlationId, clock.UtcNow, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Approves only as a distinct ConnectorApprover or SecurityAdministrator.</summary>
-    public async Task<ConnectorApprovalRecord> ApproveAsync(string connectorId, string version, AdminAccessContext actor, CancellationToken cancellationToken)
+    public async Task<ConnectorApprovalRecord> ApproveAsync(string connectorId, string version, AdminAccessContext actor, Guid correlationId, CancellationToken cancellationToken)
     {
         AdminAccessService.Require(actor, null, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
         ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
         byte[] bindingDigest = await connectors.GetBindingBundleDigestAsync(current.Id, cancellationToken).ConfigureAwait(false);
-        return await store.ApproveAsync(current.Id, current.ChecksumSha256, bindingDigest, current.CreatedBy, actor.Principal.Id, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+        return await store.ApproveAsync(current.Id, current.ChecksumSha256, bindingDigest, current.CreatedBy, actor.Principal.Id, correlationId, clock.UtcNow, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Rejects only as a distinct ConnectorApprover or SecurityAdministrator.</summary>
-    public async Task<ConnectorApprovalRecord> RejectAsync(string connectorId, string version, string? comment, AdminAccessContext actor, CancellationToken cancellationToken)
+    public async Task<ConnectorApprovalRecord> RejectAsync(string connectorId, string version, string? comment, AdminAccessContext actor, Guid correlationId, CancellationToken cancellationToken)
     {
         AdminAccessService.Require(actor, null, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
         ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
         string? redactedComment = string.IsNullOrWhiteSpace(comment) ? null : comment.Trim();
         if (redactedComment?.Length > 500) throw new GatewayException("BGW-ADMIN-APPROVAL-COMMENT", 400);
         byte[] bindingDigest = await connectors.GetBindingBundleDigestAsync(current.Id, cancellationToken).ConfigureAwait(false);
-        return await store.RejectAsync(current.Id, current.ChecksumSha256, bindingDigest, current.CreatedBy, actor.Principal.Id, redactedComment, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+        return await store.RejectAsync(current.Id, current.ChecksumSha256, bindingDigest, current.CreatedBy, actor.Principal.Id, redactedComment, correlationId, clock.UtcNow, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Lists approval metadata.</summary>

@@ -33,7 +33,11 @@ public sealed class RoutingConnectorConfigurationStore : IConnectorConfiguration
     /// <inheritdoc />
     public Task<IReadOnlyList<ConnectorSummary>> ListConnectorsAsync(CancellationToken cancellationToken) => admin.ListConnectorsAsync(cancellationToken);
     /// <inheritdoc />
+    public Task<AdminPage<ConnectorSummary>> ListConnectorsPageAsync(int offset, int limit, string? filter, CancellationToken cancellationToken) => admin.ListConnectorsPageAsync(offset, limit, filter, cancellationToken);
+    /// <inheritdoc />
     public Task<IReadOnlyList<ConnectorVersionRecord>> ListVersionsAsync(string connectorId, CancellationToken cancellationToken) => admin.ListVersionsAsync(connectorId, cancellationToken);
+    /// <inheritdoc />
+    public Task<AdminPage<ConnectorVersionRecord>> ListVersionsPageAsync(string connectorId, int offset, int limit, string? filter, CancellationToken cancellationToken) => admin.ListVersionsPageAsync(connectorId, offset, limit, filter, cancellationToken);
     /// <inheritdoc />
     public Task<ConnectorVersionRecord> MarkValidatedAsync(Guid versionId, long expectedRowVersion, DateTimeOffset now, CancellationToken cancellationToken) => admin.MarkValidatedAsync(versionId, expectedRowVersion, now, cancellationToken);
     /// <inheritdoc />
@@ -41,11 +45,13 @@ public sealed class RoutingConnectorConfigurationStore : IConnectorConfiguration
     /// <inheritdoc />
     public Task<ConnectorVersionRecord> PublishApprovedAsync(Guid versionId, byte[] expectedBindingDigestSha256, long expectedRowVersion, long expectedPublicationRevision, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken) => admin.PublishApprovedAsync(versionId, expectedBindingDigestSha256, expectedRowVersion, expectedPublicationRevision, actor, correlationId, now, cancellationToken);
     /// <inheritdoc />
-    public Task<ConnectorVersionRecord> RollbackAsync(string connectorId, string targetVersion, long expectedActiveRowVersion, string actor, DateTimeOffset now, CancellationToken cancellationToken) => admin.RollbackAsync(connectorId, targetVersion, expectedActiveRowVersion, actor, now, cancellationToken);
+    public Task<ConnectorVersionRecord> RollbackAsync(string connectorId, string targetVersion, long expectedActiveRowVersion, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken) => admin.RollbackAsync(connectorId, targetVersion, expectedActiveRowVersion, actor, correlationId, now, cancellationToken);
     /// <inheritdoc />
-    public Task<ConnectorVersionRecord> RetireAsync(Guid versionId, long expectedRowVersion, string actor, DateTimeOffset now, CancellationToken cancellationToken) => admin.RetireAsync(versionId, expectedRowVersion, actor, now, cancellationToken);
+    public Task<ConnectorVersionRecord> RetireAsync(Guid versionId, long expectedRowVersion, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken) => admin.RetireAsync(versionId, expectedRowVersion, actor, correlationId, now, cancellationToken);
     /// <inheritdoc />
-    public Task<ConnectorBindingSet> PutBindingsAsync(ConnectorBindingSet bindings, long? expectedRevision, CancellationToken cancellationToken) => admin.PutBindingsAsync(bindings, expectedRevision, cancellationToken);
+    public Task<ConnectorBindingSet> PutBindingsAsync(ConnectorBindingSet bindings, long? expectedRevision, Guid correlationId, CancellationToken cancellationToken) => admin.PutBindingsAsync(bindings, expectedRevision, correlationId, cancellationToken);
+    /// <inheritdoc />
+    public Task<AdminPage<ConnectorBindingSet>> ListBindingsPageAsync(Guid connectorVersionId, int offset, int limit, Guid? environmentId, CancellationToken cancellationToken) => admin.ListBindingsPageAsync(connectorVersionId, offset, limit, environmentId, cancellationToken);
     /// <inheritdoc />
     public Task<byte[]> GetBindingBundleDigestAsync(Guid connectorVersionId, CancellationToken cancellationToken) => admin.GetBindingBundleDigestAsync(connectorVersionId, cancellationToken);
     /// <inheritdoc />

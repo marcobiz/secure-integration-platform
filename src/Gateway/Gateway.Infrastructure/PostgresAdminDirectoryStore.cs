@@ -86,5 +86,5 @@ public sealed class PostgresAdminDirectoryStore(AdminPostgresDataSource adminDat
     }
 
     private static InstallationRecord ReadInstallation(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetGuid(3), Enum.Parse<InstallationStatus>(reader.GetString(4), true), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetFieldValue<DateTimeOffset>(6), reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7), reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8), reader.IsDBNull(9) ? null : reader.GetString(9));
-    private static void ValidatePage(int offset, int limit) { if (offset < 0 || limit is < 1 or > 200) throw new GatewayException("BGW-ADMIN-PAGINATION", 400); }
+    private static void ValidatePage(int offset, int limit) { if (offset < 0 || limit is < 1 or > 100) throw new GatewayException("BGW-ADMIN-PAGINATION", 400); }
 }

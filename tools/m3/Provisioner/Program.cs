@@ -121,8 +121,8 @@ async Task PublishConnectorAsync(string connectorId, string version, bool securi
     };
     string primaryChecksum = ConnectorBindingDigests.Revision(draft.Id, environmentId, endpoints, secrets, certificates);
     string securityChecksum = ConnectorBindingDigests.Revision(draft.Id, securityEnvironmentId, endpoints, secrets, certificates);
-    _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, environmentId, endpoints, secrets, certificates, 0, primaryChecksum, ConnectorBindingState.Draft, clock.UtcNow, "m3-provisioner"), null, CancellationToken.None).ConfigureAwait(false);
-    _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, securityEnvironmentId, endpoints, secrets, certificates, 0, securityChecksum, ConnectorBindingState.Draft, clock.UtcNow, "m3-provisioner"), null, CancellationToken.None).ConfigureAwait(false);
+    _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, environmentId, endpoints, secrets, certificates, 0, primaryChecksum, ConnectorBindingState.Draft, clock.UtcNow, "m3-provisioner"), null, Guid.NewGuid(), CancellationToken.None).ConfigureAwait(false);
+    _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, securityEnvironmentId, endpoints, secrets, certificates, 0, securityChecksum, ConnectorBindingState.Draft, clock.UtcNow, "m3-provisioner"), null, Guid.NewGuid(), CancellationToken.None).ConfigureAwait(false);
     _ = await connectorStore.PublishAsync(draft.Id, validatedRecord.RowVersion, 0, "m3-provisioner", clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
 }
 

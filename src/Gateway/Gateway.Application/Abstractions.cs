@@ -11,6 +11,13 @@ public interface IGatewayClock
     DateTimeOffset UtcNow { get; }
 }
 
+/// <summary>Test-only failpoint seam used to prove transactional rollback at named boundaries.</summary>
+public interface IAdminTransactionFaultInjector
+{
+    /// <summary>Throws when a configured transaction boundary is reached.</summary>
+    void Check(string boundary);
+}
+
 /// <summary>Gateway persistence boundary.</summary>
 public interface IGatewayRegistry
 {
@@ -24,8 +31,12 @@ public interface IGatewayRegistry
     Task AddInstallationAsync(InstallationRecord installation, CancellationToken cancellationToken);
     /// <summary>Adds a one-time activation record.</summary>
     Task AddActivationCodeAsync(ActivationCodeRecord activationCode, CancellationToken cancellationToken);
+    /// <summary>Persists a pending Installation, its HMAC-only activation and audit event in one transaction.</summary>
+    Task AddInstallationActivationWithAuditAsync(InstallationRecord installation, ActivationCodeRecord activationCode, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Adds an operation grant.</summary>
     Task AddGrantAsync(InstallationGrantRecord grant, CancellationToken cancellationToken);
+    /// <summary>Persists a grant and its audit event atomically.</summary>
+    Task AddGrantWithAuditAsync(InstallationGrantRecord grant, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Finds activation metadata by its opaque identifier.</summary>
     Task<ActivationCodeRecord?> FindActivationCodeAsync(Guid activationCodeId, CancellationToken cancellationToken);
     /// <summary>Records a denied activation attempt.</summary>
@@ -38,6 +49,8 @@ public interface IGatewayRegistry
     Task<bool> RenewCredentialAsync(Guid installationId, Guid currentCredentialId, InstallationCredentialRecord replacement, DateTimeOffset overlapEndsAt, CancellationToken cancellationToken);
     /// <summary>Revokes an Installation and its usable credentials.</summary>
     Task<bool> RevokeInstallationAsync(Guid installationId, string reason, DateTimeOffset now, CancellationToken cancellationToken);
+    /// <summary>Revokes an Installation and appends its audit event atomically.</summary>
+    Task<bool> RevokeInstallationWithAuditAsync(Guid installationId, string reason, DateTimeOffset now, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Checks an operation grant in the authenticated tenant scope.</summary>
     Task<bool> IsGrantedAsync(Guid installationId, Guid tenantId, string connectorId, string operationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Stores a replay digest if it has not been seen.</summary>
@@ -96,8 +109,23 @@ public interface IConnectorConfigurationStore
     Task<ConnectorVersionRecord?> GetVersionAsync(string connectorId, string version, CancellationToken cancellationToken);
     /// <summary>Lists all known Connectors.</summary>
     Task<IReadOnlyList<ConnectorSummary>> ListConnectorsAsync(CancellationToken cancellationToken);
+    /// <summary>Lists a stable bounded Connector page with optional server-side text filter.</summary>
+    async Task<AdminPage<ConnectorSummary>> ListConnectorsPageAsync(int offset, int limit, string? filter, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<ConnectorSummary> all = await ListConnectorsAsync(cancellationToken).ConfigureAwait(false);
+        IEnumerable<ConnectorSummary> filtered = string.IsNullOrWhiteSpace(filter) ? all : all.Where(value => value.ConnectorId.Contains(filter, StringComparison.OrdinalIgnoreCase) || value.DisplayName.Contains(filter, StringComparison.OrdinalIgnoreCase));
+        ConnectorSummary[] values = filtered.ToArray();
+        return new(values.Skip(offset).Take(limit).ToArray(), offset, limit, values.Length);
+    }
     /// <summary>Lists versions newest first.</summary>
     Task<IReadOnlyList<ConnectorVersionRecord>> ListVersionsAsync(string connectorId, CancellationToken cancellationToken);
+    /// <summary>Lists a stable bounded version timeline.</summary>
+    async Task<AdminPage<ConnectorVersionRecord>> ListVersionsPageAsync(string connectorId, int offset, int limit, string? filter, CancellationToken cancellationToken)
+    {
+        IReadOnlyList<ConnectorVersionRecord> all = await ListVersionsAsync(connectorId, cancellationToken).ConfigureAwait(false);
+        ConnectorVersionRecord[] values = (string.IsNullOrWhiteSpace(filter) ? all : all.Where(value => value.Version.Contains(filter, StringComparison.OrdinalIgnoreCase))).ToArray();
+        return new(values.Skip(offset).Take(limit).ToArray(), offset, limit, values.Length);
+    }
     /// <summary>Transitions Draft to Validated using optimistic concurrency.</summary>
     Task<ConnectorVersionRecord> MarkValidatedAsync(Guid versionId, long expectedRowVersion, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Publishes a Validated version and supersedes the current one atomically.</summary>
@@ -105,11 +133,13 @@ public interface IConnectorConfigurationStore
     /// <summary>Publishes only after locking and verifying the exact approved connector/binding digest, and appends audit in the same transaction.</summary>
     Task<ConnectorVersionRecord> PublishApprovedAsync(Guid versionId, byte[] expectedBindingDigestSha256, long expectedRowVersion, long expectedPublicationRevision, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Reactivates a previously Published, now Superseded version atomically.</summary>
-    Task<ConnectorVersionRecord> RollbackAsync(string connectorId, string targetVersion, long expectedActiveRowVersion, string actor, DateTimeOffset now, CancellationToken cancellationToken);
+    Task<ConnectorVersionRecord> RollbackAsync(string connectorId, string targetVersion, long expectedActiveRowVersion, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Retires a version and clears runtime activation if necessary.</summary>
-    Task<ConnectorVersionRecord> RetireAsync(Guid versionId, long expectedRowVersion, string actor, DateTimeOffset now, CancellationToken cancellationToken);
+    Task<ConnectorVersionRecord> RetireAsync(Guid versionId, long expectedRowVersion, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Creates/replaces server-side logical bindings for one Environment.</summary>
-    Task<ConnectorBindingSet> PutBindingsAsync(ConnectorBindingSet bindings, long? expectedRevision, CancellationToken cancellationToken);
+    Task<ConnectorBindingSet> PutBindingsAsync(ConnectorBindingSet bindings, long? expectedRevision, Guid correlationId, CancellationToken cancellationToken);
+    /// <summary>Lists immutable binding revisions for one Connector version.</summary>
+    Task<AdminPage<ConnectorBindingSet>> ListBindingsPageAsync(Guid connectorVersionId, int offset, int limit, Guid? environmentId, CancellationToken cancellationToken);
     /// <summary>Computes the approval digest over the Connector checksum and all current immutable binding revisions.</summary>
     Task<byte[]> GetBindingBundleDigestAsync(Guid connectorVersionId, CancellationToken cancellationToken);
     /// <summary>Returns the active stamp, or null when no version is Published.</summary>

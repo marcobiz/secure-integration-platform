@@ -35,6 +35,11 @@ public sealed class AdminApiSecurityTests
         using HttpResponseMessage response = await client.PostAsJsonAsync("/admin/api/v1/tenants", new { code = "missing-csrf", displayName = "Missing CSRF" }, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Contains("BGW-ADMIN-CSRF", await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.Ordinal);
+        GatewayAuditEvent denial = Assert.Single(factory.Services.GetRequiredService<InMemoryGatewayRegistry>().SnapshotAuditEvents(), value => value.Outcome == "denied");
+        Assert.Equal("BGW-ADMIN-CSRF", denial.ReasonCode);
+        Assert.Equal("admin.request.denied", denial.Action);
+        Assert.Equal("method", Assert.Single(denial.Metadata.Keys));
+        Assert.DoesNotContain("missing-csrf", System.Text.Json.JsonSerializer.Serialize(denial), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -49,6 +54,9 @@ public sealed class AdminApiSecurityTests
         mutation.Headers.Add("X-CSRF-TOKEN", csrf);
         using HttpResponseMessage denied = await client.SendAsync(mutation, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        GatewayAuditEvent audit = Assert.Single(factory.Services.GetRequiredService<InMemoryGatewayRegistry>().SnapshotAuditEvents(), value => value.Outcome == "denied");
+        Assert.Equal("BGW-ADMIN-AUTHORIZATION", audit.ReasonCode);
+        Assert.Equal(denied.Headers.GetValues("X-Correlation-ID").Single(), audit.CorrelationId.ToString("D"));
     }
 
     [Fact]
@@ -91,6 +99,80 @@ public sealed class AdminApiSecurityTests
     }
 
     [Fact]
+    public async Task M5_IT_Captured_cookie_cannot_be_replayed_after_logout()
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        (string csrf, string capturedCookie) = await LoginAndCaptureCookieAsync(client, "viewer", TestContext.Current.CancellationToken);
+        using HttpRequestMessage logout = new(HttpMethod.Post, "/admin/auth/logout");
+        logout.Headers.Add("X-CSRF-TOKEN", csrf);
+        using HttpResponseMessage signedOut = await client.SendAsync(logout, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, signedOut.StatusCode);
+
+        using HttpClient replay = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost"), HandleCookies = false });
+        using HttpRequestMessage request = new(HttpMethod.Get, "/admin/auth/me");
+        request.Headers.Add("Cookie", capturedCookie);
+        request.Headers.Accept.ParseAdd("application/json");
+        using HttpResponseMessage denied = await replay.SendAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, denied.StatusCode);
+    }
+
+    [Fact]
+    public async Task M5_IT_Reauthentication_rotates_session_and_invalidates_the_previous_cookie()
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        (_, string firstCookie) = await LoginAndCaptureCookieAsync(client, "viewer", TestContext.Current.CancellationToken);
+        (_, string secondCookie) = await LoginAndCaptureCookieAsync(client, "viewer", TestContext.Current.CancellationToken);
+        Assert.NotEqual(firstCookie, secondCookie);
+
+        using HttpClient replay = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost"), HandleCookies = false });
+        using HttpRequestMessage oldRequest = new(HttpMethod.Get, "/admin/auth/me");
+        oldRequest.Headers.Add("Cookie", firstCookie);
+        oldRequest.Headers.Accept.ParseAdd("application/json");
+        using HttpResponseMessage oldResponse = await replay.SendAsync(oldRequest, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, oldResponse.StatusCode);
+
+        using HttpRequestMessage currentRequest = new(HttpMethod.Get, "/admin/auth/me");
+        currentRequest.Headers.Add("Cookie", secondCookie);
+        currentRequest.Headers.Accept.ParseAdd("application/json");
+        using HttpResponseMessage currentResponse = await replay.SendAsync(currentRequest, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, currentResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task M5_IT_Role_revocation_immediately_invalidates_all_target_sessions()
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient viewer = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        _ = await LoginAsync(viewer, "viewer", TestContext.Current.CancellationToken);
+
+        using HttpClient administrator = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        string adminCsrf = await LoginAsync(administrator, "security-admin", TestContext.Current.CancellationToken);
+        using HttpRequestMessage assign = new(HttpMethod.Post, "/admin/api/v1/role-assignments")
+        {
+            Content = JsonContent.Create(new { principal = new { issuer = "https://development.invalid", subject = "viewer", displayName = "viewer" }, role = "Operator", tenantId = (Guid?)null })
+        };
+        assign.Headers.Add("X-CSRF-TOKEN", adminCsrf);
+        using HttpResponseMessage assignedResponse = await administrator.SendAsync(assign, TestContext.Current.CancellationToken);
+        assignedResponse.EnsureSuccessStatusCode();
+        System.Text.Json.JsonElement assigned = await assignedResponse.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+
+        (_, string refreshedViewerCookie) = await LoginAndCaptureCookieAsync(viewer, "viewer", TestContext.Current.CancellationToken);
+        using HttpRequestMessage revoke = new(HttpMethod.Delete, $"/admin/api/v1/role-assignments/{assigned.GetProperty("id").GetGuid():D}");
+        revoke.Headers.Add("X-CSRF-TOKEN", adminCsrf);
+        using HttpResponseMessage revoked = await administrator.SendAsync(revoke, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.NoContent, revoked.StatusCode);
+
+        using HttpClient replay = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost"), HandleCookies = false });
+        using HttpRequestMessage request = new(HttpMethod.Get, "/admin/auth/me");
+        request.Headers.Add("Cookie", refreshedViewerCookie);
+        request.Headers.Accept.ParseAdd("application/json");
+        using HttpResponseMessage response = await replay.SendAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task M5_IT_Role_assignment_is_server_authorized_and_audited()
     {
         await using AdminDevelopmentFactory factory = new();
@@ -106,7 +188,7 @@ public sealed class AdminApiSecurityTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         InMemoryGatewayRegistry registry = factory.Services.GetRequiredService<InMemoryGatewayRegistry>();
-        GatewayAuditEvent audit = Assert.Single(registry.SnapshotAuditEvents(), value => value.Action == "admin.role.assign");
+        GatewayAuditEvent audit = Assert.Single(registry.SnapshotAuditEvents(), value => value.Action == "admin.role.assign" && value.TargetId != value.ActorId);
         Assert.Equal("success", audit.Outcome);
         Assert.DoesNotContain("issuer.example.invalid", System.Text.Json.JsonSerializer.Serialize(audit), StringComparison.OrdinalIgnoreCase);
     }
@@ -137,6 +219,96 @@ public sealed class AdminApiSecurityTests
         ConnectorVersionResource draft = (await importResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: TestContext.Current.CancellationToken))!;
         Assert.Equal(HttpStatusCode.Created, importResponse.StatusCode);
         Assert.Equal(ConnectorVersionState.Draft, draft.State);
+    }
+
+    [Fact]
+    public async Task M5_IT_Binding_update_requires_current_IfMatch_and_precondition_failures_do_not_mutate()
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        string csrf = await LoginAsync(client, "security-admin", TestContext.Current.CancellationToken);
+        Guid environmentId = Guid.NewGuid();
+        await factory.Services.GetRequiredService<InMemoryGatewayRegistry>().AddEnvironmentAsync(new(environmentId, "binding-test", "Binding test", false), TestContext.Current.CancellationToken);
+        ConnectorVersionResource version = await ImportAndValidateSampleAsync(client, csrf, TestContext.Current.CancellationToken);
+        object body = new
+        {
+            environmentId,
+            connectorVersion = version.Version,
+            endpoints = new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/" },
+            secretReferences = new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://api-key" },
+            certificateReferences = new Dictionary<string, string> { ["sample-vendor-client-certificate"] = "synthetic://certificate" }
+        };
+
+        using HttpResponseMessage created = await PutBindingAsync(client, version.ConnectorId, body, csrf, null);
+        Assert.Equal(HttpStatusCode.OK, created.StatusCode);
+        Assert.Equal(1, (await created.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(cancellationToken: TestContext.Current.CancellationToken)).GetProperty("revision").GetInt64());
+
+        using HttpResponseMessage missing = await PutBindingAsync(client, version.ConnectorId, body, csrf, null);
+        Assert.Equal((HttpStatusCode)428, missing.StatusCode);
+        using HttpResponseMessage stale = await PutBindingAsync(client, version.ConnectorId, body, csrf, "\"99\"");
+        Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+        GatewayAuditEvent[] denials = factory.Services.GetRequiredService<InMemoryGatewayRegistry>().SnapshotAuditEvents().Where(value => value.Outcome == "denied").ToArray();
+        Assert.Single(denials, value => value.ReasonCode == "BGW-CONCURRENCY-PRECONDITION");
+        Assert.Single(denials, value => value.ReasonCode == "BGW-CONCURRENCY-CONFLICT");
+
+        IConnectorConfigurationStore store = factory.Services.GetRequiredService<IConnectorConfigurationStore>();
+        ConnectorVersionRecord stored = (await store.GetVersionAsync(version.ConnectorId, version.Version, TestContext.Current.CancellationToken))!;
+        Assert.Equal(1, (await store.ListBindingsPageAsync(stored.Id, 0, 50, environmentId, TestContext.Current.CancellationToken)).Total);
+
+        using HttpResponseMessage updated = await PutBindingAsync(client, version.ConnectorId, body, csrf, "\"1\"");
+        Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
+        Assert.Equal(2, (await updated.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>(cancellationToken: TestContext.Current.CancellationToken)).GetProperty("revision").GetInt64());
+    }
+
+    [Fact]
+    public async Task M5_IT_Security_denials_for_binding_policy_self_approval_and_bootstrap_are_redacted_once()
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        string csrf = await LoginAsync(client, "security-admin", TestContext.Current.CancellationToken);
+        Guid environmentId = Guid.NewGuid();
+        await factory.Services.GetRequiredService<InMemoryGatewayRegistry>().AddEnvironmentAsync(new(environmentId, "denial-test", "Denial test", false), TestContext.Current.CancellationToken);
+        ConnectorVersionResource version = await ImportAndValidateSampleAsync(client, csrf, TestContext.Current.CancellationToken);
+        object invalidBinding = new
+        {
+            environmentId,
+            connectorVersion = version.Version,
+            endpoints = new Dictionary<string, string> { ["attacker-endpoint"] = "https://controlled.example.test/" },
+            secretReferences = new Dictionary<string, string> { ["attacker-secret"] = "synthetic://canary-not-a-secret" }
+        };
+        using HttpResponseMessage bindingDenied = await PutBindingAsync(client, version.ConnectorId, invalidBinding, csrf, null);
+        Assert.Equal(HttpStatusCode.BadRequest, bindingDenied.StatusCode);
+
+        object validBinding = new
+        {
+            environmentId,
+            connectorVersion = version.Version,
+            endpoints = new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/" },
+            secretReferences = new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://api-key" },
+            certificateReferences = new Dictionary<string, string> { ["sample-vendor-client-certificate"] = "synthetic://certificate" }
+        };
+        using HttpResponseMessage bindingCreated = await PutBindingAsync(client, version.ConnectorId, validBinding, csrf, null);
+        bindingCreated.EnsureSuccessStatusCode();
+        using HttpRequestMessage approvalRequest = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approval-requests");
+        approvalRequest.Headers.Add("X-CSRF-TOKEN", csrf);
+        using HttpResponseMessage requested = await client.SendAsync(approvalRequest, TestContext.Current.CancellationToken);
+        requested.EnsureSuccessStatusCode();
+        using HttpRequestMessage approve = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approvals");
+        approve.Headers.Add("X-CSRF-TOKEN", csrf);
+        using HttpResponseMessage selfApproval = await client.SendAsync(approve, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Forbidden, selfApproval.StatusCode);
+
+        using HttpRequestMessage bootstrap = new(HttpMethod.Post, "/admin/api/v1/bootstrap");
+        bootstrap.Headers.Add("X-CSRF-TOKEN", csrf);
+        using HttpResponseMessage bootstrapDenied = await client.SendAsync(bootstrap, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Forbidden, bootstrapDenied.StatusCode);
+
+        GatewayAuditEvent[] denials = factory.Services.GetRequiredService<InMemoryGatewayRegistry>().SnapshotAuditEvents().Where(value => value.Outcome == "denied").ToArray();
+        Assert.Single(denials, value => value.ReasonCode == "BGW-CONNECTOR-BINDING-SCOPE");
+        Assert.Single(denials, value => value.ReasonCode == "BGW-ADMIN-FOUR-EYES");
+        Assert.Single(denials, value => value.ReasonCode == "BGW-ADMIN-BOOTSTRAP-DENIED");
+        Assert.All(denials, value => { Assert.Equal("admin.request.denied", value.Action); Assert.Equal("method", Assert.Single(value.Metadata.Keys)); });
+        Assert.DoesNotContain("canary-not-a-secret", System.Text.Json.JsonSerializer.Serialize(denials), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -201,6 +373,46 @@ public sealed class AdminApiSecurityTests
         using HttpResponseMessage response = await client.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         return await GetCsrfAsync(client, cancellationToken);
+    }
+
+    private static async Task<(string Csrf, string Cookie)> LoginAndCaptureCookieAsync(HttpClient client, string user, CancellationToken cancellationToken)
+    {
+        string csrf = await GetCsrfAsync(client, cancellationToken);
+        using HttpRequestMessage request = new(HttpMethod.Post, "/admin/auth/development/login") { Content = JsonContent.Create(new { userName = user }) };
+        request.Headers.Add("X-CSRF-TOKEN", csrf);
+        using HttpResponseMessage response = await client.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        string setCookie = Assert.Single(response.Headers.GetValues("Set-Cookie"), value => value.StartsWith("__Host-SecureIntegration.Admin=", StringComparison.Ordinal));
+        return (await GetCsrfAsync(client, cancellationToken), setCookie[..setCookie.IndexOf(';')]);
+    }
+
+    private static async Task<ConnectorVersionResource> ImportAndValidateSampleAsync(HttpClient client, string csrf, CancellationToken cancellationToken)
+    {
+        using HttpResponseMessage sample = await client.GetAsync("/admin/api/v1/connectors/sample", cancellationToken);
+        sample.EnsureSuccessStatusCode();
+        using System.Text.Json.JsonDocument definition = await System.Text.Json.JsonDocument.ParseAsync(await sample.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
+        using HttpRequestMessage validate = new(HttpMethod.Post, "/admin/api/v1/connectors:validate") { Content = JsonContent.Create(new ConnectorImportRequest(definition.RootElement.Clone())) };
+        validate.Headers.Add("X-CSRF-TOKEN", csrf);
+        using HttpResponseMessage validationResponse = await client.SendAsync(validate, cancellationToken);
+        ConnectorValidationResult validation = (await validationResponse.Content.ReadFromJsonAsync<ConnectorValidationResult>(cancellationToken: cancellationToken))!;
+        using HttpRequestMessage import = new(HttpMethod.Post, "/admin/api/v1/connectors:import") { Content = JsonContent.Create(new ConnectorImportRequest(definition.RootElement.Clone(), validation.ChecksumSha256)) };
+        import.Headers.Add("X-CSRF-TOKEN", csrf);
+        using HttpResponseMessage importResponse = await client.SendAsync(import, cancellationToken);
+        ConnectorVersionResource draft = (await importResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: cancellationToken))!;
+        using HttpRequestMessage markValidated = new(HttpMethod.Post, $"/admin/api/v1/connectors/{draft.ConnectorId}/versions/{draft.Version}:validate");
+        markValidated.Headers.Add("X-CSRF-TOKEN", csrf);
+        markValidated.Headers.TryAddWithoutValidation("If-Match", $"\"{draft.RowVersion}\"");
+        using HttpResponseMessage validated = await client.SendAsync(markValidated, cancellationToken);
+        validated.EnsureSuccessStatusCode();
+        return (await validated.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: cancellationToken))!;
+    }
+
+    private static Task<HttpResponseMessage> PutBindingAsync(HttpClient client, string connectorId, object body, string csrf, string? etag)
+    {
+        HttpRequestMessage request = new(HttpMethod.Put, $"/admin/api/v1/connectors/{connectorId}/bindings") { Content = JsonContent.Create(body) };
+        request.Headers.Add("X-CSRF-TOKEN", csrf);
+        if (etag is not null) request.Headers.TryAddWithoutValidation("If-Match", etag);
+        return client.SendAsync(request, TestContext.Current.CancellationToken);
     }
 
     private static async Task<string> GetCsrfAsync(HttpClient client, CancellationToken cancellationToken)

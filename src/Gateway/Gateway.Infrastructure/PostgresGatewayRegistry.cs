@@ -7,7 +7,7 @@ using SecureIntegration.Gateway.Domain;
 namespace SecureIntegration.Gateway.Infrastructure;
 
 /// <summary>PostgreSQL 18 registry. Tenant-scoped operations set the RLS context transaction-locally.</summary>
-public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource) : IGatewayRegistry
+public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminTransactionFaultInjector? faultInjector = null) : IGatewayRegistry
 {
     /// <inheritdoc />
     public async Task AddTenantAsync(TenantRecord tenant, CancellationToken cancellationToken) => await ExecuteAsync(
@@ -46,6 +46,21 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource) : IGate
     }
 
     /// <inheritdoc />
+    public async Task AddInstallationActivationWithAuditAsync(InstallationRecord installation, ActivationCodeRecord activationCode, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        if (activationCode.InstallationId != installation.Id || auditEvent.TenantId != installation.TenantId) throw new ArgumentException("Administrative installation aggregate is inconsistent.");
+        await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        await SetTenantAsync(connection, transaction, installation.TenantId, cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction, "INSERT INTO gateway.installation(id,tenant_id,application_id,environment_id,status,broker_version,created_at,last_seen_at,revoked_at,revocation_reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)", cancellationToken, installation.Id, installation.TenantId, installation.ApplicationId, installation.EnvironmentId, Db(installation.Status), installation.BrokerVersion, installation.CreatedAt, installation.LastSeenAt, installation.RevokedAt, installation.RevocationReason).ConfigureAwait(false);
+        faultInjector?.Check("installation.create.after-installation");
+        await ExecuteAsync(connection, transaction, "INSERT INTO gateway.activation_code(id,installation_id,code_hmac,expires_at,created_at,created_by,attempt_count,used_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", cancellationToken, activationCode.Id, activationCode.InstallationId, activationCode.CodeHmac, activationCode.ExpiresAt, activationCode.CreatedAt, activationCode.CreatedBy, activationCode.AttemptCount, activationCode.UsedAt).ConfigureAwait(false);
+        faultInjector?.Check("installation.create.after-activation");
+        await InsertAuditAsync(connection, transaction, auditEvent, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public async Task AddGrantAsync(InstallationGrantRecord grant, CancellationToken cancellationToken)
     {
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
@@ -57,6 +72,20 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource) : IGate
         await ExecuteAsync(connection, transaction,
             "INSERT INTO gateway.installation_connector_grant(id,installation_id,tenant_id,connector_id,operation_id,enabled,valid_from,valid_until) SELECT $1,$2,$3,id,$4,$5,$6,$7 FROM gateway.connector_definition WHERE slug=$8", cancellationToken,
             grant.Id, grant.InstallationId, grant.TenantId, grant.OperationId, grant.Enabled, grant.ValidFrom, grant.ValidUntil, grant.ConnectorId).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task AddGrantWithAuditAsync(InstallationGrantRecord grant, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        await SetTenantAsync(connection, transaction, grant.TenantId, cancellationToken).ConfigureAwait(false);
+        Guid connectorId = Guid.NewGuid();
+        await ExecuteAsync(connection, transaction, "INSERT INTO gateway.connector_definition(id,slug,display_name,status,created_at,created_by) VALUES($1,$2,$2,'active',now(),'gateway-provisioning') ON CONFLICT(slug) DO NOTHING", cancellationToken, connectorId, grant.ConnectorId).ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction, "INSERT INTO gateway.installation_connector_grant(id,installation_id,tenant_id,connector_id,operation_id,enabled,valid_from,valid_until) SELECT $1,$2,$3,id,$4,$5,$6,$7 FROM gateway.connector_definition WHERE slug=$8", cancellationToken, grant.Id, grant.InstallationId, grant.TenantId, grant.OperationId, grant.Enabled, grant.ValidFrom, grant.ValidUntil, grant.ConnectorId).ConfigureAwait(false);
+        faultInjector?.Check("grant.create.after-state");
+        await InsertAuditAsync(connection, transaction, auditEvent, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -144,6 +173,24 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource) : IGate
     }
 
     /// <inheritdoc />
+    public async Task<bool> RevokeInstallationWithAuditAsync(Guid installationId, string reason, DateTimeOffset now, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        Guid tenantId = auditEvent.TenantId ?? throw new ArgumentException("Installation audit must be tenant scoped.", nameof(auditEvent));
+        await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        await SetTenantAsync(connection, transaction, tenantId, cancellationToken).ConfigureAwait(false);
+        int result = await ExecuteAsync(connection, transaction, "UPDATE gateway.installation SET status='revoked',revoked_at=$2,revocation_reason=$3,row_version=row_version+1 WHERE id=$1 AND tenant_id=$4 AND status NOT IN ('revoked','retired')", cancellationToken, installationId, now, reason, tenantId).ConfigureAwait(false);
+        if (result == 1) await ExecuteAsync(connection, transaction, "UPDATE gateway.installation_credential SET status='revoked',revoked_at=$2 WHERE installation_id=$1 AND status IN ('active','overlap')", cancellationToken, installationId, now).ConfigureAwait(false);
+        if (result == 1)
+        {
+            faultInjector?.Check("installation.revoke.after-state");
+            await InsertAuditAsync(connection, transaction, auditEvent, cancellationToken).ConfigureAwait(false);
+        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return result == 1;
+    }
+
+    /// <inheritdoc />
     public async Task<bool> IsGrantedAsync(Guid installationId, Guid tenantId, string connectorId, string operationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         object? result = await ScalarTenantAsync(tenantId, "SELECT EXISTS(SELECT 1 FROM gateway.installation_connector_grant g JOIN gateway.connector_definition c ON c.id=g.connector_id WHERE g.installation_id=$1 AND g.tenant_id=$2 AND c.slug=$3 AND g.operation_id=$4 AND g.enabled AND g.valid_from<=$5 AND (g.valid_until IS NULL OR g.valid_until>$5))", cancellationToken, installationId, tenantId, connectorId, operationId, now).ConfigureAwait(false);
@@ -171,6 +218,12 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource) : IGate
             await ExecuteTenantAsync(tenantId, "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)", cancellationToken, auditEvent.Id, auditEvent.OccurredAt, tenantId, auditEvent.ActorType, auditEvent.ActorId, auditEvent.Action, auditEvent.TargetType, auditEvent.TargetId, auditEvent.CorrelationId, auditEvent.Outcome, auditEvent.ReasonCode, metadata).ConfigureAwait(false);
         else
             await ExecuteAsync("INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)", cancellationToken, auditEvent.Id, auditEvent.OccurredAt, auditEvent.ActorType, auditEvent.ActorId, auditEvent.Action, auditEvent.TargetType, auditEvent.TargetId, auditEvent.CorrelationId, auditEvent.Outcome, auditEvent.ReasonCode, metadata).ConfigureAwait(false);
+    }
+
+    private static Task<int> InsertAuditAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        string metadata = JsonSerializer.Serialize(auditEvent.Metadata);
+        return ExecuteAsync(connection, transaction, "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)", cancellationToken, auditEvent.Id, auditEvent.OccurredAt, auditEvent.TenantId, auditEvent.ActorType, auditEvent.ActorId, auditEvent.Action, auditEvent.TargetType, auditEvent.TargetId, auditEvent.CorrelationId, auditEvent.Outcome, auditEvent.ReasonCode, metadata);
     }
 
     /// <inheritdoc />

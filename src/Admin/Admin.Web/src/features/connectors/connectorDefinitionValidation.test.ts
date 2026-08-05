@@ -11,6 +11,10 @@ describe('canonical Connector Definition client validation', () => {
   it('reports stable codes and JSON Pointer locations', () => {
     const invalid: Record<string, unknown> = structuredClone(sample);
     delete invalid.connectorId;
-    expect(validateConnectorDefinition(schema, invalid)).toContainEqual({ code: 'CONNECTOR_SCHEMA_REQUIRED', location: '/' });
+    expect(validateConnectorDefinition(schema, invalid)).toContainEqual({
+      code: 'CONNECTOR_SCHEMA_REQUIRED',
+      location: '/',
+      message: 'Connector definition validation failed.',
+    });
   });
 });

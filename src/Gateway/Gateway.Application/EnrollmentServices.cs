@@ -26,6 +26,23 @@ public sealed class EnrollmentSecurityOptions
 /// <summary>Creates registry records and one-time activation material without exposing it again.</summary>
 public sealed class GatewayProvisioningService(IGatewayRegistry registry, IGatewayClock clock, EnrollmentSecurityOptions options)
 {
+    /// <summary>Creates a pending Installation, HMAC-only activation and metadata-only audit atomically.</summary>
+    public async Task<ProvisionedActivation> CreateAdminInstallationAsync(InstallationRecord installation, string createdBy, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(createdBy);
+        DateTimeOffset now = clock.UtcNow;
+        byte[] rawCode = RandomNumberGenerator.GetBytes(32);
+        try
+        {
+            string code = Base64Url.Encode(rawCode);
+            byte[] hmac = HMACSHA256.HashData(options.ActivationHmacKey, Encoding.UTF8.GetBytes(code));
+            ActivationCodeRecord activation = new(Guid.NewGuid(), installation.Id, hmac, now.Add(options.ActivationLifetime), now, createdBy);
+            await registry.AddInstallationActivationWithAuditAsync(installation, activation, auditEvent, cancellationToken).ConfigureAwait(false);
+            return new(installation.Id, activation.Id, code, activation.ExpiresAt);
+        }
+        finally { CryptographicOperations.ZeroMemory(rawCode); }
+    }
+
     /// <summary>Creates the registry aggregate and its first one-time activation.</summary>
     public async Task<ProvisionedActivation> CreateInstallationAsync(
         TenantRecord tenant,
@@ -162,6 +179,13 @@ public sealed class InstallationEnrollmentService(IGatewayRegistry registry, IEn
     {
         if (string.IsNullOrWhiteSpace(reason) || reason.Length is < 3 or > 1000) throw new GatewayException("BGW-VALIDATION-REASON", 400);
         if (!await registry.RevokeInstallationAsync(installationId, reason, clock.UtcNow, cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-INSTALLATION-NOT-FOUND", 404);
+    }
+
+    /// <summary>Revokes an Installation and persists its administrative audit event atomically.</summary>
+    public async Task RevokeAdminAsync(Guid installationId, string reason, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(reason) || reason.Length is < 3 or > 1000) throw new GatewayException("BGW-VALIDATION-REASON", 400);
+        if (!await registry.RevokeInstallationWithAuditAsync(installationId, reason, clock.UtcNow, auditEvent, cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-INSTALLATION-NOT-FOUND", 404);
     }
 
     /// <summary>Builds the canonical activation proof bytes.</summary>

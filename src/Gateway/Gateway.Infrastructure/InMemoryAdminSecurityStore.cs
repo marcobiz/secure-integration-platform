@@ -6,13 +6,14 @@ using SecureIntegration.Gateway.Domain;
 namespace SecureIntegration.Gateway.Infrastructure;
 
 /// <summary>Thread-safe Development/Testing Admin security store.</summary>
-public sealed class InMemoryAdminSecurityStore : IAdminSecurityStore
+public sealed class InMemoryAdminSecurityStore(IGatewayRegistry? auditRegistry = null) : IAdminSecurityStore
 {
     private readonly object sync = new();
     private readonly Dictionary<(string Issuer, string Subject), AdminPrincipalRecord> principals = new();
     private readonly List<AdminRoleAssignmentRecord> assignments = [];
     private readonly List<ConnectorApprovalRecord> approvals = [];
     private Guid? bootstrapPrincipal;
+    internal event Action<Guid, DateTimeOffset>? PrincipalPrivilegesChanged;
 
     /// <inheritdoc />
     public Task<AdminPrincipalRecord> EnsurePrincipalAsync(AdminExternalIdentity identity, CancellationToken cancellationToken)
@@ -39,7 +40,18 @@ public sealed class InMemoryAdminSecurityStore : IAdminSecurityStore
     }
 
     /// <inheritdoc />
-    public Task<bool> TryBootstrapSecurityAdministratorAsync(Guid principalId, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<AdminPage<AdminRoleAssignmentRecord>> ListAssignmentsAsync(int offset, int limit, Guid? principalId, Guid? tenantId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (sync)
+        {
+            AdminRoleAssignmentRecord[] values = assignments.Where(value => (principalId is null || value.PrincipalId == principalId) && (tenantId is null || value.TenantId == tenantId)).OrderBy(value => value.Role).ThenBy(value => value.PrincipalId).ToArray();
+            return Task.FromResult(new AdminPage<AdminRoleAssignmentRecord>(values.Skip(offset).Take(limit).ToArray(), offset, limit, values.Length));
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<bool> TryBootstrapSecurityAdministratorAsync(Guid principalId, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (sync)
@@ -53,22 +65,45 @@ public sealed class InMemoryAdminSecurityStore : IAdminSecurityStore
     }
 
     /// <inheritdoc />
-    public Task<AdminRoleAssignmentRecord> AssignRoleAsync(Guid principalId, AdminRole role, Guid? tenantId, Guid grantedBy, DateTimeOffset now, CancellationToken cancellationToken)
+    public async Task<AdminRoleAssignmentRecord> AssignRoleAsync(Guid principalId, AdminRole role, Guid? tenantId, Guid grantedBy, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        AdminRoleAssignmentRecord result;
         lock (sync)
         {
             if (!principals.Values.Any(value => value.Id == principalId && value.Active)) throw new GatewayException("BGW-ADMIN-PRINCIPAL-NOT-FOUND", 404);
             AdminRoleAssignmentRecord? existing = assignments.SingleOrDefault(value => value.PrincipalId == principalId && value.Role == role && value.TenantId == tenantId);
-            if (existing is not null) return Task.FromResult(existing);
-            AdminRoleAssignmentRecord created = new(Guid.NewGuid(), principalId, role, tenantId, grantedBy, now);
-            assignments.Add(created);
-            return Task.FromResult(created);
+            if (existing is not null) result = existing;
+            else
+            {
+                result = new(Guid.NewGuid(), principalId, role, tenantId, grantedBy, now);
+                assignments.Add(result);
+            }
         }
+        if (auditRegistry is not null)
+            await auditRegistry.AppendAuditAsync(new(Guid.NewGuid(), now, tenantId, "administrator", grantedBy.ToString("D"), "admin.role.assign", "admin_principal", principalId.ToString("D"), correlationId, "success", "BGW-ADMIN-ROLE-ASSIGNED", new Dictionary<string, string>()), cancellationToken).ConfigureAwait(false);
+        PrincipalPrivilegesChanged?.Invoke(principalId, now);
+        return result;
     }
 
     /// <inheritdoc />
-    public Task<ConnectorApprovalRecord> RequestApprovalAsync(ConnectorVersionRecord version, byte[] bindingDigestSha256, Guid requester, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<bool> RevokeRoleAsync(Guid assignmentId, Guid revokedBy, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Guid? principalId = null;
+        lock (sync)
+        {
+            int index = assignments.FindIndex(value => value.Id == assignmentId);
+            if (index < 0) return Task.FromResult(false);
+            principalId = assignments[index].PrincipalId;
+            assignments.RemoveAt(index);
+        }
+        PrincipalPrivilegesChanged?.Invoke(principalId.Value, now);
+        return Task.FromResult(true);
+    }
+
+    /// <inheritdoc />
+    public Task<ConnectorApprovalRecord> RequestApprovalAsync(ConnectorVersionRecord version, byte[] bindingDigestSha256, Guid requester, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (sync)
@@ -81,7 +116,7 @@ public sealed class InMemoryAdminSecurityStore : IAdminSecurityStore
     }
 
     /// <inheritdoc />
-    public Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid approver, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid approver, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (sync)
@@ -97,7 +132,7 @@ public sealed class InMemoryAdminSecurityStore : IAdminSecurityStore
     }
 
     /// <inheritdoc />
-    public Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid rejector, string? comment, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid rejector, string? comment, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (sync)
@@ -132,6 +167,17 @@ public sealed class InMemoryAdminSecurityStore : IAdminSecurityStore
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (sync) return Task.FromResult<IReadOnlyList<ConnectorApprovalRecord>>(approvals.Where(value => value.ConnectorVersionId == connectorVersionId).OrderByDescending(value => value.RequestedAt).ToArray());
+    }
+
+    /// <inheritdoc />
+    public Task<AdminPage<ConnectorApprovalRecord>> ListApprovalsPageAsync(Guid connectorVersionId, int offset, int limit, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (sync)
+        {
+            ConnectorApprovalRecord[] values = approvals.Where(value => value.ConnectorVersionId == connectorVersionId).OrderByDescending(value => value.RequestedAt).ToArray();
+            return Task.FromResult(new AdminPage<ConnectorApprovalRecord>(values.Skip(offset).Take(limit).ToArray(), offset, limit, values.Length));
+        }
     }
 
     private void InvalidateCore(Guid connectorVersionId, DateTimeOffset now)

@@ -10,7 +10,7 @@ using SecureIntegration.Gateway.Domain;
 namespace SecureIntegration.Gateway.Application;
 
 /// <summary>One redacted validation finding.</summary>
-public sealed record ConnectorValidationIssue(string Code, string Location);
+public sealed record ConnectorValidationIssue(string Code, string Location, string Message = "Connector definition validation failed.");
 
 /// <summary>Validation output safe to return through the Admin API.</summary>
 public sealed record ConnectorValidationResult(bool Valid, string? ChecksumSha256, IReadOnlyList<ConnectorValidationIssue> Issues);
@@ -305,8 +305,7 @@ public sealed class ConnectorAdministrationService(
     IGatewayOperationCatalog runtimeCatalog,
     IGatewayRegistry registry,
     IGatewayClock clock,
-    IConnectorApprovalPolicy? approvalPolicy = null,
-    IAdminSecurityStore? approvalStore = null)
+    IConnectorApprovalPolicy? approvalPolicy = null)
 {
     /// <summary>Validates without persisting a definition.</summary>
     public ConnectorValidationResult Validate(JsonElement definition) => validator.Validate(definition);
@@ -355,9 +354,8 @@ public sealed class ConnectorAdministrationService(
     /// <summary>Reactivates a Superseded version; Draft/Validated/Retired targets fail closed.</summary>
     public async Task<ConnectorVersionResource> RollbackAsync(string connectorId, ConnectorRollbackRequest request, string actor, Guid correlationId, CancellationToken cancellationToken)
     {
-        ConnectorVersionRecord updated = await store.RollbackAsync(connectorId, request.TargetVersion, request.ExpectedActiveRowVersion, actor, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+        ConnectorVersionRecord updated = await store.RollbackAsync(connectorId, request.TargetVersion, request.ExpectedActiveRowVersion, actor, correlationId, clock.UtcNow, cancellationToken).ConfigureAwait(false);
         runtimeCatalog.Invalidate(connectorId);
-        await AuditAsync(actor, "connector.rollback", updated, correlationId, "success", "BGW-CONNECTOR-ROLLED-BACK", cancellationToken).ConfigureAwait(false);
         return Resource(updated);
     }
 
@@ -365,9 +363,8 @@ public sealed class ConnectorAdministrationService(
     public async Task<ConnectorVersionResource> RetireAsync(string connectorId, string version, long expectedRowVersion, string actor, Guid correlationId, CancellationToken cancellationToken)
     {
         ConnectorVersionRecord existing = await RequiredAsync(connectorId, version, cancellationToken).ConfigureAwait(false);
-        ConnectorVersionRecord updated = await store.RetireAsync(existing.Id, expectedRowVersion, actor, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+        ConnectorVersionRecord updated = await store.RetireAsync(existing.Id, expectedRowVersion, actor, correlationId, clock.UtcNow, cancellationToken).ConfigureAwait(false);
         runtimeCatalog.Invalidate(connectorId);
-        await AuditAsync(actor, "connector.retire", updated, correlationId, "success", "BGW-CONNECTOR-RETIRED", cancellationToken).ConfigureAwait(false);
         return Resource(updated);
     }
 
@@ -401,10 +398,8 @@ public sealed class ConnectorAdministrationService(
         }
         if (secretReferences.Concat(certificateReferences).Any(pair => string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value))) throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING", 400);
         string checksum = ConnectorBindingDigests.Revision(reference.Id, request.EnvironmentId, endpoints, secretReferences, certificateReferences);
-        ConnectorBindingSet saved = await store.PutBindingsAsync(new(Guid.NewGuid(), reference.ConnectorId, reference.Id, request.EnvironmentId, endpoints, secretReferences, certificateReferences, 0, checksum, ConnectorBindingState.Draft, clock.UtcNow, actor), request.ExpectedRevision, cancellationToken).ConfigureAwait(false);
-        if (approvalStore is not null) await approvalStore.InvalidateApprovalsAsync(reference.Id, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+        ConnectorBindingSet saved = await store.PutBindingsAsync(new(Guid.NewGuid(), reference.ConnectorId, reference.Id, request.EnvironmentId, endpoints, secretReferences, certificateReferences, 0, checksum, ConnectorBindingState.Draft, clock.UtcNow, actor), request.ExpectedRevision, correlationId, cancellationToken).ConfigureAwait(false);
         runtimeCatalog.Invalidate(connectorId);
-        await AuditAsync(actor, "connector.bindings.update", reference, correlationId, "success", "BGW-CONNECTOR-BINDINGS-UPDATED", cancellationToken).ConfigureAwait(false);
         return saved.Revision;
     }
 
@@ -427,7 +422,8 @@ public sealed class ConnectorAdministrationService(
     private Task AuditAsync(string actor, string action, ConnectorVersionRecord version, Guid correlationId, string outcome, string reason, CancellationToken cancellationToken) =>
         registry.AppendAuditAsync(new(Guid.NewGuid(), clock.UtcNow, null, "administrator", actor, action, "connectorVersion", version.ConnectorSlug + "/" + version.Version, correlationId, outcome, reason, new Dictionary<string, string> { ["state"] = version.State.ToString(), ["checksum"] = Convert.ToHexString(version.ChecksumSha256) }), cancellationToken);
 
-    private static ConnectorVersionResource Resource(ConnectorVersionRecord value) => new(value.ConnectorSlug, value.Version, value.SchemaVersion, value.State, Convert.ToHexString(value.ChecksumSha256), value.RowVersion, value.CreatedAt, value.PublishedAt);
+    /// <summary>Projects internal persistence metadata to the redacted Admin API resource.</summary>
+    public static ConnectorVersionResource Resource(ConnectorVersionRecord value) => new(value.ConnectorSlug, value.Version, value.SchemaVersion, value.State, Convert.ToHexString(value.ChecksumSha256), value.RowVersion, value.CreatedAt, value.PublishedAt);
 }
 
 /// <summary>Published-only cache that validates a lightweight store stamp on every invocation.</summary>

@@ -151,7 +151,7 @@ public sealed class ConnectorConfigurationTests
         Assert.Equal("synthetic://client-cert", operation.ClientCertificateReference);
 
         ConnectorVersionRecord stored = (await fixture.Store.ListVersionsAsync(version.ConnectorId, TestContext.Current.CancellationToken))[0];
-        _ = await fixture.Store.RetireAsync(stored.Id, stored.RowVersion, "other-node", fixture.Clock.UtcNow, TestContext.Current.CancellationToken);
+        _ = await fixture.Store.RetireAsync(stored.Id, stored.RowVersion, "other-node", Guid.NewGuid(), fixture.Clock.UtcNow, TestContext.Current.CancellationToken);
         GatewayException staleDenied = await Assert.ThrowsAsync<GatewayException>(() => fixture.Catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken));
         Assert.Equal("BGW-CONNECTOR-NOT-PUBLISHED", staleDenied.Code);
     }

@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
+using SecureIntegration.Gateway.Application;
 
 namespace SecureIntegration.Gateway.Api;
 
@@ -44,6 +45,31 @@ public static class AdminAuthentication
                 cookie.AccessDeniedPath = "/admin/access-denied";
                 cookie.Events.OnRedirectToLogin = context => ApiAwareRedirect(context, StatusCodes.Status401Unauthorized);
                 cookie.Events.OnRedirectToAccessDenied = context => ApiAwareRedirect(context, StatusCodes.Status403Forbidden);
+                cookie.Events.OnSigningIn = async context =>
+                {
+                    if (context.Principal?.FindFirst("sid") is not null) return;
+                    AdminExternalIdentity identity = ExternalIdentity(context.Principal ?? throw new InvalidOperationException("Administrative principal missing."));
+                    IGatewayClock clock = context.HttpContext.RequestServices.GetRequiredService<IGatewayClock>();
+                    IAdminSessionStore store = context.HttpContext.RequestServices.GetRequiredService<IAdminSessionStore>();
+                    string? previousHandle = context.HttpContext.User.FindFirst("sid")?.Value;
+                    if (!string.IsNullOrWhiteSpace(previousHandle))
+                        await store.RevokeAsync(previousHandle, clock.UtcNow, context.HttpContext.RequestAborted).ConfigureAwait(false);
+                    (string handle, AdminSessionRecord session) = await store.CreateAsync(identity, clock.UtcNow, TimeSpan.FromHours(8), TimeSpan.FromMinutes(20), context.HttpContext.RequestAborted).ConfigureAwait(false);
+                    context.Principal = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sid", handle)], CookieAuthenticationDefaults.AuthenticationScheme, "sid", ClaimTypes.Role));
+                    context.Properties.ExpiresUtc = session.IdleExpiresAt;
+                    context.Properties.IsPersistent = false;
+                };
+                cookie.Events.OnValidatePrincipal = async context =>
+                {
+                    string? handle = context.Principal?.FindFirst("sid")?.Value;
+                    IAdminSessionStore store = context.HttpContext.RequestServices.GetRequiredService<IAdminSessionStore>();
+                    IGatewayClock clock = context.HttpContext.RequestServices.GetRequiredService<IGatewayClock>();
+                    if (string.IsNullOrWhiteSpace(handle) || await store.ValidateAsync(handle, clock.UtcNow, TimeSpan.FromMinutes(20), context.HttpContext.RequestAborted).ConfigureAwait(false) is null)
+                    {
+                        context.RejectPrincipal();
+                        await context.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme).ConfigureAwait(false);
+                    }
+                };
             });
 
         if (string.Equals(options.Mode, "Oidc", StringComparison.Ordinal))
@@ -109,6 +135,19 @@ public static class AdminAuthentication
         }
         context.Response.Redirect(context.RedirectUri);
         return Task.CompletedTask;
+    }
+
+    private static AdminExternalIdentity ExternalIdentity(ClaimsPrincipal principal)
+    {
+        string issuer = principal.FindFirst("iss")?.Value ?? principal.FindFirst(ClaimTypes.NameIdentifier)?.Issuer ?? string.Empty;
+        string subject = principal.FindFirst("sub")?.Value ?? principal.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? string.Empty;
+        if (!Uri.TryCreate(issuer, UriKind.Absolute, out Uri? issuerUri) || issuerUri.Scheme != Uri.UriSchemeHttps || string.IsNullOrWhiteSpace(subject) || subject.Length > 256)
+            throw new InvalidOperationException("Administrative identity is invalid.");
+        string displayName = principal.FindFirst("name")?.Value ?? subject;
+        if (displayName.Length > 256) displayName = displayName[..256];
+        string? email = principal.FindFirst("email")?.Value;
+        if (email?.Length > 320) email = null;
+        return new(issuer, subject, displayName, email);
     }
 }
 

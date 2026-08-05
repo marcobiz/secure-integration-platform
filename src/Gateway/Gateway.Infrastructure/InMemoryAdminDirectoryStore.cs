@@ -40,7 +40,7 @@ public sealed class InMemoryAdminDirectoryStore(InMemoryGatewayRegistry registry
     private static Task<AdminPage<T>> Page<T>(IEnumerable<T> source, int offset, int limit, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (offset < 0 || limit is < 1 or > 200) throw new GatewayException("BGW-ADMIN-PAGINATION", 400);
+        if (offset < 0 || limit is < 1 or > 100) throw new GatewayException("BGW-ADMIN-PAGINATION", 400);
         T[] values = source.ToArray();
         return Task.FromResult(new AdminPage<T>(values.Skip(offset).Take(limit).ToArray(), offset, limit, values.Length));
     }

@@ -199,6 +199,11 @@ paths:
       responses:
         '200': { description: Current redacted principal and roles, content: { application/json: { schema: { $ref: '#/components/schemas/AdminSession' } } } }
         default: { $ref: '#/components/responses/Problem' }
+  /admin/auth/login:
+    get:
+      tags: [AdminAuth]
+      operationId: beginAdminLogin
+      responses: { '302': { description: Redirect to the configured OIDC provider or development login page. }, '404': { $ref: '#/components/responses/Problem' } }
   /admin/auth/csrf:
     get:
       tags: [AdminAuth]
@@ -210,7 +215,15 @@ paths:
       tags: [AdminAuth]
       operationId: logoutAdmin
       security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Csrf' }]
       responses: { '200': { description: Session invalidated. }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/auth/development/login:
+    post:
+      tags: [AdminAuth]
+      operationId: developmentAdminLogin
+      parameters: [{ $ref: '#/components/parameters/Csrf' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [userName], properties: { userName: { type: string } } } } } }
+      responses: { '200': { description: Loopback-only synthetic session created. }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/dashboard:
     get:
       tags: [Administration]
@@ -230,6 +243,7 @@ paths:
       tags: [Administration]
       operationId: createTenant
       security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Csrf' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateTenant' } } } }
       responses: { '201': { description: Tenant created, content: { application/json: { schema: { $ref: '#/components/schemas/Tenant' } } } }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/applications:
@@ -243,6 +257,7 @@ paths:
       tags: [Administration]
       operationId: createApplication
       security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Csrf' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateApplication' } } } }
       responses: { '201': { description: Application created }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/environments:
@@ -262,8 +277,17 @@ paths:
       tags: [Administration]
       operationId: createInstallation
       security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Csrf' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateInstallation' } } } }
       responses: { '201': { description: One-time activation response, content: { application/json: { schema: { $ref: '#/components/schemas/ProvisionedActivation' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/installations/{installationId}:revoke:
+    post:
+      tags: [Administration]
+      operationId: revokeInstallation
+      security: [{ AdminSession: [] }]
+      parameters: [{ name: installationId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/Csrf' }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [reason], properties: { reason: { type: string, minLength: 3, maxLength: 1000 } } } } } }
+      responses: { '200': { description: Installation and credentials revoked atomically. }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/grants:
     get:
       tags: [Administration]
@@ -271,6 +295,13 @@ paths:
       security: [{ AdminSession: [] }]
       parameters: [{ $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }]
       responses: { '200': { description: Grant page, content: { application/json: { schema: { $ref: '#/components/schemas/GrantPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
+    post:
+      tags: [Administration]
+      operationId: createGrant
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Csrf' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateGrant' } } } }
+      responses: { '201': { description: Grant and audit committed atomically, content: { application/json: { schema: { $ref: '#/components/schemas/Grant' } } } }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/audit:
     get:
       tags: [Administration]
@@ -283,20 +314,78 @@ paths:
       tags: [ConnectorsAdmin]
       operationId: listAdminConnectors
       security: [{ AdminSession: [] }]
-      responses: { '200': { description: Connector summaries, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ConnectorSummary' } } } } }, default: { $ref: '#/components/responses/Problem' } }
+      parameters: [{ $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Filter' }]
+      responses: { '200': { description: Connector summary page, content: { application/json: { schema: { $ref: '#/components/schemas/ConnectorPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/schema:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: getConnectorDefinitionSchema
+      security: [{ AdminSession: [] }]
+      responses: { '200': { description: Authoritative Draft 2020-12 Connector Definition schema. }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/sample:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: getConnectorDefinitionSample
+      security: [{ AdminSession: [] }]
+      responses: { '200': { description: Canonical valid Connector Definition sample. }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors:validate:
+    post:
+      tags: [ConnectorsAdmin]
+      operationId: validateConnectorDefinition
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Csrf' }]
+      requestBody: { $ref: '#/components/requestBodies/ConnectorImport' }
+      responses: { '200': { description: Preliminary validation result, content: { application/json: { schema: { $ref: '#/components/schemas/ConnectorValidationResult' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors:import:
+    post:
+      tags: [ConnectorsAdmin]
+      operationId: importConnectorDefinition
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Csrf' }]
+      requestBody: { $ref: '#/components/requestBodies/ConnectorImport' }
+      responses: { '201': { description: Draft persisted, content: { application/json: { schema: { $ref: '#/components/schemas/ConnectorVersion' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/bootstrap:
+    post:
+      tags: [Administration]
+      operationId: bootstrapAdmin
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Csrf' }, { name: X-Bootstrap-Token, in: header, required: true, schema: { type: string, writeOnly: true } }]
+      responses: { '200': { description: One-time bootstrap and audit committed atomically. }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/role-assignments:
+    get:
+      tags: [Administration]
+      operationId: listAdminRoleAssignments
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }, { name: principalId, in: query, schema: { type: string, format: uuid } }, { name: tenantId, in: query, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Role assignment page, content: { application/json: { schema: { $ref: '#/components/schemas/RoleAssignmentPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
     post:
       tags: [Administration]
       operationId: assignAdminRole
       security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Csrf' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RoleAssignmentRequest' } } } }
       responses: { '200': { description: Provider-neutral role assignment created or returned idempotently. }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/role-assignments/{assignmentId}:
+    delete:
+      tags: [Administration]
+      operationId: revokeAdminRoleAssignment
+      security: [{ AdminSession: [] }]
+      parameters: [{ name: assignmentId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/Csrf' }]
+      responses: { '204': { description: Assignment revoked and sessions invalidated. }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/connectors/{connectorId}/versions:
     get:
       tags: [ConnectorsAdmin]
       operationId: listAdminConnectorVersions
       security: [{ AdminSession: [] }]
-      parameters: [{ $ref: '#/components/parameters/ConnectorId' }]
-      responses: { '200': { description: Redacted version timeline. }, default: { $ref: '#/components/responses/Problem' } }
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Filter' }]
+      responses: { '200': { description: Redacted version timeline, content: { application/json: { schema: { $ref: '#/components/schemas/ConnectorVersionPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/{connectorId}/versions/{version}:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: getAdminConnectorVersion
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }]
+      responses: { '200': { description: Version metadata with ETag, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/ConnectorVersion' } } } }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/connectors/{connectorId}/versions/{version}/definition:
     get:
       tags: [ConnectorsAdmin]
@@ -304,39 +393,86 @@ paths:
       security: [{ AdminSession: [] }]
       parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }]
       responses: { '200': { description: Canonical Connector definition without Environment bindings, content: { application/json: { schema: { type: object } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/{connectorId}/versions/{version}:validate:
+    post:
+      tags: [ConnectorsAdmin]
+      operationId: validateStoredAdminConnectorVersion
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/Csrf' }]
+      responses: { '200': { description: Draft transitioned with ETag, content: { application/json: { schema: { $ref: '#/components/schemas/ConnectorVersion' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/{connectorId}/versions/{version}:publish:
+    post:
+      tags: [ConnectorsAdmin]
+      operationId: publishAdminConnectorVersion
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/Csrf' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/VersionActionRequest' } } } }
+      responses: { '200': { description: Exact approved connector and binding digest published atomically. }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/{connectorId}/versions/{version}:retire:
+    post:
+      tags: [ConnectorsAdmin]
+      operationId: retireAdminConnectorVersion
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/Csrf' }]
+      responses: { '200': { description: Version retired atomically with audit. }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/{connectorId}:rollback:
+    post:
+      tags: [ConnectorsAdmin]
+      operationId: rollbackAdminConnectorVersion
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Csrf' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RollbackRequest' } } } }
+      responses: { '200': { description: Published version rolled back atomically with audit. }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/{connectorId}/bindings:
+    put:
+      tags: [ConnectorsAdmin]
+      operationId: putAdminConnectorBindings
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/IfMatchOptional' }, { $ref: '#/components/parameters/Csrf' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ConnectorBindingRequest' } } } }
+      responses: { '200': { description: Immutable binding revision created; update requires If-Match. }, '428': { $ref: '#/components/responses/Problem' }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/{connectorId}/versions/{version}/bindings:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: listAdminConnectorBindings
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }, { $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }, { name: environmentId, in: query, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Immutable binding revision page, content: { application/json: { schema: { $ref: '#/components/schemas/ConnectorBindingPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/connectors/{connectorId}/versions/{version}/approval-requests:
     post:
       tags: [ConnectorsAdmin]
       operationId: requestAdminConnectorApproval
       security: [{ AdminSession: [] }]
-      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }, { $ref: '#/components/parameters/Csrf' }]
       responses: { '200': { description: Checksum-specific approval requested. }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/connectors/{connectorId}/versions/{version}/approvals:
     get:
       tags: [ConnectorsAdmin]
       operationId: listAdminConnectorApprovals
       security: [{ AdminSession: [] }]
-      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }]
-      responses: { '200': { description: Redacted approval decisions. }, default: { $ref: '#/components/responses/Problem' } }
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }, { $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { description: Redacted approval decision page, content: { application/json: { schema: { $ref: '#/components/schemas/ApprovalPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
     post:
       tags: [ConnectorsAdmin]
       operationId: approveAdminConnectorVersion
       security: [{ AdminSession: [] }]
-      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }, { $ref: '#/components/parameters/Csrf' }]
       responses: { '200': { description: Exact checksum approved by a distinct principal. }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/connectors/{connectorId}/versions/{version}/rejections:
     post:
       tags: [ConnectorsAdmin]
       operationId: rejectAdminConnectorVersion
       security: [{ AdminSession: [] }]
-      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }, { $ref: '#/components/parameters/Csrf' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ApprovalDecisionRequest' } } } }
       responses: { '200': { description: Exact checksum rejected by a distinct principal. }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/connectors/{connectorId}:test:
     post:
       tags: [ConnectorsAdmin]
       operationId: testAdminConnector
       security: [{ AdminSession: [] }]
-      parameters: [{ $ref: '#/components/parameters/ConnectorId' }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Csrf' }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ConnectorTestRequest' } } } }
       responses: { '200': { description: Controlled server-side Connector resolution result. }, default: { $ref: '#/components/responses/Problem' } }
   /health/live:
     get:
@@ -369,7 +505,11 @@ components:
     Version: { name: version, in: path, required: true, schema: { type: string } }
     TenantId: { name: tenantId, in: query, required: true, schema: { type: string, format: uuid } }
     Offset: { name: offset, in: query, required: false, schema: { type: integer, minimum: 0, default: 0 } }
-    Limit: { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+    Limit: { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
+    Filter: { name: filter, in: query, required: false, schema: { type: string, maxLength: 100 } }
+    Csrf: { name: X-CSRF-TOKEN, in: header, required: true, schema: { type: string }, description: Opaque token obtained from /admin/auth/csrf. }
+    IfMatch: { name: If-Match, in: header, required: true, schema: { type: string, pattern: '^"[1-9][0-9]*"$' } }
+    IfMatchOptional: { name: If-Match, in: header, required: false, schema: { type: string, pattern: '^"[1-9][0-9]*"$' }, description: Omit only for create; mandatory for update. }
   requestBodies:
     ConnectorImport:
       required: true
@@ -476,6 +616,11 @@ components:
       properties: { id: { type: string, format: uuid }, installationId: { type: string, format: uuid }, tenantId: { type: string, format: uuid }, connectorId: { type: string }, operationId: { type: string }, enabled: { type: boolean }, validFrom: { type: string, format: date-time }, validUntil: { type: [string, 'null'], format: date-time } }
     GrantPage:
       allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Grant' } } } }]
+    CreateGrant:
+      type: object
+      additionalProperties: false
+      required: [tenantId, installationId, connectorId, operationId]
+      properties: { tenantId: { type: string, format: uuid }, installationId: { type: string, format: uuid }, connectorId: { type: string }, operationId: { type: string }, validUntil: { type: [string, 'null'], format: date-time } }
     AuditEvent:
       type: object
       required: [id, occurredAt, action, targetType, targetId, correlationId, outcome, reasonCode]
@@ -486,6 +631,65 @@ components:
       type: object
       required: [connectorId, displayName, versions, publicationRevision]
       properties: { connectorId: { type: string }, displayName: { type: string }, versions: { type: integer }, publishedVersion: { type: [string, 'null'] }, publicationRevision: { type: integer, minimum: 0 } }
+    ConnectorPage:
+      allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/ConnectorSummary' } } } }]
+    ConnectorVersion:
+      type: object
+      required: [connectorId, version, schemaVersion, state, checksumSha256, rowVersion, createdAt]
+      properties: { connectorId: { type: string }, version: { type: string }, schemaVersion: { type: string }, state: { type: string }, checksumSha256: { type: string, pattern: '^[A-F0-9]{64}$' }, rowVersion: { type: integer, minimum: 1 }, createdAt: { type: string, format: date-time }, publishedAt: { type: [string, 'null'], format: date-time } }
+    ConnectorVersionPage:
+      allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/ConnectorVersion' } } } }]
+    ConnectorValidationIssue:
+      type: object
+      required: [code, location, message]
+      properties: { code: { type: string, pattern: '^BGW-[A-Z0-9-]+$' }, location: { type: string }, message: { type: string } }
+    ConnectorValidationResult:
+      type: object
+      required: [valid, issues]
+      properties: { valid: { type: boolean }, checksumSha256: { type: [string, 'null'], pattern: '^[A-F0-9]{64}$' }, issues: { type: array, items: { $ref: '#/components/schemas/ConnectorValidationIssue' } } }
+    ConnectorBindingRequest:
+      type: object
+      additionalProperties: false
+      required: [environmentId, endpoints, secretReferences]
+      properties:
+        environmentId: { type: string, format: uuid }
+        connectorVersion: { type: [string, 'null'] }
+        endpoints: { type: object, additionalProperties: { type: string, format: uri } }
+        secretReferences: { type: object, additionalProperties: { type: string } }
+        certificateReferences: { type: object, additionalProperties: { type: string } }
+        expectedRevision: { type: [integer, 'null'], deprecated: true, description: If-Match is authoritative. }
+    ConnectorBinding:
+      type: object
+      required: [id, connectorId, connectorVersionId, environmentId, endpoints, secretReferences, certificateReferences, revision, checksumSha256, state, updatedAt, updatedBy]
+      properties: { id: { type: string, format: uuid }, connectorId: { type: string }, connectorVersionId: { type: string, format: uuid }, environmentId: { type: string, format: uuid }, endpoints: { type: object, additionalProperties: { type: string, format: uri } }, secretReferences: { type: object, additionalProperties: { type: string } }, certificateReferences: { type: object, additionalProperties: { type: string } }, revision: { type: integer, minimum: 1 }, checksumSha256: { type: string }, state: { type: string }, updatedAt: { type: string, format: date-time }, updatedBy: { type: string } }
+    ConnectorBindingPage:
+      allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/ConnectorBinding' } } } }]
+    Approval:
+      type: object
+      required: [id, connectorVersionId, checksumSha256, bindingDigestSha256, requestedBy, status, requestedAt]
+      properties: { id: { type: string, format: uuid }, connectorVersionId: { type: string, format: uuid }, checksumSha256: { type: string }, bindingDigestSha256: { type: string }, requestedBy: { type: string, format: uuid }, approvedBy: { type: [string, 'null'], format: uuid }, rejectedBy: { type: [string, 'null'], format: uuid }, status: { type: string }, requestedAt: { type: string, format: date-time } }
+    ApprovalPage:
+      allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Approval' } } } }]
+    RoleAssignment:
+      type: object
+      required: [id, principalId, role, grantedBy, grantedAt]
+      properties: { id: { type: string, format: uuid }, principalId: { type: string, format: uuid }, role: { $ref: '#/components/schemas/AdminRole' }, tenantId: { type: [string, 'null'], format: uuid }, grantedBy: { type: string, format: uuid }, grantedAt: { type: string, format: date-time } }
+    RoleAssignmentPage:
+      allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/RoleAssignment' } } } }]
+    RoleAssignmentRequest:
+      type: object
+      additionalProperties: false
+      required: [principal, role]
+      properties: { principal: { type: object, additionalProperties: false, required: [issuer, subject, displayName], properties: { issuer: { type: string, format: uri }, subject: { type: string }, displayName: { type: string }, email: { type: [string, 'null'], format: email } } }, role: { $ref: '#/components/schemas/AdminRole' }, tenantId: { type: [string, 'null'], format: uuid } }
+    ApprovalDecisionRequest:
+      type: object
+      additionalProperties: false
+      properties: { comment: { type: [string, 'null'], maxLength: 500 } }
+    ConnectorTestRequest:
+      type: object
+      additionalProperties: false
+      required: [environmentId, operationId]
+      properties: { environmentId: { type: string, format: uuid }, operationId: { type: string, maxLength: 100 } }
     InvokeRequest:
       type: object
       additionalProperties: false
