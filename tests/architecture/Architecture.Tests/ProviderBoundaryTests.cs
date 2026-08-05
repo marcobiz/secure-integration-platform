@@ -10,7 +10,7 @@ public sealed class ProviderBoundaryTests
     [Fact]
     public void Core_solution_excludes_deployment_packs_and_cloud_packages()
     {
-        string solution = File.ReadAllText(Path.Combine(Root, "BrokerGateway.slnx"));
+        string solution = File.ReadAllText(Path.Combine(Root, "BrokerGateway.Core.slnx"));
         Assert.DoesNotContain("packs/deployment", solution, StringComparison.OrdinalIgnoreCase);
 
         string centralPackages = File.ReadAllText(Path.Combine(Root, "Directory.Packages.props"));
