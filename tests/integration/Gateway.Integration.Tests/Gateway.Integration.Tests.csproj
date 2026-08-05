@@ -16,4 +16,7 @@
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="coverlet.collector" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\..\docs\connectors\examples\sample-secure-service.connector.json" Link="Samples\sample-secure-service.connector.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

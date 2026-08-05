@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "1.0",
+  "connectorId": "sample-secure-service",
+  "version": "1.0.0",
+  "displayName": "Sample Secure Service",
+  "description": "Synthetic API-key and mTLS connector used by the open-source quick start.",
+  "bindings": {
+    "endpoints": [
+      { "name": "sample-vendor-endpoint" }
+    ],
+    "secrets": [
+      { "name": "sample-vendor-api-key", "kind": "opaque" },
+      { "name": "sample-vendor-client-certificate", "kind": "clientCertificate" }
+    ]
+  },
+  "operations": [
+    {
+      "operationId": "submit",
+      "endpointBinding": "sample-vendor-endpoint",
+      "method": "POST",
+      "path": "/vendor/orders",
+      "request": {
+        "contentType": "application/json",
+        "maximumBytes": 1048576
+      },
+      "response": {
+        "maximumBytes": 1048576
+      },
+      "authentication": {
+        "kind": "apiKeyAndMtls",
+        "secretBinding": "sample-vendor-api-key",
+        "headerName": "X-Vendor-Api-Key",
+        "certificateBinding": "sample-vendor-client-certificate"
+      },
+      "timeoutMs": 30000,
+      "redirectPolicy": "deny",
+      "allowedClientHeaders": [],
+      "idempotent": false,
+      "maximumRetries": 0
+    }
+  ]
+}

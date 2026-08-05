@@ -25,6 +25,19 @@ public sealed class GatewayHostOptions
     public bool TrustAzureAppServiceClientCertificateForwarding { get; init; }
     /// <summary>Server-owned operation allowlist.</summary>
     public List<GatewayOperationConfiguration> Operations { get; init; } = [];
+    /// <summary>Published Connector cache TTL. A store stamp is still checked on every invocation.</summary>
+    public int ConnectorCacheTtlSeconds { get; init; } = 30;
+    /// <summary>Authentication configuration for the provider-neutral Admin API.</summary>
+    public GatewayAdminOptions Admin { get; init; } = new();
+}
+
+/// <summary>Admin API authentication. DevelopmentApiKey is rejected outside Development/Testing.</summary>
+public sealed class GatewayAdminOptions
+{
+    /// <summary>Disabled or DevelopmentApiKey. Production OIDC is a deployment concern.</summary>
+    public string Mode { get; init; } = "Disabled";
+    /// <summary>Process environment variable containing the development-only API key.</summary>
+    public string ApiKeyEnvironmentVariable { get; init; } = "GATEWAY_ADMIN_API_KEY";
 }
 
 /// <summary>Configuration representation of one immutable outbound operation.</summary>

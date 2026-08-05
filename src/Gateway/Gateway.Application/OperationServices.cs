@@ -26,12 +26,16 @@ public sealed class GatewayOperationCatalog : IGatewayOperationCatalog
     }
 
     /// <inheritdoc />
-    public GatewayOperationDefinition GetRequired(string connectorId, string operationId)
+    public Task<GatewayOperationDefinition> GetRequiredAsync(string connectorId, string operationId, Guid environmentId, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (!operations.TryGetValue(Key(connectorId, operationId), out GatewayOperationDefinition? value))
             throw new GatewayException("BGW-OPERATION-NOT-FOUND", 404);
-        return value;
+        return Task.FromResult(value);
     }
+
+    /// <inheritdoc />
+    public void Invalidate(string connectorId) { }
 
     private static string Key(string connectorId, string operationId) => connectorId + "\n" + operationId;
 
@@ -76,10 +80,10 @@ public sealed class RestrictedEgressService(
             throw new GatewayException("BGW-PROTOCOL-VERSION", 400);
         if (request.IdempotencyKey is not null && (request.IdempotencyKey.Length is < 1 or > 128 || request.IdempotencyKey.Any(character => character is < '!' or > '~')))
             throw new GatewayException("BGW-IDEMPOTENCY-KEY", 400);
-        GatewayOperationDefinition operation = catalog.GetRequired(connectorId, operationId);
         RegisteredInstallationIdentity identity = authenticated.Identity;
         if (identity.TenantStatus != TenantStatus.Active || identity.ApplicationStatus != ApplicationStatus.Active || identity.InstallationStatus != InstallationStatus.Active)
             throw new GatewayException("BGW-INSTALLATION-REVOKED", 403);
+        GatewayOperationDefinition operation = await catalog.GetRequiredAsync(connectorId, operationId, identity.EnvironmentId, cancellationToken).ConfigureAwait(false);
         if (!await registry.IsGrantedAsync(identity.InstallationId, identity.TenantId, connectorId, operationId, clock.UtcNow, cancellationToken).ConfigureAwait(false))
             throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403);
 

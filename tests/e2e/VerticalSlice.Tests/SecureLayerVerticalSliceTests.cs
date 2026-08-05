@@ -18,6 +18,9 @@ using SecureIntegration.Broker.Core;
 using SecureIntegration.Broker.Infrastructure.Windows;
 using SecureIntegration.Broker.Sdk;
 using SecureIntegration.Contracts;
+using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.Domain;
+using SecureIntegration.Gateway.Infrastructure;
 using Xunit;
 
 namespace SecureIntegration.Broker.VerticalSlice.Tests;
@@ -25,13 +28,13 @@ namespace SecureIntegration.Broker.VerticalSlice.Tests;
 public sealed class SecureLayerVerticalSliceTests
 {
     [Fact]
-    public async Task E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay()
+    public async Task M4_E2E_sample_secure_service_uses_Published_definition_and_server_side_bindings()
     {
         await using VerticalSliceHarness harness = await VerticalSliceHarness.CreateAsync();
         byte[] legacyPayload = "{\"patient\":\"synthetic-001\"}"u8.ToArray();
         InvokeGatewayResult result = await harness.Client.InvokeGatewayAsync(new InvokeGatewayRequest
         {
-            ConnectorId = "secure-layer-demo",
+            ConnectorId = "sample-secure-service",
             OperationId = "submit",
             ContentType = "application/json",
             PayloadBase64 = Convert.ToBase64String(legacyPayload),
@@ -50,7 +53,7 @@ public sealed class SecureLayerVerticalSliceTests
 
         BrokerClientException denied = await Assert.ThrowsAsync<BrokerClientException>(() => harness.Client.InvokeGatewayAsync(new InvokeGatewayRequest
         {
-            ConnectorId = "secure-layer-demo",
+            ConnectorId = "sample-secure-service",
             OperationId = "client-selected-operation",
             PayloadBase64 = "e30=",
         }, TestContext.Current.CancellationToken));
@@ -59,7 +62,7 @@ public sealed class SecureLayerVerticalSliceTests
 
         BrokerClientException timeout = await Assert.ThrowsAsync<BrokerClientException>(() => harness.ShortDeadlineClient.InvokeGatewayAsync(new InvokeGatewayRequest
         {
-            ConnectorId = "secure-layer-demo",
+            ConnectorId = "sample-secure-service",
             OperationId = "submit",
             PayloadBase64 = Convert.ToBase64String("{\"simulateDelay\":true}"u8),
         }, TestContext.Current.CancellationToken));
@@ -133,7 +136,7 @@ public sealed class SecureLayerVerticalSliceTests
             WebApplication external = BuildMutualTlsServer(externalServerCertificate, gatewayClientCertificate, async context =>
             {
                 harness!.ExternalRequestCount++;
-                harness.ExternalApiKeySeen = context.Request.Headers["X-Api-Key"].ToString();
+                harness.ExternalApiKeySeen = context.Request.Headers["X-Vendor-Api-Key"].ToString();
                 harness.ExternalClientCertificateSeen = (await context.Connection.GetClientCertificateAsync())!.Thumbprint;
                 using StreamReader reader = new(context.Request.Body, Encoding.UTF8);
                 string body = await reader.ReadToEndAsync(context.RequestAborted);
@@ -146,38 +149,55 @@ public sealed class SecureLayerVerticalSliceTests
 
                 context.Response.ContentType = "application/json";
                 await context.Response.WriteAsync("{\"accepted\":true}", context.RequestAborted);
-            });
+            }, "/vendor/orders");
             await external.StartAsync();
             Uri externalAddress = AddressOf(external);
 
             HttpClientHandler externalHandler = TrustedMutualTlsHandler(gatewayClientCertificate, externalServerCertificate);
             HttpClient externalClient = new(externalHandler) { BaseAddress = externalAddress };
+            SystemGatewayClock gatewayClock = new();
+            InMemoryGatewayRegistry gatewayRegistry = new(gatewayClock);
+            Guid tenantId = Guid.NewGuid();
+            Guid applicationId = Guid.NewGuid();
+            Guid environmentId = Guid.NewGuid();
+            Guid installationId = Guid.NewGuid();
+            await gatewayRegistry.AddTenantAsync(new(tenantId, "sample-tenant", "Sample Tenant", TenantStatus.Active, gatewayClock.UtcNow), TestContext.Current.CancellationToken);
+            await gatewayRegistry.AddApplicationAsync(new(applicationId, "sample-legacy", "Sample Legacy", ApplicationStatus.Active, "1.0.0", null, gatewayClock.UtcNow), TestContext.Current.CancellationToken);
+            await gatewayRegistry.AddEnvironmentAsync(new(environmentId, "local", "Local", false), TestContext.Current.CancellationToken);
+            await gatewayRegistry.AddInstallationAsync(new(installationId, tenantId, applicationId, environmentId, InstallationStatus.Active, "3.0.0", gatewayClock.UtcNow), TestContext.Current.CancellationToken);
+            await gatewayRegistry.AddGrantAsync(new(Guid.NewGuid(), installationId, tenantId, "sample-secure-service", "submit", true, gatewayClock.UtcNow), TestContext.Current.CancellationToken);
+            InMemoryConnectorConfigurationStore connectorStore = new();
+            ConnectorDefinitionValidator connectorValidator = new();
+            PublishedConnectorCatalog connectorCatalog = new(connectorStore, connectorValidator, gatewayClock, TimeSpan.FromMinutes(5));
+            ConnectorAdministrationService connectorAdmin = new(connectorStore, connectorValidator, connectorCatalog, gatewayRegistry, gatewayClock);
+            using (JsonDocument sample = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "Samples", "sample-secure-service.connector.json"))))
+            {
+                ConnectorVersionResource imported = await connectorAdmin.ImportAsync(sample.RootElement, null, "e2e-admin", Guid.NewGuid(), TestContext.Current.CancellationToken);
+                ConnectorVersionResource validated = await connectorAdmin.ValidateStoredAsync(imported.ConnectorId, imported.Version, imported.RowVersion, "e2e-admin", Guid.NewGuid(), TestContext.Current.CancellationToken);
+                _ = await connectorAdmin.PublishAsync(validated.ConnectorId, validated.Version, validated.RowVersion, 0, "e2e-admin", Guid.NewGuid(), TestContext.Current.CancellationToken);
+            }
+            _ = await connectorAdmin.PutBindingsAsync("sample-secure-service", new(environmentId,
+                new Dictionary<string, string> { ["sample-vendor-endpoint"] = new UriBuilder(externalAddress) { Host = "localhost" }.Uri.AbsoluteUri },
+                new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://vendor-key", ["sample-vendor-client-certificate"] = "synthetic://vendor-certificate" }),
+                "e2e-admin", Guid.NewGuid(), TestContext.Current.CancellationToken);
+            InMemorySecretProvider gatewaySecrets = new(new Dictionary<string, string> { ["synthetic://vendor-key"] = "synthetic-vendor-key-e2e-only" }, new Dictionary<string, byte[]> { ["synthetic://vendor-certificate"] = gatewayClientCertificate.Export(X509ContentType.Pkcs12) });
+            RestrictedEgressService connectorRuntime = new(gatewayRegistry, connectorCatalog, gatewaySecrets, new LoopbackResolver(), new E2eTransport(externalClient, gatewayClientCertificate), gatewayClock, new LoopbackAllowance());
+            RegisteredInstallationIdentity runtimeIdentity = new(installationId, tenantId, applicationId, environmentId, TenantStatus.Active, ApplicationStatus.Active, InstallationStatus.Active, Guid.NewGuid(), CredentialStatus.Active, brokerClientCertificate.RawData, gatewayClock.UtcNow.AddMinutes(-1), gatewayClock.UtcNow.AddHours(1), "1.0.0", null);
             WebApplication gateway = BuildMutualTlsServer(gatewayServerCertificate, brokerClientCertificate, async context =>
             {
                 string connectorId = context.Request.RouteValues["connectorId"]?.ToString() ?? string.Empty;
                 string operationId = context.Request.RouteValues["operationId"]?.ToString() ?? string.Empty;
-                if (connectorId != "secure-layer-demo" || operationId != "submit")
-                {
-                    context.Response.StatusCode = StatusCodes.Status404NotFound;
-                    return;
-                }
-
                 harness!.GatewayClientCertificateSeen = (await context.Connection.GetClientCertificateAsync())!.Thumbprint;
                 harness.GatewayCorrelationSeen = context.Request.Headers["X-Correlation-Id"].ToString();
                 using MemoryStream payload = new();
                 await context.Request.Body.CopyToAsync(payload, context.RequestAborted);
                 harness.GatewayPayloadSeen = payload.ToArray();
                 harness.PlatformAudit.Add($"gateway connector={connectorId} operation={operationId}");
-                using HttpRequestMessage outbound = new(HttpMethod.Post, "vendor/submit");
-                outbound.Headers.TryAddWithoutValidation("X-Api-Key", harness.VendorApiKey);
-                outbound.Content = new ByteArrayContent(harness.GatewayPayloadSeen);
-                outbound.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
-                using HttpResponseMessage vendorResponse = await externalClient.SendAsync(outbound, context.RequestAborted);
-                byte[] response = await vendorResponse.Content.ReadAsByteArrayAsync(context.RequestAborted);
-                context.Response.StatusCode = (int)vendorResponse.StatusCode;
-                context.Response.ContentType = "application/json";
-                context.Response.Headers["X-Connector-Version"] = "1.0.0";
-                await context.Response.Body.WriteAsync(response, context.RequestAborted);
+                GatewayInvokeRequest request = new("1.0", new(context.Request.ContentType ?? "application/octet-stream", "base64", Convert.ToBase64String(harness.GatewayPayloadSeen)), Guid.Parse(harness.GatewayCorrelationSeen));
+                GatewayInvokeResponse response = await connectorRuntime.InvokeAsync(new(runtimeIdentity, request.CorrelationId), connectorId, operationId, request, context.RequestAborted);
+                context.Response.ContentType = response.Result.ContentType;
+                context.Response.Headers["X-Connector-Version"] = response.ConnectorVersion;
+                await context.Response.Body.WriteAsync(Convert.FromBase64String(response.Result.Data), context.RequestAborted);
             }, "/runtime/connectors/{connectorId}/operations/{operationId}:invoke");
             await gateway.StartAsync();
             Uri gatewayAddress = AddressOf(gateway);
@@ -195,7 +215,7 @@ public sealed class SecureLayerVerticalSliceTests
                 ExecutablePaths = [executable],
                 ExecutableSha256 = [executableHash],
                 AllowedOperations = [BrokerOperations.InvokeGateway, BrokerOperations.GetBrokerStatus],
-                GatewayGrants = ["secure-layer-demo:submit"],
+                GatewayGrants = ["sample-secure-service:submit"],
             };
             BrokerOptions brokerOptions = new() { PipeName = pipeName, InstallationId = "installation-e2e", DataDirectory = temporary.Path, Applications = [policy] };
             WindowsDpapiProtectionProvider protection = new();
@@ -219,7 +239,7 @@ public sealed class SecureLayerVerticalSliceTests
         {
             using HttpClient untrustedClient = new() { BaseAddress = gatewayAddress };
             FixedGatewayHttpInvoker invoker = new(untrustedClient);
-            _ = await invoker.InvokeAsync("legacy-simulator", "secure-layer-demo", "submit", "application/json", "{}"u8.ToArray(), Guid.NewGuid(), cancellationToken);
+            _ = await invoker.InvokeAsync("legacy-simulator", "sample-secure-service", "submit", "application/json", "{}"u8.ToArray(), Guid.NewGuid(), cancellationToken);
         }
 
         public async Task AssertReplayIsRejectedAsync(CancellationToken cancellationToken)
@@ -316,6 +336,31 @@ public sealed class SecureLayerVerticalSliceTests
 
             using X509Certificate2 created = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
             return X509CertificateLoader.LoadPkcs12(created.Export(X509ContentType.Pkcs12), null, X509KeyStorageFlags.Exportable);
+        }
+
+        private sealed class LoopbackResolver : IHostResolver
+        {
+            public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) => Task.FromResult(new[] { IPAddress.Loopback });
+        }
+
+        private sealed class LoopbackAllowance : IPrivateDestinationAllowance
+        {
+            public bool IsAllowed(string host, IPAddress address) => string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) && IPAddress.IsLoopback(address);
+        }
+
+        private sealed class E2eTransport(HttpClient client, X509Certificate2 expectedCertificate) : IRestrictedTransport
+        {
+            public async Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
+            {
+                if (approvedAddresses.Count != 1 || !IPAddress.IsLoopback(approvedAddresses[0]) || !string.Equals(clientCertificate?.Thumbprint, expectedCertificate.Thumbprint, StringComparison.OrdinalIgnoreCase))
+                    throw new GatewayException("BGW-EGRESS-DESTINATION-DENIED", 403);
+                using CancellationTokenSource bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                bounded.CancelAfter(timeout);
+                using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, bounded.Token);
+                byte[] body = await response.Content.ReadAsByteArrayAsync(bounded.Token);
+                if (body.LongLength > maximumResponseBytes) throw new GatewayException("BGW-EGRESS-RESPONSE-TOO-LARGE", 502);
+                return new((int)response.StatusCode, response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream", body);
+            }
         }
 
         private sealed class CapturingAudit : IBrokerAuditSink

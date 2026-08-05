@@ -92,8 +92,37 @@ public interface IRestrictedTransport
 /// <summary>Read-only catalogue of server-owned outbound operations.</summary>
 public interface IGatewayOperationCatalog
 {
-    /// <summary>Gets one configured operation or rejects the identifier.</summary>
-    GatewayOperationDefinition GetRequired(string connectorId, string operationId);
+    /// <summary>Gets one Published, Environment-bound operation or rejects it.</summary>
+    Task<GatewayOperationDefinition> GetRequiredAsync(string connectorId, string operationId, Guid environmentId, CancellationToken cancellationToken);
+    /// <summary>Invalidates local cache entries after an administrative lifecycle change.</summary>
+    void Invalidate(string connectorId);
+}
+
+/// <summary>Provider-neutral persistence boundary for Connector lifecycle and logical bindings.</summary>
+public interface IConnectorConfigurationStore
+{
+    /// <summary>Creates a new Draft; Connector/version pairs are unique.</summary>
+    Task<ConnectorVersionRecord> CreateDraftAsync(ConnectorVersionRecord draft, CancellationToken cancellationToken);
+    /// <summary>Gets a version by Connector and semantic version.</summary>
+    Task<ConnectorVersionRecord?> GetVersionAsync(string connectorId, string version, CancellationToken cancellationToken);
+    /// <summary>Lists all known Connectors.</summary>
+    Task<IReadOnlyList<ConnectorSummary>> ListConnectorsAsync(CancellationToken cancellationToken);
+    /// <summary>Lists versions newest first.</summary>
+    Task<IReadOnlyList<ConnectorVersionRecord>> ListVersionsAsync(string connectorId, CancellationToken cancellationToken);
+    /// <summary>Transitions Draft to Validated using optimistic concurrency.</summary>
+    Task<ConnectorVersionRecord> MarkValidatedAsync(Guid versionId, long expectedRowVersion, DateTimeOffset now, CancellationToken cancellationToken);
+    /// <summary>Publishes a Validated version and supersedes the current one atomically.</summary>
+    Task<ConnectorVersionRecord> PublishAsync(Guid versionId, long expectedRowVersion, long expectedPublicationRevision, string actor, DateTimeOffset now, CancellationToken cancellationToken);
+    /// <summary>Reactivates a previously Published, now Superseded version atomically.</summary>
+    Task<ConnectorVersionRecord> RollbackAsync(string connectorId, string targetVersion, long expectedActiveRowVersion, string actor, DateTimeOffset now, CancellationToken cancellationToken);
+    /// <summary>Retires a version and clears runtime activation if necessary.</summary>
+    Task<ConnectorVersionRecord> RetireAsync(Guid versionId, long expectedRowVersion, string actor, DateTimeOffset now, CancellationToken cancellationToken);
+    /// <summary>Creates/replaces server-side logical bindings for one Environment.</summary>
+    Task<ConnectorBindingSet> PutBindingsAsync(ConnectorBindingSet bindings, long? expectedRevision, CancellationToken cancellationToken);
+    /// <summary>Returns the active stamp, or null when no version is Published.</summary>
+    Task<PublishedConnectorStamp?> GetPublishedStampAsync(string connectorId, Guid environmentId, CancellationToken cancellationToken);
+    /// <summary>Returns the Published definition with bindings, or null.</summary>
+    Task<PublishedConnectorSnapshot?> GetPublishedSnapshotAsync(string connectorId, Guid environmentId, CancellationToken cancellationToken);
 }
 
 /// <summary>Immutable enrollment challenge.</summary>

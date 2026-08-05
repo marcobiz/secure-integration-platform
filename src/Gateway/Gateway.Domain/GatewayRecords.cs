@@ -142,3 +142,51 @@ public sealed record GatewayAuditEvent(
     string Outcome,
     string ReasonCode,
     IReadOnlyDictionary<string, string> Metadata);
+
+/// <summary>Lifecycle state of one immutable Connector definition version.</summary>
+public enum ConnectorVersionState
+{
+    /// <summary>The definition can still be replaced by its author.</summary>
+    Draft,
+    /// <summary>The definition passed schema and semantic validation.</summary>
+    Validated,
+    /// <summary>The definition is the only version eligible for runtime use.</summary>
+    Published,
+    /// <summary>The definition was published previously and may be used as a rollback target.</summary>
+    Superseded,
+    /// <summary>The definition is permanently unavailable to runtime and rollback.</summary>
+    Retired
+}
+
+/// <summary>Immutable JSON and lifecycle metadata for one Connector version.</summary>
+public sealed record ConnectorVersionRecord(
+    Guid Id,
+    Guid ConnectorId,
+    string ConnectorSlug,
+    string Version,
+    string SchemaVersion,
+    ConnectorVersionState State,
+    string CanonicalJson,
+    byte[] ChecksumSha256,
+    string CreatedBy,
+    DateTimeOffset CreatedAt,
+    long RowVersion,
+    DateTimeOffset? ValidatedAt = null,
+    DateTimeOffset? PublishedAt = null,
+    DateTimeOffset? RetiredAt = null);
+
+/// <summary>Server-side values for logical Connector bindings in one Environment.</summary>
+public sealed record ConnectorBindingSet(
+    Guid ConnectorId,
+    Guid EnvironmentId,
+    IReadOnlyDictionary<string, Uri> Endpoints,
+    IReadOnlyDictionary<string, string> SecretReferences,
+    long Revision,
+    DateTimeOffset UpdatedAt,
+    string UpdatedBy);
+
+/// <summary>Small stamp checked before a cached runtime definition may be reused.</summary>
+public sealed record PublishedConnectorStamp(Guid VersionId, long PublicationRevision, long BindingRevision);
+
+/// <summary>Published immutable definition and its server-side Environment bindings.</summary>
+public sealed record PublishedConnectorSnapshot(ConnectorVersionRecord Version, ConnectorBindingSet Bindings, PublishedConnectorStamp Stamp);

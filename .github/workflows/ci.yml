@@ -92,7 +92,8 @@ jobs:
     env:
       GATEWAY_POSTGRES_ADMIN_CONNECTION: Host=127.0.0.1;Port=5432;Database=broker_gateway_test;Username=postgres;SSL Mode=Disable
       GATEWAY_MIGRATION_CONNECTION: Host=127.0.0.1;Port=5432;Database=broker_gateway_test;Username=postgres;SSL Mode=Disable
-      EXPECTED_MIGRATION_SHA256: 182CC690E16BB986638A4B52EE1554A4B540A8E58FD673F2111A79D194C66A98
+      EXPECTED_M2_MIGRATION_SHA256: 182CC690E16BB986638A4B52EE1554A4B540A8E58FD673F2111A79D194C66A98
+      EXPECTED_M4_MIGRATION_SHA256: 9D991B0E4E8268D47C32121DECE2D3593B183623059BB17F4A82A479DC8D322C
     steps:
       - uses: actions/checkout@v4
         with:
@@ -112,10 +113,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          actual_sha="$(sha256sum src/Gateway/Gateway.Infrastructure/Persistence/Migrations/0001_gateway_m2.sql | awk '{print toupper($1)}')"
-          test "$actual_sha" = "$EXPECTED_MIGRATION_SHA256"
+          actual_m2_sha="$(sha256sum src/Gateway/Gateway.Infrastructure/Persistence/Migrations/0001_gateway_m2.sql | awk '{print toupper($1)}')"
+          actual_m4_sha="$(sha256sum src/Gateway/Gateway.Infrastructure/Persistence/Migrations/0002_connector_configuration_m4.sql | awk '{print toupper($1)}')"
+          test "$actual_m2_sha" = "$EXPECTED_M2_MIGRATION_SHA256"
+          test "$actual_m4_sha" = "$EXPECTED_M4_MIGRATION_SHA256"
           first_output="$(dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release --no-build -- apply)"
-          grep -F "Applied 0001_gateway_m2.sql ($EXPECTED_MIGRATION_SHA256)" <<<"$first_output"
+          grep -F "Applied 0001_gateway_m2.sql ($EXPECTED_M2_MIGRATION_SHA256)" <<<"$first_output"
+          grep -F "Applied 0002_connector_configuration_m4.sql ($EXPECTED_M4_MIGRATION_SHA256)" <<<"$first_output"
           second_output="$(dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release --no-build -- apply)"
           if grep -Fq "Applied " <<<"$second_output"; then
             echo "Second migration application was not a no-op." >&2
@@ -132,6 +136,9 @@ jobs:
           test "$("${psql_cmd[@]}" -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='gateway' AND c.relrowsecurity AND c.relforcerowsecurity AND c.relname IN ('installation','installation_credential','activation_code','installation_connector_grant','replay_nonce','audit_event','invocation_event');")" = "7"
           test "$("${psql_cmd[@]}" -c "SELECT has_schema_privilege('gateway_runtime','gateway','CREATE');")" = "f"
           test "$("${psql_cmd[@]}" -c "SELECT has_table_privilege('gateway_runtime','gateway.schema_migration','SELECT') OR has_table_privilege('gateway_runtime','gateway.schema_migration','INSERT') OR has_table_privilege('gateway_runtime','gateway.schema_migration','UPDATE') OR has_table_privilege('gateway_runtime','gateway.schema_migration','DELETE');")" = "f"
+          test "$("${psql_cmd[@]}" -c "SELECT count(*) FROM pg_indexes WHERE schemaname='gateway' AND indexname='ux_connector_one_published_version';")" = "1"
+          test "$("${psql_cmd[@]}" -c "SELECT count(*) FROM pg_trigger WHERE tgname='connector_version_immutable' AND NOT tgisinternal;")" = "1"
+          test "$("${psql_cmd[@]}" -c "SELECT has_table_privilege('gateway_runtime','gateway.connector_version','SELECT') AND NOT has_table_privilege('gateway_runtime','gateway.connector_version','INSERT') AND NOT has_table_privilege('gateway_runtime','gateway.connector_version','UPDATE');")" = "t"
       - name: Build Gateway integration tests
         run: dotnet build tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj -c Release --no-restore
       - name: Run PostgreSQL and API integration tests
@@ -392,3 +399,32 @@ jobs:
             ${{ runner.temp }}/m3a-ci-${{ github.run_id }}-redacted-evidence.zip.sha256
           if-no-files-found: error
           retention-days: 30
+
+  m4-connector-quickstart:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_COMMIT_SHA }}
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+      - name: Validate M4 quick start prerequisites and CLI
+        shell: pwsh
+        run: ./tools/m4/Invoke-M4Quickstart.ps1 -Phase Validate
+      - name: Run M4 Published connector quick start
+        shell: pwsh
+        run: ./tools/m4/Invoke-M4Quickstart.ps1 -Phase Start
+      - name: Stop M4 stack and verify cleanup
+        if: always()
+        shell: pwsh
+        run: |
+          ./tools/m4/Invoke-M4Quickstart.ps1 -Phase Stop
+          $containers = docker ps -aq --filter label=com.docker.compose.project=broker-gateway-m4-quickstart
+          $volumes = docker volume ls -q --filter label=com.docker.compose.project=broker-gateway-m4-quickstart
+          $networks = docker network ls -q --filter label=com.docker.compose.project=broker-gateway-m4-quickstart
+          if ($containers -or $volumes -or $networks) { throw 'M4_QUICKSTART_CLEANUP_FAILED' }

@@ -1,6 +1,7 @@
 using System.Data;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
 using Npgsql;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
@@ -127,6 +128,58 @@ public sealed class PostgresIsolationTests
         Assert.Contains("ALTER TABLE gateway.activation_code FORCE ROW LEVEL SECURITY", sql, StringComparison.Ordinal);
         Assert.Contains("metadata_redacted jsonb", sql, StringComparison.Ordinal);
         Assert.DoesNotContain("secret_value", sql, StringComparison.OrdinalIgnoreCase);
+        string connectorSql = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0002_connector_configuration_m4.sql"));
+        Assert.Contains("connector_version_immutable", connectorSql, StringComparison.Ordinal);
+        Assert.Contains("state IN ('draft','validated','published','superseded','retired')", connectorSql, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret_value", connectorSql, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task M4_IT_DAT_PostgreSQL18_connector_publication_binding_and_rollback_when_configured()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) return;
+        await using NpgsqlDataSource dataSource = NpgsqlDataSource.Create(connectionString);
+        await using (NpgsqlConnection connection = await dataSource.OpenConnectionAsync(TestContext.Current.CancellationToken)) await ApplyMigrationAsync(connection);
+        PostgresConnectorConfigurationStore store = new(dataSource);
+        PostgresGatewayRegistry registry = new(dataSource);
+        TestClock clock = new(DateTimeOffset.UtcNow);
+        ConnectorDefinitionValidator validator = new();
+        PublishedConnectorCatalog catalog = new(store, validator, clock, TimeSpan.FromMinutes(5));
+        ConnectorAdministrationService admin = new(store, validator, catalog, registry, clock);
+        Guid suffix = Guid.NewGuid();
+        string connectorId = "postgres-" + suffix.ToString("N");
+        Guid environmentId = Guid.NewGuid();
+        await registry.AddEnvironmentAsync(new(environmentId, "m4-" + suffix.ToString("N")[..20], "M4", false), TestContext.Current.CancellationToken);
+        using JsonDocument source = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(FindRepositoryRoot(), "docs", "connectors", "examples", "sample-secure-service.connector.json"), TestContext.Current.CancellationToken));
+
+        async Task<ConnectorVersionResource> ImportPublishAsync(string version, long revision)
+        {
+            string candidate = source.RootElement.GetRawText().Replace("sample-secure-service", connectorId, StringComparison.Ordinal).Replace("\"version\": \"1.0.0\"", $"\"version\": \"{version}\"", StringComparison.Ordinal);
+            using JsonDocument definition = JsonDocument.Parse(candidate);
+            ConnectorVersionResource imported = await admin.ImportAsync(definition.RootElement, null, "postgres-test", Guid.NewGuid(), TestContext.Current.CancellationToken);
+            ConnectorVersionResource validated = await admin.ValidateStoredAsync(connectorId, version, imported.RowVersion, "postgres-test", Guid.NewGuid(), TestContext.Current.CancellationToken);
+            return await admin.PublishAsync(connectorId, version, validated.RowVersion, revision, "postgres-test", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        }
+
+        ConnectorVersionResource v1 = await ImportPublishAsync("1.0.0", 0);
+        _ = await admin.PutBindingsAsync(connectorId, new(environmentId,
+            new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/" },
+            new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://key", ["sample-vendor-client-certificate"] = "synthetic://cert" }),
+            "postgres-test", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        GatewayOperationDefinition operation = await catalog.GetRequiredAsync(connectorId, "submit", environmentId, TestContext.Current.CancellationToken);
+        Assert.Equal("1.0.0", operation.Version);
+
+        ConnectorVersionResource v2 = await ImportPublishAsync("2.0.0", 1);
+        ConnectorVersionResource rolledBack = await admin.RollbackAsync(connectorId, new("1.0.0", v2.RowVersion), "postgres-test", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        Assert.Equal(v1.ChecksumSha256, rolledBack.ChecksumSha256);
+        Assert.Equal("1.0.0", (await catalog.GetRequiredAsync(connectorId, "submit", environmentId, TestContext.Current.CancellationToken)).Version);
+
+        await using NpgsqlConnection tamperConnection = await dataSource.OpenConnectionAsync(TestContext.Current.CancellationToken);
+        await using NpgsqlCommand tamper = new("UPDATE gateway.connector_version SET configuration_json='{}'::jsonb WHERE id=$1", tamperConnection);
+        tamper.Parameters.AddWithValue((await store.GetVersionAsync(connectorId, "1.0.0", TestContext.Current.CancellationToken))!.Id);
+        PostgresException immutable = await Assert.ThrowsAsync<PostgresException>(() => tamper.ExecuteNonQueryAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("23000", immutable.SqlState);
     }
 
     private static async Task ExecuteAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string sql, params object[] values)
@@ -138,9 +191,13 @@ public sealed class PostgresIsolationTests
 
     private static async Task ApplyMigrationAsync(NpgsqlConnection connection)
     {
-        string migration = await File.ReadAllTextAsync(Path.Combine(FindRepositoryRoot(), "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0001_gateway_m2.sql"), TestContext.Current.CancellationToken);
-        await using NpgsqlCommand command = new(migration, connection);
-        await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        string directory = Path.Combine(FindRepositoryRoot(), "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations");
+        foreach (string path in Directory.GetFiles(directory, "*.sql").Order(StringComparer.Ordinal))
+        {
+            string migration = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
+            await using NpgsqlCommand command = new(migration, connection);
+            await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        }
     }
 
     private static string FindRepositoryRoot()

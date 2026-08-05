@@ -1,11 +1,14 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.Domain;
 
 namespace SecureIntegration.Gateway.Integration.Tests;
 
@@ -52,6 +55,49 @@ public sealed class GatewayApiTests : IClassFixture<GatewayApiFactory>
         Assert.Contains("BGW-PROTOCOL", body, StringComparison.Ordinal);
         Assert.DoesNotContain(canary, string.Join('\n', factory.Logs), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task M4_IT_Admin_API_requires_key_and_supports_import_validate_publish_export_and_test()
+    {
+        using JsonDocument source = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "Samples", "sample-secure-service.connector.json"), TestContext.Current.CancellationToken));
+        string connectorId = "sample-" + Guid.NewGuid().ToString("N");
+        using JsonDocument definition = JsonDocument.Parse(source.RootElement.GetRawText().Replace("sample-secure-service", connectorId, StringComparison.Ordinal));
+        ConnectorImportRequest importRequest = new(definition.RootElement.Clone());
+
+        using HttpResponseMessage unauthenticated = await client.PostAsJsonAsync("/admin/v1/connectors:validate", importRequest, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthenticated.StatusCode);
+
+        client.DefaultRequestHeaders.Add("X-Admin-Key", GatewayApiFactory.AdminKey);
+        client.DefaultRequestHeaders.Add("X-Admin-Actor", "m4-integration-test");
+        using HttpResponseMessage validation = await client.PostAsJsonAsync("/admin/v1/connectors:validate", importRequest, TestContext.Current.CancellationToken);
+        ConnectorValidationResult validationResult = (await validation.Content.ReadFromJsonAsync<ConnectorValidationResult>(cancellationToken: TestContext.Current.CancellationToken))!;
+        Assert.True(validationResult.Valid);
+
+        using HttpResponseMessage importedResponse = await client.PostAsJsonAsync("/admin/v1/connectors:import", importRequest with { ExpectedChecksumSha256 = validationResult.ChecksumSha256 }, TestContext.Current.CancellationToken);
+        ConnectorVersionResource imported = (await importedResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: TestContext.Current.CancellationToken))!;
+        Assert.Equal(HttpStatusCode.Created, importedResponse.StatusCode);
+        Assert.Equal(ConnectorVersionState.Draft, imported.State);
+
+        using HttpResponseMessage validatedResponse = await client.PostAsJsonAsync($"/admin/v1/connectors/{connectorId}/versions/1.0.0:validate", new ConnectorVersionActionRequest(imported.RowVersion), TestContext.Current.CancellationToken);
+        ConnectorVersionResource validated = (await validatedResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: TestContext.Current.CancellationToken))!;
+        using HttpResponseMessage publishedResponse = await client.PostAsJsonAsync($"/admin/v1/connectors/{connectorId}/versions/1.0.0:publish", new ConnectorVersionActionRequest(validated.RowVersion, 0), TestContext.Current.CancellationToken);
+        ConnectorVersionResource published = (await publishedResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: TestContext.Current.CancellationToken))!;
+        Assert.Equal(ConnectorVersionState.Published, published.State);
+
+        Guid environmentId = Guid.NewGuid();
+        using HttpResponseMessage bindingResponse = await client.PutAsJsonAsync($"/admin/v1/connectors/{connectorId}/bindings", new ConnectorBindingRequest(environmentId,
+            new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/" },
+            new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://api-key", ["sample-vendor-client-certificate"] = "synthetic://certificate" }), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, bindingResponse.StatusCode);
+        using HttpResponseMessage testResponse = await client.PostAsJsonAsync($"/admin/v1/connectors/{connectorId}:test", new ConnectorTestRequest(environmentId, "submit"), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, testResponse.StatusCode);
+
+        using HttpResponseMessage exportResponse = await client.GetAsync($"/admin/v1/connectors/{connectorId}/versions/1.0.0:export", TestContext.Current.CancellationToken);
+        string exported = await exportResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(validationResult.ChecksumSha256, ConnectorCanonicalJson.Checksum(exported));
+        Assert.DoesNotContain("synthetic://api-key", exported, StringComparison.Ordinal);
+        Assert.DoesNotContain(GatewayApiFactory.AdminKey, string.Join('\n', factory.Logs), StringComparison.Ordinal);
+    }
 }
 
 public sealed class GatewayM3TestingStartupTests
@@ -84,13 +130,23 @@ public sealed class GatewayM3TestingStartupTests
 
 public sealed class GatewayApiFactory : WebApplicationFactory<Program>
 {
+    public const string AdminKey = "M4-DEVELOPMENT-ADMIN-KEY-TEST-ONLY";
     private readonly RecordingLoggerProvider loggerProvider = new();
     public IReadOnlyCollection<string> Logs => loggerProvider.Messages;
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        Environment.SetEnvironmentVariable("M4_GATEWAY_ADMIN_TEST_KEY", AdminKey, EnvironmentVariableTarget.Process);
         builder.UseEnvironment("Testing");
+        builder.UseSetting("Gateway:Admin:Mode", "DevelopmentApiKey");
+        builder.UseSetting("Gateway:Admin:ApiKeyEnvironmentVariable", "M4_GATEWAY_ADMIN_TEST_KEY");
         builder.ConfigureServices(services => services.AddSingleton<ILoggerProvider>(loggerProvider));
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        base.Dispose(disposing);
+        Environment.SetEnvironmentVariable("M4_GATEWAY_ADMIN_TEST_KEY", null, EnvironmentVariableTarget.Process);
     }
 }
 

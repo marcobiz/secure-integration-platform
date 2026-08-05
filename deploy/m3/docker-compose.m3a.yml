@@ -119,49 +119,6 @@ services:
       Gateway__ActivationHmacKeyBase64: ${M3_ACTIVATION_HMAC_BASE64:?required}
       Gateway__M3PrivateMockHost: vendor.m3.test
       Gateway__M3PrivateMockCidr: 172.29.44.0/28
-      Gateway__Operations__0__ConnectorId: m3-vendor
-      Gateway__Operations__0__OperationId: submit
-      Gateway__Operations__0__Version: 3.0.0-m3
-      Gateway__Operations__0__Endpoint: https://vendor.m3.test:8443/vendor/orders
-      Gateway__Operations__0__Method: POST
-      Gateway__Operations__0__RequestContentType: application/json
-      Gateway__Operations__0__Authentication: ApiKeyAndMutualTls
-      Gateway__Operations__0__ApiKeySecretReference: synthetic-vault://vault.m3.test/vendor-api-key
-      Gateway__Operations__0__ApiKeyHeaderName: X-Vendor-Api-Key
-      Gateway__Operations__0__ClientCertificateReference: synthetic-vault://vault.m3.test/vendor-client-certificate
-      Gateway__Operations__0__MaximumRequestBytes: 1048576
-      Gateway__Operations__0__MaximumResponseBytes: 1048576
-      Gateway__Operations__1__ConnectorId: m3-vendor
-      Gateway__Operations__1__OperationId: loopback
-      Gateway__Operations__1__Version: 3.0.0-m3
-      Gateway__Operations__1__Endpoint: https://127.0.0.1/vendor/orders
-      Gateway__Operations__1__Authentication: None
-      Gateway__Operations__2__ConnectorId: m3-vendor
-      Gateway__Operations__2__OperationId: private
-      Gateway__Operations__2__Version: 3.0.0-m3
-      Gateway__Operations__2__Endpoint: https://172.29.44.7/vendor/orders
-      Gateway__Operations__2__Authentication: None
-      Gateway__Operations__3__ConnectorId: m3-vendor
-      Gateway__Operations__3__OperationId: metadata
-      Gateway__Operations__3__Version: 3.0.0-m3
-      Gateway__Operations__3__Endpoint: https://169.254.169.254/latest/meta-data/
-      Gateway__Operations__3__Authentication: None
-      Gateway__Operations__4__ConnectorId: m3-vendor
-      Gateway__Operations__4__OperationId: redirect
-      Gateway__Operations__4__Version: 3.0.0-m3
-      Gateway__Operations__4__Endpoint: https://vendor.m3.test:8443/vendor/redirect
-      Gateway__Operations__4__Authentication: ApiKeyAndMutualTls
-      Gateway__Operations__4__ApiKeySecretReference: synthetic-vault://vault.m3.test/vendor-api-key
-      Gateway__Operations__4__ApiKeyHeaderName: X-Vendor-Api-Key
-      Gateway__Operations__4__ClientCertificateReference: synthetic-vault://vault.m3.test/vendor-client-certificate
-      Gateway__Operations__5__ConnectorId: m3-vendor
-      Gateway__Operations__5__OperationId: wrong-certificate
-      Gateway__Operations__5__Version: 3.0.0-m3
-      Gateway__Operations__5__Endpoint: https://vendor.m3.test:8443/vendor/orders
-      Gateway__Operations__5__Authentication: ApiKeyAndMutualTls
-      Gateway__Operations__5__ApiKeySecretReference: synthetic-vault://vault.m3.test/vendor-api-key
-      Gateway__Operations__5__ApiKeyHeaderName: X-Vendor-Api-Key
-      Gateway__Operations__5__ClientCertificateReference: synthetic-vault://vault.m3.test/vendor-wrong-client-certificate
     volumes:
       - ${M3_CERTIFICATE_DIRECTORY:?required}:/run/m3-certs:ro
     read_only: true

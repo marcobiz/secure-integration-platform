@@ -1,63 +1,53 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.example.invalid/broker-gateway/connector-definition/1.0/schema.json",
-  "title": "Secure Integration Platform Connector Definition",
+  "$id": "https://schemas.secure-integration.example/connector-definition/v1/schema.json",
+  "title": "Secure Integration Connector Definition v1",
+  "description": "Provider-neutral, declarative connector contract. Endpoint and secret values are bound server-side and never appear here.",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "schemaVersion",
-    "connectorId",
-    "connectorVersion",
-    "displayName",
-    "endpoints",
-    "operations"
-  ],
+  "required": ["schemaVersion", "connectorId", "version", "displayName", "bindings", "operations"],
   "properties": {
     "schemaVersion": { "const": "1.0" },
     "connectorId": { "$ref": "#/$defs/identifier" },
-    "connectorVersion": {
-      "type": "string",
-      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$",
-      "maxLength": 64
-    },
+    "version": { "$ref": "#/$defs/semanticVersion" },
     "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
     "description": { "type": "string", "maxLength": 4000 },
-    "runtimeCompatibility": {
+    "bindings": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["minimumVersion"],
+      "required": ["endpoints", "secrets"],
       "properties": {
-        "minimumVersion": { "type": "string", "maxLength": 64 },
-        "maximumVersion": { "type": ["string", "null"], "maxLength": 64 }
+        "endpoints": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": { "name": { "$ref": "#/$defs/identifier" } }
+          }
+        },
+        "secrets": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "kind"],
+            "properties": {
+              "name": { "$ref": "#/$defs/identifier" },
+              "kind": { "enum": ["opaque", "username", "password", "clientCertificate"] }
+            }
+          }
+        }
       }
-    },
-    "plugin": {
-      "type": ["object", "null"],
-      "additionalProperties": false,
-      "required": ["pluginId", "pluginVersion", "contractVersion"],
-      "properties": {
-        "pluginId": { "$ref": "#/$defs/identifier" },
-        "pluginVersion": { "type": "string", "maxLength": 64 },
-        "contractVersion": { "type": "string", "maxLength": 32 }
-      }
-    },
-    "endpoints": {
-      "type": "object",
-      "minProperties": 1,
-      "maxProperties": 16,
-      "propertyNames": { "$ref": "#/$defs/identifier" },
-      "additionalProperties": { "$ref": "#/$defs/endpoint" }
     },
     "operations": {
       "type": "array",
       "minItems": 1,
       "maxItems": 100,
       "items": { "$ref": "#/$defs/operation" }
-    },
-    "extensions": {
-      "type": "object",
-      "maxProperties": 16,
-      "propertyNames": { "pattern": "^[a-z0-9][a-z0-9.-]+/[a-zA-Z0-9._-]+$" }
     }
   },
   "$defs": {
@@ -65,311 +55,109 @@
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9.-]{2,99}$"
     },
-    "endpoint": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["baseUri", "classification"],
-      "properties": {
-        "baseUri": {
-          "type": "string",
-          "format": "uri",
-          "pattern": "^https://",
-          "maxLength": 2048
-        },
-        "classification": { "enum": ["publicExternal", "approvedPrivate"] },
-        "allowedPorts": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 8,
-          "uniqueItems": true,
-          "items": { "type": "integer", "minimum": 1, "maximum": 65535 },
-          "default": [443]
-        },
-        "tls": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "minimumVersion": { "enum": ["1.2", "1.3"], "default": "1.2" },
-            "customTrustBundleRef": { "type": ["string", "null"], "maxLength": 256 }
-          }
-        }
-      }
+    "semanticVersion": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
     },
     "operation": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "operationId",
-        "mode",
-        "executionStrategy",
-        "request",
-        "outbound",
-        "authentication",
-        "response",
-        "policy"
-      ],
+      "required": ["operationId", "endpointBinding", "method", "path", "request", "response", "authentication", "timeoutMs", "redirectPolicy", "allowedClientHeaders"],
       "properties": {
         "operationId": { "$ref": "#/$defs/identifier" },
-        "displayName": { "type": "string", "minLength": 1, "maxLength": 256 },
-        "mode": { "enum": ["secureLayer", "managed"] },
-        "executionStrategy": { "enum": ["gateway", "broker", "hybrid"] },
-        "hybridHandoff": {
-          "type": ["object", "null"],
-          "additionalProperties": false,
-          "required": ["kind"],
-          "properties": {
-            "kind": { "enum": ["oauthCodeExchange", "localSignature", "localMfa"] },
-            "ttlSeconds": { "type": "integer", "minimum": 30, "maximum": 900 }
-          }
-        },
-        "managedHandler": {
-          "type": ["object", "null"],
-          "additionalProperties": false,
-          "required": ["kind", "handlerId"],
-          "properties": {
-            "kind": { "enum": ["builtIn", "plugin"] },
-            "handlerId": { "$ref": "#/$defs/identifier" }
-          }
-        },
-        "request": { "$ref": "#/$defs/messagePolicy" },
-        "outbound": { "$ref": "#/$defs/outbound" },
-        "authentication": { "$ref": "#/$defs/authentication" },
-        "response": { "$ref": "#/$defs/messagePolicy" },
-        "policy": { "$ref": "#/$defs/operationPolicy" },
-        "audit": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "metadataAllowlist": {
-              "type": "array",
-              "maxItems": 32,
-              "uniqueItems": true,
-              "items": { "type": "string", "maxLength": 100 }
-            }
-          }
-        }
-      },
-      "allOf": [
-        {
-          "if": { "properties": { "executionStrategy": { "const": "hybrid" } } },
-          "then": { "required": ["hybridHandoff"] },
-          "else": { "properties": { "hybridHandoff": { "type": "null" } } }
-        },
-        {
-          "if": { "properties": { "mode": { "const": "managed" } } },
-          "then": { "required": ["managedHandler"] },
-          "else": { "properties": { "managedHandler": { "type": "null" } } }
-        }
-      ]
-    },
-    "messagePolicy": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["contentTypes", "maxBytes"],
-      "properties": {
-        "contentTypes": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 8,
-          "uniqueItems": true,
-          "items": { "type": "string", "minLength": 3, "maxLength": 128 }
-        },
-        "maxBytes": { "type": "integer", "minimum": 1, "maximum": 67108864 },
-        "schemaRef": { "type": ["string", "null"], "maxLength": 512 },
-        "xml": {
-          "type": ["object", "null"],
-          "additionalProperties": false,
-          "properties": {
-            "maxDepth": { "type": "integer", "minimum": 1, "maximum": 128, "default": 32 },
-            "maxNodes": { "type": "integer", "minimum": 1, "maximum": 1000000, "default": 100000 },
-            "allowDtd": { "const": false },
-            "allowExternalEntities": { "const": false }
-          }
-        }
-      }
-    },
-    "outbound": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["endpointRef", "method", "pathTemplate"],
-      "properties": {
-        "endpointRef": { "$ref": "#/$defs/identifier" },
-        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
-        "pathTemplate": {
+        "endpointBinding": { "$ref": "#/$defs/identifier" },
+        "method": { "enum": ["GET", "POST", "PUT", "DELETE"] },
+        "path": {
           "type": "string",
           "pattern": "^/",
           "maxLength": 1024,
-          "not": { "pattern": "(^|/)\\.\\.(/|$)" }
+          "not": { "pattern": "(^|/)\\.\\.(/|$)|[?#]" }
         },
-        "pathParameters": {
-          "type": "object",
-          "maxProperties": 16,
-          "additionalProperties": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["source", "pattern", "maxLength"],
-            "properties": {
-              "source": { "enum": ["metadata", "payloadField", "operatorContext"] },
-              "pattern": { "type": "string", "maxLength": 256 },
-              "maxLength": { "type": "integer", "minimum": 1, "maximum": 512 }
-            }
-          }
-        },
+        "request": { "$ref": "#/$defs/messagePolicy" },
+        "response": { "$ref": "#/$defs/responsePolicy" },
+        "authentication": { "$ref": "#/$defs/authentication" },
+        "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 },
+        "redirectPolicy": { "const": "deny" },
         "allowedClientHeaders": {
           "type": "array",
           "maxItems": 16,
           "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9-]+$",
-            "maxLength": 64
-          }
+          "items": { "type": "string", "pattern": "^[A-Za-z0-9-]+$", "maxLength": 64 }
         },
-        "redirects": { "const": false, "default": false }
+        "idempotent": { "type": "boolean", "default": false },
+        "maximumRetries": { "type": "integer", "minimum": 0, "maximum": 2, "default": 0 }
       }
+    },
+    "messagePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contentType", "maximumBytes"],
+      "properties": {
+        "contentType": { "type": "string", "minLength": 3, "maxLength": 128 },
+        "maximumBytes": { "type": "integer", "minimum": 1, "maximum": 16777216 }
+      }
+    },
+    "responsePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maximumBytes"],
+      "properties": { "maximumBytes": { "type": "integer", "minimum": 1, "maximum": 16777216 } }
     },
     "authentication": {
       "oneOf": [
-        { "$ref": "#/$defs/authNone" },
-        { "$ref": "#/$defs/authBasic" },
-        { "$ref": "#/$defs/authApiKey" },
-        { "$ref": "#/$defs/authMtls" },
-        { "$ref": "#/$defs/authOauthClientCredentials" },
-        { "$ref": "#/$defs/authOauthAuthorizationCode" },
-        { "$ref": "#/$defs/authHmac" },
-        { "$ref": "#/$defs/authJwt" }
-      ]
-    },
-    "authNone": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind"],
-      "properties": { "kind": { "const": "none" } }
-    },
-    "authBasic": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "secretBindings"],
-      "properties": {
-        "kind": { "const": "basic" },
-        "secretBindings": { "$ref": "#/$defs/secretBindings" }
-      }
-    },
-    "authApiKey": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "secretBindings", "placement", "name"],
-      "properties": {
-        "kind": { "const": "apiKey" },
-        "secretBindings": { "$ref": "#/$defs/secretBindings" },
-        "placement": { "enum": ["header", "query"] },
-        "name": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$", "maxLength": 64 }
-      }
-    },
-    "authMtls": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "secretBindings"],
-      "properties": {
-        "kind": { "const": "mtls" },
-        "secretBindings": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 1,
-          "items": { "$ref": "#/$defs/identifier" }
-        }
-      }
-    },
-    "authOauthClientCredentials": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "tokenEndpointRef", "secretBindings"],
-      "properties": {
-        "kind": { "const": "oauth2ClientCredentials" },
-        "tokenEndpointRef": { "$ref": "#/$defs/identifier" },
-        "secretBindings": { "$ref": "#/$defs/secretBindings" },
-        "scopes": {
-          "type": "array",
-          "maxItems": 32,
-          "uniqueItems": true,
-          "items": { "type": "string", "maxLength": 256 }
-        }
-      }
-    },
-    "authOauthAuthorizationCode": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "tokenEndpointRef", "sessionBinding"],
-      "properties": {
-        "kind": { "enum": ["oauth2AuthorizationCode", "oauth2Pkce"] },
-        "tokenEndpointRef": { "$ref": "#/$defs/identifier" },
-        "secretBindings": { "$ref": "#/$defs/secretBindings" },
-        "sessionBinding": { "$ref": "#/$defs/identifier" },
-        "scopes": {
-          "type": "array",
-          "maxItems": 32,
-          "uniqueItems": true,
-          "items": { "type": "string", "maxLength": 256 }
-        }
-      }
-    },
-    "authHmac": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "secretBindings", "placement", "name", "canonicalization"],
-      "properties": {
-        "kind": { "const": "hmacSha256" },
-        "secretBindings": { "$ref": "#/$defs/secretBindings" },
-        "placement": { "enum": ["header", "bodyField"] },
-        "name": { "type": "string", "maxLength": 64 },
-        "canonicalization": { "enum": ["rawBody", "rfc8785Json", "connectorPlugin"] }
-      }
-    },
-    "authJwt": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "secretBindings", "issuer", "audience", "maximumLifetimeSeconds"],
-      "properties": {
-        "kind": { "const": "jwtRs256" },
-        "secretBindings": { "$ref": "#/$defs/secretBindings" },
-        "issuer": { "type": "string", "maxLength": 512 },
-        "audience": { "type": "string", "maxLength": 512 },
-        "maximumLifetimeSeconds": { "type": "integer", "minimum": 30, "maximum": 3600 },
-        "clockSkewSeconds": { "type": "integer", "minimum": 0, "maximum": 300, "default": 60 },
-        "allowedClaims": {
-          "type": "array",
-          "maxItems": 32,
-          "uniqueItems": true,
-          "items": { "type": "string", "maxLength": 128 }
-        }
-      }
-    },
-    "secretBindings": {
-      "type": "array",
-      "minItems": 1,
-      "maxItems": 4,
-      "uniqueItems": true,
-      "items": { "$ref": "#/$defs/identifier" }
-    },
-    "operationPolicy": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["timeoutMs", "retryCount", "idempotency"],
-      "properties": {
-        "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 60000 },
-        "retryCount": { "type": "integer", "minimum": 0, "maximum": 2 },
-        "idempotency": { "enum": ["forbidden", "optional", "required"] },
-        "rateLimit": {
+        {
           "type": "object",
           "additionalProperties": false,
-          "required": ["requests", "windowSeconds"],
+          "required": ["kind"],
+          "properties": { "kind": { "const": "none" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "usernameBinding", "passwordBinding"],
           "properties": {
-            "requests": { "type": "integer", "minimum": 1, "maximum": 10000 },
-            "windowSeconds": { "type": "integer", "minimum": 1, "maximum": 3600 }
+            "kind": { "const": "basic" },
+            "usernameBinding": { "$ref": "#/$defs/identifier" },
+            "passwordBinding": { "$ref": "#/$defs/identifier" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "secretBinding", "headerName"],
+          "properties": {
+            "kind": { "const": "apiKey" },
+            "secretBinding": { "$ref": "#/$defs/identifier" },
+            "headerName": { "$ref": "#/$defs/safeHeader" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "certificateBinding"],
+          "properties": {
+            "kind": { "const": "mtls" },
+            "certificateBinding": { "$ref": "#/$defs/identifier" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "secretBinding", "headerName", "certificateBinding"],
+          "properties": {
+            "kind": { "const": "apiKeyAndMtls" },
+            "secretBinding": { "$ref": "#/$defs/identifier" },
+            "headerName": { "$ref": "#/$defs/safeHeader" },
+            "certificateBinding": { "$ref": "#/$defs/identifier" }
           }
         }
-      }
+      ]
+    },
+    "safeHeader": {
+      "type": "string",
+      "pattern": "^(?!Authorization$|Cookie$|Host$|Forwarded$|X-Forwarded-|Proxy-)[A-Za-z0-9-]+$",
+      "maxLength": 64
     }
   }
 }
-
