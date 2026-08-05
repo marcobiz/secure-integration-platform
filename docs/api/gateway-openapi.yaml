@@ -1,14 +1,16 @@
 openapi: 3.1.0
 info:
   title: Secure Integration Platform Gateway API
-  version: 1.1.0-m4
-  description: Provider-neutral runtime and Connector Configuration MVP Admin API.
+  version: 1.2.0-m5
+  description: Provider-neutral runtime and same-origin OIDC Admin API.
 servers:
   - url: https://gateway.example.invalid
 tags:
   - name: Runtime
   - name: Enrollment
   - name: ConnectorsAdmin
+  - name: Administration
+  - name: AdminAuth
   - name: Health
 paths:
   /v1/enrollments/challenges:
@@ -189,6 +191,99 @@ paths:
       responses:
         '200': { description: Published definition and bindings resolve without invocation. }
         default: { $ref: '#/components/responses/Problem' }
+  /admin/auth/me:
+    get:
+      tags: [AdminAuth]
+      operationId: getAdminSession
+      security: [{ AdminSession: [] }]
+      responses:
+        '200': { description: Current redacted principal and roles, content: { application/json: { schema: { $ref: '#/components/schemas/AdminSession' } } } }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/auth/csrf:
+    get:
+      tags: [AdminAuth]
+      operationId: getCsrfToken
+      responses:
+        '200': { description: Opaque anti-CSRF request token, content: { application/json: { schema: { type: object, required: [token], properties: { token: { type: string } } } } } }
+  /admin/auth/logout:
+    post:
+      tags: [AdminAuth]
+      operationId: logoutAdmin
+      security: [{ AdminSession: [] }]
+      responses: { '200': { description: Session invalidated. }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/dashboard:
+    get:
+      tags: [Administration]
+      operationId: getAdminDashboard
+      security: [{ AdminSession: [] }]
+      responses:
+        '200': { description: Provider-neutral status summary, content: { application/json: { schema: { $ref: '#/components/schemas/Dashboard' } } } }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/api/v1/tenants:
+    get:
+      tags: [Administration]
+      operationId: listTenants
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { description: Tenant page, content: { application/json: { schema: { $ref: '#/components/schemas/TenantPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
+    post:
+      tags: [Administration]
+      operationId: createTenant
+      security: [{ AdminSession: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateTenant' } } } }
+      responses: { '201': { description: Tenant created, content: { application/json: { schema: { $ref: '#/components/schemas/Tenant' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/applications:
+    get:
+      tags: [Administration]
+      operationId: listApplications
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { description: Application page, content: { application/json: { schema: { $ref: '#/components/schemas/ApplicationPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
+    post:
+      tags: [Administration]
+      operationId: createApplication
+      security: [{ AdminSession: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateApplication' } } } }
+      responses: { '201': { description: Application created }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/environments:
+    get:
+      tags: [Administration]
+      operationId: listEnvironments
+      security: [{ AdminSession: [] }]
+      responses: { '200': { description: Environment page, content: { application/json: { schema: { $ref: '#/components/schemas/EnvironmentPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/installations:
+    get:
+      tags: [Administration]
+      operationId: listInstallations
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { description: Installation page, content: { application/json: { schema: { $ref: '#/components/schemas/InstallationPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
+    post:
+      tags: [Administration]
+      operationId: createInstallation
+      security: [{ AdminSession: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateInstallation' } } } }
+      responses: { '201': { description: One-time activation response, content: { application/json: { schema: { $ref: '#/components/schemas/ProvisionedActivation' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/grants:
+    get:
+      tags: [Administration]
+      operationId: listGrants
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { description: Grant page, content: { application/json: { schema: { $ref: '#/components/schemas/GrantPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/audit:
+    get:
+      tags: [Administration]
+      operationId: listAudit
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }]
+      responses: { '200': { description: Redacted audit page, content: { application/json: { schema: { $ref: '#/components/schemas/AuditPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: listAdminConnectors
+      security: [{ AdminSession: [] }]
+      responses: { '200': { description: Connector summaries, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ConnectorSummary' } } } } }, default: { $ref: '#/components/responses/Problem' } }
   /health/live:
     get:
       tags: [Health]
@@ -209,10 +304,18 @@ components:
       in: header
       name: X-Gateway-Admin-Key
       description: Development-only representation; production deployments must bind OIDC policy.
+    AdminSession:
+      type: apiKey
+      in: cookie
+      name: __Host-SecureIntegration.Admin
+      description: HttpOnly same-origin session created by the server-side OIDC flow.
   parameters:
     ConnectorId: { name: connectorId, in: path, required: true, schema: { type: string, pattern: '^[a-z0-9][a-z0-9.-]{2,99}$' } }
     OperationId: { name: operationId, in: path, required: true, schema: { type: string } }
     Version: { name: version, in: path, required: true, schema: { type: string } }
+    TenantId: { name: tenantId, in: query, required: true, schema: { type: string, format: uuid } }
+    Offset: { name: offset, in: query, required: false, schema: { type: integer, minimum: 0, default: 0 } }
+    Limit: { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
   requestBodies:
     ConnectorImport:
       required: true
@@ -231,6 +334,104 @@ components:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
   schemas:
+    AdminRole:
+      type: string
+      enum: [Viewer, ConnectorEditor, ConnectorApprover, Operator, SecurityAdministrator]
+    AdminSession:
+      type: object
+      required: [id, displayName, roles]
+      properties:
+        id: { type: string, format: uuid }
+        displayName: { type: string }
+        roles: { type: array, items: { type: object, required: [role], properties: { role: { $ref: '#/components/schemas/AdminRole' }, tenantId: { type: [string, 'null'], format: uuid } } } }
+    Dashboard:
+      type: object
+      required: [tenants, applications, database, provider, generatedAtUtc]
+      properties:
+        tenants: { type: integer }
+        applications: { type: integer }
+        database: { type: string, enum: [healthy, unhealthy] }
+        provider: { type: string, enum: [healthy, unhealthy] }
+        generatedAtUtc: { type: string, format: date-time }
+    Page:
+      type: object
+      required: [items, offset, limit, total]
+      properties:
+        items: { type: array, items: {} }
+        offset: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+    Tenant:
+      type: object
+      required: [id, code, displayName, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        displayName: { type: string }
+        status: { type: string }
+        createdAt: { type: string, format: date-time }
+    TenantPage:
+      allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Tenant' } } } }]
+    CreateTenant:
+      type: object
+      additionalProperties: false
+      required: [code, displayName]
+      properties: { code: { type: string, maxLength: 64 }, displayName: { type: string, maxLength: 256 } }
+    Application:
+      type: object
+      required: [id, code, displayName, status, minimumBrokerVersion, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string }
+        displayName: { type: string }
+        status: { type: string }
+        minimumBrokerVersion: { type: string }
+        maximumBrokerVersion: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+    ApplicationPage:
+      allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Application' } } } }]
+    CreateApplication:
+      type: object
+      additionalProperties: false
+      required: [code, displayName, minimumBrokerVersion]
+      properties: { code: { type: string }, displayName: { type: string }, minimumBrokerVersion: { type: string }, maximumBrokerVersion: { type: [string, 'null'] } }
+    Environment:
+      type: object
+      required: [id, code, displayName, productionControls]
+      properties: { id: { type: string, format: uuid }, code: { type: string }, displayName: { type: string }, productionControls: { type: boolean } }
+    EnvironmentPage:
+      allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Environment' } } } }]
+    Installation:
+      type: object
+      required: [id, tenantId, applicationId, environmentId, status, createdAt]
+      properties: { id: { type: string, format: uuid }, tenantId: { type: string, format: uuid }, applicationId: { type: string, format: uuid }, environmentId: { type: string, format: uuid }, status: { type: string }, brokerVersion: { type: [string, 'null'] }, createdAt: { type: string, format: date-time }, lastSeenAt: { type: [string, 'null'], format: date-time } }
+    InstallationPage:
+      allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Installation' } } } }]
+    CreateInstallation:
+      type: object
+      additionalProperties: false
+      required: [tenantId, applicationId, environmentId]
+      properties: { tenantId: { type: string, format: uuid }, applicationId: { type: string, format: uuid }, environmentId: { type: string, format: uuid } }
+    ProvisionedActivation:
+      type: object
+      required: [installationId, activationCodeId, activationCode, expiresAt]
+      properties: { installationId: { type: string, format: uuid }, activationCodeId: { type: string, format: uuid }, activationCode: { type: string, writeOnly: true }, expiresAt: { type: string, format: date-time } }
+    Grant:
+      type: object
+      required: [id, installationId, tenantId, connectorId, operationId, enabled, validFrom]
+      properties: { id: { type: string, format: uuid }, installationId: { type: string, format: uuid }, tenantId: { type: string, format: uuid }, connectorId: { type: string }, operationId: { type: string }, enabled: { type: boolean }, validFrom: { type: string, format: date-time }, validUntil: { type: [string, 'null'], format: date-time } }
+    GrantPage:
+      allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Grant' } } } }]
+    AuditEvent:
+      type: object
+      required: [id, occurredAt, action, targetType, targetId, correlationId, outcome, reasonCode]
+      properties: { id: { type: string, format: uuid }, occurredAt: { type: string, format: date-time }, action: { type: string }, targetType: { type: string }, targetId: { type: string }, correlationId: { type: string, format: uuid }, outcome: { type: string }, reasonCode: { type: string } }
+    AuditPage:
+      allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } } } }]
+    ConnectorSummary:
+      type: object
+      required: [connectorId, displayName, versions]
+      properties: { connectorId: { type: string }, displayName: { type: string }, versions: { type: integer }, publishedVersion: { type: [string, 'null'] } }
     InvokeRequest:
       type: object
       additionalProperties: false

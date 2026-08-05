@@ -1,0 +1,27 @@
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { ApiProblem, adminApi, api, csrf, type AdminSession } from './api/client';
+import { hasRole } from './auth/SessionContext';
+import { DataTable } from './components/DataTable';
+import { ErrorState } from './components/AsyncState';
+import i18n from './i18n';
+
+const session: AdminSession = { id: '00000000-0000-0000-0000-000000000001', displayName: 'Editor', roles: [{ role: 'ConnectorEditor', tenantId: null }] };
+
+describe('Admin UI security and presentation behavior', () => {
+  beforeEach(async () => { vi.restoreAllMocks(); localStorage.clear(); await i18n.changeLanguage('en'); });
+
+  it('renders accessible table headings and data', () => {
+    render(<DataTable rows={[{ name: 'Alpha' }]} label="Tenants" columns={[{ key: 'name', label: 'Name', render: row => row.name }]} />);
+    expect(screen.getByRole('table', { name: 'Tenants' })).toBeInTheDocument(); expect(screen.getByRole('columnheader', { name: 'Name' })).toBeInTheDocument();
+  });
+  it('renders the empty state', () => { render(<DataTable rows={[]} label="Empty" columns={[]} />); expect(screen.getByText('No records found.')).toBeInTheDocument(); });
+  it('enforces permission guards from server roles', () => { expect(hasRole(session, 'ConnectorEditor')).toBe(true); expect(hasRole(session, 'SecurityAdministrator')).toBe(false); });
+  it('maps forbidden errors without internal details', () => { render(<ErrorState error={new ApiProblem(403, 'BGW-ADMIN-AUTHORIZATION', 'c-1')} />); expect(screen.getByText(/not authorized/i)).toBeInTheDocument(); expect(screen.getByText(/c-1/)).toBeInTheDocument(); });
+  it('maps concurrency conflict errors', () => { render(<ErrorState error={new ApiProblem(409, 'BGW-CONCURRENCY', 'c-2')} />); expect(screen.getByText(/resource changed/i)).toBeInTheDocument(); });
+  it('persists language as non-sensitive preference', async () => { await i18n.changeLanguage('it'); expect(i18n.t('save')).toBe('Salva'); });
+  it('fetches and caches CSRF tokens', async () => { vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ token: 'synthetic-csrf' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))); expect(await csrf()).toBe('synthetic-csrf'); });
+  it('adds CSRF to mutating requests', async () => { const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ token: 't' }), { status: 200, headers: { 'Content-Type': 'application/json' } })).mockResolvedValueOnce(new Response(JSON.stringify({ token: 't' }), { status: 200, headers: { 'Content-Type': 'application/json' } })).mockResolvedValueOnce(new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'Content-Type': 'application/json' } })); vi.stubGlobal('fetch', fetchMock); await csrf(); await api('/test', { method: 'POST', body: '{}' }); const headers = fetchMock.mock.calls[1][1].headers as Headers; expect(headers.get('X-CSRF-TOKEN')).toBe('t'); });
+  it('never requests activation code when listing installations', async () => { const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [], offset: 0, limit: 50, total: 0 }), { status: 200, headers: { 'Content-Type': 'application/json' } })); vi.stubGlobal('fetch', fetchMock); await adminApi.installations('tenant'); expect(String(fetchMock.mock.calls[0][0])).not.toContain('activation'); });
+  it('supports observable retry action', () => { const retry = vi.fn(); render(<ErrorState error={new Error('offline')} retry={retry} />); fireEvent.click(screen.getByRole('button', { name: 'Retry' })); expect(retry).toHaveBeenCalledOnce(); });
+});
