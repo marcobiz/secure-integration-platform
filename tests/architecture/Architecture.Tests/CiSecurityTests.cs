@@ -12,6 +12,7 @@ public sealed class CiSecurityTests
         string workflow = File.ReadAllText(Path.Combine(Root, ".github", "workflows", "ci.yml"));
 
         Assert.Contains("Username=ci_gateway_admin", workflow, StringComparison.Ordinal);
+        Assert.Contains("GATEWAY_POSTGRES_MIGRATION_CONNECTION: Host=127.0.0.1;Port=5432;Database=broker_gateway_test;Username=postgres", workflow, StringComparison.Ordinal);
         Assert.Contains("CREATE ROLE ci_gateway_admin LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION", workflow, StringComparison.Ordinal);
         Assert.Contains("GRANT gateway_admin TO ci_gateway_admin", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("GATEWAY_POSTGRES_ADMIN_CONNECTION: Host=127.0.0.1;Port=5432;Database=broker_gateway_test;Username=postgres", workflow, StringComparison.Ordinal);

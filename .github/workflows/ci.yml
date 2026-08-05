@@ -94,6 +94,7 @@ jobs:
     env:
       GATEWAY_POSTGRES_ADMIN_CONNECTION: Host=127.0.0.1;Port=5432;Database=broker_gateway_test;Username=ci_gateway_admin;SSL Mode=Disable;GSS Encryption Mode=Disable
       GATEWAY_MIGRATION_CONNECTION: Host=127.0.0.1;Port=5432;Database=broker_gateway_test;Username=postgres;SSL Mode=Disable
+      GATEWAY_POSTGRES_MIGRATION_CONNECTION: Host=127.0.0.1;Port=5432;Database=broker_gateway_test;Username=postgres;SSL Mode=Disable;GSS Encryption Mode=Disable
       EXPECTED_M2_MIGRATION_SHA256: 182CC690E16BB986638A4B52EE1554A4B540A8E58FD673F2111A79D194C66A98
       EXPECTED_M4_MIGRATION_SHA256: 9D991B0E4E8268D47C32121DECE2D3593B183623059BB17F4A82A479DC8D322C
     steps:
