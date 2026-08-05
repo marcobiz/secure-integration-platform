@@ -4,7 +4,7 @@ $trackedRoots = @('src', 'sdk', 'tests', 'deploy', 'docs', 'eng', '.github')
 $patterns = @(
     'BEGIN (RSA |EC )?PRIVATE KEY',
     'Authorization:\s*Bearer\s+[A-Za-z0-9._-]{12,}',
-    '(?i)client[_-]?secret\s*[:=]\s*(?:\x22(?!synthetic[-_]|test-only[-_])[^\x22]{8,}\x22|\x27(?!synthetic[-_]|test-only[-_])[^\x27]{8,}\x27|(?!synthetic[-_]|test-only[-_])[A-Za-z0-9._-]{8,}\s*$)',
+    '(?i)[\x22\x27]?client[_-]?secret[\x22\x27]?\s*[:=]\s*[\x22\x27]?(?!(?:synthetic|test-only)[-_])[A-Za-z0-9._+/=-]{8,}[\x22\x27]?\s*[,}]?\s*$',
     '(?i)password\s*[:=]\s*(?:\x22(?!synthetic[-_]|test-only[-_])[^\x22]{8,}\x22|\x27(?!synthetic[-_]|test-only[-_])[^\x27]{8,}\x27|(?!synthetic[-_]|test-only[-_])[A-Za-z0-9._-]{8,}\s*$)'
 )
 
@@ -19,21 +19,12 @@ try {
             if ($ripgrep) {
                 # Relative paths avoid Windows PowerShell 5.1 native argument
                 # corruption when a regex is followed by an absolute C:\ path.
-                $matches = & $ripgrep.Source -l --pcre2 -e $pattern -- $relative 2>$null
-            }
-            elseif (Test-Path -LiteralPath (Join-Path $root '.git')) {
-                # Git is already a repository prerequisite and its PCRE engine keeps
-                # this gate functional on clean Windows runners that do not ship rg.
-                $matches = & git -C $root grep -Il -P -e $pattern -- $relative 2>$null
-                if ($LASTEXITCODE -notin 0, 1) {
-                    throw "Secret scan failed while inspecting '$relative'."
-                }
+                $matches = & $ripgrep.Source -l --hidden --pcre2 -e $pattern -- $relative 2>$null
             }
             else {
-                # Allowlisted open-source exports intentionally contain no .git directory.
-                # Select-String keeps the same fail-closed scan available on minimal CI
-                # images that do not include ripgrep.
-                $matches = @(Get-ChildItem -LiteralPath $relative -Recurse -File |
+                # Enumerating the filesystem, rather than only Git's index, is required
+                # so the negative CI fixture and any other untracked credential are seen.
+                $matches = @(Get-ChildItem -LiteralPath $relative -Recurse -File -Force |
                     Where-Object { $_.Length -le 10MB -and $_.Extension -notin @('.png', '.jpg', '.jpeg', '.gif', '.ico', '.dll', '.exe', '.zip') } |
                     Select-String -Pattern $pattern |
                     Select-Object -ExpandProperty Path -Unique)
