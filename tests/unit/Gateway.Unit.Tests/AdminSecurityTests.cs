@@ -10,6 +10,7 @@ namespace SecureIntegration.Gateway.Unit.Tests;
 public sealed class AdminSecurityTests
 {
     private static readonly DateTimeOffset Now = new(2026, 8, 5, 12, 0, 0, TimeSpan.Zero);
+    private static readonly byte[] BindingDigest = SHA256.HashData("binding-bundle"u8);
 
     [Fact]
     public async Task M5_UT_Admin_identity_is_issuer_and_subject_not_email()
@@ -60,9 +61,9 @@ public sealed class AdminSecurityTests
         InMemoryAdminSecurityStore store = new();
         AdminPrincipalRecord editor = await PrincipalAsync(store, "editor");
         ConnectorVersionRecord version = Version(editor.Id);
-        await store.RequestApprovalAsync(version, editor.Id, Now, TestContext.Current.CancellationToken);
+        await store.RequestApprovalAsync(version, BindingDigest, editor.Id, Now, TestContext.Current.CancellationToken);
 
-        GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => store.ApproveAsync(version.Id, version.ChecksumSha256, version.CreatedBy, editor.Id, Now.AddMinutes(1), TestContext.Current.CancellationToken));
+        GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => store.ApproveAsync(version.Id, version.ChecksumSha256, BindingDigest, version.CreatedBy, editor.Id, Now.AddMinutes(1), TestContext.Current.CancellationToken));
         Assert.Equal("BGW-ADMIN-FOUR-EYES", denied.Code);
     }
 
@@ -73,12 +74,12 @@ public sealed class AdminSecurityTests
         AdminPrincipalRecord editor = await PrincipalAsync(store, "editor");
         AdminPrincipalRecord approver = await PrincipalAsync(store, "approver");
         ConnectorVersionRecord version = Version(editor.Id);
-        await store.RequestApprovalAsync(version, editor.Id, Now, TestContext.Current.CancellationToken);
-        ConnectorApprovalRecord approval = await store.ApproveAsync(version.Id, version.ChecksumSha256, version.CreatedBy, approver.Id, Now.AddMinutes(1), TestContext.Current.CancellationToken);
+        await store.RequestApprovalAsync(version, BindingDigest, editor.Id, Now, TestContext.Current.CancellationToken);
+        ConnectorApprovalRecord approval = await store.ApproveAsync(version.Id, version.ChecksumSha256, BindingDigest, version.CreatedBy, approver.Id, Now.AddMinutes(1), TestContext.Current.CancellationToken);
 
         Assert.Equal(ConnectorApprovalStatus.Approved, approval.Status);
-        await new FourEyesConnectorApprovalPolicy(store).EnsurePublishApprovedAsync(version, editor.Id.ToString("D"), TestContext.Current.CancellationToken);
-        Assert.False(await store.HasValidApprovalAsync(version.Id, SHA256.HashData("other"u8), editor.Id.ToString("D"), TestContext.Current.CancellationToken));
+        await new FourEyesConnectorApprovalPolicy(store).EnsurePublishApprovedAsync(version, BindingDigest, editor.Id.ToString("D"), TestContext.Current.CancellationToken);
+        Assert.False(await store.HasValidApprovalAsync(version.Id, SHA256.HashData("other"u8), BindingDigest, editor.Id.ToString("D"), TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -88,14 +89,14 @@ public sealed class AdminSecurityTests
         AdminPrincipalRecord editor = await PrincipalAsync(store, "editor-reject");
         AdminPrincipalRecord approver = await PrincipalAsync(store, "approver-reject");
         ConnectorVersionRecord version = Version(editor.Id);
-        await store.RequestApprovalAsync(version, editor.Id, Now, TestContext.Current.CancellationToken);
+        await store.RequestApprovalAsync(version, BindingDigest, editor.Id, Now, TestContext.Current.CancellationToken);
 
-        ConnectorApprovalRecord rejection = await store.RejectAsync(version.Id, version.ChecksumSha256, version.CreatedBy, approver.Id, "schema requires revision", Now.AddMinutes(1), TestContext.Current.CancellationToken);
+        ConnectorApprovalRecord rejection = await store.RejectAsync(version.Id, version.ChecksumSha256, BindingDigest, version.CreatedBy, approver.Id, "schema requires revision", Now.AddMinutes(1), TestContext.Current.CancellationToken);
 
         Assert.Equal(ConnectorApprovalStatus.Rejected, rejection.Status);
         Assert.Equal(approver.Id, rejection.RejectedBy);
         Assert.Equal("schema requires revision", rejection.DecisionComment);
-        Assert.False(await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, editor.Id.ToString("D"), TestContext.Current.CancellationToken));
+        Assert.False(await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, BindingDigest, editor.Id.ToString("D"), TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -105,13 +106,29 @@ public sealed class AdminSecurityTests
         AdminPrincipalRecord editor = await PrincipalAsync(store, "editor");
         AdminPrincipalRecord approver = await PrincipalAsync(store, "approver");
         ConnectorVersionRecord version = Version(editor.Id);
-        await store.RequestApprovalAsync(version, editor.Id, Now, TestContext.Current.CancellationToken);
-        await store.ApproveAsync(version.Id, version.ChecksumSha256, version.CreatedBy, approver.Id, Now.AddMinutes(1), TestContext.Current.CancellationToken);
+        await store.RequestApprovalAsync(version, BindingDigest, editor.Id, Now, TestContext.Current.CancellationToken);
+        await store.ApproveAsync(version.Id, version.ChecksumSha256, BindingDigest, version.CreatedBy, approver.Id, Now.AddMinutes(1), TestContext.Current.CancellationToken);
 
         await store.InvalidateApprovalsAsync(version.Id, Now.AddMinutes(2), TestContext.Current.CancellationToken);
 
-        Assert.False(await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, editor.Id.ToString("D"), TestContext.Current.CancellationToken));
+        Assert.False(await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, BindingDigest, editor.Id.ToString("D"), TestContext.Current.CancellationToken));
         Assert.Equal(ConnectorApprovalStatus.Invalidated, Assert.Single(await store.ListApprovalsAsync(version.Id, TestContext.Current.CancellationToken)).Status);
+    }
+
+    [Fact]
+    public async Task M5_UT_Approval_is_bound_to_exact_connector_and_binding_bundle_digest()
+    {
+        InMemoryAdminSecurityStore store = new();
+        AdminPrincipalRecord editor = await PrincipalAsync(store, "digest-editor");
+        AdminPrincipalRecord approver = await PrincipalAsync(store, "digest-approver");
+        ConnectorVersionRecord version = Version(editor.Id);
+        await store.RequestApprovalAsync(version, BindingDigest, editor.Id, Now, TestContext.Current.CancellationToken);
+        await store.ApproveAsync(version.Id, version.ChecksumSha256, BindingDigest, version.CreatedBy, approver.Id, Now.AddMinutes(1), TestContext.Current.CancellationToken);
+
+        byte[] changedBindingDigest = SHA256.HashData("changed-binding-bundle"u8);
+        GatewayException stale = await Assert.ThrowsAsync<GatewayException>(() => new FourEyesConnectorApprovalPolicy(store).EnsurePublishApprovedAsync(version, changedBindingDigest, approver.Id.ToString("D"), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-ADMIN-APPROVAL-REQUIRED", stale.Code);
+        Assert.False(await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, changedBindingDigest, approver.Id.ToString("D"), TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -148,10 +165,10 @@ public sealed class AdminSecurityTests
         public Task<IReadOnlyList<AdminRoleAssignmentRecord>> GetAssignmentsAsync(Guid principalId, CancellationToken cancellationToken) => throw new InvalidOperationException("Role resolution must not run for disabled principals.");
         public Task<bool> TryBootstrapSecurityAdministratorAsync(Guid principalId, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<AdminRoleAssignmentRecord> AssignRoleAsync(Guid principalId, AdminRole role, Guid? tenantId, Guid grantedBy, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<ConnectorApprovalRecord> RequestApprovalAsync(ConnectorVersionRecord version, Guid requester, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, string createdBy, Guid approver, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, string createdBy, Guid rejector, string? comment, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<bool> HasValidApprovalAsync(Guid connectorVersionId, byte[] checksumSha256, string actor, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<ConnectorApprovalRecord> RequestApprovalAsync(ConnectorVersionRecord version, byte[] bindingDigestSha256, Guid requester, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid approver, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid rejector, string? comment, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> HasValidApprovalAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string actor, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task InvalidateApprovalsAsync(Guid connectorVersionId, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<IReadOnlyList<ConnectorApprovalRecord>> ListApprovalsAsync(Guid connectorVersionId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }

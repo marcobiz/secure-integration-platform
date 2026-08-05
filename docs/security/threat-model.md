@@ -66,6 +66,10 @@
 | TM-038 | E | Autorizzazione stale dopo revoca ruolo. | Assignment riletto server-side per richiesta e sessione breve. | Finestra di cookie/OIDC provider e cache future da rivalutare. |
 | TM-039 | S/E | DevelopmentAuth raggiunge produzione. | Abilitazione esplicita, identità fisse, host locale e startup failure in Production. | Errore di classificazione ambiente non-Production richiede controllo deployment. |
 
+| TM-040 | E/I | Un editor combina endpoint controllato e secret/certificate reference per esfiltrare credenziali. | Revisioni binding immutabili per ConnectorVersion/Environment; scope logici esatti; digest combinato Connector+endpoint+secret+certificate; approvatore distinto; runtime solo su revisioni attive incluse nel digest Published. | Due amministratori collusi o un host/DBA privilegiato restano nella TCB. |
+| TM-041 | S/E | Un peer remoto falsifica Host o forwarded headers per usare DevelopmentAuth. | RemoteIpAddress deve essere loopback, il listener Compose e fissato a 127.0.0.1 e i forwarded headers sono elaborati solo da proxy allowlistati. | Una classificazione errata dell'ambiente Development resta deployment risk. |
+| TM-042 | T/R | Approval viene invalidata fra controllo e publish. | ConnectorVersion, binding revisions e approval sono bloccati e verificati con publish, supersede e audit nella stessa transazione PostgreSQL serializable. | Contention concorrente viene negata con conflitto stabile e richiede retry esplicito. |
+
 ## Analisi degli scenari obbligatori
 
 ### Amministratore locale/SYSTEM

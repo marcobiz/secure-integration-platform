@@ -117,7 +117,7 @@ Challenge di enrollment sono effimeri in memoria; se serve scalare prima dell'ac
 
 Una versione già pubblicata è immutabile per JSON, checksum, version, schema e Connector tramite trigger; solo le transizioni lifecycle revisionate sono consentite.
 
-### `connector_environment_binding` (M4 implementato)
+### `connector_environment_binding` (legacy M4)
 
 - PK `(connector_id, environment_id)`;
 - `endpoints_json` associa logical endpoint a URI HTTPS;
@@ -125,6 +125,19 @@ Una versione già pubblicata è immutabile per JSON, checksum, version, schema e
 - `revision`, `updated_at`, `updated_by`.
 
 Non contiene secret value. I binding non fanno parte del JSON canonico né dell'export Connector.
+
+`connector_environment_binding` resta nella lineage per compatibilita, ma dalla migration 0004 non viene piu letto dal runtime.
+
+### `connector_binding_bundle_version` (M5 remediation)
+
+- `id uuid PK`, `connector_id`, `connector_version_id` e `environment_id` fissano lo scope;
+- `revision` e monotona per ConnectorVersion/Environment e ogni modifica inserisce una nuova riga;
+- `endpoints_json`, `secret_references_json` e `certificate_references_json` contengono endpoint e soli riferimenti server-side, mai valori segreti;
+- `checksum_sha256` autentica la rappresentazione canonica della revisione;
+- `state CHECK draft|active|retired`, `created_at` e `created_by` rendono esplicito lifecycle e attore;
+- `connector_approval.binding_digest_sha256` lega l'approvazione al checksum Connector e a tutte le revisioni binding esatte.
+
+Il publish PostgreSQL blocca ConnectorVersion, revisioni binding e approval, ricomputa il digest, verifica four-eyes, attiva le revisioni, supersede la versione precedente e inserisce audit in un'unica transazione serializable. Il runtime seleziona solo righe `active` dell'esatta ConnectorVersion Published e verifica nuovamente il checksum.
 
 ### `connector_operation`
 

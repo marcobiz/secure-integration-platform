@@ -1,4 +1,4 @@
-import { lazy, useEffect, useState } from 'react';
+import { lazy, useState } from 'react';
 import { Alert, Box, Button, Card, CardContent, Chip, FormControl, InputLabel, MenuItem, Select, Stack, TextField, Typography } from '@mui/material';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -51,16 +51,14 @@ export function ConnectorsPage() {
   const schema = useQuery({ queryKey: ['connector-schema'], queryFn: adminApi.connectorSchema });
   const sample = useQuery({ queryKey: ['connector-sample'], queryFn: adminApi.connectorSample });
 
-  useEffect(() => {
-    if (!editorChanged && sample.data) setJson(JSON.stringify(sample.data, null, 2));
-  }, [editorChanged, sample.data]);
+  const editorJson = editorChanged ? json : sample.data ? JSON.stringify(sample.data, null, 2) : '';
 
   const refresh = async () => {
     await Promise.all([cache.invalidateQueries({ queryKey: ['connectors'] }), cache.invalidateQueries({ queryKey: ['connector-versions', selected] })]);
   };
   const validate = useMutation({
     mutationFn: async () => {
-      const parsed: unknown = JSON.parse(json);
+      const parsed: unknown = JSON.parse(editorJson);
       if (!schema.data) throw new Error('connector-schema-unavailable');
       const issues = validateConnectorDefinition(schema.data, parsed);
       setClientIssues(issues);
@@ -72,7 +70,7 @@ export function ConnectorsPage() {
   const importDraft = useMutation({
     mutationFn: async () => {
       if (!validation?.valid || !validation.checksumSha256) throw new Error('validation-required');
-      return adminApi.importConnector(JSON.parse(json) as object, validation.checksumSha256);
+      return adminApi.importConnector(JSON.parse(editorJson) as object, validation.checksumSha256);
     },
     onSuccess: refresh,
   });
@@ -137,9 +135,9 @@ export function ConnectorsPage() {
     </CardContent></Card>}
     {canEdit && <Card sx={{ mt: 3 }}><CardContent>
       <Typography variant="h2" sx={{ mb: 2 }}>{t('connectorJson')}</Typography>
-      <Box sx={{ border: 1, borderColor: 'divider' }}><CodeMirror value={json} height="360px" onChange={value => { setJson(value); setEditorChanged(true); setValidation(undefined); }} aria-label={t('connectorJson')} /></Box>
+      <Box sx={{ border: 1, borderColor: 'divider' }}><CodeMirror value={editorJson} height="360px" onChange={value => { setJson(value); setEditorChanged(true); setValidation(undefined); }} aria-label={t('connectorJson')} /></Box>
       <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
-        <Button variant="outlined" disabled={!schema.data || !json} onClick={() => validate.mutate()}>{t('validate')}</Button>
+        <Button variant="outlined" disabled={!schema.data || !editorJson} onClick={() => validate.mutate()}>{t('validate')}</Button>
         <Button variant="contained" disabled={!validation?.valid} onClick={() => importDraft.mutate()}>{t('importDraft')}</Button>
       </Stack>
       {validation && <Alert severity={validation.valid ? 'success' : 'error'} sx={{ mt: 2 }}>

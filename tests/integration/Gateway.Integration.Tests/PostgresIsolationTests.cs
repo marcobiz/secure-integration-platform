@@ -159,14 +159,14 @@ public sealed class PostgresIsolationTests
             using JsonDocument definition = JsonDocument.Parse(candidate);
             ConnectorVersionResource imported = await admin.ImportAsync(definition.RootElement, null, "postgres-test", Guid.NewGuid(), TestContext.Current.CancellationToken);
             ConnectorVersionResource validated = await admin.ValidateStoredAsync(connectorId, version, imported.RowVersion, "postgres-test", Guid.NewGuid(), TestContext.Current.CancellationToken);
+            _ = await admin.PutBindingsAsync(connectorId, new(environmentId,
+                new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/" },
+                new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://key", ["sample-vendor-client-certificate"] = "synthetic://cert" },
+                ConnectorVersion: version), "postgres-test", Guid.NewGuid(), TestContext.Current.CancellationToken);
             return await admin.PublishAsync(connectorId, version, validated.RowVersion, revision, "postgres-test", Guid.NewGuid(), TestContext.Current.CancellationToken);
         }
 
         ConnectorVersionResource v1 = await ImportPublishAsync("1.0.0", 0);
-        _ = await admin.PutBindingsAsync(connectorId, new(environmentId,
-            new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/" },
-            new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://key", ["sample-vendor-client-certificate"] = "synthetic://cert" }),
-            "postgres-test", Guid.NewGuid(), TestContext.Current.CancellationToken);
         GatewayOperationDefinition operation = await catalog.GetRequiredAsync(connectorId, "submit", environmentId, TestContext.Current.CancellationToken);
         Assert.Equal("1.0.0", operation.Version);
 
@@ -180,6 +180,80 @@ public sealed class PostgresIsolationTests
         tamper.Parameters.AddWithValue((await store.GetVersionAsync(connectorId, "1.0.0", TestContext.Current.CancellationToken))!.Id);
         PostgresException immutable = await Assert.ThrowsAsync<PostgresException>(() => tamper.ExecuteNonQueryAsync(TestContext.Current.CancellationToken));
         Assert.Equal("23000", immutable.SqlState);
+    }
+
+    [Fact]
+    public async Task M5_IT_DAT_Approved_binding_digest_and_publication_are_atomic_under_concurrent_mutation_when_configured()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) return;
+        await using AdminPostgresDataSource adminPool = new(connectionString);
+        await using (NpgsqlConnection migration = await adminPool.Value.OpenConnectionAsync(TestContext.Current.CancellationToken)) await ApplyMigrationAsync(migration);
+        PostgresConnectorConfigurationStore store = new(adminPool.Value);
+        PostgresAdminSecurityStore security = new(adminPool);
+        PostgresGatewayRegistry registry = new(adminPool.Value);
+        TestClock clock = new(DateTimeOffset.UtcNow);
+        ConnectorDefinitionValidator validator = new();
+        PublishedConnectorCatalog catalog = new(store, validator, clock, TimeSpan.FromMinutes(5));
+        ConnectorAdministrationService admin = new(store, validator, catalog, registry, clock);
+        AdminPrincipalRecord editor = await security.EnsurePrincipalAsync(new("https://m5-postgres.invalid", "editor-" + Guid.NewGuid().ToString("N"), "Editor", null), TestContext.Current.CancellationToken);
+        AdminPrincipalRecord approver = await security.EnsurePrincipalAsync(new("https://m5-postgres.invalid", "approver-" + Guid.NewGuid().ToString("N"), "Approver", null), TestContext.Current.CancellationToken);
+        Guid environmentId = Guid.NewGuid();
+        string connectorId = "atomic-" + Guid.NewGuid().ToString("N");
+        await registry.AddEnvironmentAsync(new(environmentId, "a-" + Guid.NewGuid().ToString("N")[..20], "Atomic", false), TestContext.Current.CancellationToken);
+        using JsonDocument source = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(FindRepositoryRoot(), "docs", "connectors", "examples", "sample-secure-service.connector.json"), TestContext.Current.CancellationToken));
+        using JsonDocument definition = JsonDocument.Parse(source.RootElement.GetRawText().Replace("sample-secure-service", connectorId, StringComparison.Ordinal));
+        ConnectorVersionResource imported = await admin.ImportAsync(definition.RootElement, null, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionResource validated = await admin.ValidateStoredAsync(connectorId, imported.Version, imported.RowVersion, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await admin.PutBindingsAsync(connectorId, new(environmentId,
+            new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://approved.example.test/" },
+            new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://canary", ["sample-vendor-client-certificate"] = "synthetic://certificate" }), editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord stored = (await store.GetVersionAsync(connectorId, imported.Version, TestContext.Current.CancellationToken))!;
+        byte[] approvedDigest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
+        _ = await security.RequestApprovalAsync(stored, approvedDigest, editor.Id, clock.UtcNow, TestContext.Current.CancellationToken);
+        _ = await security.ApproveAsync(stored.Id, stored.ChecksumSha256, approvedDigest, stored.CreatedBy, approver.Id, clock.UtcNow.AddSeconds(1), TestContext.Current.CancellationToken);
+
+        await using NpgsqlConnection blocker = await adminPool.Value.OpenConnectionAsync(TestContext.Current.CancellationToken);
+        await using NpgsqlTransaction blockerTransaction = await blocker.BeginTransactionAsync(TestContext.Current.CancellationToken);
+        await using (NpgsqlCommand lockVersion = new("SELECT id FROM gateway.connector_version WHERE id=$1 FOR UPDATE", blocker, blockerTransaction))
+        {
+            lockVersion.Parameters.AddWithValue(stored.Id);
+            _ = await lockVersion.ExecuteScalarAsync(TestContext.Current.CancellationToken);
+        }
+        Task<long> mutation = admin.PutBindingsAsync(connectorId, new(environmentId,
+            new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://controlled-attacker.example.test/" },
+            new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://canary", ["sample-vendor-client-certificate"] = "synthetic://certificate" }, 1), editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        await WaitForVersionLockWaitAsync(adminPool.Value, TestContext.Current.CancellationToken);
+        Task<ConnectorVersionRecord> publication = store.PublishApprovedAsync(stored.Id, approvedDigest, validated.RowVersion, 0, approver.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow.AddSeconds(2), TestContext.Current.CancellationToken);
+        await blockerTransaction.CommitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, await mutation);
+        GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => publication);
+        Assert.True(denied.Code is "BGW-ADMIN-APPROVAL-STALE" or "BGW-ADMIN-APPROVAL-REQUIRED" or "BGW-CONCURRENCY-CONFLICT", denied.Code);
+        ConnectorVersionRecord after = (await store.GetVersionAsync(connectorId, imported.Version, TestContext.Current.CancellationToken))!;
+        Assert.Equal(ConnectorVersionState.Validated, after.State);
+        await using NpgsqlConnection auditConnection = await adminPool.Value.OpenConnectionAsync(TestContext.Current.CancellationToken);
+        await using NpgsqlCommand audit = new("SELECT count(*) FROM gateway.audit_event WHERE action='connector.publish' AND target_id=$1", auditConnection);
+        audit.Parameters.AddWithValue(connectorId + "/" + imported.Version);
+        Assert.Equal(0L, await audit.ExecuteScalarAsync(TestContext.Current.CancellationToken));
+        byte[] currentDigest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
+        _ = await security.RequestApprovalAsync(after, currentDigest, editor.Id, clock.UtcNow.AddSeconds(3), TestContext.Current.CancellationToken);
+        _ = await security.ApproveAsync(after.Id, after.ChecksumSha256, currentDigest, after.CreatedBy, approver.Id, clock.UtcNow.AddSeconds(4), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord published = await store.PublishApprovedAsync(after.Id, currentDigest, after.RowVersion, 0, approver.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow.AddSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal(ConnectorVersionState.Published, published.State);
+        Assert.Equal(1L, await audit.ExecuteScalarAsync(TestContext.Current.CancellationToken));
+    }
+
+    private static async Task WaitForVersionLockWaitAsync(NpgsqlDataSource dataSource, CancellationToken cancellationToken)
+    {
+        for (int attempt = 0; attempt < 50; attempt++)
+        {
+            await using NpgsqlConnection observation = await dataSource.OpenConnectionAsync(cancellationToken);
+            await using NpgsqlCommand command = new("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE 'SELECT state FROM gateway.connector_version%')", observation);
+            if (await command.ExecuteScalarAsync(cancellationToken) is true) return;
+            await Task.Delay(50, cancellationToken);
+        }
+        throw new TimeoutException("Binding mutation did not reach the connector-version lock barrier.");
     }
 
     private static async Task ExecuteAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string sql, params object[] values)

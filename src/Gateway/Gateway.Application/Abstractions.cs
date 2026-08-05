@@ -102,12 +102,16 @@ public interface IConnectorConfigurationStore
     Task<ConnectorVersionRecord> MarkValidatedAsync(Guid versionId, long expectedRowVersion, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Publishes a Validated version and supersedes the current one atomically.</summary>
     Task<ConnectorVersionRecord> PublishAsync(Guid versionId, long expectedRowVersion, long expectedPublicationRevision, string actor, DateTimeOffset now, CancellationToken cancellationToken);
+    /// <summary>Publishes only after locking and verifying the exact approved connector/binding digest, and appends audit in the same transaction.</summary>
+    Task<ConnectorVersionRecord> PublishApprovedAsync(Guid versionId, byte[] expectedBindingDigestSha256, long expectedRowVersion, long expectedPublicationRevision, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Reactivates a previously Published, now Superseded version atomically.</summary>
     Task<ConnectorVersionRecord> RollbackAsync(string connectorId, string targetVersion, long expectedActiveRowVersion, string actor, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Retires a version and clears runtime activation if necessary.</summary>
     Task<ConnectorVersionRecord> RetireAsync(Guid versionId, long expectedRowVersion, string actor, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Creates/replaces server-side logical bindings for one Environment.</summary>
     Task<ConnectorBindingSet> PutBindingsAsync(ConnectorBindingSet bindings, long? expectedRevision, CancellationToken cancellationToken);
+    /// <summary>Computes the approval digest over the Connector checksum and all current immutable binding revisions.</summary>
+    Task<byte[]> GetBindingBundleDigestAsync(Guid connectorVersionId, CancellationToken cancellationToken);
     /// <summary>Returns the active stamp, or null when no version is Published.</summary>
     Task<PublishedConnectorStamp?> GetPublishedStampAsync(string connectorId, Guid environmentId, CancellationToken cancellationToken);
     /// <summary>Returns the Published definition with bindings, or null.</summary>

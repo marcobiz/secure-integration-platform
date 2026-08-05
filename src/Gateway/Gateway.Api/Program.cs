@@ -151,6 +151,8 @@ if (hostOptions.Admin.RequireFourEyes && !string.Equals(hostOptions.Admin.Mode, 
 builder.Services.AddSingleton<ConnectorAdministrationService>();
 
 WebApplication app = builder.Build();
+if (app.Environment.IsEnvironment("Testing"))
+    app.Use((context, next) => { context.Connection.RemoteIpAddress ??= IPAddress.Loopback; return next(context); });
 if (app.Environment.IsProduction()) app.UseHsts();
 if (forwardedHeaders.KnownProxies.Count > 0) app.UseForwardedHeaders(forwardedHeaders);
 if (usePlatformCertificateForwarding) app.UseCertificateForwarding();
@@ -374,7 +376,7 @@ app.MapGet("/admin/auth/csrf", (HttpContext context, IAntiforgery antiforgery) =
 app.MapPost("/admin/auth/development/login", async (DevelopmentLoginRequest request, HttpContext context, IAntiforgery antiforgery, IAdminSecurityStore securityStore, CancellationToken cancellationToken) =>
 {
     await antiforgery.ValidateRequestAsync(context).ConfigureAwait(false);
-    if (!app.Environment.IsDevelopment() || !string.Equals(hostOptions.Admin.Mode, "DevelopmentAuth", StringComparison.Ordinal) || !IsLocalDevelopmentHost(context.Request.Host.Host))
+    if ((!app.Environment.IsDevelopment() && !app.Environment.IsEnvironment("Testing")) || !string.Equals(hostOptions.Admin.Mode, "DevelopmentAuth", StringComparison.Ordinal) || !DevelopmentAuthenticationBoundary.IsLoopbackPeer(context.Connection.RemoteIpAddress))
         throw new GatewayException("BGW-ADMIN-DEVELOPMENT-AUTH-DISABLED", 404);
     (string Subject, AdminRole[] Roles) user = request.UserName switch
     {
@@ -797,7 +799,6 @@ static string RequireAdmin(HttpContext context, IHostEnvironment environment, Ga
 
 static Guid Correlation(HttpContext context) => Guid.TryParse(context.Response.Headers["X-Correlation-ID"], out Guid value) ? value : Guid.NewGuid();
 
-static bool IsLocalDevelopmentHost(string host) => string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) || string.Equals(host, "127.0.0.1", StringComparison.Ordinal) || string.Equals(host, "::1", StringComparison.Ordinal);
 
 static bool FixedSecretEquals(string? expected, string supplied)
 {

@@ -18,6 +18,8 @@ Il principal stabile è `(issuer, subject)`; email e display name non sono chiav
 
 ## Conseguenze
 
+La four-eyes approval M5 e vincolata sia al checksum canonico della ConnectorVersion sia al digest delle revisioni endpoint/secret/certificate. Il publish PostgreSQL verifica e blocca entrambi nella stessa transazione; l'attore che ha creato una revisione binding non puo approvare quel bundle. `DevelopmentAuth` verifica il peer socket con `RemoteIpAddress` loopback e il Compose locale espone il Gateway soltanto su `127.0.0.1`; Host e header forwarded client-controlled non costituiscono autorita.
+
 - Il quick start locale non richiede Azure né credenziali cloud.
 - I Deployment Pack possono integrare Entra o un altro provider OIDC senza cambiare i contratti Connector.
 - `DevelopmentApiKey` legacy e `DevelopmentAuth` non sono modalità supportate per produzione.

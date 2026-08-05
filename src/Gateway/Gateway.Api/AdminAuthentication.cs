@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Net;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -17,8 +18,8 @@ public static class AdminAuthentication
         bool production = builder.Environment.IsProduction();
         if (production && !string.Equals(options.Mode, "Oidc", StringComparison.Ordinal))
             throw new InvalidOperationException("Production Admin authentication must use OIDC.");
-        if (string.Equals(options.Mode, "DevelopmentAuth", StringComparison.Ordinal) && !builder.Environment.IsDevelopment())
-            throw new InvalidOperationException("DevelopmentAuth is allowed only in Development.");
+        if (string.Equals(options.Mode, "DevelopmentAuth", StringComparison.Ordinal) && !builder.Environment.IsDevelopment() && !builder.Environment.IsEnvironment("Testing"))
+            throw new InvalidOperationException("DevelopmentAuth is allowed only in Development or the in-process Testing environment.");
         if (string.Equals(options.Mode, "DevelopmentApiKey", StringComparison.Ordinal) && !builder.Environment.IsEnvironment("M4Testing") && !builder.Environment.IsEnvironment("Testing"))
             throw new InvalidOperationException("DevelopmentApiKey is allowed only in compatibility tests.");
 
@@ -109,4 +110,11 @@ public static class AdminAuthentication
         context.Response.Redirect(context.RedirectUri);
         return Task.CompletedTask;
     }
+}
+
+/// <summary>Socket-level boundary for synthetic development authentication.</summary>
+public static class DevelopmentAuthenticationBoundary
+{
+    /// <summary>Returns true only for an actual loopback peer; HTTP headers are deliberately irrelevant.</summary>
+    public static bool IsLoopbackPeer(IPAddress? remoteAddress) => remoteAddress is not null && IPAddress.IsLoopback(remoteAddress);
 }

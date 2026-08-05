@@ -80,6 +80,7 @@ public sealed record ConnectorApprovalRecord(
     Guid Id,
     Guid ConnectorVersionId,
     string ChecksumSha256,
+    string BindingDigestSha256,
     Guid RequestedBy,
     Guid? ApprovedBy,
     Guid? RejectedBy,
@@ -105,13 +106,13 @@ public interface IAdminSecurityStore
     /// <summary>Assigns a role through an audited Security Administrator action.</summary>
     Task<AdminRoleAssignmentRecord> AssignRoleAsync(Guid principalId, AdminRole role, Guid? tenantId, Guid grantedBy, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Creates or replaces a request for the exact version checksum.</summary>
-    Task<ConnectorApprovalRecord> RequestApprovalAsync(ConnectorVersionRecord version, Guid requester, DateTimeOffset now, CancellationToken cancellationToken);
+    Task<ConnectorApprovalRecord> RequestApprovalAsync(ConnectorVersionRecord version, byte[] bindingDigestSha256, Guid requester, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Approves the current request when approver and editor identities are distinct.</summary>
-    Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, string createdBy, Guid approver, DateTimeOffset now, CancellationToken cancellationToken);
+    Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid approver, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Rejects the current exact-checksum request as a distinct approver.</summary>
-    Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, string createdBy, Guid rejector, string? comment, DateTimeOffset now, CancellationToken cancellationToken);
+    Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid rejector, string? comment, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Checks for a current approval by a distinct principal.</summary>
-    Task<bool> HasValidApprovalAsync(Guid connectorVersionId, byte[] checksumSha256, string actor, CancellationToken cancellationToken);
+    Task<bool> HasValidApprovalAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string actor, CancellationToken cancellationToken);
     /// <summary>Invalidates current approvals after an approval-relevant mutation.</summary>
     Task InvalidateApprovalsAsync(Guid connectorVersionId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Lists redacted approval metadata for a Connector version.</summary>
@@ -122,16 +123,16 @@ public interface IAdminSecurityStore
 public interface IConnectorApprovalPolicy
 {
     /// <summary>Rejects publication unless the exact checksum has a distinct valid approval.</summary>
-    Task EnsurePublishApprovedAsync(ConnectorVersionRecord version, string actor, CancellationToken cancellationToken);
+    Task EnsurePublishApprovedAsync(ConnectorVersionRecord version, byte[] bindingDigestSha256, string actor, CancellationToken cancellationToken);
 }
 
 /// <summary>Default production four-eyes policy.</summary>
 public sealed class FourEyesConnectorApprovalPolicy(IAdminSecurityStore store) : IConnectorApprovalPolicy
 {
     /// <inheritdoc />
-    public async Task EnsurePublishApprovedAsync(ConnectorVersionRecord version, string actor, CancellationToken cancellationToken)
+    public async Task EnsurePublishApprovedAsync(ConnectorVersionRecord version, byte[] bindingDigestSha256, string actor, CancellationToken cancellationToken)
     {
-        if (!await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, actor, cancellationToken).ConfigureAwait(false))
+        if (!await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, bindingDigestSha256, actor, cancellationToken).ConfigureAwait(false))
             throw new GatewayException("BGW-ADMIN-APPROVAL-REQUIRED", 409);
     }
 }
@@ -173,7 +174,8 @@ public sealed class ConnectorApprovalService(IAdminSecurityStore store, IConnect
         AdminAccessService.Require(actor, null, AdminRole.ConnectorEditor, AdminRole.SecurityAdministrator);
         ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
         if (current.State != ConnectorVersionState.Validated) throw new GatewayException("BGW-CONNECTOR-STATE", 409);
-        return await store.RequestApprovalAsync(current, actor.Principal.Id, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+        byte[] bindingDigest = await connectors.GetBindingBundleDigestAsync(current.Id, cancellationToken).ConfigureAwait(false);
+        return await store.RequestApprovalAsync(current, bindingDigest, actor.Principal.Id, clock.UtcNow, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Approves only as a distinct ConnectorApprover or SecurityAdministrator.</summary>
@@ -181,7 +183,8 @@ public sealed class ConnectorApprovalService(IAdminSecurityStore store, IConnect
     {
         AdminAccessService.Require(actor, null, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
         ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
-        return await store.ApproveAsync(current.Id, current.ChecksumSha256, current.CreatedBy, actor.Principal.Id, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+        byte[] bindingDigest = await connectors.GetBindingBundleDigestAsync(current.Id, cancellationToken).ConfigureAwait(false);
+        return await store.ApproveAsync(current.Id, current.ChecksumSha256, bindingDigest, current.CreatedBy, actor.Principal.Id, clock.UtcNow, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Rejects only as a distinct ConnectorApprover or SecurityAdministrator.</summary>
@@ -191,7 +194,8 @@ public sealed class ConnectorApprovalService(IAdminSecurityStore store, IConnect
         ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
         string? redactedComment = string.IsNullOrWhiteSpace(comment) ? null : comment.Trim();
         if (redactedComment?.Length > 500) throw new GatewayException("BGW-ADMIN-APPROVAL-COMMENT", 400);
-        return await store.RejectAsync(current.Id, current.ChecksumSha256, current.CreatedBy, actor.Principal.Id, redactedComment, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+        byte[] bindingDigest = await connectors.GetBindingBundleDigestAsync(current.Id, cancellationToken).ConfigureAwait(false);
+        return await store.RejectAsync(current.Id, current.ChecksumSha256, bindingDigest, current.CreatedBy, actor.Principal.Id, redactedComment, clock.UtcNow, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Lists approval metadata.</summary>

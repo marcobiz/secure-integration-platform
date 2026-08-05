@@ -175,18 +175,34 @@ public sealed record ConnectorVersionRecord(
     DateTimeOffset? PublishedAt = null,
     DateTimeOffset? RetiredAt = null);
 
-/// <summary>Server-side values for logical Connector bindings in one Environment.</summary>
+/// <summary>Lifecycle of one immutable, server-owned Connector binding bundle revision.</summary>
+public enum ConnectorBindingState
+{
+    /// <summary>Awaiting checksum-bound four-eyes approval and publication.</summary>
+    Draft,
+    /// <summary>Referenced by an approved Published Connector version.</summary>
+    Active,
+    /// <summary>Permanently unavailable for new runtime resolution.</summary>
+    Retired
+}
+
+/// <summary>Server-owned immutable endpoint, secret and certificate binding revisions in one Environment.</summary>
 public sealed record ConnectorBindingSet(
+    Guid Id,
     Guid ConnectorId,
+    Guid ConnectorVersionId,
     Guid EnvironmentId,
     IReadOnlyDictionary<string, Uri> Endpoints,
     IReadOnlyDictionary<string, string> SecretReferences,
+    IReadOnlyDictionary<string, string> CertificateReferences,
     long Revision,
+    string ChecksumSha256,
+    ConnectorBindingState State,
     DateTimeOffset UpdatedAt,
     string UpdatedBy);
 
 /// <summary>Small stamp checked before a cached runtime definition may be reused.</summary>
-public sealed record PublishedConnectorStamp(Guid VersionId, long PublicationRevision, long BindingRevision);
+public sealed record PublishedConnectorStamp(Guid VersionId, long PublicationRevision, long BindingRevision, string BindingChecksumSha256);
 
 /// <summary>Published immutable definition and its server-side Environment bindings.</summary>
 public sealed record PublishedConnectorSnapshot(ConnectorVersionRecord Version, ConnectorBindingSet Bindings, PublishedConnectorStamp Stamp);

@@ -80,15 +80,14 @@ public sealed class GatewayApiTests : IClassFixture<GatewayApiFactory>
 
         using HttpResponseMessage validatedResponse = await client.PostAsJsonAsync($"/admin/v1/connectors/{connectorId}/versions/1.0.0:validate", new ConnectorVersionActionRequest(imported.RowVersion), TestContext.Current.CancellationToken);
         ConnectorVersionResource validated = (await validatedResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: TestContext.Current.CancellationToken))!;
-        using HttpResponseMessage publishedResponse = await client.PostAsJsonAsync($"/admin/v1/connectors/{connectorId}/versions/1.0.0:publish", new ConnectorVersionActionRequest(validated.RowVersion, 0), TestContext.Current.CancellationToken);
-        ConnectorVersionResource published = (await publishedResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: TestContext.Current.CancellationToken))!;
-        Assert.Equal(ConnectorVersionState.Published, published.State);
-
         Guid environmentId = Guid.NewGuid();
         using HttpResponseMessage bindingResponse = await client.PutAsJsonAsync($"/admin/v1/connectors/{connectorId}/bindings", new ConnectorBindingRequest(environmentId,
             new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/" },
             new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://api-key", ["sample-vendor-client-certificate"] = "synthetic://certificate" }), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, bindingResponse.StatusCode);
+        using HttpResponseMessage publishedResponse = await client.PostAsJsonAsync($"/admin/v1/connectors/{connectorId}/versions/1.0.0:publish", new ConnectorVersionActionRequest(validated.RowVersion, 0), TestContext.Current.CancellationToken);
+        ConnectorVersionResource published = (await publishedResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: TestContext.Current.CancellationToken))!;
+        Assert.Equal(ConnectorVersionState.Published, published.State);
         using HttpResponseMessage testResponse = await client.PostAsJsonAsync($"/admin/v1/connectors/{connectorId}:test", new ConnectorTestRequest(environmentId, "submit"), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, testResponse.StatusCode);
 

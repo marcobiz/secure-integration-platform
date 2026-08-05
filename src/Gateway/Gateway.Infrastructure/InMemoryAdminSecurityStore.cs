@@ -68,25 +68,25 @@ public sealed class InMemoryAdminSecurityStore : IAdminSecurityStore
     }
 
     /// <inheritdoc />
-    public Task<ConnectorApprovalRecord> RequestApprovalAsync(ConnectorVersionRecord version, Guid requester, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<ConnectorApprovalRecord> RequestApprovalAsync(ConnectorVersionRecord version, byte[] bindingDigestSha256, Guid requester, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (sync)
         {
             InvalidateCore(version.Id, now);
-            ConnectorApprovalRecord created = new(Guid.NewGuid(), version.Id, Convert.ToHexString(version.ChecksumSha256), requester, null, null, ConnectorApprovalStatus.Requested, now, null, null, null, null);
+            ConnectorApprovalRecord created = new(Guid.NewGuid(), version.Id, Convert.ToHexString(version.ChecksumSha256), Convert.ToHexString(bindingDigestSha256), requester, null, null, ConnectorApprovalStatus.Requested, now, null, null, null, null);
             approvals.Add(created);
             return Task.FromResult(created);
         }
     }
 
     /// <inheritdoc />
-    public Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, string createdBy, Guid approver, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid approver, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (sync)
         {
-            int index = approvals.FindIndex(value => value.ConnectorVersionId == connectorVersionId && value.Status == ConnectorApprovalStatus.Requested && FixedChecksum(value.ChecksumSha256, checksumSha256));
+            int index = approvals.FindIndex(value => value.ConnectorVersionId == connectorVersionId && value.Status == ConnectorApprovalStatus.Requested && FixedChecksum(value.ChecksumSha256, checksumSha256) && FixedChecksum(value.BindingDigestSha256, bindingDigestSha256));
             if (index < 0) throw new GatewayException("BGW-ADMIN-APPROVAL-NOT-FOUND", 409);
             ConnectorApprovalRecord current = approvals[index];
             if (current.RequestedBy == approver || (Guid.TryParse(createdBy, out Guid creator) && creator == approver)) throw new GatewayException("BGW-ADMIN-FOUR-EYES", 403);
@@ -97,12 +97,12 @@ public sealed class InMemoryAdminSecurityStore : IAdminSecurityStore
     }
 
     /// <inheritdoc />
-    public Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, string createdBy, Guid rejector, string? comment, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid rejector, string? comment, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (sync)
         {
-            int index = approvals.FindIndex(value => value.ConnectorVersionId == connectorVersionId && value.Status == ConnectorApprovalStatus.Requested && FixedChecksum(value.ChecksumSha256, checksumSha256));
+            int index = approvals.FindIndex(value => value.ConnectorVersionId == connectorVersionId && value.Status == ConnectorApprovalStatus.Requested && FixedChecksum(value.ChecksumSha256, checksumSha256) && FixedChecksum(value.BindingDigestSha256, bindingDigestSha256));
             if (index < 0) throw new GatewayException("BGW-ADMIN-APPROVAL-NOT-FOUND", 409);
             ConnectorApprovalRecord current = approvals[index];
             if (current.RequestedBy == rejector || (Guid.TryParse(createdBy, out Guid creator) && creator == rejector)) throw new GatewayException("BGW-ADMIN-FOUR-EYES", 403);
@@ -113,10 +113,10 @@ public sealed class InMemoryAdminSecurityStore : IAdminSecurityStore
     }
 
     /// <inheritdoc />
-    public Task<bool> HasValidApprovalAsync(Guid connectorVersionId, byte[] checksumSha256, string actor, CancellationToken cancellationToken)
+    public Task<bool> HasValidApprovalAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string actor, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (sync) return Task.FromResult(approvals.Any(value => value.ConnectorVersionId == connectorVersionId && value.Status == ConnectorApprovalStatus.Approved && value.ApprovedBy != value.RequestedBy && FixedChecksum(value.ChecksumSha256, checksumSha256)));
+        lock (sync) return Task.FromResult(approvals.Any(value => value.ConnectorVersionId == connectorVersionId && value.Status == ConnectorApprovalStatus.Approved && value.ApprovedBy != value.RequestedBy && FixedChecksum(value.ChecksumSha256, checksumSha256) && FixedChecksum(value.BindingDigestSha256, bindingDigestSha256)));
     }
 
     /// <inheritdoc />

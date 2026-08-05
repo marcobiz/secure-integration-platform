@@ -100,6 +100,7 @@ public sealed class ConnectorConfigurationTests
     {
         Fixture fixture = new();
         ConnectorVersionResource version = await fixture.ImportAsync(Sample());
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
         foreach (string endpoint in new[] { "https://vendor.example.test/base?override=true", "https://127.0.0.1/", "http://vendor.example.test/" })
         {
             GatewayException rejected = await Assert.ThrowsAsync<GatewayException>(() => fixture.Admin.PutBindingsAsync(version.ConnectorId,
@@ -137,12 +138,12 @@ public sealed class ConnectorConfigurationTests
         Fixture fixture = new();
         ConnectorVersionResource version = await fixture.ImportAsync(Sample());
         version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
-        version = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
         long bindingRevision = await fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId,
             new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/base/" },
             new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://api-key", ["sample-vendor-client-certificate"] = "synthetic://client-cert" }),
             "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
         Assert.Equal(1, bindingRevision);
+        version = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
 
         GatewayOperationDefinition operation = await fixture.Catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken);
         Assert.Equal(new Uri("https://vendor.example.test/vendor/orders"), operation.Endpoint);
@@ -161,23 +162,21 @@ public sealed class ConnectorConfigurationTests
         Fixture fixture = new();
         ConnectorVersionResource version = await fixture.ImportAsync(Sample());
         version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
-        _ = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
-
-        await fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId, new Dictionary<string, string>(), new Dictionary<string, string>
+        GatewayException missingEndpoint = await Assert.ThrowsAsync<GatewayException>(() => fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId, new Dictionary<string, string>(), new Dictionary<string, string>
         {
             ["sample-vendor-api-key"] = "synthetic://api-key",
             ["sample-vendor-client-certificate"] = "synthetic://client-cert"
-        }), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
-        Assert.Equal("BGW-CONNECTOR-ENDPOINT-BINDING-MISSING", (await Assert.ThrowsAsync<GatewayException>(() => fixture.Catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken))).Code);
+        }), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-CONNECTOR-BINDING-SCOPE", missingEndpoint.Code);
 
-        await fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId, new Dictionary<string, string>
+        GatewayException missingSecret = await Assert.ThrowsAsync<GatewayException>(() => fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId, new Dictionary<string, string>
         {
             ["sample-vendor-endpoint"] = "https://vendor.example.test/"
         }, new Dictionary<string, string>
         {
             ["sample-vendor-api-key"] = "synthetic://api-key"
-        }), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
-        Assert.Equal("BGW-CONNECTOR-SECRET-BINDING-MISSING", (await Assert.ThrowsAsync<GatewayException>(() => fixture.Catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken))).Code);
+        }), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-CONNECTOR-BINDING-SCOPE", missingSecret.Code);
 
         await fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId, new Dictionary<string, string>
         {
@@ -187,7 +186,52 @@ public sealed class ConnectorConfigurationTests
             ["sample-vendor-api-key"] = "synthetic://api-key",
             ["sample-vendor-client-certificate"] = "synthetic://client-cert"
         }), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
         Assert.Equal("BGW-OPERATION-NOT-FOUND", (await Assert.ThrowsAsync<GatewayException>(() => fixture.Catalog.GetRequiredAsync(version.ConnectorId, "missing-operation", fixture.EnvironmentId, TestContext.Current.CancellationToken))).Code);
+    }
+
+    [Fact]
+    public async Task M5_UT_Binding_revisions_are_immutable_checksum_bound_and_published_behavior_cannot_be_mutated()
+    {
+        Fixture fixture = new();
+        ConnectorVersionResource version = await fixture.ImportAsync(Sample());
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        long first = await fixture.Admin.PutBindingsAsync(version.ConnectorId, BindingRequest(fixture.EnvironmentId, "https://first.example.test/"), "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord stored = (await fixture.Store.ListVersionsAsync(version.ConnectorId, TestContext.Current.CancellationToken)).Single();
+        byte[] firstDigest = await fixture.Store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
+
+        long second = await fixture.Admin.PutBindingsAsync(version.ConnectorId, BindingRequest(fixture.EnvironmentId, "https://second.example.test/", first), "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        byte[] secondDigest = await fixture.Store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
+        Assert.Equal(1, first);
+        Assert.Equal(2, second);
+        Assert.NotEqual(Convert.ToHexString(firstDigest), Convert.ToHexString(secondDigest));
+
+        version = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "approver", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        GatewayOperationDefinition operation = await fixture.Catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken);
+        Assert.Equal(new Uri("https://second.example.test/vendor/orders"), operation.Endpoint);
+        GatewayException mutation = await Assert.ThrowsAsync<GatewayException>(() => fixture.Admin.PutBindingsAsync(version.ConnectorId, BindingRequest(fixture.EnvironmentId, "https://attacker.example.test/", second), "editor", Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-CONNECTOR-BINDING-REQUIRES-VALIDATED-VERSION", mutation.Code);
+        Assert.Equal(new Uri("https://second.example.test/vendor/orders"), (await fixture.Catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken)).Endpoint);
+    }
+
+    [Fact]
+    public async Task M5_UT_Bindings_are_exactly_scoped_to_definition_and_environment()
+    {
+        Fixture fixture = new();
+        ConnectorVersionResource version = await fixture.ImportAsync(Sample());
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorBindingRequest arbitrary = BindingRequest(fixture.EnvironmentId, "https://controlled.example.test/") with
+        {
+            SecretReferences = new Dictionary<string, string>
+            {
+                ["sample-vendor-api-key"] = "synthetic://canary",
+                ["unapproved-operation-secret"] = "synthetic://should-never-resolve",
+                ["sample-vendor-client-certificate"] = "synthetic://certificate"
+            }
+        };
+        GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => fixture.Admin.PutBindingsAsync(version.ConnectorId, arbitrary, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-CONNECTOR-BINDING-SCOPE", denied.Code);
+        Assert.Equal("BGW-CONNECTOR-NOT-PUBLISHED", (await Assert.ThrowsAsync<GatewayException>(() => fixture.Catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken))).Code);
     }
 
     [Fact]
@@ -207,6 +251,12 @@ public sealed class ConnectorConfigurationTests
         using JsonDocument sample = Sample();
         return JsonDocument.Parse(sample.RootElement.GetRawText().Replace("\"version\": \"1.0.0\"", $"\"version\": \"{version}\"", StringComparison.Ordinal));
     }
+
+    private static ConnectorBindingRequest BindingRequest(Guid environmentId, string endpoint, long? expectedRevision = null) => new(
+        environmentId,
+        new Dictionary<string, string> { ["sample-vendor-endpoint"] = endpoint },
+        new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://api-key", ["sample-vendor-client-certificate"] = "synthetic://client-certificate" },
+        expectedRevision);
 
     private sealed class Fixture
     {

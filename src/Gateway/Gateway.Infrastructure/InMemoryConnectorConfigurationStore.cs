@@ -13,7 +13,7 @@ public sealed class InMemoryConnectorConfigurationStore : IConnectorConfiguratio
     private readonly Dictionary<string, Guid> versionKeys = new(StringComparer.Ordinal);
     private readonly Dictionary<Guid, Guid> activeVersions = [];
     private readonly Dictionary<Guid, long> publicationRevisions = [];
-    private readonly Dictionary<string, ConnectorBindingSet> bindingSets = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<ConnectorBindingSet>> bindingSets = new(StringComparer.Ordinal);
 
     /// <inheritdoc />
     public Task<ConnectorVersionRecord> CreateDraftAsync(ConnectorVersionRecord draft, CancellationToken cancellationToken)
@@ -101,6 +101,11 @@ public sealed class InMemoryConnectorConfigurationStore : IConnectorConfiguratio
             ConnectorVersionRecord target = Required(versionId);
             Ensure(target, expectedRowVersion, ConnectorVersionState.Validated);
             if (publicationRevisions[target.ConnectorId] != expectedPublicationRevision) throw new GatewayException("BGW-CONCURRENCY-CONFLICT", 409);
+            foreach (ConnectorBindingSet binding in LatestBindings(versionId))
+            {
+                List<ConnectorBindingSet> revisions = bindingSets[BindingKey(versionId, binding.EnvironmentId)];
+                revisions[^1] = binding with { State = ConnectorBindingState.Active };
+            }
             if (activeVersions.TryGetValue(target.ConnectorId, out Guid activeId))
             {
                 ConnectorVersionRecord active = versions[activeId];
@@ -112,6 +117,13 @@ public sealed class InMemoryConnectorConfigurationStore : IConnectorConfiguratio
             publicationRevisions[target.ConnectorId]++;
             return Task.FromResult(Clone(updated));
         }
+    }
+
+    /// <inheritdoc />
+    public Task<ConnectorVersionRecord> PublishApprovedAsync(Guid versionId, byte[] expectedBindingDigestSha256, long expectedRowVersion, long expectedPublicationRevision, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        throw new GatewayException("BGW-ADMIN-ATOMIC-PUBLISH-REQUIRES-POSTGRES", 503);
     }
 
     /// <inheritdoc />
@@ -161,12 +173,28 @@ public sealed class InMemoryConnectorConfigurationStore : IConnectorConfiguratio
         lock (gate)
         {
             if (!connectorIds.ContainsValue(bindings.ConnectorId)) throw new GatewayException("BGW-CONNECTOR-NOT-FOUND", 404);
-            string key = BindingKey(bindings.ConnectorId, bindings.EnvironmentId);
-            long current = bindingSets.TryGetValue(key, out ConnectorBindingSet? existing) ? existing.Revision : 0;
+            string key = BindingKey(bindings.ConnectorVersionId, bindings.EnvironmentId);
+            if (!bindingSets.TryGetValue(key, out List<ConnectorBindingSet>? revisions)) bindingSets.Add(key, revisions = []);
+            long current = revisions.Count == 0 ? 0 : revisions[^1].Revision;
+            if (current > 0 && expectedRevision is null) throw new GatewayException("BGW-CONCURRENCY-PRECONDITION", 428);
+            if (current == 0 && expectedRevision is not null) throw new GatewayException("BGW-CONCURRENCY-CONFLICT", 409);
             if (expectedRevision is not null && expectedRevision.Value != current) throw new GatewayException("BGW-CONCURRENCY-CONFLICT", 409);
             ConnectorBindingSet saved = Clone(bindings with { Revision = current + 1 });
-            bindingSets[key] = saved;
+            revisions.Add(saved);
             return Task.FromResult(Clone(saved));
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<byte[]> GetBindingBundleDigestAsync(Guid connectorVersionId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            ConnectorVersionRecord version = Required(connectorVersionId);
+            ConnectorBindingSet[] bindings = LatestBindings(connectorVersionId);
+            if (bindings.Length == 0) throw new GatewayException("BGW-CONNECTOR-BINDING-MISSING", 409);
+            return Task.FromResult(ConnectorBindingDigests.Bundle(version.ChecksumSha256, bindings));
         }
     }
 
@@ -177,8 +205,9 @@ public sealed class InMemoryConnectorConfigurationStore : IConnectorConfiguratio
         lock (gate)
         {
             if (!connectorIds.TryGetValue(connectorId, out Guid id) || !activeVersions.TryGetValue(id, out Guid active)) return Task.FromResult<PublishedConnectorStamp?>(null);
-            long bindingRevision = bindingSets.TryGetValue(BindingKey(id, environmentId), out ConnectorBindingSet? binding) ? binding.Revision : 0;
-            return Task.FromResult<PublishedConnectorStamp?>(new(active, publicationRevisions[id], bindingRevision));
+            if (!bindingSets.TryGetValue(BindingKey(active, environmentId), out List<ConnectorBindingSet>? revisions) || revisions.Count == 0 || revisions[^1].State != ConnectorBindingState.Active) return Task.FromResult<PublishedConnectorStamp?>(new(active, publicationRevisions[id], 0, string.Empty));
+            ConnectorBindingSet binding = revisions[^1];
+            return Task.FromResult<PublishedConnectorStamp?>(new(active, publicationRevisions[id], binding.Revision, binding.ChecksumSha256));
         }
     }
 
@@ -188,8 +217,9 @@ public sealed class InMemoryConnectorConfigurationStore : IConnectorConfiguratio
         cancellationToken.ThrowIfCancellationRequested();
         lock (gate)
         {
-            if (!connectorIds.TryGetValue(connectorId, out Guid id) || !activeVersions.TryGetValue(id, out Guid active) || !bindingSets.TryGetValue(BindingKey(id, environmentId), out ConnectorBindingSet? binding)) return Task.FromResult<PublishedConnectorSnapshot?>(null);
-            PublishedConnectorStamp stamp = new(active, publicationRevisions[id], binding.Revision);
+            if (!connectorIds.TryGetValue(connectorId, out Guid id) || !activeVersions.TryGetValue(id, out Guid active) || !bindingSets.TryGetValue(BindingKey(active, environmentId), out List<ConnectorBindingSet>? revisions) || revisions.Count == 0 || revisions[^1].State != ConnectorBindingState.Active) return Task.FromResult<PublishedConnectorSnapshot?>(null);
+            ConnectorBindingSet binding = revisions[^1];
+            PublishedConnectorStamp stamp = new(active, publicationRevisions[id], binding.Revision, binding.ChecksumSha256);
             return Task.FromResult<PublishedConnectorSnapshot?>(new(Clone(versions[active]), Clone(binding), stamp));
         }
     }
@@ -201,7 +231,8 @@ public sealed class InMemoryConnectorConfigurationStore : IConnectorConfiguratio
         if (value.State != state) throw new GatewayException("BGW-CONNECTOR-STATE", 409);
     }
     private static string VersionKey(string connector, string version) => connector + "\n" + version;
-    private static string BindingKey(Guid connector, Guid environment) => connector.ToString("N") + "\n" + environment.ToString("N");
+    private ConnectorBindingSet[] LatestBindings(Guid connectorVersionId) => bindingSets.Where(value => value.Key.StartsWith(connectorVersionId.ToString("N") + "\n", StringComparison.Ordinal) && value.Value.Count > 0).Select(value => value.Value[^1]).OrderBy(value => value.EnvironmentId).ToArray();
+    private static string BindingKey(Guid connectorVersion, Guid environment) => connectorVersion.ToString("N") + "\n" + environment.ToString("N");
     private static ConnectorVersionRecord Clone(ConnectorVersionRecord value) => value with { ChecksumSha256 = value.ChecksumSha256.ToArray() };
-    private static ConnectorBindingSet Clone(ConnectorBindingSet value) => value with { Endpoints = new Dictionary<string, Uri>(value.Endpoints, StringComparer.Ordinal), SecretReferences = new Dictionary<string, string>(value.SecretReferences, StringComparer.Ordinal) };
+    private static ConnectorBindingSet Clone(ConnectorBindingSet value) => value with { Endpoints = new Dictionary<string, Uri>(value.Endpoints, StringComparer.Ordinal), SecretReferences = new Dictionary<string, string>(value.SecretReferences, StringComparer.Ordinal), CertificateReferences = new Dictionary<string, string>(value.CertificateReferences, StringComparer.Ordinal) };
 }

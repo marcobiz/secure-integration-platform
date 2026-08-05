@@ -103,7 +103,6 @@ async Task PublishConnectorAsync(string connectorId, string version, bool securi
     ValidatedConnectorDefinition validated = connectorValidator.ValidateRequired(definition);
     ConnectorVersionRecord draft = await connectorStore.CreateDraftAsync(new(Guid.NewGuid(), Guid.Empty, connectorId, version, "1.0", ConnectorVersionState.Draft, validated.CanonicalJson, Convert.FromHexString(validated.ChecksumSha256), "m3-provisioner", clock.UtcNow, 1), CancellationToken.None).ConfigureAwait(false);
     ConnectorVersionRecord validatedRecord = await connectorStore.MarkValidatedAsync(draft.Id, draft.RowVersion, clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
-    _ = await connectorStore.PublishAsync(draft.Id, validatedRecord.RowVersion, 0, "m3-provisioner", clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
     Dictionary<string, Uri> endpoints = new(StringComparer.Ordinal)
     {
         ["vendor"] = new("https://vendor.m3.test:8443/"),
@@ -113,12 +112,18 @@ async Task PublishConnectorAsync(string connectorId, string version, bool securi
     };
     Dictionary<string, string> secrets = new(StringComparer.Ordinal)
     {
-        ["vendor-api-key"] = "synthetic-vault://vault.m3.test/vendor-api-key",
+        ["vendor-api-key"] = "synthetic-vault://vault.m3.test/vendor-api-key"
+    };
+    Dictionary<string, string> certificates = new(StringComparer.Ordinal)
+    {
         ["vendor-client-certificate"] = "synthetic-vault://vault.m3.test/vendor-client-certificate",
         ["vendor-wrong-client-certificate"] = "synthetic-vault://vault.m3.test/vendor-wrong-client-certificate"
     };
-    _ = await connectorStore.PutBindingsAsync(new(draft.ConnectorId, environmentId, endpoints, secrets, 0, clock.UtcNow, "m3-provisioner"), null, CancellationToken.None).ConfigureAwait(false);
-    _ = await connectorStore.PutBindingsAsync(new(draft.ConnectorId, securityEnvironmentId, endpoints, secrets, 0, clock.UtcNow, "m3-provisioner"), null, CancellationToken.None).ConfigureAwait(false);
+    string primaryChecksum = ConnectorBindingDigests.Revision(draft.Id, environmentId, endpoints, secrets, certificates);
+    string securityChecksum = ConnectorBindingDigests.Revision(draft.Id, securityEnvironmentId, endpoints, secrets, certificates);
+    _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, environmentId, endpoints, secrets, certificates, 0, primaryChecksum, ConnectorBindingState.Draft, clock.UtcNow, "m3-provisioner"), null, CancellationToken.None).ConfigureAwait(false);
+    _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, securityEnvironmentId, endpoints, secrets, certificates, 0, securityChecksum, ConnectorBindingState.Draft, clock.UtcNow, "m3-provisioner"), null, CancellationToken.None).ConfigureAwait(false);
+    _ = await connectorStore.PublishAsync(draft.Id, validatedRecord.RowVersion, 0, "m3-provisioner", clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
 }
 
 static object Operation(string operationId, string endpointBinding, string path, string authentication, string? certificateBinding)

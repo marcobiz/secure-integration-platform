@@ -3,6 +3,8 @@ services:
     environment:
       M5_POSTGRES_ADMIN_API_PASSWORD: ${M5_POSTGRES_ADMIN_API_PASSWORD:?required}
   gateway:
+    ports:
+      - "127.0.0.1:${M5_GATEWAY_PORT:-18443}:8443"
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       Gateway__Admin__Mode: DevelopmentAuth

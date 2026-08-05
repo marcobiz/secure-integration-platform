@@ -43,7 +43,9 @@ public sealed record ConnectorBindingRequest(
     Guid EnvironmentId,
     IReadOnlyDictionary<string, string> Endpoints,
     IReadOnlyDictionary<string, string> SecretReferences,
-    long? ExpectedRevision = null);
+    long? ExpectedRevision = null,
+    IReadOnlyDictionary<string, string>? CertificateReferences = null,
+    string? ConnectorVersion = null);
 
 /// <summary>Non-destructive contract test of one Published operation and Environment binding.</summary>
 public sealed record ConnectorTestRequest(Guid EnvironmentId, string OperationId);
@@ -125,6 +127,38 @@ public static class ConnectorCanonicalJson
             default:
                 throw new GatewayException("BGW-CONNECTOR-JSON", 400);
         }
+    }
+}
+
+/// <summary>Canonical checksums binding a Connector version to immutable server-owned resources.</summary>
+public static class ConnectorBindingDigests
+{
+    /// <summary>Checksums one exact Environment binding revision.</summary>
+    public static string Revision(Guid connectorVersionId, Guid environmentId, IReadOnlyDictionary<string, Uri> endpoints, IReadOnlyDictionary<string, string> secrets, IReadOnlyDictionary<string, string> certificates)
+    {
+        var canonical = new
+        {
+            connectorVersionId = connectorVersionId.ToString("D"),
+            environmentId = environmentId.ToString("D"),
+            endpoints = endpoints.OrderBy(value => value.Key, StringComparer.Ordinal).ToDictionary(value => value.Key, value => value.Value.AbsoluteUri, StringComparer.Ordinal),
+            secrets = secrets.OrderBy(value => value.Key, StringComparer.Ordinal).ToDictionary(value => value.Key, value => value.Value, StringComparer.Ordinal),
+            certificates = certificates.OrderBy(value => value.Key, StringComparer.Ordinal).ToDictionary(value => value.Key, value => value.Value, StringComparer.Ordinal)
+        };
+        return Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(canonical)));
+    }
+
+    /// <summary>Checksums a Connector checksum plus all exact Environment binding revisions.</summary>
+    public static byte[] Bundle(byte[] connectorChecksum, IEnumerable<ConnectorBindingSet> bindings)
+    {
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(connectorChecksum);
+        foreach (ConnectorBindingSet binding in bindings.OrderBy(value => value.EnvironmentId).ThenBy(value => value.Revision))
+        {
+            hash.AppendData(binding.EnvironmentId.ToByteArray());
+            hash.AppendData(BitConverter.GetBytes(binding.Revision));
+            hash.AppendData(Convert.FromHexString(binding.ChecksumSha256));
+        }
+        return hash.GetHashAndReset();
     }
 }
 
@@ -271,7 +305,8 @@ public sealed class ConnectorAdministrationService(
     IGatewayOperationCatalog runtimeCatalog,
     IGatewayRegistry registry,
     IGatewayClock clock,
-    IConnectorApprovalPolicy? approvalPolicy = null)
+    IConnectorApprovalPolicy? approvalPolicy = null,
+    IAdminSecurityStore? approvalStore = null)
 {
     /// <summary>Validates without persisting a definition.</summary>
     public ConnectorValidationResult Validate(JsonElement definition) => validator.Validate(definition);
@@ -301,11 +336,19 @@ public sealed class ConnectorAdministrationService(
     public async Task<ConnectorVersionResource> PublishAsync(string connectorId, string version, long expectedRowVersion, long expectedPublicationRevision, string actor, Guid correlationId, CancellationToken cancellationToken)
     {
         ConnectorVersionRecord existing = await RequiredAsync(connectorId, version, cancellationToken).ConfigureAwait(false);
-        if (approvalPolicy is not null) await approvalPolicy.EnsurePublishApprovedAsync(existing, actor, cancellationToken).ConfigureAwait(false);
         _ = validator.ParseStored(existing.CanonicalJson, existing.ChecksumSha256);
-        ConnectorVersionRecord updated = await store.PublishAsync(existing.Id, expectedRowVersion, expectedPublicationRevision, actor, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+        ConnectorVersionRecord updated;
+        if (approvalPolicy is not null)
+        {
+            byte[] bindingDigest = await store.GetBindingBundleDigestAsync(existing.Id, cancellationToken).ConfigureAwait(false);
+            updated = await store.PublishApprovedAsync(existing.Id, bindingDigest, expectedRowVersion, expectedPublicationRevision, actor, correlationId, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            updated = await store.PublishAsync(existing.Id, expectedRowVersion, expectedPublicationRevision, actor, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+        }
         runtimeCatalog.Invalidate(connectorId);
-        await AuditAsync(actor, "connector.publish", updated, correlationId, "success", "BGW-CONNECTOR-PUBLISHED", cancellationToken).ConfigureAwait(false);
+        if (approvalPolicy is null) await AuditAsync(actor, "connector.publish", updated, correlationId, "success", "BGW-CONNECTOR-PUBLISHED", cancellationToken).ConfigureAwait(false);
         return Resource(updated);
     }
 
@@ -332,7 +375,10 @@ public sealed class ConnectorAdministrationService(
     public async Task<long> PutBindingsAsync(string connectorId, ConnectorBindingRequest request, string actor, Guid correlationId, CancellationToken cancellationToken)
     {
         IReadOnlyList<ConnectorVersionRecord> versions = await store.ListVersionsAsync(connectorId, cancellationToken).ConfigureAwait(false);
-        ConnectorVersionRecord reference = versions.Count == 0 ? throw new GatewayException("BGW-CONNECTOR-NOT-FOUND", 404) : versions[0];
+        ConnectorVersionRecord reference = request.ConnectorVersion is null
+            ? versions.FirstOrDefault(value => value.State == ConnectorVersionState.Validated) ?? throw new GatewayException("BGW-CONNECTOR-BINDING-REQUIRES-VALIDATED-VERSION", 409)
+            : versions.SingleOrDefault(value => string.Equals(value.Version, request.ConnectorVersion, StringComparison.Ordinal)) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
+        if (reference.State != ConnectorVersionState.Validated) throw new GatewayException("BGW-CONNECTOR-BINDING-REQUIRES-VALIDATED-VERSION", 409);
         Dictionary<string, Uri> endpoints = new(StringComparer.Ordinal);
         foreach ((string name, string value) in request.Endpoints)
         {
@@ -340,8 +386,23 @@ public sealed class ConnectorAdministrationService(
                 throw new GatewayException("BGW-CONNECTOR-ENDPOINT-BINDING", 400);
             endpoints[name] = endpoint!;
         }
-        if (request.SecretReferences.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value))) throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING", 400);
-        ConnectorBindingSet saved = await store.PutBindingsAsync(new(reference.ConnectorId, request.EnvironmentId, endpoints, new Dictionary<string, string>(request.SecretReferences, StringComparer.Ordinal), 0, clock.UtcNow, actor), request.ExpectedRevision, cancellationToken).ConfigureAwait(false);
+        Dictionary<string, string> secretReferences = new(request.SecretReferences, StringComparer.Ordinal);
+        Dictionary<string, string> certificateReferences = request.CertificateReferences is null ? [] : new(request.CertificateReferences, StringComparer.Ordinal);
+        using (JsonDocument document = JsonDocument.Parse(reference.CanonicalJson))
+        {
+            HashSet<string> requiredEndpoints = document.RootElement.GetProperty("bindings").GetProperty("endpoints").EnumerateArray().Select(value => value.GetProperty("name").GetString()!).ToHashSet(StringComparer.Ordinal);
+            Dictionary<string, string> requiredSecrets = document.RootElement.GetProperty("bindings").GetProperty("secrets").EnumerateArray().ToDictionary(value => value.GetProperty("name").GetString()!, value => value.GetProperty("kind").GetString()!, StringComparer.Ordinal);
+            foreach ((string name, string kind) in requiredSecrets.Where(value => value.Value == "clientCertificate").ToArray())
+                if (certificateReferences.Count == 0 && secretReferences.Remove(name, out string? legacyReference)) certificateReferences.Add(name, legacyReference);
+            HashSet<string> ordinarySecrets = requiredSecrets.Where(value => value.Value != "clientCertificate").Select(value => value.Key).ToHashSet(StringComparer.Ordinal);
+            HashSet<string> certificateSecrets = requiredSecrets.Where(value => value.Value == "clientCertificate").Select(value => value.Key).ToHashSet(StringComparer.Ordinal);
+            if (!requiredEndpoints.SetEquals(endpoints.Keys) || !ordinarySecrets.SetEquals(secretReferences.Keys) || !certificateSecrets.SetEquals(certificateReferences.Keys))
+                throw new GatewayException("BGW-CONNECTOR-BINDING-SCOPE", 400);
+        }
+        if (secretReferences.Concat(certificateReferences).Any(pair => string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value))) throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING", 400);
+        string checksum = ConnectorBindingDigests.Revision(reference.Id, request.EnvironmentId, endpoints, secretReferences, certificateReferences);
+        ConnectorBindingSet saved = await store.PutBindingsAsync(new(Guid.NewGuid(), reference.ConnectorId, reference.Id, request.EnvironmentId, endpoints, secretReferences, certificateReferences, 0, checksum, ConnectorBindingState.Draft, clock.UtcNow, actor), request.ExpectedRevision, cancellationToken).ConfigureAwait(false);
+        if (approvalStore is not null) await approvalStore.InvalidateApprovalsAsync(reference.Id, clock.UtcNow, cancellationToken).ConfigureAwait(false);
         runtimeCatalog.Invalidate(connectorId);
         await AuditAsync(actor, "connector.bindings.update", reference, correlationId, "success", "BGW-CONNECTOR-BINDINGS-UPDATED", cancellationToken).ConfigureAwait(false);
         return saved.Revision;
@@ -420,7 +481,7 @@ public sealed class PublishedConnectorCatalog(
             Uri endpoint = new(baseUri, operation.GetProperty("path").GetString()!);
             JsonElement auth = operation.GetProperty("authentication");
             GatewayAuthenticationKind authKind = ParseAuthentication(auth.GetProperty("kind").GetString()!);
-            string? Resolve(string property) => auth.TryGetProperty(property, out JsonElement logical) && snapshot.Bindings.SecretReferences.TryGetValue(logical.GetString()!, out string? reference)
+            string? Resolve(string property) => auth.TryGetProperty(property, out JsonElement logical) && (property == "certificateBinding" ? snapshot.Bindings.CertificateReferences : snapshot.Bindings.SecretReferences).TryGetValue(logical.GetString()!, out string? reference)
                 ? reference
                 : auth.TryGetProperty(property, out _) ? throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING-MISSING", 503) : null;
             JsonElement request = operation.GetProperty("request");

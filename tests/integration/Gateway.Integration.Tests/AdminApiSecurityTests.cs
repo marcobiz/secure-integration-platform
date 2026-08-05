@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using SecureIntegration.Gateway.Api;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
@@ -148,6 +150,49 @@ public sealed class AdminApiSecurityTests
         Assert.ThrowsAny<Exception>(() => factory.CreateClient());
     }
 
+    [Theory]
+    [InlineData("127.0.0.1", true)]
+    [InlineData("::1", true)]
+    [InlineData("192.0.2.25", false)]
+    [InlineData("203.0.113.10", false)]
+    public void M5_UT_DevelopmentAuth_uses_actual_socket_peer_only(string address, bool expected) =>
+        Assert.Equal(expected, DevelopmentAuthenticationBoundary.IsLoopbackPeer(System.Net.IPAddress.Parse(address)));
+
+    [Fact]
+    public void M5_UT_Remote_peer_cannot_forge_loopback_with_Host_or_forwarded_headers()
+    {
+        DefaultHttpContext context = new();
+        context.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("192.0.2.25");
+        context.Request.Host = new HostString("localhost");
+        context.Request.Headers["X-Forwarded-For"] = "127.0.0.1";
+        context.Request.Headers["X-Forwarded-Host"] = "localhost";
+        Assert.False(DevelopmentAuthenticationBoundary.IsLoopbackPeer(context.Connection.RemoteIpAddress));
+    }
+
+    [Fact]
+    public void M5_CT_DevelopmentAuth_compose_listener_is_explicitly_loopback_only()
+    {
+        string compose = File.ReadAllText(Path.Combine(RepositoryRoot(), "deploy", "m5", "docker-compose.m5.yml"));
+        Assert.Contains("127.0.0.1:${M5_GATEWAY_PORT:-18443}:8443", compose, StringComparison.Ordinal);
+        Assert.DoesNotContain("0.0.0.0", compose, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task M5_IT_Development_login_route_is_unavailable_when_mode_is_disabled()
+    {
+        await using WebApplicationFactory<Program> factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Testing");
+            builder.UseSetting("Gateway:Admin:Mode", "Disabled");
+        });
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        string csrf = await GetCsrfAsync(client, TestContext.Current.CancellationToken);
+        using HttpRequestMessage request = new(HttpMethod.Post, "/admin/auth/development/login") { Content = JsonContent.Create(new { userName = "viewer" }) };
+        request.Headers.Add("X-CSRF-TOKEN", csrf);
+        using HttpResponseMessage response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
     private static async Task<string> LoginAsync(HttpClient client, string user, CancellationToken cancellationToken)
     {
         string csrf = await GetCsrfAsync(client, cancellationToken);
@@ -173,13 +218,20 @@ public sealed class AdminApiSecurityTests
         using System.Text.Json.JsonDocument json = await System.Text.Json.JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(TestContext.Current.CancellationToken), cancellationToken: TestContext.Current.CancellationToken);
         return json.RootElement.GetProperty("id").GetGuid();
     }
+
+    private static string RepositoryRoot()
+    {
+        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "BrokerGateway.slnx"))) directory = directory.Parent;
+        return directory?.FullName ?? throw new InvalidOperationException("Repository root not found.");
+    }
 }
 
 public sealed class AdminDevelopmentFactory : WebApplicationFactory<Program>
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        builder.UseEnvironment("Development");
+        builder.UseEnvironment("Testing");
         builder.UseSetting("Gateway:Admin:Mode", "DevelopmentAuth");
     }
 }

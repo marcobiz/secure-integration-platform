@@ -39,11 +39,15 @@ public sealed class RoutingConnectorConfigurationStore : IConnectorConfiguration
     /// <inheritdoc />
     public Task<ConnectorVersionRecord> PublishAsync(Guid versionId, long expectedRowVersion, long expectedPublicationRevision, string actor, DateTimeOffset now, CancellationToken cancellationToken) => admin.PublishAsync(versionId, expectedRowVersion, expectedPublicationRevision, actor, now, cancellationToken);
     /// <inheritdoc />
+    public Task<ConnectorVersionRecord> PublishApprovedAsync(Guid versionId, byte[] expectedBindingDigestSha256, long expectedRowVersion, long expectedPublicationRevision, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken) => admin.PublishApprovedAsync(versionId, expectedBindingDigestSha256, expectedRowVersion, expectedPublicationRevision, actor, correlationId, now, cancellationToken);
+    /// <inheritdoc />
     public Task<ConnectorVersionRecord> RollbackAsync(string connectorId, string targetVersion, long expectedActiveRowVersion, string actor, DateTimeOffset now, CancellationToken cancellationToken) => admin.RollbackAsync(connectorId, targetVersion, expectedActiveRowVersion, actor, now, cancellationToken);
     /// <inheritdoc />
     public Task<ConnectorVersionRecord> RetireAsync(Guid versionId, long expectedRowVersion, string actor, DateTimeOffset now, CancellationToken cancellationToken) => admin.RetireAsync(versionId, expectedRowVersion, actor, now, cancellationToken);
     /// <inheritdoc />
     public Task<ConnectorBindingSet> PutBindingsAsync(ConnectorBindingSet bindings, long? expectedRevision, CancellationToken cancellationToken) => admin.PutBindingsAsync(bindings, expectedRevision, cancellationToken);
+    /// <inheritdoc />
+    public Task<byte[]> GetBindingBundleDigestAsync(Guid connectorVersionId, CancellationToken cancellationToken) => admin.GetBindingBundleDigestAsync(connectorVersionId, cancellationToken);
     /// <inheritdoc />
     public Task<PublishedConnectorStamp?> GetPublishedStampAsync(string connectorId, Guid environmentId, CancellationToken cancellationToken) => runtime.GetPublishedStampAsync(connectorId, environmentId, cancellationToken);
     /// <inheritdoc />

@@ -171,16 +171,17 @@ public sealed class SecureLayerVerticalSliceTests
             ConnectorDefinitionValidator connectorValidator = new();
             PublishedConnectorCatalog connectorCatalog = new(connectorStore, connectorValidator, gatewayClock, TimeSpan.FromMinutes(5));
             ConnectorAdministrationService connectorAdmin = new(connectorStore, connectorValidator, connectorCatalog, gatewayRegistry, gatewayClock);
+            ConnectorVersionResource validated;
             using (JsonDocument sample = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "Samples", "sample-secure-service.connector.json"))))
             {
                 ConnectorVersionResource imported = await connectorAdmin.ImportAsync(sample.RootElement, null, "e2e-admin", Guid.NewGuid(), TestContext.Current.CancellationToken);
-                ConnectorVersionResource validated = await connectorAdmin.ValidateStoredAsync(imported.ConnectorId, imported.Version, imported.RowVersion, "e2e-admin", Guid.NewGuid(), TestContext.Current.CancellationToken);
-                _ = await connectorAdmin.PublishAsync(validated.ConnectorId, validated.Version, validated.RowVersion, 0, "e2e-admin", Guid.NewGuid(), TestContext.Current.CancellationToken);
+                validated = await connectorAdmin.ValidateStoredAsync(imported.ConnectorId, imported.Version, imported.RowVersion, "e2e-admin", Guid.NewGuid(), TestContext.Current.CancellationToken);
             }
             _ = await connectorAdmin.PutBindingsAsync("sample-secure-service", new(environmentId,
                 new Dictionary<string, string> { ["sample-vendor-endpoint"] = new UriBuilder(externalAddress) { Host = "localhost" }.Uri.AbsoluteUri },
                 new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://vendor-key", ["sample-vendor-client-certificate"] = "synthetic://vendor-certificate" }),
                 "e2e-admin", Guid.NewGuid(), TestContext.Current.CancellationToken);
+            _ = await connectorAdmin.PublishAsync(validated.ConnectorId, validated.Version, validated.RowVersion, 0, "e2e-admin", Guid.NewGuid(), TestContext.Current.CancellationToken);
             InMemoryProvider gatewaySecrets = new(new Dictionary<string, string> { ["synthetic://vendor-key"] = "synthetic-vendor-key-e2e-only" }, new Dictionary<string, byte[]> { ["synthetic://vendor-certificate"] = gatewayClientCertificate.Export(X509ContentType.Pkcs12) });
             RestrictedEgressService connectorRuntime = new(gatewayRegistry, connectorCatalog, gatewaySecrets, gatewaySecrets, new LoopbackResolver(), new E2eTransport(externalClient, gatewayClientCertificate), gatewayClock, new LoopbackAllowance());
             RegisteredInstallationIdentity runtimeIdentity = new(installationId, tenantId, applicationId, environmentId, TenantStatus.Active, ApplicationStatus.Active, InstallationStatus.Active, Guid.NewGuid(), CredentialStatus.Active, brokerClientCertificate.RawData, gatewayClock.UtcNow.AddMinutes(-1), gatewayClock.UtcNow.AddHours(1), "1.0.0", null);
