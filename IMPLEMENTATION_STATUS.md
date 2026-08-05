@@ -10,7 +10,7 @@ Aggiornato: 2026-08-05
 | M1 — Local Broker minimo | Implementato; **gate live tecnico PASS** | run `m0-m1-20260803-232955`; AC-002/004 PASS-LIVE sul commit testato |
 | Primo vertical slice E2E | Completato come harness ripetibile | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` |
 | M2 — Gateway minimo | **Done** | gate CI `30896803567`: build/test, PostgreSQL 18, container hardening, Gitleaks e SBOM PASS |
-| M3 — vertical slice production-like | **Implementato, gate aperto** | M3A container CI PASS; prima run split-host BLOCKED pre-handoff, P02 e M3B ancora PENDING |
+| M3 — vertical slice production-like | **Implementato, gate M3 aperto** | M3A product gate PASS; M3B Azure smoke PENDING |
 | M4 e milestone successive | Non iniziate | nessun Connector lifecycle, Admin o adapter nativo |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
@@ -79,13 +79,15 @@ Esito conclusivo: **GO per M2**. La lineage live è stata integrata linearmente:
 - workflow Azure manuale protetto, federato OIDC, con Managed Identity, Key Vault reale, PostgreSQL 18 e App Service mTLS;
 - evidence CI redatta con manifest, digest immagini, versione PostgreSQL, scenari e sidecar SHA-256; raw evidence esclusa da Git.
 
-Il gate non è chiuso: M3-P02 deve ancora essere eseguito live con la procedura operatore
-revisionata e l'environment `azure-dev` non è configurato. Non è richiesto un runner Codex
-elevato o un executor SYSTEM generico: queste automazioni di laboratorio sono rinviate
-alla qualificazione di release. Nessun tag M3 è stato creato e M4 resta vietata. Review:
-`docs/reviews/M3-GATE-REVIEW.md`.
+M3A product gate è PASS con la run `m3a-live-20260805-094131`: P02 ha attraversato il
+vero Windows Service e tutti gli scenari obbligatori HOST/VM sono PASS. Il finalizzatore
+del laboratorio è separatamente BLOCKED e non viene presentato come PASS. M3 resta aperto
+perché l'environment `azure-dev` non è configurato e M3B non è stato eseguito. Non è
+richiesto un runner Codex elevato o un executor SYSTEM generico: queste automazioni sono
+rinviate alla qualificazione di release. Nessun tag M3 è stato creato e M4 resta vietata.
+Review: `docs/reviews/M3-GATE-REVIEW.md` e `docs/reviews/M3A-PRODUCT-GATE-20260805.md`.
 
-La run split-host `m3a-live-20260804-131718` è stata classificata **BLOCKED — PRE-HANDOFF INFRASTRUCTURE VALIDATION**: live/readiness erano HTTP 200, ma Docker health falliva per SAN incompatibile e i profili Windows Firewall erano disabilitati. Il runner VM non è stato eseguito e P02 non è stato testato. Cleanup PASS ha lasciato zero risorse della run e ha rimosso l'handoff non utilizzato. I fix health/TLS e firewall reversibile sono implementati. Il runner predispone ora un secondo switch Hyper-V Internal e una NIC VM `M3A-Isolated`, senza NAT/gateway/DNS/forwarding, con rollback SYSTEM, isolamento del profilo Private e probe VM→HOST pre-handoff. La nuova prova live resta PENDING. Dettagli: `docs/reviews/M3A-BLOCKED-RUN-20260804-131718.md`.
+La run split-host `m3a-live-20260804-131718` è stata classificata **BLOCKED — PRE-HANDOFF INFRASTRUCTURE VALIDATION**: live/readiness erano HTTP 200, ma Docker health falliva per SAN incompatibile e i profili Windows Firewall erano disabilitati. Il runner VM non è stato eseguito e P02 non è stato testato. Cleanup PASS ha lasciato zero risorse della run e ha rimosso l'handoff non utilizzato. I fix health/TLS e firewall reversibile sono implementati. Il runner predispone ora un secondo switch Hyper-V Internal e una NIC VM `M3A-Isolated`, senza NAT/gateway/DNS/forwarding, con rollback SYSTEM, isolamento del profilo Private e probe VM→HOST pre-handoff. La run è storica ed è superata dal PASS product gate `m3a-live-20260805-094131`. Dettagli: `docs/reviews/M3A-BLOCKED-RUN-20260804-131718.md`.
 
 La successiva run `m3a-live-20260804-153103` è **BLOCKED — ROLLBACK WINDOW EXPIRED**:
 il runner VM ha incontrato collisione col servizio M0/M1, diritto batch mancante, ACL
@@ -164,7 +166,7 @@ La matrice live A-F è PASS sulla VM `DESKTOP-5T30P6J` con RunId `m0-m1-20260803
 - **AC-023:** esempio Secure Layer eseguito dalla suite E2E.
 - **AC-027:** generazione SBOM SPDX verificata.
 
-Per M3, AC-001/006/007/009/010/011/012/013/021/023 hanno nuova evidenza container deterministica. Il percorso attraverso il vero Broker Windows Service e lo smoke Azure restano PENDING; pertanto M3 non è Done e non esiste una baseline M3.
+Per M3, AC-001/006/007/009/010/011/012/013/021/023 hanno evidenza container deterministica e M3A split-host PASS-LIVE. Lo smoke Azure M3B resta PENDING; pertanto M3 non è Done e non esiste una baseline M3.
 
 **AC-002 e AC-004 restano PASS-LIVE sul commit testato invariato. M2 è Done.** Il gate indipendente M2 è PASS sul commit candidato `b6e1e46aebbd005d1bacf20943b358f6ccb6ea1a`; il tag annotato di baseline viene applicato soltanto dopo la replica verde sul commit documentale conclusivo.
 

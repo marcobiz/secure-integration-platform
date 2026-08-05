@@ -13,7 +13,7 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | FR-005 | M1 | AEAD roundtrip/tamper/rotation + nonce/AAD/unknown-version/malformed suite + Installation differentiation |
 | FR-006 | M1/M7 | M1 HMAC lifecycle/grant/reopen; firma/certificato: M7 |
 | FR-007 | M2 | `UT_GTW_Enrollment_PoP_derives_tenant_and_replay_is_rejected`, `UT_GTW_Invoke_contract_has_no_client_controlled_endpoint_or_secret_reference`, `UT_GTW_Cross_tenant_grant_is_rejected` |
-| FR-008 | M3 | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay`; CI `m3-deterministic-container-slice` M3-P01/P03-P07 e M3-N01..N15 PASS; run `m3a-live-20260805-091023` dimostra P02/Windows Service ma resta BLOCKED prima della matrice HOST completa e non chiude M3A |
+| FR-008 | M3 | CI `m3-deterministic-container-slice` PASS; **M3A PASS-LIVE** run `m3a-live-20260805-094131`: P02/Windows Service, Legacy standard user, P01/P03–P07 e N01–N14; M3B PENDING |
 | FR-009 | M8 | `E2E-CON-ManagedConnector` |
 | FR-010 | M7/M8 | local/gateway/hybrid sequence suites |
 | FR-011 | M4 | `IT-CON-BindingScope`, secret absence scan |
@@ -34,7 +34,7 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | NFR-003 | M2 transport TLS 1.2/1.3, hostname validation e DNS pinning; M3 synthetic CA/HTTPS/mTLS e certificato errato PASS in container; Key Vault/Managed Identity live PENDING |
 | NFR-004 | IPC exact boundary/oversize pass; aggregate stream/backpressure aperti |
 | NFR-005 | M1 deadline/cancel/idempotent delete; M2 `UT_EGR_Transient_retry_occurs_only_for_idempotent_operation`; circuit breaker resta M7 |
-| NFR-006 | M2 correlation ID firmato/auditato e `traceparent` obbligatorio; propagazione Gateway→vendor PASS M3A container, Broker→Gateway live PENDING |
+| NFR-006 | M2 correlation ID firmato/auditato e `traceparent` obbligatorio; propagazione Gateway→vendor PASS M3A container e Broker→Gateway PASS-LIVE run `m3a-live-20260805-094131` |
 | NFR-007 | canonical checksum/immutability/tamper tests |
 | NFR-008 | clean build, SBOM, signature verification report |
 | NFR-009 | Windows and adapter compatibility matrix |
@@ -44,7 +44,7 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 
 | AC | Test/evidence |
 |---|---|
-| AC-001 | E2E storico + M3A container P03-P07/N15 PASS; vero Broker Service M3-P02 e Azure M3B PENDING |
+| AC-001 | E2E storico + M3A container P03-P07/N15 PASS; M3A P02 vero Broker Service PASS-LIVE; Azure M3B PENDING |
 | AC-002 | **PASS-LIVE:** run `m0-m1-20260803-232955`, tag `m0-m1-live-pass-20260803-232955` |
 | AC-003 | **PASS-LIVE:** processo autorizzato/non autorizzato sotto identità distinte nella stessa run |
 | AC-004 | **PASS-LIVE:** ACL pipe/storage e DPAPI cross-identity nella stessa run |
@@ -56,7 +56,7 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | AC-010 | API-surface/deny-before-side-effect unit + M3-N05/N06/N10 PASS container |
 | AC-011 | enrollment/PoP unit + M3-P01, N02 e N03 PASS container |
 | AC-012 | cross-Tenant/RLS unit e PostgreSQL 18 + M3-P03/N04 PASS container |
-| AC-013 | revoca unit + M3-N01 PASS container; percorso completo via Broker Service PENDING |
+| AC-013 | revoca unit + M3-N01 PASS nella run split-host; percorso completo via Broker Service PASS-LIVE M3A |
 | AC-014 | ConnectorVersion persistence/API test |
 | AC-015 | atomic rollback and cache invalidation E2E |
 | AC-016 | JSON Schema/semantic/security validation corpus |
@@ -64,7 +64,7 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | AC-018 | PASS `gateway-container` run `30896803567`: build/esecuzione, non-root, read-only, live/ready, fail-closed, secret scan, SBOM e shutdown |
 | AC-019 | ADR-0017 Accepted; MSI install/upgrade/repair/uninstall/reinstall matrix prevista in M9 |
 | AC-020 | `eng/build.ps1`, pinned toolchain e istruzioni root |
-| AC-021 | primo slice storico; M3A container PASS con evidence redatta, M3A Windows Service e M3B PENDING |
+| AC-021 | primo slice storico; M3A container e Windows Service PASS con evidence redatta correlata; M3B PENDING |
 | AC-022 | SDK plus native/COM compatibility report |
 | AC-023 | E2E storico + M3 synthetic vendor API key/mTLS container PASS; smoke Azure PENDING |
 | AC-024 | Managed Connector example execution |

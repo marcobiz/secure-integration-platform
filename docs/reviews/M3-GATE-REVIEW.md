@@ -14,16 +14,14 @@ CI: run `30903757495`
 
 **M3 non è ancora Done. NO-GO per M4.**
 
-La parte container deterministica di M3A è PASS sul commit esatto: Gateway reale,
+La parte container deterministica e il product gate split-host M3A sono PASS: Gateway reale,
 PostgreSQL 18.4, synthetic Vault HTTPS, vendor mock HTTPS/mTLS, enrollment, percorso
-positivo, 14 negative applicative e canary/log scan. Il bundle redatto è stato scaricato
-fuori dal repository e verificato.
+positivo, vero Broker Windows Service, Legacy standard user, 14 negative applicative e
+canary/log scan correlati. I bundle redatti sono fuori dal repository e verificati.
 
-Restano due blocker non sostituibili con simulazioni:
+Resta un blocker non sostituibile con simulazioni:
 
-1. M3A deve ancora essere eseguita con il Broker installato come vero Windows Service e
-   il Legacy Simulator come utente standard attraverso la procedura operatore revisionata.
-2. M3B deve ancora essere eseguita in Azure dev; il repository non ha environment
+1. M3B deve ancora essere eseguita in Azure dev; il repository non ha environment
    `azure-dev`, variabili OIDC o subscription autorizzata.
 
 Per questo non sono stati creati tag/baseline M3, non è stato aggiornato `main` e M4 non
@@ -104,7 +102,7 @@ Digest osservati:
 | Scenario | Stato | Evidenza/codice |
 |---|---|---|
 | P01 enrollment | PASS-CI | `BGW-ENROLLMENT-OK` |
-| P02 invocazione tramite vero Broker Service | **PENDING-LIVE** | harness `Invoke-M3A.ps1` pronto, nessun runner elevato disponibile |
+| P02 invocazione tramite vero Broker Service | **PASS-LIVE** | run `m3a-live-20260805-094131`, vero service/virtual account e Legacy standard user |
 | P03 tenant server-side | PASS-CI | risposta positiva e tenant override N04 negato |
 | P04 grant valido | PASS-CI | `BGW-OK`; connector/operation N05/N06 negati |
 | P05 API key letta dal Vault | PASS-CI | vendor accetta il canary soltanto dal Gateway |
@@ -147,9 +145,9 @@ sequenceDiagram
     Note over G,X: N15 scansiona i log prima del bundle redatto
 ```
 
-Questa è la sequenza realmente provata dalla CI. Il tratto Legacy Simulator → Named Pipe
-→ vero Broker Windows Service → Gateway è implementato nell'orchestratore ma resta
-PENDING-LIVE e non viene rappresentato come eseguito.
+La sequenza Gateway è provata dalla CI e dalla run split-host. Il tratto Legacy Simulator
+→ Named Pipe → vero Broker Windows Service → Gateway è PASS-LIVE nella run
+`m3a-live-20260805-094131` e non è simulato.
 
 ## Review sicurezza mirata
 
@@ -169,7 +167,9 @@ PENDING-LIVE e non viene rappresentato come eseguito.
   `Production` quando `WEBSITE_INSTANCE_ID` prova il boundary App Service. Il comportamento
   deve ancora essere validato live in M3B.
 - Errori e audit contengono codici/correlation ID, non payload o credenziali. Il canary
-  scan CI è PASS; la stessa verifica sul Windows Event Log M3A resta PENDING.
+  scan CI e il Windows Event Log M3A sono PASS. Il solo scan aggregato dei log container
+  della run live non è stato raggiunto dal finalizzatore ed è dichiarato come limite di
+  evidence non bloccante.
 
 ## Build, test e scanning
 
@@ -188,22 +188,17 @@ PENDING-LIVE e non viene rappresentato come eseguito.
 
 ## Blocker per la baseline M3
 
-- esecuzione manuale M3A dello script revisionato con P02 attraverso il vero Broker
-  Service e acquisizione di `RESULT.json`/evidence redatta PASS;
 - environment GitHub `azure-dev`, OIDC federato e variabili elencate nel runbook;
 - smoke Azure PASS con Managed Identity/Key Vault reali e bundle redatto verificato.
 
 ### Ultima run split-host
 
-La run `m3a-live-20260805-091023` sul commit `febd8b3` ha dimostrato live il tratto P02
-attraverso il vero Windows Service, il Legacy Simulator standard user e il vendor mock
-mTLS. Non è tuttavia accettata come PASS: il SecurityDriver HOST è terminato durante
-`Finalize` perché Windows Schannel non supporta il client key importato come
-`EphemeralKeySet`; N01–N14 HOST e il bundle finale non sono stati completati. Il cleanup
-HOST/VM è stato verificato e le evidenze VM originali redatte sono preservate fuori Git.
-La classificazione, gli hash e il fix harness `678aa07` sono documentati in
-`M3A-SPLIT-HOST-BLOCKED-20260805.md`. È richiesta una nuova run completa con materiale
-nuovo; M3A resta aperta.
+La run `m3a-live-20260805-094131` chiude **M3A PRODUCT GATE PASS** sul commit `86b4e0f`.
+P02, Windows Service/virtual account, Legacy standard user, negazioni VM e cleanup sono
+PASS nell'archive VM originale; P01/P03–P07 e N01–N14 HOST sono PASS nel report originale.
+Il finalizzatore del laboratorio resta dichiarato BLOCKED per il probe Schannel opzionale,
+senza mascherarlo come PASS. Evidence, hash, limite di log aggregation e criterio di
+composizione sono in `M3A-PRODUCT-GATE-20260805.md`.
 
 ## Non-blocker e debito rinviato
 
@@ -221,4 +216,4 @@ nuovo; M3A resta aperta.
 
 Nessuna deviazione architetturale richiede una nuova ADR: synthetic Vault e allowlist
 privata sono confinati all'ambiente di test; Azure usa OIDC, Managed Identity e Key Vault
-come previsto. **Nessun tag M3 viene creato. NO-GO per M4.**
+come previsto. **M3A è PASS; M3 resta aperto per M3B. Nessun tag M3 viene creato. NO-GO per M4.**
