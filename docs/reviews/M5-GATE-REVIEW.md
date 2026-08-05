@@ -2,16 +2,18 @@
 
 **Baseline M4:** `m4-connector-configuration-baseline-20260805` (`49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b`)  
 **Branch:** `m5/admin-ui-mvp`  
-**Implementation candidate:** `9eea56f632bcf20e0eb8f0bec438796d36097eed`
-**Stato:** **FINAL REMEDIATION CANDIDATE — read-only review and final CI replica pending. M5 is not declared Done; PR #5 remains open and unmerged.**
+**Implementation candidate:** `080ae20f11070382084a1c66c210129f9a309609`
+**Stato:** **FINAL REMEDIATION CANDIDATE — exact-commit CI PASS; read-only review pending. M5 is not declared Done; PR #5 remains open and unmerged.**
 
-> Historical evidence and counts below remain provenance only. The authoritative final-cycle status is recorded in `M5-MULTI-AGENT-REMEDIATION.md`; the new external evidence bundle must bind the exact final documentation HEAD before read-only delta review.
+> Historical evidence and counts below remain provenance only. The authoritative final-cycle status is recorded in `M5-MULTI-AGENT-REMEDIATION.md`; the external evidence bundle binds the final documentation HEAD and is verified before read-only delta review.
 
 ## Remediation delta
 
 The merge-blocking delta review is tracked in `M5-MULTI-AGENT-REMEDIATION.md`. The corrected candidate adds immutable approved binding bundles, atomic approval/publication, revocable server-side sessions, durable denial audit, complete pagination/OpenAPI, accessible administration workflows and trustworthy production-like test boundaries. It also separates runtime and administrative registry credentials after the real PostgreSQL/full-stack gate exposed the previous privilege-routing defect.
 
 The final-cycle evidence directory is newly generated under `C:\SecureEvidence\m5-final-remediation-gate-*`; earlier bundles are not reused. This remains a delta-review candidate: M5 is not declared Done here, PR #5 is not merged, and M6 is not started.
+
+The exact implementation candidate passed general CI run `31048418560` (6/6 jobs), M5 push run `31048413797` (15/15) and M5 pull-request run `31048418026` (15/15). The final local gate records 145 ordinary .NET PASS plus seven explicit PostgreSQL skips, eight PostgreSQL 18 PASS, 22 Vitest PASS, 32 Playwright browser-mock PASS and `FULLSTACK-01` PASS. The Core export contains 286 files with manifest SHA-256 `3A630E6C2A0365E21317D1F11F9D101CC3B9EAADDDE00AC2AAFDE56A5746C97A`.
 
 ## Product result
 
