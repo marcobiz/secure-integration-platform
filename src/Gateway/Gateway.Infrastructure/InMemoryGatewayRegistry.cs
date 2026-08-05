@@ -25,6 +25,14 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null) : IGate
         lock (gate) return auditEvents.ToArray();
     }
 
+    /// <summary>Returns redacted administrative metadata for Development and tests.</summary>
+    public (TenantRecord[] Tenants, ApplicationRecord[] Applications, GatewayEnvironmentRecord[] Environments,
+        InstallationRecord[] Installations, InstallationGrantRecord[] Grants, GatewayAuditEvent[] Audit) SnapshotDirectory()
+    {
+        lock (gate) return (tenants.Values.ToArray(), applications.Values.ToArray(), environments.Values.ToArray(),
+            installations.Values.ToArray(), grants.Values.ToArray(), auditEvents.ToArray());
+    }
+
     /// <inheritdoc />
     public Task AddTenantAsync(TenantRecord tenant, CancellationToken cancellationToken)
     {

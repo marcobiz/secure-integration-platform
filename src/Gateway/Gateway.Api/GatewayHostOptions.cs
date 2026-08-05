@@ -47,10 +47,31 @@ public sealed class GatewayProviderOptions
 /// <summary>Admin API authentication. DevelopmentApiKey is rejected outside Development/Testing.</summary>
 public sealed class GatewayAdminOptions
 {
-    /// <summary>Disabled or DevelopmentApiKey. Production OIDC is a deployment concern.</summary>
+    /// <summary>Disabled, Oidc, DevelopmentAuth or the M4Testing-only DevelopmentApiKey compatibility mode.</summary>
     public string Mode { get; init; } = "Disabled";
     /// <summary>Process environment variable containing the development-only API key.</summary>
     public string ApiKeyEnvironmentVariable { get; init; } = "GATEWAY_ADMIN_API_KEY";
+    /// <summary>Environment variable containing the one-time bootstrap token.</summary>
+    public string BootstrapTokenEnvironmentVariable { get; init; } = "GATEWAY_ADMIN_BOOTSTRAP_TOKEN";
+    /// <summary>Requires checksum-specific approval by a distinct principal before publication.</summary>
+    public bool RequireFourEyes { get; init; } = true;
+    /// <summary>Explicit proxy IP addresses allowed to supply forwarded headers.</summary>
+    public List<string> TrustedProxies { get; init; } = [];
+    /// <summary>Provider-neutral OIDC client configuration.</summary>
+    public GatewayOidcOptions Oidc { get; init; } = new();
+}
+
+/// <summary>Standard confidential OIDC client settings.</summary>
+public sealed class GatewayOidcOptions
+{
+    /// <summary>HTTPS issuer/authority.</summary>
+    public string? Authority { get; init; }
+    /// <summary>OIDC client identifier.</summary>
+    public string? ClientId { get; init; }
+    /// <summary>Process environment variable containing the confidential client secret.</summary>
+    public string ClientSecretEnvironmentVariable { get; init; } = "GATEWAY_ADMIN_OIDC_CLIENT_SECRET";
+    /// <summary>OIDC callback path registered with the provider.</summary>
+    public string CallbackPath { get; init; } = "/admin/auth/callback";
 }
 
 /// <summary>Configuration representation of one immutable outbound operation.</summary>

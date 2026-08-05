@@ -8,5 +8,6 @@
     <ProjectReference Include="..\Gateway.Application\Gateway.Application.csproj" />
     <ProjectReference Include="..\Gateway.Infrastructure\Gateway.Infrastructure.csproj" />
     <ProjectReference Include="..\..\Providers\Synthetic\Providers.Synthetic.csproj" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
   </ItemGroup>
 </Project>

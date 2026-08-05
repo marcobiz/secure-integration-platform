@@ -245,7 +245,8 @@ public sealed class ConnectorAdministrationService(
     ConnectorDefinitionValidator validator,
     IGatewayOperationCatalog runtimeCatalog,
     IGatewayRegistry registry,
-    IGatewayClock clock)
+    IGatewayClock clock,
+    IConnectorApprovalPolicy? approvalPolicy = null)
 {
     /// <summary>Validates without persisting a definition.</summary>
     public ConnectorValidationResult Validate(JsonElement definition) => validator.Validate(definition);
@@ -275,6 +276,7 @@ public sealed class ConnectorAdministrationService(
     public async Task<ConnectorVersionResource> PublishAsync(string connectorId, string version, long expectedRowVersion, long expectedPublicationRevision, string actor, Guid correlationId, CancellationToken cancellationToken)
     {
         ConnectorVersionRecord existing = await RequiredAsync(connectorId, version, cancellationToken).ConfigureAwait(false);
+        if (approvalPolicy is not null) await approvalPolicy.EnsurePublishApprovedAsync(existing, actor, cancellationToken).ConfigureAwait(false);
         _ = validator.ParseStored(existing.CanonicalJson, existing.ChecksumSha256);
         ConnectorVersionRecord updated = await store.PublishAsync(existing.Id, expectedRowVersion, expectedPublicationRevision, actor, clock.UtcNow, cancellationToken).ConfigureAwait(false);
         runtimeCatalog.Invalidate(connectorId);

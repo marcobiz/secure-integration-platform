@@ -1,9 +1,16 @@
 using System.Security.Cryptography;
+using System.Security.Claims;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Runtime.Loader;
+using System.Net;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
@@ -11,6 +18,7 @@ using Npgsql;
 using SecureIntegration.Gateway.Api;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Infrastructure;
+using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Providers.Abstractions;
 using SecureIntegration.Providers.Synthetic;
 
@@ -47,6 +55,21 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 GatewayHostOptions hostOptions = builder.Configuration.GetSection("Gateway").Get<GatewayHostOptions>() ?? new();
+builder.AddGatewayAdminAuthentication(hostOptions.Admin);
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.User.FindFirst("sub")?.Value ?? context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions { PermitLimit = context.Request.Path.StartsWithSegments("/admin/auth") ? 20 : 240, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true }));
+});
+ForwardedHeadersOptions forwardedHeaders = new() { ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto };
+foreach (string configuredProxy in hostOptions.Admin.TrustedProxies)
+{
+    if (!IPAddress.TryParse(configuredProxy, out IPAddress? proxy)) throw new InvalidOperationException("Gateway Admin trusted proxy is invalid.");
+    forwardedHeaders.KnownProxies.Add(proxy);
+}
 bool usePlatformCertificateForwarding = hostOptions.TrustPlatformClientCertificateForwarding;
 if (usePlatformCertificateForwarding)
 {
@@ -66,14 +89,20 @@ if (string.IsNullOrWhiteSpace(connectionString))
 {
     if (!builder.Environment.IsDevelopment() && !builder.Environment.IsEnvironment("Testing"))
         throw new InvalidOperationException("GatewayDatabase is required outside Development/Testing.");
-    builder.Services.AddSingleton<IGatewayRegistry, InMemoryGatewayRegistry>();
+    builder.Services.AddSingleton<InMemoryGatewayRegistry>();
+    builder.Services.AddSingleton<IGatewayRegistry>(services => services.GetRequiredService<InMemoryGatewayRegistry>());
+    builder.Services.AddSingleton<IAdminDirectoryStore, InMemoryAdminDirectoryStore>();
     builder.Services.AddSingleton<IConnectorConfigurationStore, InMemoryConnectorConfigurationStore>();
+    builder.Services.AddSingleton<IAdminSecurityStore, InMemoryAdminSecurityStore>();
 }
 else
 {
     builder.Services.AddSingleton(_ => NpgsqlDataSource.Create(connectionString));
-    builder.Services.AddSingleton<IGatewayRegistry, PostgresGatewayRegistry>();
+    builder.Services.AddSingleton<PostgresGatewayRegistry>();
+    builder.Services.AddSingleton<IGatewayRegistry>(services => services.GetRequiredService<PostgresGatewayRegistry>());
+    builder.Services.AddSingleton<IAdminDirectoryStore, PostgresAdminDirectoryStore>();
     builder.Services.AddSingleton<IConnectorConfigurationStore, PostgresConnectorConfigurationStore>();
+    builder.Services.AddSingleton<IAdminSecurityStore, PostgresAdminSecurityStore>();
 }
 builder.Services.AddSingleton<ConnectorDefinitionValidator>();
 if (builder.Environment.IsEnvironment("M3Testing") && hostOptions.Operations.Count > 0)
@@ -111,9 +140,14 @@ builder.Services.AddSingleton<GatewayProvisioningService>();
 builder.Services.AddSingleton<InstallationEnrollmentService>();
 builder.Services.AddSingleton<RuntimeIdentityService>();
 builder.Services.AddSingleton<RestrictedEgressService>();
+builder.Services.AddSingleton<AdminAccessService>();
+builder.Services.AddSingleton<ConnectorApprovalService>();
+if (hostOptions.Admin.RequireFourEyes && !string.Equals(hostOptions.Admin.Mode, "DevelopmentApiKey", StringComparison.Ordinal)) builder.Services.AddSingleton<IConnectorApprovalPolicy, FourEyesConnectorApprovalPolicy>();
 builder.Services.AddSingleton<ConnectorAdministrationService>();
 
 WebApplication app = builder.Build();
+if (app.Environment.IsProduction()) app.UseHsts();
+if (forwardedHeaders.KnownProxies.Count > 0) app.UseForwardedHeaders(forwardedHeaders);
 if (usePlatformCertificateForwarding) app.UseCertificateForwarding();
 ILogger gatewayLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SecureIntegration.Gateway.Requests");
 app.Use(async (context, next) =>
@@ -146,6 +180,14 @@ app.Use(async (context, next) =>
         GatewayLog.RequestRejected(gatewayLogger, "BGW-PROTOCOL-REQUEST", requestCorrelationId);
         await context.Response.WriteAsJsonAsync(new { type = "about:blank", title = "Invalid request", status, code = "BGW-PROTOCOL-REQUEST", correlationId = requestCorrelationId, retryable = false }).ConfigureAwait(false);
     }
+    catch (AntiforgeryValidationException)
+    {
+        if (context.Response.HasStarted) throw;
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        context.Response.ContentType = "application/problem+json";
+        GatewayLog.RequestRejected(gatewayLogger, "BGW-ADMIN-CSRF", requestCorrelationId);
+        await context.Response.WriteAsJsonAsync(new { type = "about:blank", title = "CSRF validation failed", status = 403, code = "BGW-ADMIN-CSRF", correlationId = requestCorrelationId, retryable = false }).ConfigureAwait(false);
+    }
     catch (ProviderAccessException exception)
     {
         if (context.Response.HasStarted) throw;
@@ -164,6 +206,27 @@ app.Use(async (context, next) =>
         await context.Response.WriteAsJsonAsync(new { type = "about:blank", title = "Gateway request failed", status = 500, code = "BGW-INTERNAL", correlationId = requestCorrelationId, retryable = false }).ConfigureAwait(false);
     }
 });
+
+app.UseAuthentication();
+app.UseRateLimiter();
+app.Use(async (context, next) =>
+{
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'";
+        context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        context.Response.Headers["Referrer-Policy"] = "no-referrer";
+        context.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=(), usb=()";
+        context.Response.Headers["X-Frame-Options"] = "DENY";
+        if (context.Request.Path.StartsWithSegments("/admin/auth") || context.Request.Path.StartsWithSegments("/admin/api")) context.Response.Headers.CacheControl = "no-store";
+        return Task.CompletedTask;
+    });
+    bool mutation = context.Request.Method is not ("GET" or "HEAD" or "OPTIONS" or "TRACE");
+    if (mutation && context.Request.Path.StartsWithSegments("/admin/api"))
+        await context.RequestServices.GetRequiredService<IAntiforgery>().ValidateRequestAsync(context).ConfigureAwait(false);
+    await next(context).ConfigureAwait(false);
+});
+app.UseAuthorization();
 
 app.MapGet("/health/live", () => Results.Ok(new { status = "healthy" }));
 app.MapGet("/health/ready", async (IGatewayRegistry registry, IProviderHealthCheck provider, CancellationToken cancellationToken) =>
@@ -276,6 +339,302 @@ app.MapPost("/admin/v1/connectors/{connectorId}:test", async (string connectorId
     return Results.Ok(new { status = "valid", connectorId, operationId = operation.OperationId, connectorVersion = operation.Version });
 });
 
+app.MapGet("/admin/auth/login", (HttpContext context) =>
+{
+    if (string.Equals(hostOptions.Admin.Mode, "Oidc", StringComparison.Ordinal))
+        return Results.Challenge(new AuthenticationProperties { RedirectUri = "/admin" }, [OpenIdConnectDefaults.AuthenticationScheme]);
+    if (string.Equals(hostOptions.Admin.Mode, "DevelopmentAuth", StringComparison.Ordinal))
+        return Results.Redirect("/admin/login");
+    return Results.NotFound();
+});
+
+app.MapGet("/admin/auth/csrf", (HttpContext context, IAntiforgery antiforgery) =>
+{
+    AntiforgeryTokenSet tokens = antiforgery.GetAndStoreTokens(context);
+    context.Response.Headers.CacheControl = "no-store";
+    return Results.Ok(new { token = tokens.RequestToken });
+});
+
+app.MapPost("/admin/auth/development/login", async (DevelopmentLoginRequest request, HttpContext context, IAntiforgery antiforgery, IAdminSecurityStore securityStore, CancellationToken cancellationToken) =>
+{
+    await antiforgery.ValidateRequestAsync(context).ConfigureAwait(false);
+    if (!app.Environment.IsDevelopment() || !string.Equals(hostOptions.Admin.Mode, "DevelopmentAuth", StringComparison.Ordinal) || !IsLocalDevelopmentHost(context.Request.Host.Host))
+        throw new GatewayException("BGW-ADMIN-DEVELOPMENT-AUTH-DISABLED", 404);
+    (string Subject, AdminRole[] Roles) user = request.UserName switch
+    {
+        "viewer" => ("viewer", [AdminRole.Viewer]),
+        "editor" => ("editor", [AdminRole.Viewer, AdminRole.ConnectorEditor]),
+        "approver" => ("approver", [AdminRole.Viewer, AdminRole.ConnectorApprover]),
+        "operator" => ("operator", [AdminRole.Viewer, AdminRole.Operator]),
+        "security-admin" => ("security-admin", [AdminRole.Viewer, AdminRole.SecurityAdministrator]),
+        _ => throw new GatewayException("BGW-ADMIN-DEVELOPMENT-USER", 401)
+    };
+    const string issuer = "https://development.invalid";
+    AdminPrincipalRecord principal = await securityStore.EnsurePrincipalAsync(new(issuer, user.Subject, user.Subject, user.Subject + "@example.invalid"), cancellationToken).ConfigureAwait(false);
+    if (user.Roles.Contains(AdminRole.SecurityAdministrator)) _ = await securityStore.TryBootstrapSecurityAdministratorAsync(principal.Id, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+    foreach (AdminRole role in user.Roles.Where(role => role != AdminRole.SecurityAdministrator))
+        _ = await securityStore.AssignRoleAsync(principal.Id, role, null, principal.Id, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+    ClaimsIdentity identity = new([
+        new Claim("iss", issuer, ClaimValueTypes.String, issuer),
+        new Claim("sub", user.Subject, ClaimValueTypes.String, issuer),
+        new Claim("name", user.Subject, ClaimValueTypes.String, issuer),
+        new Claim(ClaimTypes.NameIdentifier, user.Subject, ClaimValueTypes.String, issuer)
+    ], CookieAuthenticationDefaults.AuthenticationScheme, "name", ClaimTypes.Role);
+    await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity), new AuthenticationProperties { IsPersistent = false, ExpiresUtc = DateTimeOffset.UtcNow.AddMinutes(20) }).ConfigureAwait(false);
+    return Results.Ok(new { status = "authenticated" });
+});
+
+app.MapPost("/admin/auth/logout", async (HttpContext context, IAntiforgery antiforgery) =>
+{
+    await antiforgery.ValidateRequestAsync(context).ConfigureAwait(false);
+    await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme).ConfigureAwait(false);
+    if (string.Equals(hostOptions.Admin.Mode, "Oidc", StringComparison.Ordinal))
+    {
+        await context.SignOutAsync(OpenIdConnectDefaults.AuthenticationScheme, new AuthenticationProperties { RedirectUri = "/admin/login" }).ConfigureAwait(false);
+        return Results.Empty;
+    }
+    return Results.Ok(new { status = "signed-out" });
+}).RequireAuthorization();
+
+app.MapGet("/admin/auth/me", async (HttpContext context, AdminAccessService access, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    context.Response.Headers.CacheControl = "no-store";
+    return Results.Ok(new { id = admin.Principal.Id, displayName = admin.Principal.DisplayName, roles = admin.Assignments.Select(value => new { role = value.Role.ToString(), tenantId = value.TenantId }) });
+}).RequireAuthorization();
+
+RouteGroupBuilder adminApi = app.MapGroup("/admin/api/v1").RequireAuthorization();
+
+adminApi.MapGet("/dashboard", async (HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, IGatewayRegistry registry, IProviderHealthCheck provider, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.Viewer, AdminRole.ConnectorEditor, AdminRole.ConnectorApprover, AdminRole.Operator, AdminRole.SecurityAdministrator);
+    AdminPage<TenantRecord> tenants = await directory.ListTenantsAsync(0, 1, cancellationToken).ConfigureAwait(false);
+    AdminPage<ApplicationRecord> applications = await directory.ListApplicationsAsync(0, 1, cancellationToken).ConfigureAwait(false);
+    bool databaseReady = await registry.IsReadyAsync(cancellationToken).ConfigureAwait(false);
+    bool providerReady = await provider.IsReadyAsync(cancellationToken).ConfigureAwait(false);
+    return Results.Ok(new { tenants = tenants.Total, applications = applications.Total, database = databaseReady ? "healthy" : "unhealthy", provider = providerReady ? "healthy" : "unhealthy", generatedAtUtc = DateTimeOffset.UtcNow });
+});
+
+adminApi.MapGet("/tenants", async (int? offset, int? limit, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.Viewer, AdminRole.SecurityAdministrator);
+    return Results.Ok(await directory.ListTenantsAsync(offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
+});
+
+adminApi.MapPost("/tenants", async (CreateTenantRequest request, HttpContext context, AdminAccessService access, IGatewayRegistry registry, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.SecurityAdministrator);
+    ValidateAdminCode(request.Code, 64); ValidateAdminName(request.DisplayName);
+    TenantRecord tenant = new(Guid.NewGuid(), request.Code, request.DisplayName, TenantStatus.Active, DateTimeOffset.UtcNow);
+    await registry.AddTenantAsync(tenant, cancellationToken).ConfigureAwait(false);
+    await AppendAdminAuditAsync(registry, context, admin, tenant.Id, "tenant.create", "tenant", tenant.Id.ToString("D"), cancellationToken).ConfigureAwait(false);
+    return Results.Created($"/admin/api/v1/tenants/{tenant.Id:D}", tenant);
+});
+
+adminApi.MapGet("/applications", async (int? offset, int? limit, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.Viewer, AdminRole.SecurityAdministrator);
+    return Results.Ok(await directory.ListApplicationsAsync(offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
+});
+
+adminApi.MapPost("/applications", async (CreateApplicationRequest request, HttpContext context, AdminAccessService access, IGatewayRegistry registry, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.SecurityAdministrator);
+    ValidateAdminCode(request.Code, 100); ValidateAdminName(request.DisplayName);
+    if (!Version.TryParse(request.MinimumBrokerVersion, out _) || (request.MaximumBrokerVersion is not null && !Version.TryParse(request.MaximumBrokerVersion, out _))) throw new GatewayException("BGW-ADMIN-BROKER-VERSION", 400);
+    ApplicationRecord application = new(Guid.NewGuid(), request.Code, request.DisplayName, ApplicationStatus.Active, request.MinimumBrokerVersion, request.MaximumBrokerVersion, DateTimeOffset.UtcNow);
+    await registry.AddApplicationAsync(application, cancellationToken).ConfigureAwait(false);
+    await AppendAdminAuditAsync(registry, context, admin, null, "application.create", "application", application.Id.ToString("D"), cancellationToken).ConfigureAwait(false);
+    return Results.Created($"/admin/api/v1/applications/{application.Id:D}", application);
+});
+
+adminApi.MapGet("/environments", async (int? offset, int? limit, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.Viewer, AdminRole.SecurityAdministrator);
+    return Results.Ok(await directory.ListEnvironmentsAsync(offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
+});
+
+adminApi.MapGet("/installations", async (Guid tenantId, int? offset, int? limit, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, tenantId, AdminRole.Viewer, AdminRole.Operator, AdminRole.SecurityAdministrator);
+    return Results.Ok(await directory.ListInstallationsAsync(tenantId, offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
+});
+
+adminApi.MapPost("/installations", async (CreateInstallationRequest request, HttpContext context, AdminAccessService access, IGatewayRegistry registry, GatewayProvisioningService provisioning, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, request.TenantId, AdminRole.SecurityAdministrator);
+    Guid id = Guid.NewGuid(); DateTimeOffset now = DateTimeOffset.UtcNow;
+    await registry.AddInstallationAsync(new(id, request.TenantId, request.ApplicationId, request.EnvironmentId, InstallationStatus.Pending, null, now), cancellationToken).ConfigureAwait(false);
+    ProvisionedActivation activation = await provisioning.CreateActivationCodeAsync(id, admin.ActorId, cancellationToken).ConfigureAwait(false);
+    await AppendAdminAuditAsync(registry, context, admin, request.TenantId, "installation.create", "installation", id.ToString("D"), cancellationToken).ConfigureAwait(false);
+    context.Response.Headers.CacheControl = "no-store";
+    return Results.Json(activation, statusCode: StatusCodes.Status201Created);
+});
+
+adminApi.MapPost("/installations/{installationId}:revoke", async (Guid installationId, Guid tenantId, RevokeInstallationRequest request, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, InstallationEnrollmentService enrollment, IGatewayRegistry registry, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, tenantId, AdminRole.SecurityAdministrator);
+    if (await directory.GetInstallationAsync(tenantId, installationId, cancellationToken).ConfigureAwait(false) is null) throw new GatewayException("BGW-INSTALLATION-NOT-FOUND", 404);
+    await enrollment.RevokeAsync(installationId, request.Reason, cancellationToken).ConfigureAwait(false);
+    await AppendAdminAuditAsync(registry, context, admin, tenantId, "installation.revoke", "installation", installationId.ToString("D"), cancellationToken).ConfigureAwait(false);
+    return Results.Ok(new { status = "revoked" });
+});
+
+adminApi.MapGet("/grants", async (Guid tenantId, int? offset, int? limit, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, tenantId, AdminRole.Viewer, AdminRole.SecurityAdministrator);
+    return Results.Ok(await directory.ListGrantsAsync(tenantId, offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
+});
+
+adminApi.MapPost("/grants", async (CreateGrantRequest request, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, IGatewayRegistry registry, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, request.TenantId, AdminRole.SecurityAdministrator);
+    if (await directory.GetInstallationAsync(request.TenantId, request.InstallationId, cancellationToken).ConfigureAwait(false) is null) throw new GatewayException("BGW-INSTALLATION-NOT-FOUND", 404);
+    ValidateAdminCode(request.ConnectorId, 100); ValidateAdminCode(request.OperationId, 100);
+    InstallationGrantRecord grant = new(Guid.NewGuid(), request.InstallationId, request.TenantId, request.ConnectorId, request.OperationId, true, DateTimeOffset.UtcNow, request.ValidUntil);
+    await registry.AddGrantAsync(grant, cancellationToken).ConfigureAwait(false);
+    await AppendAdminAuditAsync(registry, context, admin, request.TenantId, "grant.create", "installation_grant", grant.Id.ToString("D"), cancellationToken).ConfigureAwait(false);
+    return Results.Created($"/admin/api/v1/grants/{grant.Id:D}", grant);
+});
+
+adminApi.MapGet("/audit", async (Guid tenantId, int? offset, int? limit, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, tenantId, AdminRole.Viewer, AdminRole.Operator, AdminRole.SecurityAdministrator);
+    return Results.Ok(await directory.ListAuditAsync(tenantId, offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
+});
+
+adminApi.MapPost("/bootstrap", async (HttpContext context, AdminAccessService access, IAdminSecurityStore securityStore, IGatewayRegistry registry, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    string? expected = Environment.GetEnvironmentVariable(hostOptions.Admin.BootstrapTokenEnvironmentVariable, EnvironmentVariableTarget.Process);
+    string supplied = context.Request.Headers["X-Bootstrap-Token"].ToString();
+    if (!FixedSecretEquals(expected, supplied)) throw new GatewayException("BGW-ADMIN-BOOTSTRAP-DENIED", 403);
+    if (!await securityStore.TryBootstrapSecurityAdministratorAsync(admin.Principal.Id, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false))
+        throw new GatewayException("BGW-ADMIN-BOOTSTRAP-COMPLETE", 409);
+    await registry.AppendAuditAsync(new GatewayAuditEvent(Guid.NewGuid(), DateTimeOffset.UtcNow, null, "admin", admin.ActorId, "admin.bootstrap", "admin_principal", admin.ActorId, Correlation(context), "success", "BGW-ADMIN-BOOTSTRAP-COMPLETE", new Dictionary<string, string>()), cancellationToken).ConfigureAwait(false);
+    return Results.Ok(new { status = "completed" });
+});
+
+adminApi.MapPost("/role-assignments", async (AdminRoleAssignmentRequest request, HttpContext context, AdminAccessService access, IAdminSecurityStore securityStore, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, request.TenantId, AdminRole.SecurityAdministrator);
+    AdminPrincipalRecord target = await securityStore.EnsurePrincipalAsync(request.Principal, cancellationToken).ConfigureAwait(false);
+    return Results.Ok(await securityStore.AssignRoleAsync(target.Id, request.Role, request.TenantId, admin.Principal.Id, DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false));
+});
+
+adminApi.MapGet("/connectors", async (HttpContext context, AdminAccessService access, ConnectorAdministrationService service, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.Viewer, AdminRole.ConnectorEditor, AdminRole.ConnectorApprover, AdminRole.Operator, AdminRole.SecurityAdministrator);
+    return Results.Ok(await service.ListAsync(cancellationToken).ConfigureAwait(false));
+});
+
+adminApi.MapPost("/connectors:validate", async (ConnectorImportRequest request, HttpContext context, AdminAccessService access, ConnectorAdministrationService service, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.ConnectorEditor, AdminRole.SecurityAdministrator);
+    return Results.Ok(service.Validate(request.Definition));
+});
+
+adminApi.MapPost("/connectors:import", async (ConnectorImportRequest request, HttpContext context, AdminAccessService access, ConnectorAdministrationService service, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.ConnectorEditor, AdminRole.SecurityAdministrator);
+    ConnectorVersionResource created = await service.ImportAsync(request.Definition, request.ExpectedChecksumSha256, admin.ActorId, Correlation(context), cancellationToken).ConfigureAwait(false);
+    context.Response.Headers.ETag = ETag(created.RowVersion);
+    return Results.Json(created, statusCode: StatusCodes.Status201Created);
+});
+
+adminApi.MapGet("/connectors/{connectorId}/versions", async (string connectorId, HttpContext context, AdminAccessService access, ConnectorAdministrationService service, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.Viewer, AdminRole.ConnectorEditor, AdminRole.ConnectorApprover, AdminRole.Operator, AdminRole.SecurityAdministrator);
+    return Results.Ok(await service.VersionsAsync(connectorId, cancellationToken).ConfigureAwait(false));
+});
+
+adminApi.MapGet("/connectors/{connectorId}/versions/{version}", async (string connectorId, string version, HttpContext context, AdminAccessService access, ConnectorAdministrationService service, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.Viewer, AdminRole.ConnectorEditor, AdminRole.ConnectorApprover, AdminRole.Operator, AdminRole.SecurityAdministrator);
+    ConnectorVersionResource resource = await service.ShowAsync(connectorId, version, cancellationToken).ConfigureAwait(false);
+    context.Response.Headers.ETag = ETag(resource.RowVersion);
+    return Results.Ok(resource);
+});
+
+adminApi.MapPost("/connectors/{connectorId}/versions/{version}:validate", async (string connectorId, string version, HttpContext context, AdminAccessService access, ConnectorAdministrationService service, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.ConnectorEditor, AdminRole.SecurityAdministrator);
+    long rowVersion = RequiredIfMatch(context);
+    ConnectorVersionResource resource = await service.ValidateStoredAsync(connectorId, version, rowVersion, admin.ActorId, Correlation(context), cancellationToken).ConfigureAwait(false);
+    context.Response.Headers.ETag = ETag(resource.RowVersion);
+    return Results.Ok(resource);
+});
+
+adminApi.MapPost("/connectors/{connectorId}/versions/{version}/approval-requests", async (string connectorId, string version, HttpContext context, AdminAccessService access, ConnectorApprovalService approvals, CancellationToken cancellationToken) =>
+    Results.Ok(await approvals.RequestAsync(connectorId, version, await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false)));
+
+adminApi.MapPost("/connectors/{connectorId}/versions/{version}/approvals", async (string connectorId, string version, HttpContext context, AdminAccessService access, ConnectorApprovalService approvals, CancellationToken cancellationToken) =>
+    Results.Ok(await approvals.ApproveAsync(connectorId, version, await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false)));
+
+adminApi.MapGet("/connectors/{connectorId}/versions/{version}/approvals", async (string connectorId, string version, HttpContext context, AdminAccessService access, ConnectorApprovalService approvals, CancellationToken cancellationToken) =>
+    Results.Ok(await approvals.ListAsync(connectorId, version, await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false), cancellationToken).ConfigureAwait(false)));
+
+adminApi.MapPost("/connectors/{connectorId}/versions/{version}:publish", async (string connectorId, string version, ConnectorVersionActionRequest request, HttpContext context, AdminAccessService access, ConnectorAdministrationService service, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
+    long rowVersion = RequiredIfMatch(context);
+    if (request.ExpectedPublicationRevision is null) throw new GatewayException("BGW-CONCURRENCY-PRECONDITION", 428);
+    ConnectorVersionResource resource = await service.PublishAsync(connectorId, version, rowVersion, request.ExpectedPublicationRevision.Value, admin.ActorId, Correlation(context), cancellationToken).ConfigureAwait(false);
+    context.Response.Headers.ETag = ETag(resource.RowVersion);
+    return Results.Ok(resource);
+});
+
+adminApi.MapPost("/connectors/{connectorId}:rollback", async (string connectorId, ConnectorRollbackRequest request, HttpContext context, AdminAccessService access, ConnectorAdministrationService service, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
+    return Results.Ok(await service.RollbackAsync(connectorId, request, admin.ActorId, Correlation(context), cancellationToken).ConfigureAwait(false));
+});
+
+adminApi.MapPost("/connectors/{connectorId}/versions/{version}:retire", async (string connectorId, string version, HttpContext context, AdminAccessService access, ConnectorAdministrationService service, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.SecurityAdministrator);
+    ConnectorVersionResource resource = await service.RetireAsync(connectorId, version, RequiredIfMatch(context), admin.ActorId, Correlation(context), cancellationToken).ConfigureAwait(false);
+    context.Response.Headers.ETag = ETag(resource.RowVersion);
+    return Results.Ok(resource);
+});
+
+adminApi.MapPut("/connectors/{connectorId}/bindings", async (string connectorId, ConnectorBindingRequest request, HttpContext context, AdminAccessService access, ConnectorAdministrationService service, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.SecurityAdministrator);
+    return Results.Ok(new { revision = await service.PutBindingsAsync(connectorId, request, admin.ActorId, Correlation(context), cancellationToken).ConfigureAwait(false) });
+});
+
+adminApi.MapPost("/connectors/{connectorId}:test", async (string connectorId, ConnectorTestRequest request, HttpContext context, AdminAccessService access, IGatewayOperationCatalog catalog, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.Operator, AdminRole.SecurityAdministrator);
+    GatewayOperationDefinition operation = await catalog.GetRequiredAsync(connectorId, request.OperationId, request.EnvironmentId, cancellationToken).ConfigureAwait(false);
+    return Results.Ok(new { status = "valid", connectorId, operationId = operation.OperationId, connectorVersion = operation.Version });
+});
+
 app.Run();
 
 static ProviderServices CreateProviderServices(GatewayProviderOptions options, IHostEnvironment environment)
@@ -332,6 +691,20 @@ static string RequiredHeader(HttpContext context, string name)
     return value;
 }
 
+static void ValidateAdminCode(string value, int maximumLength)
+{
+    if (string.IsNullOrWhiteSpace(value) || value.Length > maximumLength || value.Any(character => !(char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.')))
+        throw new GatewayException("BGW-ADMIN-CODE", 400);
+}
+
+static void ValidateAdminName(string value)
+{
+    if (string.IsNullOrWhiteSpace(value) || value.Length > 256 || value.Any(char.IsControl)) throw new GatewayException("BGW-ADMIN-DISPLAY-NAME", 400);
+}
+
+static Task AppendAdminAuditAsync(IGatewayRegistry registry, HttpContext context, AdminAccessContext actor, Guid? tenantId, string action, string targetType, string targetId, CancellationToken cancellationToken) =>
+    registry.AppendAuditAsync(new GatewayAuditEvent(Guid.NewGuid(), DateTimeOffset.UtcNow, tenantId, "admin", actor.ActorId, action, targetType, targetId, Correlation(context), "success", "BGW-ADMIN-ACTION", new Dictionary<string, string>()), cancellationToken);
+
 static string RequireAdmin(HttpContext context, IHostEnvironment environment, GatewayHostOptions options)
 {
     if (!string.Equals(options.Admin.Mode, "DevelopmentApiKey", StringComparison.Ordinal) || (!environment.IsDevelopment() && !environment.IsEnvironment("Testing") && !environment.IsEnvironment("M4Testing")))
@@ -350,6 +723,27 @@ static string RequireAdmin(HttpContext context, IHostEnvironment environment, Ga
 }
 
 static Guid Correlation(HttpContext context) => Guid.TryParse(context.Response.Headers["X-Correlation-ID"], out Guid value) ? value : Guid.NewGuid();
+
+static bool IsLocalDevelopmentHost(string host) => string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) || string.Equals(host, "127.0.0.1", StringComparison.Ordinal) || string.Equals(host, "::1", StringComparison.Ordinal);
+
+static bool FixedSecretEquals(string? expected, string supplied)
+{
+    if (string.IsNullOrWhiteSpace(expected) || string.IsNullOrWhiteSpace(supplied)) return false;
+    byte[] expectedBytes = Encoding.UTF8.GetBytes(expected);
+    byte[] suppliedBytes = Encoding.UTF8.GetBytes(supplied);
+    try { return expectedBytes.Length == suppliedBytes.Length && CryptographicOperations.FixedTimeEquals(expectedBytes, suppliedBytes); }
+    finally { CryptographicOperations.ZeroMemory(expectedBytes); CryptographicOperations.ZeroMemory(suppliedBytes); }
+}
+
+static string ETag(long rowVersion) => FormattableString.Invariant($"\"{rowVersion}\"");
+
+static long RequiredIfMatch(HttpContext context)
+{
+    string value = context.Request.Headers.IfMatch.ToString();
+    if (value.Length < 3 || value[0] != '"' || value[^1] != '"' || !long.TryParse(value.AsSpan(1, value.Length - 2), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out long rowVersion) || rowVersion < 1)
+        throw new GatewayException("BGW-CONCURRENCY-PRECONDITION", 428);
+    return rowVersion;
+}
 
 static async Task<byte[]> ReadBodyAsync(HttpRequest request, CancellationToken cancellationToken)
 {
