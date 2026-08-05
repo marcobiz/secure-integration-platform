@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param([string] $SbomDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) '.artifacts\sbom'))
+param(
+    [string] $SbomDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) '.artifacts\sbom'),
+    [switch] $SkipContainer
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -9,8 +12,8 @@ $expected = [ordered]@{
     'sdk-dotnet.spdx.json' = @('SecureIntegration.Broker.Sdk', 'System.Text.Json')
     'connector-cli.spdx.json' = @('SecureIntegration.Connector.Cli', 'JsonSchema.Net')
     'admin-frontend.spdx.json' = @('@secure-integration/admin-web', 'react')
-    'gateway-container.spdx.json' = @('SecureIntegration.Gateway.Api', 'Npgsql')
 }
+if (-not $SkipContainer) { $expected['gateway-container.spdx.json'] = @('SecureIntegration.Gateway.Api', 'Npgsql') }
 $manifestPath = Join-Path $SbomDirectory 'aggregate-manifest.json'
 if (-not (Test-Path -LiteralPath $manifestPath)) { throw 'SBOM_AGGREGATE_MANIFEST_MISSING' }
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json

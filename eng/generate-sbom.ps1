@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string] $Version = '0.1.0-dev',
-    [string] $GatewayImage = 'secure-integration-m5-quickstart-gateway:latest'
+    [string] $GatewayImage = 'secure-integration-m5-quickstart-gateway:latest',
+    [switch] $SkipContainer
 )
 
 Set-StrictMode -Version Latest
@@ -67,14 +68,25 @@ try {
     [IO.File]::WriteAllText((Join-Path $output 'admin-frontend.spdx.json'), $frontendSbom, [Text.UTF8Encoding]::new($false))
 } finally { Pop-Location }
 
-& docker image inspect $GatewayImage *> $null
-if ($LASTEXITCODE -ne 0) {
-    $GatewayImage = 'secure-integration-gateway:m5-sbom'
-    & docker build --file (Join-Path $root 'src\Gateway\Gateway.Api\Dockerfile') --tag $GatewayImage $root
-    if ($LASTEXITCODE -ne 0) { throw 'SBOM_GATEWAY_IMAGE_BUILD_FAILED' }
+if (-not $SkipContainer) {
+    & docker image inspect $GatewayImage *> $null
+    if ($LASTEXITCODE -ne 0) {
+        $GatewayImage = 'secure-integration-gateway:m5-sbom'
+        & docker build --file (Join-Path $root 'src\Gateway\Gateway.Api\Dockerfile') --tag $GatewayImage $root
+        if ($LASTEXITCODE -ne 0) { throw 'SBOM_GATEWAY_IMAGE_BUILD_FAILED' }
+    }
+
+    $containerSbom = Join-Path $output 'gateway-container.spdx.json'
+    if ($null -ne (Get-Command syft -ErrorAction SilentlyContinue)) {
+        & syft scan $GatewayImage --output "spdx-json=$containerSbom"
+        if ($LASTEXITCODE -ne 0) { throw 'SBOM_CONTAINER_SYFT_GENERATION_FAILED' }
+    } else {
+        & docker scout version *> $null
+        if ($LASTEXITCODE -ne 0) { throw 'SBOM_CONTAINER_TOOL_MISSING' }
+        & docker scout sbom --format spdx --output $containerSbom "local://$GatewayImage"
+        if ($LASTEXITCODE -ne 0) { throw 'SBOM_CONTAINER_SCOUT_GENERATION_FAILED' }
+    }
 }
-& docker scout sbom --format spdx --output (Join-Path $output 'gateway-container.spdx.json') "local://$GatewayImage"
-if ($LASTEXITCODE -ne 0) { throw 'SBOM_CONTAINER_GENERATION_FAILED' }
 
 $entries = foreach ($file in Get-ChildItem -LiteralPath $output -File -Filter '*.spdx.json' | Sort-Object Name) {
     [ordered]@{ file=$file.Name; sha256=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash; bytes=$file.Length; format='SPDX'; version=((Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json).spdxVersion) }
@@ -82,6 +94,6 @@ $entries = foreach ($file in Get-ChildItem -LiteralPath $output -File -Filter '*
 $aggregate = [ordered]@{ schemaVersion=1; productVersion=$Version; commitSha=(& git -C $root rev-parse HEAD).Trim(); generatedAtUtc=[DateTimeOffset]::UtcNow.ToString('O'); artifacts=$entries }
 $aggregatePath = Join-Path $output 'aggregate-manifest.json'
 [IO.File]::WriteAllText($aggregatePath, ($aggregate | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
-& (Join-Path $PSScriptRoot 'validate-sbom.ps1') -SbomDirectory $output
+& (Join-Path $PSScriptRoot 'validate-sbom.ps1') -SbomDirectory $output -SkipContainer:$SkipContainer
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "SBOM_GENERATION_PASS: $output"

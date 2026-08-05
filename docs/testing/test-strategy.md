@@ -110,7 +110,7 @@ Synthetic OIDC integration uses the real ASP.NET Core OIDC handler and an in-pro
 - `admin-frontend.spdx.json`;
 - `gateway-container.spdx.json`.
 
-The .NET and npm inventories are SPDX 2.3; Docker Scout may emit SPDX 2.2 or 2.3. `aggregate-manifest.json` binds every file to SHA-256 and the exact Git commit. `eng/validate-sbom.ps1` rejects missing documents, unsupported formats, hash drift or absence of a known component for any artefact.
+The .NET and npm inventories are SPDX 2.3; Syft or Docker Scout may emit SPDX 2.2 or 2.3 for the Linux image. `aggregate-manifest.json` binds every generated file to SHA-256 and the exact Git commit. `eng/validate-sbom.ps1` rejects missing documents, unsupported formats, hash drift or absence of a known component for any required artefact. The cross-platform Windows build job uses the explicit `-SkipContainer` mode and validates the five application artefacts; the dedicated Linux SBOM job installs Syft explicitly and is the mandatory full six-artefact container gate. `eng/test-sbom-modes.ps1` proves that the full mode fails closed without the container document and prevents the dedicated M5 job from selecting the application-only mode.
 
 ### Performance e resilienza
 

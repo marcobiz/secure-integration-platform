@@ -57,7 +57,9 @@ jobs:
         run: dotnet list BrokerGateway.slnx package --vulnerable --include-transitive
       - name: Generate SBOM
         shell: pwsh
-        run: ./eng/generate-sbom.ps1
+        run: |
+          ./eng/generate-sbom.ps1 -SkipContainer
+          ./eng/test-sbom-modes.ps1
 
   gitleaks:
     runs-on: ubuntu-latest
