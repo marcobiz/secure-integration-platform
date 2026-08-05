@@ -15,7 +15,7 @@ foreach ($relative in $trackedRoots) {
     if (-not (Test-Path -LiteralPath $path)) { continue }
     foreach ($pattern in $patterns) {
         if ($ripgrep) {
-            $matches = & $ripgrep.Source -l --pcre2 $pattern $path 2>$null
+            $matches = & $ripgrep.Source -l --pcre2 -e $pattern -- $path 2>$null
         }
         else {
             # Git is already a repository prerequisite and its PCRE engine keeps
