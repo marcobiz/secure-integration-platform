@@ -123,10 +123,36 @@ public sealed class AdminSecurityTests
         Assert.Equal("BGW-ADMIN-IDENTITY", denied.Code);
     }
 
+    [Fact]
+    public async Task M5_UT_Disabled_principal_is_rejected_before_role_resolution()
+    {
+        AdminAccessService service = new(new DisabledPrincipalStore());
+        ClaimsIdentity identity = new([new Claim("iss", "https://issuer.example.invalid"), new Claim("sub", "disabled")], "test");
+
+        GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => service.ResolveAsync(new ClaimsPrincipal(identity), TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-ADMIN-PRINCIPAL-DISABLED", denied.Code);
+    }
+
     private static Task<AdminPrincipalRecord> PrincipalAsync(InMemoryAdminSecurityStore store, string subject) =>
         store.EnsurePrincipalAsync(new("https://issuer.example.invalid", subject, subject, subject + "@example.invalid"), TestContext.Current.CancellationToken);
 
     private static ConnectorVersionRecord Version(Guid editor) => new(
         Guid.NewGuid(), Guid.NewGuid(), "sample", "1.0.0", "1.0", ConnectorVersionState.Validated,
         "{}", SHA256.HashData("canonical"u8), editor.ToString("D"), Now, 2, Now, null, null);
+
+    private sealed class DisabledPrincipalStore : IAdminSecurityStore
+    {
+        public Task<AdminPrincipalRecord> EnsurePrincipalAsync(AdminExternalIdentity identity, CancellationToken cancellationToken) =>
+            Task.FromResult(new AdminPrincipalRecord(Guid.NewGuid(), identity.Issuer, identity.Subject, identity.DisplayName, identity.Email, false, Now));
+        public Task<IReadOnlyList<AdminRoleAssignmentRecord>> GetAssignmentsAsync(Guid principalId, CancellationToken cancellationToken) => throw new InvalidOperationException("Role resolution must not run for disabled principals.");
+        public Task<bool> TryBootstrapSecurityAdministratorAsync(Guid principalId, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<AdminRoleAssignmentRecord> AssignRoleAsync(Guid principalId, AdminRole role, Guid? tenantId, Guid grantedBy, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<ConnectorApprovalRecord> RequestApprovalAsync(ConnectorVersionRecord version, Guid requester, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, string createdBy, Guid approver, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, string createdBy, Guid rejector, string? comment, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<bool> HasValidApprovalAsync(Guid connectorVersionId, byte[] checksumSha256, string actor, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task InvalidateApprovalsAsync(Guid connectorVersionId, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<IReadOnlyList<ConnectorApprovalRecord>> ListApprovalsAsync(Guid connectorVersionId, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
 }
