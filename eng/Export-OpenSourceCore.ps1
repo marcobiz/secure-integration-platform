@@ -58,7 +58,8 @@ if ($exported.Count -lt 20) { throw 'OSS_EXPORT_ALLOWLIST_TOO_NARROW' }
 
 $manifestEntries = foreach ($relative in ($exported | Sort-Object)) {
     $path = Join-Path $destination $relative
-    [ordered]@{ path = $relative; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash; bytes = (Get-Item -LiteralPath $path).Length }
+    if (-not [IO.File]::Exists($path)) { throw "OSS_EXPORT_COPIED_FILE_MISSING: $relative" }
+    [ordered]@{ path = $relative; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash; bytes = [IO.FileInfo]::new($path).Length }
 }
 $manifest = [ordered]@{
     schemaVersion = 1
