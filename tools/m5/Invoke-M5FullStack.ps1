@@ -9,6 +9,10 @@ $web = Join-Path $root 'src\Admin\Admin.Web'
 $results = Join-Path $root '.artifacts\m5\full-stack-results'
 $project = 'secure-integration-m5-quickstart'
 $nodeVolume = "$project-playwright-node-modules"
+$nodeMountPoint = Join-Path $web 'node_modules'
+$resultsMountPoint = Join-Path $web 'test-results'
+$createdNodeMountPoint = $false
+$createdResultsMountPoint = $false
 $started = $false
 if (Test-Path -LiteralPath $results) { Remove-Item -LiteralPath $results -Recurse -Force }
 New-Item -ItemType Directory -Path $results -Force | Out-Null
@@ -21,6 +25,14 @@ try {
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($gateway)) { throw 'M5_FULLSTACK_GATEWAY_CONTAINER_MISSING' }
     & docker volume create --label "com.docker.compose.project=$project" $nodeVolume | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'M5_FULLSTACK_NODE_VOLUME_FAILED' }
+    if (-not (Test-Path -LiteralPath $nodeMountPoint)) {
+        New-Item -ItemType Directory -Path $nodeMountPoint | Out-Null
+        $createdNodeMountPoint = $true
+    }
+    if (-not (Test-Path -LiteralPath $resultsMountPoint)) {
+        New-Item -ItemType Directory -Path $resultsMountPoint | Out-Null
+        $createdResultsMountPoint = $true
+    }
     $webMount = ($web -replace '\\', '/')
     $resultsMount = ($results -replace '\\', '/')
     & docker run --rm --name "$project-playwright" --network "container:$gateway" `
@@ -66,4 +78,6 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'M5_FULLSTACK_CLEANUP_FAILED' }
     }
     & docker volume rm --force $nodeVolume 2>$null | Out-Null
+    if ($createdResultsMountPoint -and (Test-Path -LiteralPath $resultsMountPoint)) { Remove-Item -LiteralPath $resultsMountPoint -Force }
+    if ($createdNodeMountPoint -and (Test-Path -LiteralPath $nodeMountPoint)) { Remove-Item -LiteralPath $nodeMountPoint -Force }
 }

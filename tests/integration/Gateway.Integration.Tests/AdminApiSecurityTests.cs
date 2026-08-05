@@ -353,6 +353,23 @@ public sealed class AdminApiSecurityTests
     }
 
     [Fact]
+    public void M5_CT_Full_stack_runner_precreates_nested_read_only_mount_points()
+    {
+        string runner = File.ReadAllText(Path.Combine(RepositoryRoot(), "tools", "m5", "Invoke-M5FullStack.ps1"));
+        int nodeMount = runner.IndexOf("New-Item -ItemType Directory -Path $nodeMountPoint", StringComparison.Ordinal);
+        int resultsMount = runner.IndexOf("New-Item -ItemType Directory -Path $resultsMountPoint", StringComparison.Ordinal);
+        int dockerRun = runner.IndexOf("& docker run", StringComparison.Ordinal);
+
+        Assert.True(nodeMount >= 0 && nodeMount < dockerRun);
+        Assert.True(resultsMount >= 0 && resultsMount < dockerRun);
+        Assert.Contains("$createdNodeMountPoint", runner, StringComparison.Ordinal);
+        Assert.Contains("$createdResultsMountPoint", runner, StringComparison.Ordinal);
+        Assert.Contains("Remove-Item -LiteralPath $nodeMountPoint -Force", runner, StringComparison.Ordinal);
+        Assert.Contains("Remove-Item -LiteralPath $resultsMountPoint -Force", runner, StringComparison.Ordinal);
+        Assert.DoesNotContain("--read-only=false", runner, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task M5_IT_Development_login_route_is_unavailable_when_mode_is_disabled()
     {
         await using WebApplicationFactory<Program> factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
