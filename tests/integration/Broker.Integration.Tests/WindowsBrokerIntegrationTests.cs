@@ -1,5 +1,9 @@
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.AccessControl;
@@ -16,6 +20,87 @@ namespace SecureIntegration.Broker.Integration.Tests;
 
 public sealed class WindowsBrokerIntegrationTests
 {
+    [Fact]
+    public async Task M3_security_driver_UserKeySet_client_certificate_is_Schannel_compatible()
+    {
+        const string password = "synthetic-test-password";
+        using ECDsa serverKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        CertificateRequest serverRequest = new("CN=localhost", serverKey, HashAlgorithmName.SHA256);
+        serverRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+        serverRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
+        serverRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new("1.3.6.1.5.5.7.3.1") }, true));
+        SubjectAlternativeNameBuilder names = new();
+        names.AddDnsName("localhost");
+        names.AddIpAddress(IPAddress.Loopback);
+        serverRequest.CertificateExtensions.Add(names.Build());
+        using X509Certificate2 sourceServerCertificate = serverRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddMinutes(10));
+
+        using ECDsa clientKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        CertificateRequest clientRequest = new("CN=M3 Schannel probe", clientKey, HashAlgorithmName.SHA256);
+        clientRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+        clientRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
+        clientRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new("1.3.6.1.5.5.7.3.2") }, true));
+        using X509Certificate2 sourceClientCertificate = clientRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddMinutes(10));
+
+        string serverPfxPath = Path.Combine(Path.GetTempPath(), $"m3-schannel-server-{Guid.NewGuid():N}.pfx");
+        string clientPfxPath = Path.Combine(Path.GetTempPath(), $"m3-schannel-client-{Guid.NewGuid():N}.pfx");
+        await File.WriteAllBytesAsync(serverPfxPath, sourceServerCertificate.Export(X509ContentType.Pkcs12, password), TestContext.Current.CancellationToken);
+        await File.WriteAllBytesAsync(clientPfxPath, sourceClientCertificate.Export(X509ContentType.Pkcs12, password), TestContext.Current.CancellationToken);
+        try
+        {
+            using X509Certificate2 serverCertificate = X509CertificateLoader.LoadPkcs12FromFile(serverPfxPath, password, X509KeyStorageFlags.UserKeySet);
+            using X509Certificate2 clientCertificate = X509CertificateLoader.LoadPkcs12FromFile(clientPfxPath, password, X509KeyStorageFlags.UserKeySet);
+            using TcpListener listener = new(IPAddress.Loopback, 0);
+            listener.Start();
+            int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+            Task server = Task.Run(async () =>
+            {
+                using TcpClient accepted = await listener.AcceptTcpClientAsync(TestContext.Current.CancellationToken);
+                await using SslStream tls = new(accepted.GetStream(), false, (_, certificate, _, _) =>
+                    string.Equals(certificate?.GetCertHashString(HashAlgorithmName.SHA256), clientCertificate.GetCertHashString(HashAlgorithmName.SHA256), StringComparison.OrdinalIgnoreCase));
+                await tls.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+                {
+                    ServerCertificate = serverCertificate,
+                    ClientCertificateRequired = true,
+                    EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck
+                }, TestContext.Current.CancellationToken);
+                int marker = tls.ReadByte();
+                Assert.Equal(42, marker);
+            }, TestContext.Current.CancellationToken);
+
+            using TcpClient client = new();
+            await client.ConnectAsync(IPAddress.Loopback, port, TestContext.Current.CancellationToken);
+            await using SslStream clientTls = new(client.GetStream(), false, (_, certificate, _, _) =>
+                string.Equals(certificate?.GetCertHashString(HashAlgorithmName.SHA256), serverCertificate.GetCertHashString(HashAlgorithmName.SHA256), StringComparison.OrdinalIgnoreCase));
+            try
+            {
+                await clientTls.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+                {
+                    TargetHost = "localhost",
+                    ClientCertificates = new X509CertificateCollection { clientCertificate },
+                    EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck
+                }, TestContext.Current.CancellationToken);
+            }
+            catch (Exception clientException)
+            {
+                try { await server; }
+                catch (Exception serverException) { throw new AggregateException(clientException, serverException); }
+                throw;
+            }
+            clientTls.WriteByte(42);
+            await clientTls.FlushAsync(TestContext.Current.CancellationToken);
+            await server;
+        }
+        finally
+        {
+            File.Delete(serverPfxPath);
+            File.Delete(clientPfxPath);
+        }
+    }
+
     [Fact]
     public void M3_IT_BRK_Installation_credential_uses_nonexportable_CNG_P256_key()
     {
