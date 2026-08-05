@@ -1,9 +1,13 @@
 # M4 — Connector Configuration MVP Gate Review
 
-Data: 2026-08-05  
-Baseline: `m3a-product-gate-pass-20260805` / `5301b61546f814fd32874570ff667218ffe002a2`  
-Commit implementativo: `cf59a36e71ee899dfbbe4918345090a2cd4d402d`  
-Commit test negativi: `1485a0d`  
+Data: 2026-08-05
+
+Baseline: `m3a-product-gate-pass-20260805` / `5301b61546f814fd32874570ff667218ffe002a2`
+
+Commit implementativo: `cf59a36e71ee899dfbbe4918345090a2cd4d402d`
+
+Commit test negativi: `1485a0d`
+
 Branch: `m4/connector-configuration`
 
 ## Esito candidato
