@@ -7,8 +7,9 @@ using SecureIntegration.Gateway.Domain;
 namespace SecureIntegration.Gateway.Infrastructure;
 
 /// <summary>PostgreSQL administrative catalogue. Tenant rows are always read with transaction-local RLS context.</summary>
-public sealed class PostgresAdminDirectoryStore(NpgsqlDataSource dataSource) : IAdminDirectoryStore
+public sealed class PostgresAdminDirectoryStore(AdminPostgresDataSource adminDataSource) : IAdminDirectoryStore
 {
+    private readonly NpgsqlDataSource dataSource = adminDataSource.Value;
     /// <inheritdoc />
     public Task<AdminPage<TenantRecord>> ListTenantsAsync(int offset, int limit, CancellationToken cancellationToken) => QueryAsync<TenantRecord>(
         "SELECT id,code,display_name,status,created_at,count(*) OVER() FROM gateway.tenant ORDER BY code OFFSET $1 LIMIT $2",

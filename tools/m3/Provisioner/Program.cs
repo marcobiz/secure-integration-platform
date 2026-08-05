@@ -8,12 +8,14 @@ string adminConnection = Required("M3_POSTGRES_ADMIN_CONNECTION");
 string runtimePassword = Required("M3_POSTGRES_RUNTIME_PASSWORD");
 string activationKeyText = Required("M3_ACTIVATION_HMAC_BASE64");
 string outputPath = Required("M3_PROVISIONING_OUTPUT");
+string? adminApiPassword = Optional("M5_POSTGRES_ADMIN_API_PASSWORD");
 byte[] activationKey;
 try { activationKey = Convert.FromBase64String(activationKeyText); }
 catch (FormatException) { throw new InvalidOperationException("M3 activation HMAC key must be Base64."); }
 if (activationKey.Length < 32) throw new InvalidOperationException("M3 activation HMAC key must contain at least 256 bits.");
 
 await EnsureRuntimeRoleAsync(adminConnection, runtimePassword).ConfigureAwait(false);
+if (adminApiPassword is not null) await EnsureAdminRoleAsync(adminConnection, adminApiPassword).ConfigureAwait(false);
 await using NpgsqlDataSource dataSource = NpgsqlDataSource.Create(adminConnection);
 PostgresGatewayRegistry registry = new(dataSource);
 SystemGatewayClock clock = new();
@@ -148,6 +150,13 @@ static string Required(string name)
     return value;
 }
 
+static string? Optional(string name)
+{
+    string? value = Environment.GetEnvironmentVariable(name, EnvironmentVariableTarget.Process);
+    if (value is not null && (string.IsNullOrWhiteSpace(value) || value.Any(character => character is '\r' or '\n'))) throw new InvalidOperationException($"{name} is invalid.");
+    return value;
+}
+
 static async Task EnsureRuntimeRoleAsync(string connectionString, string password)
 {
     await using NpgsqlConnection connection = new(connectionString);
@@ -156,6 +165,18 @@ static async Task EnsureRuntimeRoleAsync(string connectionString, string passwor
     quote.Parameters.AddWithValue(password);
     string quotedPassword = (string)(await quote.ExecuteScalarAsync().ConfigureAwait(false) ?? throw new InvalidOperationException("Cannot quote runtime credential."));
     string sql = $"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='m3_gateway_runtime') THEN CREATE ROLE m3_gateway_runtime LOGIN; END IF; END $$; ALTER ROLE m3_gateway_runtime NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION LOGIN PASSWORD {quotedPassword}; GRANT gateway_runtime TO m3_gateway_runtime;";
+    await using NpgsqlCommand command = new(sql, connection);
+    await command.ExecuteNonQueryAsync().ConfigureAwait(false);
+}
+
+static async Task EnsureAdminRoleAsync(string connectionString, string password)
+{
+    await using NpgsqlConnection connection = new(connectionString);
+    await connection.OpenAsync().ConfigureAwait(false);
+    await using NpgsqlCommand quote = new("SELECT quote_literal($1)", connection);
+    quote.Parameters.AddWithValue(password);
+    string quotedPassword = (string)(await quote.ExecuteScalarAsync().ConfigureAwait(false) ?? throw new InvalidOperationException("Cannot quote Admin credential."));
+    string sql = $"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='m5_gateway_admin') THEN CREATE ROLE m5_gateway_admin LOGIN; END IF; END $$; ALTER ROLE m5_gateway_admin NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION LOGIN PASSWORD {quotedPassword}; GRANT gateway_admin TO m5_gateway_admin;";
     await using NpgsqlCommand command = new(sql, connection);
     await command.ExecuteNonQueryAsync().ConfigureAwait(false);
 }

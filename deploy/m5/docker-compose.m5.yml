@@ -1,0 +1,10 @@
+services:
+  provisioner:
+    environment:
+      M5_POSTGRES_ADMIN_API_PASSWORD: ${M5_POSTGRES_ADMIN_API_PASSWORD:?required}
+  gateway:
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Gateway__Admin__Mode: DevelopmentAuth
+      Gateway__Admin__RequireFourEyes: "true"
+      ConnectionStrings__GatewayAdminDatabase: Host=postgres;Port=5432;Database=broker_gateway_m3;Username=m5_gateway_admin;Password=${M5_POSTGRES_ADMIN_API_PASSWORD:?required};SSL Mode=Disable;GSS Encryption Mode=Disable

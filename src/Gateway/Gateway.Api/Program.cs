@@ -98,10 +98,15 @@ if (string.IsNullOrWhiteSpace(connectionString))
 else
 {
     builder.Services.AddSingleton(_ => NpgsqlDataSource.Create(connectionString));
+    string? adminConnectionString = builder.Configuration.GetConnectionString("GatewayAdminDatabase");
+    bool adminPlaneEnabled = string.Equals(hostOptions.Admin.Mode, "Oidc", StringComparison.Ordinal) || string.Equals(hostOptions.Admin.Mode, "DevelopmentAuth", StringComparison.Ordinal);
+    if (adminPlaneEnabled && string.IsNullOrWhiteSpace(adminConnectionString)) throw new InvalidOperationException("GatewayAdminDatabase is required when the Admin plane and PostgreSQL persistence are enabled.");
+    adminConnectionString ??= connectionString;
+    builder.Services.AddSingleton(new AdminPostgresDataSource(adminConnectionString));
     builder.Services.AddSingleton<PostgresGatewayRegistry>();
     builder.Services.AddSingleton<IGatewayRegistry>(services => services.GetRequiredService<PostgresGatewayRegistry>());
     builder.Services.AddSingleton<IAdminDirectoryStore, PostgresAdminDirectoryStore>();
-    builder.Services.AddSingleton<IConnectorConfigurationStore, PostgresConnectorConfigurationStore>();
+    builder.Services.AddSingleton<IConnectorConfigurationStore, RoutingConnectorConfigurationStore>();
     builder.Services.AddSingleton<IAdminSecurityStore, PostgresAdminSecurityStore>();
 }
 builder.Services.AddSingleton<ConnectorDefinitionValidator>();
@@ -646,18 +651,10 @@ adminApi.MapPost("/connectors/{connectorId}:test", async (string connectorId, Co
     return Results.Ok(new { status = "valid", connectorId, operationId = operation.OperationId, connectorVersion = operation.Version });
 });
 
-app.MapGet("/admin", () => Results.Redirect("/admin/"));
 string adminIndexPath = Path.Combine(app.Environment.WebRootPath ?? "wwwroot", "admin", "index.html");
 if (File.Exists(adminIndexPath))
 {
-    app.MapFallback("/admin/{*path:nonfile}", async context =>
-    {
-        string nonce = context.Items["AdminCspNonce"] as string ?? throw new InvalidOperationException("Admin CSP nonce missing.");
-        string index = (await File.ReadAllTextAsync(adminIndexPath, context.RequestAborted).ConfigureAwait(false)).Replace("__CSP_NONCE__", nonce, StringComparison.Ordinal);
-        context.Response.ContentType = "text/html; charset=utf-8";
-        context.Response.Headers.CacheControl = "no-cache";
-        await context.Response.WriteAsync(index, context.RequestAborted).ConfigureAwait(false);
-    });
+    app.MapFallback("/admin/{*path:nonfile}", context => ServeAdminIndexAsync(context, adminIndexPath));
 }
 
 app.Run();
@@ -729,6 +726,15 @@ static void ValidateAdminName(string value)
 
 static Task AppendAdminAuditAsync(IGatewayRegistry registry, HttpContext context, AdminAccessContext actor, Guid? tenantId, string action, string targetType, string targetId, CancellationToken cancellationToken) =>
     registry.AppendAuditAsync(new GatewayAuditEvent(Guid.NewGuid(), DateTimeOffset.UtcNow, tenantId, "admin", actor.ActorId, action, targetType, targetId, Correlation(context), "success", "BGW-ADMIN-ACTION", new Dictionary<string, string>()), cancellationToken);
+
+static async Task ServeAdminIndexAsync(HttpContext context, string adminIndexPath)
+{
+    string nonce = context.Items["AdminCspNonce"] as string ?? throw new InvalidOperationException("Admin CSP nonce missing.");
+    string index = (await File.ReadAllTextAsync(adminIndexPath, context.RequestAborted).ConfigureAwait(false)).Replace("__CSP_NONCE__", nonce, StringComparison.Ordinal);
+    context.Response.ContentType = "text/html; charset=utf-8";
+    context.Response.Headers.CacheControl = "no-cache";
+    await context.Response.WriteAsync(index, context.RequestAborted).ConfigureAwait(false);
+}
 
 static string RequireAdmin(HttpContext context, IHostEnvironment environment, GatewayHostOptions options)
 {

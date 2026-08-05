@@ -6,8 +6,9 @@ using SecureIntegration.Gateway.Domain;
 namespace SecureIntegration.Gateway.Infrastructure;
 
 /// <summary>PostgreSQL implementation of provider-neutral Admin security state.</summary>
-public sealed class PostgresAdminSecurityStore(NpgsqlDataSource dataSource) : IAdminSecurityStore
+public sealed class PostgresAdminSecurityStore(AdminPostgresDataSource adminDataSource) : IAdminSecurityStore
 {
+    private readonly NpgsqlDataSource dataSource = adminDataSource.Value;
     /// <inheritdoc />
     public async Task<AdminPrincipalRecord> EnsurePrincipalAsync(AdminExternalIdentity identity, CancellationToken cancellationToken)
     {
