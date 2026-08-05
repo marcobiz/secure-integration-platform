@@ -256,6 +256,25 @@ public sealed class GatewaySecurityTests
     }
 
     [Fact]
+    public async Task M4_UT_EGR_Request_and_response_bounds_fail_closed()
+    {
+        using Fixture fixture = await Fixture.CreateAsync();
+        RegisteredInstallationIdentity identity = await fixture.EnrollAsync();
+        await fixture.AddGrantAsync();
+        AuthenticatedInstallation authenticated = new(identity, Guid.NewGuid());
+        TrackingResolver requestResolver = new();
+        RestrictedEgressService requestService = fixture.CreateEgress(requestResolver, new RecordingTransport(), GatewayAuthenticationKind.None);
+        GatewayInvokeRequest oversized = new("1.0", new("application/octet-stream", "base64", Convert.ToBase64String(new byte[1025])), Guid.NewGuid());
+        GatewayException requestFailure = await Assert.ThrowsAsync<GatewayException>(() => requestService.InvokeAsync(authenticated, "vendor", "send", oversized, TestContext.Current.CancellationToken));
+        Assert.Equal(413, requestFailure.StatusCode);
+        Assert.Equal(0, requestResolver.CallCount);
+
+        RestrictedEgressService responseService = fixture.CreateEgress(new StaticResolver(IPAddress.Parse("8.8.8.8")), new OversizeResponseTransport(), GatewayAuthenticationKind.None);
+        GatewayException responseFailure = await Assert.ThrowsAsync<GatewayException>(() => responseService.InvokeAsync(authenticated, "vendor", "send", Invoke(), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-EGRESS-RESPONSE-TOO-LARGE", responseFailure.Code);
+    }
+
+    [Fact]
     public async Task UT_SEC_Audit_is_metadata_only_and_excludes_payload_and_credentials()
     {
         using Fixture fixture = await Fixture.CreateAsync();
@@ -453,6 +472,15 @@ public sealed class GatewaySecurityTests
             CallCount++;
             if (CallCount == 1) throw new HttpRequestException("synthetic transient failure");
             return Task.FromResult(new ExternalResponse(200, "application/octet-stream", []));
+        }
+    }
+
+    private sealed class OversizeResponseTransport : IRestrictedTransport
+    {
+        public Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
+        {
+            Assert.Equal(1024, maximumResponseBytes);
+            throw new GatewayException("BGW-EGRESS-RESPONSE-TOO-LARGE", 502);
         }
     }
 

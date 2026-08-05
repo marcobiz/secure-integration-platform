@@ -149,6 +149,41 @@ public sealed class ConnectorConfigurationTests
     }
 
     [Fact]
+    public async Task M4_UT_Runtime_denies_missing_endpoint_secret_and_operation()
+    {
+        Fixture fixture = new();
+        ConnectorVersionResource version = await fixture.ImportAsync(Sample());
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        await fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId, new Dictionary<string, string>(), new Dictionary<string, string>
+        {
+            ["sample-vendor-api-key"] = "synthetic://api-key",
+            ["sample-vendor-client-certificate"] = "synthetic://client-cert"
+        }), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        Assert.Equal("BGW-CONNECTOR-ENDPOINT-BINDING-MISSING", (await Assert.ThrowsAsync<GatewayException>(() => fixture.Catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken))).Code);
+
+        await fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId, new Dictionary<string, string>
+        {
+            ["sample-vendor-endpoint"] = "https://vendor.example.test/"
+        }, new Dictionary<string, string>
+        {
+            ["sample-vendor-api-key"] = "synthetic://api-key"
+        }), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        Assert.Equal("BGW-CONNECTOR-SECRET-BINDING-MISSING", (await Assert.ThrowsAsync<GatewayException>(() => fixture.Catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken))).Code);
+
+        await fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId, new Dictionary<string, string>
+        {
+            ["sample-vendor-endpoint"] = "https://vendor.example.test/"
+        }, new Dictionary<string, string>
+        {
+            ["sample-vendor-api-key"] = "synthetic://api-key",
+            ["sample-vendor-client-certificate"] = "synthetic://client-cert"
+        }), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        Assert.Equal("BGW-OPERATION-NOT-FOUND", (await Assert.ThrowsAsync<GatewayException>(() => fixture.Catalog.GetRequiredAsync(version.ConnectorId, "missing-operation", fixture.EnvironmentId, TestContext.Current.CancellationToken))).Code);
+    }
+
+    [Fact]
     public void M4_UT_Corrupted_configuration_is_rejected_fail_closed()
     {
         ConnectorDefinitionValidator validator = new();
