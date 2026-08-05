@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,6 +15,7 @@ namespace SecureIntegration.Gateway.Integration.Tests;
 
 public sealed class GatewayApiTests : IClassFixture<GatewayApiFactory>
 {
+    private static readonly JsonSerializerOptions WireJson = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
     private readonly HttpClient client;
     private readonly GatewayApiFactory factory;
 
@@ -74,19 +76,19 @@ public sealed class GatewayApiTests : IClassFixture<GatewayApiFactory>
         Assert.True(validationResult.Valid);
 
         using HttpResponseMessage importedResponse = await client.PostAsJsonAsync("/admin/v1/connectors:import", importRequest with { ExpectedChecksumSha256 = validationResult.ChecksumSha256 }, TestContext.Current.CancellationToken);
-        ConnectorVersionResource imported = (await importedResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: TestContext.Current.CancellationToken))!;
+        ConnectorVersionResource imported = (await importedResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(WireJson, TestContext.Current.CancellationToken))!;
         Assert.Equal(HttpStatusCode.Created, importedResponse.StatusCode);
         Assert.Equal(ConnectorVersionState.Draft, imported.State);
 
         using HttpResponseMessage validatedResponse = await client.PostAsJsonAsync($"/admin/v1/connectors/{connectorId}/versions/1.0.0:validate", new ConnectorVersionActionRequest(imported.RowVersion), TestContext.Current.CancellationToken);
-        ConnectorVersionResource validated = (await validatedResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: TestContext.Current.CancellationToken))!;
+        ConnectorVersionResource validated = (await validatedResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(WireJson, TestContext.Current.CancellationToken))!;
         Guid environmentId = Guid.NewGuid();
         using HttpResponseMessage bindingResponse = await client.PutAsJsonAsync($"/admin/v1/connectors/{connectorId}/bindings", new ConnectorBindingRequest(environmentId,
             new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/" },
             new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://api-key", ["sample-vendor-client-certificate"] = "synthetic://certificate" }), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, bindingResponse.StatusCode);
         using HttpResponseMessage publishedResponse = await client.PostAsJsonAsync($"/admin/v1/connectors/{connectorId}/versions/1.0.0:publish", new ConnectorVersionActionRequest(validated.RowVersion, 0), TestContext.Current.CancellationToken);
-        ConnectorVersionResource published = (await publishedResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: TestContext.Current.CancellationToken))!;
+        ConnectorVersionResource published = (await publishedResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(WireJson, TestContext.Current.CancellationToken))!;
         Assert.Equal(ConnectorVersionState.Published, published.State);
         using HttpResponseMessage testResponse = await client.PostAsJsonAsync($"/admin/v1/connectors/{connectorId}:test", new ConnectorTestRequest(environmentId, "submit"), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, testResponse.StatusCode);

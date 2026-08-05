@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -14,6 +16,7 @@ namespace SecureIntegration.Gateway.Integration.Tests;
 
 public sealed class AdminApiSecurityTests
 {
+    private static readonly JsonSerializerOptions WireJson = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
     [Fact]
     public async Task M5_IT_Anonymous_is_denied_and_security_headers_are_present()
     {
@@ -398,13 +401,13 @@ public sealed class AdminApiSecurityTests
         using HttpRequestMessage import = new(HttpMethod.Post, "/admin/api/v1/connectors:import") { Content = JsonContent.Create(new ConnectorImportRequest(definition.RootElement.Clone(), validation.ChecksumSha256)) };
         import.Headers.Add("X-CSRF-TOKEN", csrf);
         using HttpResponseMessage importResponse = await client.SendAsync(import, cancellationToken);
-        ConnectorVersionResource draft = (await importResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: cancellationToken))!;
+        ConnectorVersionResource draft = (await importResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(WireJson, cancellationToken))!;
         using HttpRequestMessage markValidated = new(HttpMethod.Post, $"/admin/api/v1/connectors/{draft.ConnectorId}/versions/{draft.Version}:validate");
         markValidated.Headers.Add("X-CSRF-TOKEN", csrf);
         markValidated.Headers.TryAddWithoutValidation("If-Match", $"\"{draft.RowVersion}\"");
         using HttpResponseMessage validated = await client.SendAsync(markValidated, cancellationToken);
         validated.EnsureSuccessStatusCode();
-        return (await validated.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: cancellationToken))!;
+        return (await validated.Content.ReadFromJsonAsync<ConnectorVersionResource>(WireJson, cancellationToken))!;
     }
 
     private static Task<HttpResponseMessage> PutBindingAsync(HttpClient client, string connectorId, object body, string csrf, string? etag)
