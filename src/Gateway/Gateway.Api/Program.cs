@@ -92,6 +92,7 @@ if (string.IsNullOrWhiteSpace(connectionString))
         throw new InvalidOperationException("GatewayDatabase is required outside Development/Testing.");
     builder.Services.AddSingleton<InMemoryGatewayRegistry>();
     builder.Services.AddSingleton<IGatewayRegistry>(services => services.GetRequiredService<InMemoryGatewayRegistry>());
+    builder.Services.AddSingleton<IAdminGatewayRegistry>(services => services.GetRequiredService<InMemoryGatewayRegistry>());
     builder.Services.AddSingleton<IAdminDirectoryStore, InMemoryAdminDirectoryStore>();
     builder.Services.AddSingleton<IConnectorConfigurationStore, InMemoryConnectorConfigurationStore>();
     builder.Services.AddSingleton<IAdminSecurityStore, InMemoryAdminSecurityStore>();
@@ -107,6 +108,7 @@ else
     builder.Services.AddSingleton(new AdminPostgresDataSource(adminConnectionString));
     builder.Services.AddSingleton<PostgresGatewayRegistry>();
     builder.Services.AddSingleton<IGatewayRegistry>(services => services.GetRequiredService<PostgresGatewayRegistry>());
+    builder.Services.AddSingleton<IAdminGatewayRegistry>(services => new PostgresGatewayRegistry(services.GetRequiredService<AdminPostgresDataSource>().Value, services.GetService<IAdminTransactionFaultInjector>()));
     builder.Services.AddSingleton<IAdminDirectoryStore, PostgresAdminDirectoryStore>();
     builder.Services.AddSingleton<IConnectorConfigurationStore, RoutingConnectorConfigurationStore>();
     builder.Services.AddSingleton<IAdminSecurityStore, PostgresAdminSecurityStore>();
@@ -462,7 +464,7 @@ adminApi.MapGet("/tenants", async (int? offset, int? limit, HttpContext context,
     return Results.Ok(await directory.ListTenantsAsync(offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
 });
 
-adminApi.MapPost("/tenants", async (CreateTenantRequest request, HttpContext context, AdminAccessService access, IGatewayRegistry registry, CancellationToken cancellationToken) =>
+adminApi.MapPost("/tenants", async (CreateTenantRequest request, HttpContext context, AdminAccessService access, IAdminGatewayRegistry registry, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
     AdminAccessService.Require(admin, null, AdminRole.SecurityAdministrator);
@@ -480,7 +482,7 @@ adminApi.MapGet("/applications", async (int? offset, int? limit, HttpContext con
     return Results.Ok(await directory.ListApplicationsAsync(offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
 });
 
-adminApi.MapPost("/applications", async (CreateApplicationRequest request, HttpContext context, AdminAccessService access, IGatewayRegistry registry, CancellationToken cancellationToken) =>
+adminApi.MapPost("/applications", async (CreateApplicationRequest request, HttpContext context, AdminAccessService access, IAdminGatewayRegistry registry, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
     AdminAccessService.Require(admin, null, AdminRole.SecurityAdministrator);
@@ -506,22 +508,24 @@ adminApi.MapGet("/installations", async (Guid tenantId, int? offset, int? limit,
     return Results.Ok(await directory.ListInstallationsAsync(tenantId, offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
 });
 
-adminApi.MapPost("/installations", async (CreateInstallationRequest request, HttpContext context, AdminAccessService access, IGatewayRegistry registry, GatewayProvisioningService provisioning, CancellationToken cancellationToken) =>
+adminApi.MapPost("/installations", async (CreateInstallationRequest request, HttpContext context, AdminAccessService access, IAdminGatewayRegistry registry, IGatewayClock clock, EnrollmentSecurityOptions enrollmentOptions, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
     AdminAccessService.Require(admin, request.TenantId, AdminRole.SecurityAdministrator);
     Guid id = Guid.NewGuid(); DateTimeOffset now = DateTimeOffset.UtcNow;
     GatewayAuditEvent audit = AdminAudit(context, admin, request.TenantId, "installation.create", "installation", id.ToString("D"), "success", "BGW-INSTALLATION-CREATED");
+    GatewayProvisioningService provisioning = new(registry, clock, enrollmentOptions);
     ProvisionedActivation activation = await provisioning.CreateAdminInstallationAsync(new(id, request.TenantId, request.ApplicationId, request.EnvironmentId, InstallationStatus.Pending, null, now), admin.ActorId, audit, cancellationToken).ConfigureAwait(false);
     context.Response.Headers.CacheControl = "no-store";
     return Results.Json(activation, statusCode: StatusCodes.Status201Created);
 });
 
-adminApi.MapPost("/installations/{installationId}:revoke", async (Guid installationId, Guid tenantId, RevokeInstallationRequest request, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, InstallationEnrollmentService enrollment, IGatewayRegistry registry, CancellationToken cancellationToken) =>
+adminApi.MapPost("/installations/{installationId}:revoke", async (Guid installationId, Guid tenantId, RevokeInstallationRequest request, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, IAdminGatewayRegistry registry, IEnrollmentChallengeStore challengeStore, IGatewayClock clock, EnrollmentSecurityOptions enrollmentOptions, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
     AdminAccessService.Require(admin, tenantId, AdminRole.SecurityAdministrator);
     if (await directory.GetInstallationAsync(tenantId, installationId, cancellationToken).ConfigureAwait(false) is null) throw new GatewayException("BGW-INSTALLATION-NOT-FOUND", 404);
+    InstallationEnrollmentService enrollment = new(registry, challengeStore, clock, enrollmentOptions);
     await enrollment.RevokeAdminAsync(installationId, request.Reason, AdminAudit(context, admin, tenantId, "installation.revoke", "installation", installationId.ToString("D"), "success", "BGW-INSTALLATION-REVOKED"), cancellationToken).ConfigureAwait(false);
     return Results.Ok(new { status = "revoked" });
 });
@@ -533,7 +537,7 @@ adminApi.MapGet("/grants", async (Guid tenantId, int? offset, int? limit, HttpCo
     return Results.Ok(await directory.ListGrantsAsync(tenantId, offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
 });
 
-adminApi.MapPost("/grants", async (CreateGrantRequest request, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, IGatewayRegistry registry, CancellationToken cancellationToken) =>
+adminApi.MapPost("/grants", async (CreateGrantRequest request, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, IAdminGatewayRegistry registry, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
     AdminAccessService.Require(admin, request.TenantId, AdminRole.SecurityAdministrator);
@@ -551,7 +555,7 @@ adminApi.MapGet("/audit", async (Guid tenantId, int? offset, int? limit, HttpCon
     return Results.Ok(await directory.ListAuditAsync(tenantId, offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
 });
 
-adminApi.MapPost("/bootstrap", async (HttpContext context, AdminAccessService access, IAdminSecurityStore securityStore, IGatewayRegistry registry, CancellationToken cancellationToken) =>
+adminApi.MapPost("/bootstrap", async (HttpContext context, AdminAccessService access, IAdminSecurityStore securityStore, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
     string? expected = Environment.GetEnvironmentVariable(hostOptions.Admin.BootstrapTokenEnvironmentVariable, EnvironmentVariableTarget.Process);
@@ -721,7 +725,7 @@ adminApi.MapGet("/role-assignments", async (Guid? principalId, Guid? tenantId, i
     return Results.Ok(await security.ListAssignmentsAsync(pageOffset, pageLimit, principalId, tenantId, cancellationToken).ConfigureAwait(false));
 });
 
-adminApi.MapPost("/connectors/{connectorId}:test", async (string connectorId, ConnectorTestRequest request, HttpContext context, AdminAccessService access, IGatewayOperationCatalog catalog, IGatewayRegistry registry, CancellationToken cancellationToken) =>
+adminApi.MapPost("/connectors/{connectorId}:test", async (string connectorId, ConnectorTestRequest request, HttpContext context, AdminAccessService access, IGatewayOperationCatalog catalog, IAdminGatewayRegistry registry, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
     AdminAccessService.Require(admin, null, AdminRole.Operator, AdminRole.SecurityAdministrator);
@@ -803,7 +807,7 @@ static void ValidateAdminName(string value)
     if (string.IsNullOrWhiteSpace(value) || value.Length > 256 || value.Any(char.IsControl)) throw new GatewayException("BGW-ADMIN-DISPLAY-NAME", 400);
 }
 
-static Task AppendAdminAuditAsync(IGatewayRegistry registry, HttpContext context, AdminAccessContext actor, Guid? tenantId, string action, string targetType, string targetId, CancellationToken cancellationToken) =>
+static Task AppendAdminAuditAsync(IAdminGatewayRegistry registry, HttpContext context, AdminAccessContext actor, Guid? tenantId, string action, string targetType, string targetId, CancellationToken cancellationToken) =>
     registry.AppendAuditAsync(new GatewayAuditEvent(Guid.NewGuid(), DateTimeOffset.UtcNow, tenantId, "admin", actor.ActorId, action, targetType, targetId, Correlation(context), "success", "BGW-ADMIN-ACTION", new Dictionary<string, string>()), cancellationToken);
 
 static GatewayAuditEvent AdminAudit(HttpContext context, AdminAccessContext actor, Guid? tenantId, string action, string targetType, string targetId, string outcome, string reasonCode) =>
@@ -826,7 +830,7 @@ static async Task AuditAdminDenialAsync(HttpContext context, string reasonCode, 
         }
         string path = context.Request.Path.Value is { Length: <= 300 } value ? value : "/admin";
         Guid correlation = Guid.TryParse(correlationId, out Guid parsed) ? parsed : Guid.NewGuid();
-        await context.RequestServices.GetRequiredService<IGatewayRegistry>().AppendAuditAsync(
+        await context.RequestServices.GetRequiredService<IAdminGatewayRegistry>().AppendAuditAsync(
             new(Guid.NewGuid(), DateTimeOffset.UtcNow, null, "administrator", actorId, "admin.request.denied", "admin_route", path, correlation, "denied", reasonCode, new Dictionary<string, string> { ["method"] = context.Request.Method }),
             context.RequestAborted).ConfigureAwait(false);
     }

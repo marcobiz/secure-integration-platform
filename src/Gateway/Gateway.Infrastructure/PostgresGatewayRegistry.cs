@@ -7,7 +7,7 @@ using SecureIntegration.Gateway.Domain;
 namespace SecureIntegration.Gateway.Infrastructure;
 
 /// <summary>PostgreSQL 18 registry. Tenant-scoped operations set the RLS context transaction-locally.</summary>
-public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminTransactionFaultInjector? faultInjector = null) : IGatewayRegistry
+public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminTransactionFaultInjector? faultInjector = null) : IGatewayRegistry, IAdminGatewayRegistry
 {
     /// <inheritdoc />
     public async Task AddTenantAsync(TenantRecord tenant, CancellationToken cancellationToken) => await ExecuteAsync(

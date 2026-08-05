@@ -61,6 +61,12 @@ public interface IGatewayRegistry
     Task<bool> IsReadyAsync(CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Administrative registry boundary. Implementations use the separately configured
+/// non-superuser admin data source and must never be resolved by runtime request paths.
+/// </summary>
+public interface IAdminGatewayRegistry : IGatewayRegistry;
+
 /// <summary>Short-lived enrollment challenge storage. Challenges are never persisted with secret values.</summary>
 public interface IEnrollmentChallengeStore
 {

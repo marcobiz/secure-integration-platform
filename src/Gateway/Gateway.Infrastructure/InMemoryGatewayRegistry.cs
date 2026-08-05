@@ -6,7 +6,7 @@ using SecureIntegration.Gateway.Domain;
 namespace SecureIntegration.Gateway.Infrastructure;
 
 /// <summary>Deterministic registry for unit/API tests and Development only.</summary>
-public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null) : IGatewayRegistry
+public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null) : IGatewayRegistry, IAdminGatewayRegistry
 {
     private readonly object gate = new();
     private readonly Dictionary<Guid, TenantRecord> tenants = [];
