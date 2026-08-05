@@ -28,6 +28,7 @@ using HttpClient bootstrap = new() { BaseAddress = new Uri(gatewayBase), Timeout
 using HttpClient authenticated = CreateClient(new Uri(gatewayBase), certificate);
 List<Scenario> scenarios = [];
 
+await VerifySelfSignedCertificateBoundaryAsync().ConfigureAwait(false);
 await EnrollAsync().ConfigureAwait(false);
 byte[] normalBody = InvokeBody();
 Result positive = await SendSignedAsync(authenticated, "m3-vendor", "submit", normalBody).ConfigureAwait(false);
@@ -109,6 +110,29 @@ async Task EnrollAsync()
     response.EnsureSuccessStatusCode();
 }
 
+async Task VerifySelfSignedCertificateBoundaryAsync()
+{
+    using ECDsa probeKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+    using X509Certificate2 probeCertificate = CreateSelfSignedInstallationCertificate(probeKey);
+    using HttpClient probeClient = CreateClient(new Uri(gatewayBase), probeCertificate);
+    const string target = "/v1/broker-policy";
+    byte[] body = [];
+    Dictionary<string, string> headers = SignHeaders(probeKey, HttpMethod.Get.Method, target, body);
+    using HttpRequestMessage request = new(HttpMethod.Get, target);
+    foreach ((string name, string value) in headers) request.Headers.TryAddWithoutValidation(name, value);
+    try
+    {
+        using HttpResponseMessage response = await probeClient.SendAsync(request).ConfigureAwait(false);
+        byte[] responseBody = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+        string code = response.IsSuccessStatusCode ? "BGW-UNEXPECTED-SUCCESS" : ReadCode(responseBody);
+        Record("M3-TLS-SELF-SIGNED-APPLICATION-BOUNDARY", response.StatusCode == HttpStatusCode.Unauthorized && code == "BGW-AUTHN-CREDENTIAL-UNKNOWN", code);
+    }
+    catch (HttpRequestException)
+    {
+        Record("M3-TLS-SELF-SIGNED-APPLICATION-BOUNDARY", false, "TLS-HANDSHAKE-REJECTED");
+    }
+}
+
 void Record(string id, bool passed, string code) => scenarios.Add(new Scenario(id, passed, passed ? "PASS" : "FAIL", code));
 async Task WriteReportAsync(bool passed)
 {
@@ -166,12 +190,17 @@ async Task RevokeAsync()
 SignedRequest Sign(string connector, string operation, byte[] body)
 {
     string target = $"/v1/connectors/{Uri.EscapeDataString(connector)}/operations/{Uri.EscapeDataString(operation)}:invoke";
+    return new(target, body, SignHeaders(privateKey, HttpMethod.Post.Method, target, body));
+}
+
+static Dictionary<string, string> SignHeaders(ECDsa signer, string method, string target, byte[] body)
+{
     string timestamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFF'Z'", CultureInfo.InvariantCulture);
     string nonce = Base64Url(RandomNumberGenerator.GetBytes(16));
     string digest = Base64Url(SHA256.HashData(body));
-    string input = string.Join('\n', "BGW1", "POST", target, timestamp, nonce, digest);
-    string signature = Base64Url(privateKey.SignData(Encoding.UTF8.GetBytes(input), HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
-    return new(target, body, new Dictionary<string, string>(StringComparer.Ordinal) { ["X-BG-Timestamp"] = timestamp, ["X-BG-Nonce"] = nonce, ["X-BG-Content-SHA256"] = digest, ["X-BG-Signature"] = signature, ["traceparent"] = $"00-{Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant()}-{Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant()}-01" });
+    string input = string.Join('\n', "BGW1", method.ToUpperInvariant(), target, timestamp, nonce, digest);
+    string signature = Base64Url(signer.SignData(Encoding.UTF8.GetBytes(input), HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
+    return new Dictionary<string, string>(StringComparer.Ordinal) { ["X-BG-Timestamp"] = timestamp, ["X-BG-Nonce"] = nonce, ["X-BG-Content-SHA256"] = digest, ["X-BG-Signature"] = signature, ["traceparent"] = $"00-{Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant()}-{Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant()}-01" };
 }
 
 async Task<Result> SendSignedAsync(HttpClient client, string connector, string operation, byte[] body) => await SendAsync(client, Sign(connector, operation, body)).ConfigureAwait(false);
@@ -221,6 +250,14 @@ static HttpClient CreateClient(Uri origin, X509Certificate2 certificate)
     HttpClientHandler handler = new() { AllowAutoRedirect = false, UseCookies = false, UseProxy = false };
     handler.ClientCertificates.Add(certificate);
     return new HttpClient(handler) { BaseAddress = origin, Timeout = TimeSpan.FromSeconds(15) };
+}
+static X509Certificate2 CreateSelfSignedInstallationCertificate(ECDsa key)
+{
+    CertificateRequest request = new("CN=M3 Self-Signed Installation Probe", key, HashAlgorithmName.SHA256);
+    request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+    request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
+    request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new Oid("1.3.6.1.5.5.7.3.2") }, true));
+    return request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddHours(1));
 }
 static string Required(string name) => Environment.GetEnvironmentVariable(name) is { Length: > 0 } value ? value : throw new InvalidOperationException(name + " is required.");
 static string Base64Url(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');

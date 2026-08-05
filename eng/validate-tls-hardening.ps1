@@ -11,6 +11,10 @@ $patterns = [ordered]@{
     'permissive server certificate callback' = '(?is)ServerCertificateCustomValidationCallback\s*=\s*[^;]*(?:=>\s*true|return\s+true)'
     'permissive handler callback' = '(?is)ServerCertificateValidationCallback\s*=\s*[^;]*(?:=>\s*true|return\s+true)'
 }
+$allowedApplicationValidatedClientCertificateBoundaries = @(
+    'src/Gateway/Gateway.Api/Program.cs',
+    'tools/m3/VendorMock/Program.cs'
+)
 
 $violations = @()
 $tracked = @(& git -C $root ls-files)
@@ -22,11 +26,19 @@ foreach ($relative in $tracked) {
     if ($extensions -notcontains $extension -and [IO.Path]::GetFileName($normalized) -ne 'Dockerfile') { continue }
     $path = Join-Path $root $relative
     $content = [IO.File]::ReadAllText($path)
+    if ($content -match '\bAllowAnyClientCertificate\s*\(' -and $allowedApplicationValidatedClientCertificateBoundaries -notcontains $normalized) {
+        $violations += "${normalized}: client certificate chain validation bypass outside an approved application-validation boundary"
+    }
     foreach ($entry in $patterns.GetEnumerator()) {
         if ([regex]::IsMatch($content, $entry.Value)) {
             $violations += "${normalized}: $($entry.Key)"
         }
     }
+}
+$gatewayProgram = [IO.File]::ReadAllText((Join-Path $root 'src/Gateway/Gateway.Api/Program.cs'))
+$securityDriver = [IO.File]::ReadAllText((Join-Path $root 'tools/m3/SecurityDriver/Program.cs'))
+if ($gatewayProgram -notmatch '\bAllowAnyClientCertificate\s*\(' -or $securityDriver -notmatch 'M3-TLS-SELF-SIGNED-APPLICATION-BOUNDARY') {
+    $violations += 'Gateway self-signed installation TLS boundary is not paired with its application-rejection regression'
 }
 if ($violations.Count -ne 0) { throw ('TLS hardening validation failed: ' + ($violations -join '; ')) }
 Write-Output 'TLS_HARDENING_VALIDATION_PASS'

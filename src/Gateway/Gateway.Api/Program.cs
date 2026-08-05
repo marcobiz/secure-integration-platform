@@ -34,7 +34,14 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = 16 * 1024 * 1024;
-    options.ConfigureHttpsDefaults(https => https.ClientCertificateMode = ClientCertificateMode.AllowCertificate);
+    options.ConfigureHttpsDefaults(https =>
+    {
+        https.ClientCertificateMode = ClientCertificateMode.AllowCertificate;
+        // Installation credentials are intentionally self-signed. TLS transports the
+        // certificate; RuntimeIdentityService owns trust through registry binding, PoP,
+        // revocation and signed-request validation.
+        https.AllowAnyClientCertificate();
+    });
 });
 
 GatewayHostOptions hostOptions = builder.Configuration.GetSection("Gateway").Get<GatewayHostOptions>() ?? new();
