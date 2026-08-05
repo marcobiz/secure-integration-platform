@@ -7,9 +7,11 @@ $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $hostRunnerPath = Join-Path $root 'tools\m3\split-host\Invoke-M3ASplitHost.ps1'
 $operatorPath = Join-Path $root 'tools\m3\split-host\Invoke-M3ASplitVmOperator.ps1'
 $vmRunnerPath = Join-Path $root 'tools\m3\split-host\Invoke-M3ASplitVm.ps1'
+$legacySimulatorPath = Join-Path $root 'tools\m3\LegacySimulator\Program.cs'
 $hostRunner = [IO.File]::ReadAllText($hostRunnerPath)
 $operator = [IO.File]::ReadAllText($operatorPath)
 $vmRunner = [IO.File]::ReadAllText($vmRunnerPath)
+$legacySimulator = [IO.File]::ReadAllText($legacySimulatorPath)
 
 foreach ($required in @(
     'WAITING_FOR_OPERATOR',
@@ -70,6 +72,10 @@ foreach ($required in @(
 }
 if ($vmRunner -match "Invoke-NativeChecked\s+-FilePath\s+'git\.exe'" -or $vmRunner -match '&\s+git(?:\.exe)?[^\r\n]+switch') {
     throw 'VM runner must use the PowerShell 5.1-safe Git wrapper.'
+}
+if ($legacySimulator.IndexOf('exception.Code == "gateway_operation_not_granted"', [StringComparison]::Ordinal) -lt 0 -or
+    $legacySimulator.IndexOf('exception.Code == "operation_not_granted"', [StringComparison]::Ordinal) -ge 0) {
+    throw 'M3 Legacy Simulator must assert the Gateway grant denial contract, not the local operation denial code.'
 }
 
 Write-Output 'M3A_OPERATOR_HANDOFF_TEST_PASS'

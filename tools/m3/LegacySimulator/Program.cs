@@ -32,7 +32,7 @@ try
     }
     catch (BrokerClientException exception)
     {
-        bool denied = exception.Code == "operation_not_granted";
+        bool denied = exception.Code == "gateway_operation_not_granted";
         scenarios.Add(new { id = "M3-N06", status = denied ? "PASS" : "FAIL", code = exception.Code });
         passed &= denied;
     }
