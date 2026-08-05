@@ -49,6 +49,14 @@ foreach (string operation in securityGrantedOperations)
     await registry.AddGrantAsync(new InstallationGrantRecord(Guid.NewGuid(), securityInstallationId, securityTenantId, "m3-vendor", operation, true, clock.UtcNow), CancellationToken.None).ConfigureAwait(false);
 
 PostgresConnectorConfigurationStore connectorStore = new(dataSource);
+await using AdminPostgresDataSource adminDataSource = new(adminConnection);
+PostgresAdminSecurityStore adminSecurity = new(adminDataSource);
+AdminPrincipalRecord provisionerEditor = await adminSecurity.EnsurePrincipalAsync(
+    new("https://provisioner.synthetic.invalid", "m3-editor", "M3 synthetic editor", null),
+    CancellationToken.None).ConfigureAwait(false);
+AdminPrincipalRecord provisionerApprover = await adminSecurity.EnsurePrincipalAsync(
+    new("https://provisioner.synthetic.invalid", "m3-approver", "M3 synthetic approver", null),
+    CancellationToken.None).ConfigureAwait(false);
 ConnectorDefinitionValidator connectorValidator = new();
 await PublishConnectorAsync("m3-vendor", "3.0.0-m3", securityOperations: true).ConfigureAwait(false);
 await PublishConnectorAsync("sample-secure-service", "1.0.0", securityOperations: false).ConfigureAwait(false);
@@ -101,7 +109,8 @@ async Task PublishConnectorAsync(string connectorId, string version, bool securi
         operations
     });
     ValidatedConnectorDefinition validated = connectorValidator.ValidateRequired(definition);
-    ConnectorVersionRecord draft = await connectorStore.CreateDraftAsync(new(Guid.NewGuid(), Guid.Empty, connectorId, version, "1.0", ConnectorVersionState.Draft, validated.CanonicalJson, Convert.FromHexString(validated.ChecksumSha256), "m3-provisioner", clock.UtcNow, 1), CancellationToken.None).ConfigureAwait(false);
+    string editor = provisionerEditor.Id.ToString("D");
+    ConnectorVersionRecord draft = await connectorStore.CreateDraftAsync(new(Guid.NewGuid(), Guid.Empty, connectorId, version, "1.0", ConnectorVersionState.Draft, validated.CanonicalJson, Convert.FromHexString(validated.ChecksumSha256), editor, clock.UtcNow, 1), CancellationToken.None).ConfigureAwait(false);
     ConnectorVersionRecord validatedRecord = await connectorStore.MarkValidatedAsync(draft.Id, draft.RowVersion, clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
     Dictionary<string, Uri> endpoints = new(StringComparer.Ordinal)
     {
@@ -121,9 +130,12 @@ async Task PublishConnectorAsync(string connectorId, string version, bool securi
     };
     string primaryChecksum = ConnectorBindingDigests.Revision(draft.Id, environmentId, endpoints, secrets, certificates);
     string securityChecksum = ConnectorBindingDigests.Revision(draft.Id, securityEnvironmentId, endpoints, secrets, certificates);
-    _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, environmentId, endpoints, secrets, certificates, 0, primaryChecksum, ConnectorBindingState.Draft, clock.UtcNow, "m3-provisioner"), null, Guid.NewGuid(), CancellationToken.None).ConfigureAwait(false);
-    _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, securityEnvironmentId, endpoints, secrets, certificates, 0, securityChecksum, ConnectorBindingState.Draft, clock.UtcNow, "m3-provisioner"), null, Guid.NewGuid(), CancellationToken.None).ConfigureAwait(false);
-    _ = await connectorStore.PublishAsync(draft.Id, validatedRecord.RowVersion, 0, "m3-provisioner", clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
+    _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, environmentId, endpoints, secrets, certificates, 0, primaryChecksum, ConnectorBindingState.Draft, clock.UtcNow, editor), null, Guid.NewGuid(), CancellationToken.None).ConfigureAwait(false);
+    _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, securityEnvironmentId, endpoints, secrets, certificates, 0, securityChecksum, ConnectorBindingState.Draft, clock.UtcNow, editor), null, Guid.NewGuid(), CancellationToken.None).ConfigureAwait(false);
+    byte[] bindingDigest = await connectorStore.GetBindingBundleDigestAsync(draft.Id, CancellationToken.None).ConfigureAwait(false);
+    _ = await adminSecurity.RequestApprovalAsync(draft, bindingDigest, provisionerEditor.Id, Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
+    _ = await adminSecurity.ApproveAsync(draft.Id, draft.ChecksumSha256, bindingDigest, draft.CreatedBy, provisionerApprover.Id, Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
+    _ = await connectorStore.PublishApprovedAsync(draft.Id, bindingDigest, validatedRecord.RowVersion, 0, provisionerApprover.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
 }
 
 static object Operation(string operationId, string endpointBinding, string path, string authentication, string? certificateBinding)
