@@ -10,24 +10,30 @@ $patterns = @(
 
 $hits = @()
 $ripgrep = Get-Command rg -ErrorAction SilentlyContinue
-foreach ($relative in $trackedRoots) {
-    $path = Join-Path $root $relative
-    if (-not (Test-Path -LiteralPath $path)) { continue }
-    foreach ($pattern in $patterns) {
-        if ($ripgrep) {
-            $matches = & $ripgrep.Source -l --pcre2 -e $pattern -- $path 2>$null
-        }
-        else {
-            # Git is already a repository prerequisite and its PCRE engine keeps
-            # this gate functional on clean Windows runners that do not ship rg.
-            $matches = & git -C $root grep -Il -P -e $pattern -- $relative 2>$null
-            if ($LASTEXITCODE -notin 0, 1) {
-                throw "Secret scan failed while inspecting '$relative'."
+Push-Location $root
+try {
+    foreach ($relative in $trackedRoots) {
+        $path = Join-Path $root $relative
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        foreach ($pattern in $patterns) {
+            if ($ripgrep) {
+                # Relative paths avoid Windows PowerShell 5.1 native argument
+                # corruption when a regex is followed by an absolute C:\ path.
+                $matches = & $ripgrep.Source -l --pcre2 -e $pattern -- $relative 2>$null
             }
+            else {
+                # Git is already a repository prerequisite and its PCRE engine keeps
+                # this gate functional on clean Windows runners that do not ship rg.
+                $matches = & git -C $root grep -Il -P -e $pattern -- $relative 2>$null
+                if ($LASTEXITCODE -notin 0, 1) {
+                    throw "Secret scan failed while inspecting '$relative'."
+                }
+            }
+            if ($matches) { $hits += $matches }
         }
-        if ($matches) { $hits += $matches }
     }
 }
+finally { Pop-Location }
 
 if ($hits.Count -gt 0) {
     $hits | Sort-Object -Unique | Write-Error
