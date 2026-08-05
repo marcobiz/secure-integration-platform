@@ -18,7 +18,7 @@ jobs:
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ env.CANDIDATE_COMMIT_SHA }}
       - uses: actions/setup-dotnet@v5
@@ -67,7 +67,7 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ env.CANDIDATE_COMMIT_SHA }}
@@ -95,7 +95,7 @@ jobs:
       EXPECTED_M2_MIGRATION_SHA256: 182CC690E16BB986638A4B52EE1554A4B540A8E58FD673F2111A79D194C66A98
       EXPECTED_M4_MIGRATION_SHA256: 9D991B0E4E8268D47C32121DECE2D3593B183623059BB17F4A82A479DC8D322C
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ env.CANDIDATE_COMMIT_SHA }}
       - uses: actions/setup-dotnet@v5
@@ -155,7 +155,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ env.CANDIDATE_COMMIT_SHA }}
       - name: Build Gateway container
@@ -218,7 +218,7 @@ jobs:
           output-file: gateway-image.spdx.json
           artifact-name: gateway-image-sbom-${{ env.CANDIDATE_COMMIT_SHA }}.spdx.json
       - name: Upload image digest evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: gateway-image-digest-${{ env.CANDIDATE_COMMIT_SHA }}
           path: gateway-image-digests.txt
@@ -229,7 +229,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ env.CANDIDATE_COMMIT_SHA }}
       - uses: actions/setup-dotnet@v5
@@ -391,7 +391,7 @@ jobs:
           (cd "$redacted" && zip -q -r "$RUNNER_TEMP/m3a-ci-$GITHUB_RUN_ID-redacted-evidence.zip" .)
           sha256sum "$RUNNER_TEMP/m3a-ci-$GITHUB_RUN_ID-redacted-evidence.zip" >"$RUNNER_TEMP/m3a-ci-$GITHUB_RUN_ID-redacted-evidence.zip.sha256"
       - name: Upload redacted M3 deterministic evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: m3a-ci-${{ env.CANDIDATE_COMMIT_SHA }}-redacted-evidence
           path: |
@@ -405,7 +405,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ env.CANDIDATE_COMMIT_SHA }}
       - uses: actions/setup-dotnet@v5

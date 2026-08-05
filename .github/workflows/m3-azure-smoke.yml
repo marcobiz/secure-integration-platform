@@ -21,7 +21,7 @@ jobs:
       AZURE_M3_RESOURCE_GROUP: ${{ vars.AZURE_M3_RESOURCE_GROUP }}
       AZURE_M3_PREFIX: ${{ vars.AZURE_M3_PREFIX }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
@@ -205,7 +205,7 @@ jobs:
             '{schemaVersion:1,environment:"M3B",runId:$runId,commitSha:$commit,resourceGroup:$rg,gatewayImageDigest:$gatewayDigest,vendorImageDigest:$vendorDigest,managedIdentityClientId:$identity,managedIdentityVerified:true,canaryScan:"PASS",scenarios:$scenarios[0]}' >"$redacted/manifest.json"
           (cd "$redacted" && zip -q -r "$RUNNER_TEMP/m3b-$GITHUB_RUN_ID-redacted-evidence.zip" .)
           sha256sum "$RUNNER_TEMP/m3b-$GITHUB_RUN_ID-redacted-evidence.zip" >"$RUNNER_TEMP/m3b-$GITHUB_RUN_ID-redacted-evidence.zip.sha256"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: m3b-${{ github.sha }}-redacted-evidence
           path: |

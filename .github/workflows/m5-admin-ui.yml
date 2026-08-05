@@ -1,0 +1,165 @@
+name: m5-admin-ui
+
+on:
+  push:
+    branches: [main, m5/admin-ui-mvp]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  WEB: src/Admin/Admin.Web
+
+jobs:
+  admin-ui-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - uses: actions/setup-node@v6
+        with: { node-version: 22.22.1, cache: npm, cache-dependency-path: src/Admin/Admin.Web/package-lock.json }
+      - run: npm ci --ignore-scripts
+        working-directory: ${{ env.WEB }}
+      - run: npm run lint && npm run check:api
+        working-directory: ${{ env.WEB }}
+
+  admin-ui-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - uses: actions/setup-node@v6
+        with: { node-version: 22.22.1, cache: npm, cache-dependency-path: src/Admin/Admin.Web/package-lock.json }
+      - run: npm ci --ignore-scripts && npm test
+        working-directory: ${{ env.WEB }}
+
+  admin-ui-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - uses: actions/setup-node@v6
+        with: { node-version: 22.22.1, cache: npm, cache-dependency-path: src/Admin/Admin.Web/package-lock.json }
+      - run: npm ci --ignore-scripts && npm run build
+        working-directory: ${{ env.WEB }}
+      - uses: actions/upload-artifact@v6
+        with: { name: 'admin-ui-${{ env.CANDIDATE_COMMIT_SHA }}', path: src/Admin/Admin.Web/dist, if-no-files-found: error }
+
+  admin-api-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - uses: actions/setup-dotnet@v5
+        with: { global-json-file: global.json, cache: true, cache-dependency-path: '**/packages.lock.json' }
+      - run: dotnet test tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj -c Release --filter FullyQualifiedName~AdminApiSecurityTests
+
+  admin-ui-playwright:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - uses: actions/setup-node@v6
+        with: { node-version: 22.22.1, cache: npm, cache-dependency-path: src/Admin/Admin.Web/package-lock.json }
+      - run: npm ci --ignore-scripts && npx playwright install --with-deps chromium && npm run test:e2e
+        working-directory: ${{ env.WEB }}
+
+  admin-ui-accessibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - uses: actions/setup-node@v6
+        with: { node-version: 22.22.1, cache: npm, cache-dependency-path: src/Admin/Admin.Web/package-lock.json }
+      - run: npm ci --ignore-scripts && npm run test:a11y
+        working-directory: ${{ env.WEB }}
+
+  gateway-container-with-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - name: Build and inspect Gateway image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --label "org.opencontainers.image.revision=$CANDIDATE_COMMIT_SHA" -f src/Gateway/Gateway.Api/Dockerfile -t secure-integration-gateway:m5 .
+          test -n "$(docker image inspect secure-integration-gateway:m5 --format '{{.Config.User}}')"
+          test "$(docker image inspect secure-integration-gateway:m5 --format '{{.Config.User}}')" != "0"
+          docker run -d --name gateway-m5 --read-only --tmpfs /tmp -p 18080:8080 -e ASPNETCORE_ENVIRONMENT=Development secure-integration-gateway:m5
+          trap 'docker rm -f gateway-m5 >/dev/null 2>&1 || true' EXIT
+          for i in {1..30}; do curl -fsS http://127.0.0.1:18080/health/ready >/dev/null && break; sleep 1; done
+          curl -fsS http://127.0.0.1:18080/admin/ | grep -F '<div id="root"></div>'
+          test "$(docker exec gateway-m5 sh -c 'command -v node || true')" = ""
+          docker image inspect secure-integration-gateway:m5 --format '{{.Id}}' | tee gateway-m5-digest.txt
+
+  clean-clone-ui-quickstart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - uses: actions/setup-dotnet@v5
+        with: { global-json-file: global.json }
+      - uses: actions/setup-node@v6
+        with: { node-version: 22.22.1, cache: npm, cache-dependency-path: src/Admin/Admin.Web/package-lock.json }
+      - name: Start and verify clean-clone stack
+        shell: pwsh
+        run: ./tools/m5/Invoke-M5Quickstart.ps1 -Phase Start
+      - name: Stop and verify cleanup
+        if: always()
+        shell: pwsh
+        run: |
+          ./tools/m5/Invoke-M5Quickstart.ps1 -Phase Stop
+          if (docker ps -a --filter label=com.docker.compose.project=secure-integration-m5-quickstart -q) { throw 'Containers remain' }
+          if (docker volume ls --filter label=com.docker.compose.project=secure-integration-m5-quickstart -q) { throw 'Volumes remain' }
+
+  open-source-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - uses: actions/setup-dotnet@v5
+        with: { global-json-file: global.json }
+      - uses: actions/setup-node@v6
+        with: { node-version: 22.22.1 }
+      - shell: pwsh
+        run: ./eng/Export-OpenSourceCore.ps1
+
+  license-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - uses: actions/setup-node@v6
+        with: { node-version: 22.22.1, cache: npm, cache-dependency-path: src/Admin/Admin.Web/package-lock.json }
+      - run: npm ci --ignore-scripts && node ../../../tools/m5/check-frontend-licenses.mjs
+        working-directory: ${{ env.WEB }}
+
+  secret-scan:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}', fetch-depth: 0 }
+      - shell: pwsh
+        run: ./eng/scan-secrets.ps1
+
+  sbom:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - uses: actions/setup-dotnet@v5
+        with: { global-json-file: global.json }
+      - uses: actions/setup-node@v6
+        with: { node-version: 22.22.1 }
+      - shell: pwsh
+        run: ./eng/generate-sbom.ps1 -Version 0.5.0-preview.1
+      - shell: bash
+        run: |
+          cd "$WEB"
+          npm ci --ignore-scripts
+          npm sbom --sbom-format spdx > ../../../.artifacts/sbom/admin-web.spdx.json
+      - uses: actions/upload-artifact@v6
+        with: { name: 'm5-sbom-${{ env.CANDIDATE_COMMIT_SHA }}', path: .artifacts/sbom, if-no-files-found: error }

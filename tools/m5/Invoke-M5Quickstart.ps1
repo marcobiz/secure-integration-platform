@@ -76,7 +76,11 @@ if (-not $ready) { throw 'M5_QUICKSTART_GATEWAY_NOT_READY' }
 $html = Join-Path $artifactRoot 'admin-index.html'
 # Schannel otherwise attempts Internet revocation checks for the intentionally offline,
 # per-run synthetic CA. Certificate chain and hostname validation remain enabled.
-Invoke-Checked 'curl.exe' @('--fail', '--silent', '--show-error', '--ssl-no-revoke', '--cacert', (Join-Path $rawRoot 'certificates\ca.crt'), 'https://localhost:18443/admin/', '--output', $html)
+$curl = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'curl.exe' } else { 'curl' }
+$curlArguments = @('--fail', '--silent', '--show-error')
+if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $curlArguments += '--ssl-no-revoke' }
+$curlArguments += @('--cacert', (Join-Path $rawRoot 'certificates\ca.crt'), 'https://localhost:18443/admin/', '--output', $html)
+Invoke-Checked $curl $curlArguments
 $content = Get-Content -Raw -LiteralPath $html
 if ($content -notmatch '<div id="root"></div>' -or $content.IndexOf('__CSP_NONCE__', [StringComparison]::Ordinal) -ge 0) { throw 'M5_QUICKSTART_ADMIN_UI_INVALID' }
 Write-Host 'M5_QUICKSTART_START_PASS'
