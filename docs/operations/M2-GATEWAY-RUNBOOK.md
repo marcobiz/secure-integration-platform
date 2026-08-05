@@ -69,8 +69,9 @@ Development e non dimostra Managed Identity o Key Vault live.
 Configurare tramite provider protetto, mai in `appsettings.json`:
 
 - `ConnectionStrings__GatewayDatabase`: login membro di `gateway_runtime`;
-- `Gateway__KeyVaultUri`: `https://<vault>.vault.azure.net/`;
-- `Gateway__ManagedIdentityClientId`: solo per user-assigned identity;
+- `Gateway__Provider__Kind`: `ExternalPack`;
+- `Gateway__Provider__Endpoint`: endpoint HTTPS del provider;
+- `Gateway__Provider__ClientIdentity`: identità opzionale interpretata esclusivamente dal pack;
 - `Gateway__ActivationHmacSecretReference`:
   `keyvault://<vault>.vault.azure.net/<secret>[/<version>]`;
 - `Gateway__Operations__<n>__*`: catalogo allowlisted; endpoint HTTPS, auth e riferimenti

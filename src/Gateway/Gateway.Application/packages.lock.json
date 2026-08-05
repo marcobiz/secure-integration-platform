@@ -32,6 +32,9 @@
       },
       "SecureIntegration.Gateway.Domain": {
         "type": "Project"
+      },
+      "SecureIntegration.Providers.Abstractions": {
+        "type": "Project"
       }
     }
   }

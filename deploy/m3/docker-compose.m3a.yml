@@ -113,8 +113,9 @@ services:
       GATEWAY_HEALTH_URL: https://localhost:8443/health/live
       SSL_CERT_FILE: /run/m3-certs/ca.crt
       ConnectionStrings__GatewayDatabase: Host=postgres;Port=5432;Database=broker_gateway_m3;Username=m3_gateway_runtime;Password=${M3_POSTGRES_RUNTIME_PASSWORD:?required};SSL Mode=Disable;GSS Encryption Mode=Disable
-      Gateway__SyntheticVaultUri: https://vault.m3.test:8443/
-      Gateway__SyntheticVaultTokenEnvironmentVariable: M3_SYNTHETIC_VAULT_TOKEN
+      Gateway__Provider__Kind: Synthetic
+      Gateway__Provider__Endpoint: https://vault.m3.test:8443/
+      Gateway__Provider__AccessTokenEnvironmentVariable: M3_SYNTHETIC_VAULT_TOKEN
       M3_SYNTHETIC_VAULT_TOKEN: ${M3_SYNTHETIC_VAULT_TOKEN:?required}
       Gateway__ActivationHmacKeyBase64: ${M3_ACTIVATION_HMAC_BASE64:?required}
       Gateway__M3PrivateMockHost: vendor.m3.test

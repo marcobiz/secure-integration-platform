@@ -1,0 +1,76 @@
+using System.Security.Cryptography.X509Certificates;
+
+namespace SecureIntegration.Providers.Abstractions;
+
+/// <summary>Retrieves secret values for server-side use only.</summary>
+public interface ISecretValueProvider
+{
+    /// <summary>Returns the value addressed by an allowlisted logical reference.</summary>
+    Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken);
+}
+
+/// <summary>Retrieves outbound client certificates without exposing them to callers outside the runtime.</summary>
+public interface IClientCertificateProvider
+{
+    /// <summary>Loads an ephemeral client certificate for one logical reference.</summary>
+    Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken);
+}
+
+/// <summary>Uses a provider-owned signing key without exporting private material.</summary>
+public interface ISigningKeyProvider
+{
+    /// <summary>Signs a digest with the referenced key and algorithm.</summary>
+    Task<byte[]> SignDigestAsync(string logicalReference, string algorithm, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken);
+}
+
+/// <summary>Computes a MAC without exporting provider-owned key material.</summary>
+public interface IMacProvider
+{
+    /// <summary>Computes a MAC with the referenced key and algorithm.</summary>
+    Task<byte[]> ComputeMacAsync(string logicalReference, string algorithm, ReadOnlyMemory<byte> data, CancellationToken cancellationToken);
+}
+
+/// <summary>Reports readiness of a configured provider boundary.</summary>
+public interface IProviderHealthCheck
+{
+    /// <summary>Returns false when the provider cannot safely serve configured capabilities.</summary>
+    Task<bool> IsReadyAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>Describes only the capabilities exposed by a provider pack.</summary>
+public interface IProviderCapabilitySource
+{
+    /// <summary>Immutable capability declaration.</summary>
+    ProviderCapabilities Capabilities { get; }
+}
+
+/// <summary>Provider capabilities; absent capabilities are never inferred or emulated.</summary>
+public sealed record ProviderCapabilities(bool SecretValues, bool ClientCertificates, bool SigningKeys, bool Mac);
+
+/// <summary>Provider-neutral configuration passed to an optional deployment pack.</summary>
+public sealed record ProviderPackContext(Uri Endpoint, string? ClientIdentity, IReadOnlyDictionary<string, string> Settings);
+
+/// <summary>Capability instances returned by a deployment pack factory.</summary>
+public sealed record ProviderServices(
+    ISecretValueProvider SecretValues,
+    IClientCertificateProvider ClientCertificates,
+    IProviderHealthCheck Health,
+    IProviderCapabilitySource CapabilitySource,
+    ISigningKeyProvider? SigningKeys = null,
+    IMacProvider? Mac = null);
+
+/// <summary>Composition seam implemented by deployment-specific packs.</summary>
+public interface IProviderPackFactory
+{
+    /// <summary>Creates provider capabilities from explicit, provider-neutral settings.</summary>
+    ProviderServices Create(ProviderPackContext context);
+}
+
+/// <summary>Sanitized provider failure propagated across the pack boundary.</summary>
+public sealed class ProviderAccessException(string code, bool retryable = false, Exception? innerException = null) : Exception(code, innerException)
+{
+    /// <summary>Stable non-secret error code.</summary>
+    public string Code { get; } = code;
+    /// <summary>Whether a bounded runtime retry may be safe.</summary>
+    public bool Retryable { get; } = retryable;
+}

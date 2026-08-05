@@ -5,30 +5,43 @@ namespace SecureIntegration.Gateway.Api;
 /// <summary>Gateway host configuration containing references and policy, not secret values in files.</summary>
 public sealed class GatewayHostOptions
 {
-    /// <summary>Azure Key Vault HTTPS endpoint.</summary>
-    public string? KeyVaultUri { get; init; }
-    /// <summary>Optional user-assigned Managed Identity client identifier.</summary>
-    public string? ManagedIdentityClientId { get; init; }
     /// <summary>Base64 activation HMAC key supplied by a protected configuration provider.</summary>
     public string? ActivationHmacKeyBase64 { get; init; }
-    /// <summary>Azure Key Vault logical reference for the production activation HMAC key.</summary>
+    /// <summary>Logical provider reference for the production activation HMAC key.</summary>
     public string? ActivationHmacSecretReference { get; init; }
-    /// <summary>HTTPS endpoint for the deterministic M3 synthetic Vault; rejected outside M3Testing.</summary>
-    public string? SyntheticVaultUri { get; init; }
-    /// <summary>Environment variable containing the per-run synthetic Vault access token.</summary>
-    public string SyntheticVaultTokenEnvironmentVariable { get; init; } = "M3_SYNTHETIC_VAULT_TOKEN";
+    /// <summary>Provider-neutral deployment pack configuration.</summary>
+    public GatewayProviderOptions Provider { get; init; } = new();
     /// <summary>Exact synthetic vendor host allowed on a private M3 test network.</summary>
     public string? M3PrivateMockHost { get; init; }
     /// <summary>Private CIDR containing only the synthetic vendor fixture.</summary>
     public string? M3PrivateMockCidr { get; init; }
-    /// <summary>Trust App Service's X-ARR-ClientCert boundary; valid only inside Azure App Service.</summary>
-    public bool TrustAzureAppServiceClientCertificateForwarding { get; init; }
+    /// <summary>Trust a deployment platform's explicitly configured client-certificate forwarding boundary.</summary>
+    public bool TrustPlatformClientCertificateForwarding { get; init; }
     /// <summary>Server-owned operation allowlist.</summary>
     public List<GatewayOperationConfiguration> Operations { get; init; } = [];
     /// <summary>Published Connector cache TTL. A store stamp is still checked on every invocation.</summary>
     public int ConnectorCacheTtlSeconds { get; init; } = 30;
     /// <summary>Authentication configuration for the provider-neutral Admin API.</summary>
     public GatewayAdminOptions Admin { get; init; } = new();
+}
+
+/// <summary>Provider-neutral composition settings. Provider-specific values remain owned by the pack.</summary>
+public sealed class GatewayProviderOptions
+{
+    /// <summary>Disabled, InMemory, Synthetic or ExternalPack.</summary>
+    public string Kind { get; init; } = "Disabled";
+    /// <summary>Fixed HTTPS endpoint owned by the selected provider pack.</summary>
+    public string? Endpoint { get; init; }
+    /// <summary>Optional deployment identity identifier interpreted only by the pack.</summary>
+    public string? ClientIdentity { get; init; }
+    /// <summary>Absolute assembly path for an optional deployment pack.</summary>
+    public string? AssemblyPath { get; init; }
+    /// <summary>Full factory type name implementing the provider pack contract.</summary>
+    public string? FactoryType { get; init; }
+    /// <summary>Environment variable containing a synthetic provider access token.</summary>
+    public string AccessTokenEnvironmentVariable { get; init; } = "M3_SYNTHETIC_VAULT_TOKEN";
+    /// <summary>Opaque non-secret provider settings. Secrets are references or process environment values.</summary>
+    public Dictionary<string, string> Settings { get; init; } = new(StringComparer.Ordinal);
 }
 
 /// <summary>Admin API authentication. DevelopmentApiKey is rejected outside Development/Testing.</summary>

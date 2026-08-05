@@ -25,10 +25,14 @@
         "type": "Project",
         "dependencies": {
           "JsonSchema.Net": "[9.4.0, )",
-          "SecureIntegration.Gateway.Domain": "[1.0.0, )"
+          "SecureIntegration.Gateway.Domain": "[1.0.0, )",
+          "SecureIntegration.Providers.Abstractions": "[1.0.0, )"
         }
       },
       "SecureIntegration.Gateway.Domain": {
+        "type": "Project"
+      },
+      "SecureIntegration.Providers.Abstractions": {
         "type": "Project"
       },
       "JsonSchema.Net": {

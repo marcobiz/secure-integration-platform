@@ -18,11 +18,11 @@ flowchart LR
   BROKER -->|signed invoke| RUN[Gateway runtime]
   RUN --> CACHE
   CACHE --> BIND[Environment bindings]
-  RUN --> SECRETS[ISecretProvider]
+  RUN --> SECRETS[Provider capability interfaces]
   RUN --> EXT[HTTPS/mTLS external service]
 ```
 
-Domain e Application dipendono solo da contratti provider-neutral. `ISecretProvider` è il seam dei Deployment Pack. Tipi Azure non compaiono nei contratti Connector, Admin o runtime; l'adapter Azure storico resta in Infrastructure/API per compatibilità M3 ed è debito di packaging, non un prerequisito operativo del Core M4.
+Domain e Application dipendono solo da contratti provider-neutral. Da M5 il seam è fisicamente separato in interfacce per capability e il pack Azure è esterno al grafo Core, come definito da ADR-0019.
 
 ## Incrementi
 

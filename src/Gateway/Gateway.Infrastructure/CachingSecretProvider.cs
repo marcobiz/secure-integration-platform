@@ -1,12 +1,10 @@
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
-using SecureIntegration.Gateway.Application;
+using SecureIntegration.Providers.Abstractions;
 
 namespace SecureIntegration.Gateway.Infrastructure;
 
 /// <summary>Short-lived in-process cache that never exposes cached values outside the secret boundary.</summary>
-public sealed class CachingSecretProvider(ISecretProvider inner, TimeSpan lifetime, TimeProvider? timeProvider = null) : ISecretProvider
+public sealed class CachingSecretValueProvider(ISecretValueProvider inner, TimeSpan lifetime, TimeProvider? timeProvider = null) : ISecretValueProvider
 {
     private readonly ConcurrentDictionary<string, CacheEntry> entries = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> locks = new(StringComparer.Ordinal);
@@ -30,22 +28,6 @@ public sealed class CachingSecretProvider(ISecretProvider inner, TimeSpan lifeti
         }
         finally { gate.Release(); }
     }
-
-    /// <inheritdoc />
-    public async Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken)
-    {
-        try
-        {
-            return X509CertificateLoader.LoadPkcs12(Convert.FromBase64String(await GetSecretAsync(logicalReference, cancellationToken).ConfigureAwait(false)), null, X509KeyStorageFlags.EphemeralKeySet);
-        }
-        catch (Exception exception) when (exception is FormatException or CryptographicException)
-        {
-            throw new GatewayException("BGW-VAULT-CERTIFICATE-INVALID", 503, true);
-        }
-    }
-
-    /// <inheritdoc />
-    public Task<bool> IsReadyAsync(CancellationToken cancellationToken) => inner.IsReadyAsync(cancellationToken);
 
     private sealed record CacheEntry(string Value, DateTimeOffset ExpiresAt);
 }

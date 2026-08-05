@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Gateway.Domain\Gateway.Domain.csproj" />
+    <ProjectReference Include="..\..\Providers\Abstractions\Providers.Abstractions.csproj" />
     <PackageReference Include="JsonSchema.Net" />
     <EmbeddedResource Include="..\..\..\docs\connectors\connector-definition.schema.json" Link="Connectors\connector-definition.schema.json" />
   </ItemGroup>

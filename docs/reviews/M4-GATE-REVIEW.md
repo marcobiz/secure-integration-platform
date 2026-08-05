@@ -21,7 +21,7 @@ La prima run CI `30992197169` è stata conservata come failure: il nuovo job qui
 - Domain, Application, JSON Schema, runtime/Admin contract e CLI non espongono tipi Azure.
 - Connector Definition ed export contengono solo logical endpoint/secret names.
 - URI e provider reference esistono soltanto nei binding Environment server-side.
-- `ISecretProvider` è il seam provider-neutral; Synthetic Vault abilita setup locale senza Azure.
+- Le capability provider-neutral sono separate da M5 secondo ADR-0019; il provider sintetico abilita setup locale senza Azure.
 - L'adapter Azure pre-M4 resta fisicamente in Infrastructure/API per compatibilità M3. La sua estrazione in un package Deployment Pack è debito di packaging e non rende Azure necessario al Core runtime locale.
 
 ADR-0010 già copriva la pipeline dichiarativa. ADR-0012 è stato reso provider-neutral; ADR-0018 documenta lifecycle, concurrency, binding e cache perché erano decisioni nuove.

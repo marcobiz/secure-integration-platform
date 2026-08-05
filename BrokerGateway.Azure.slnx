@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/core/">
+    <Project Path="src/Providers/Abstractions/Providers.Abstractions.csproj" />
+  </Folder>
+  <Folder Name="/packs/deployment/azure/">
+    <Project Path="packs/deployment/azure/src/Providers.Azure/Providers.Azure.csproj" />
+    <Project Path="packs/deployment/azure/tests/Providers.Azure.Tests/Providers.Azure.Tests.csproj" />
+  </Folder>
+</Solution>

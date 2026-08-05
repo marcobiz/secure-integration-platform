@@ -15,7 +15,7 @@ flowchart LR
   ENR --> REG
   EGR --> REG
   EGR --> CAT[Catalogo operation immutabile]
-  EGR --> VAULT[ISecretProvider]
+  EGR --> VAULT[Provider capability interfaces]
   EGR --> DNS[DNS validation]
   EGR --> HTTP[Trasporto HTTPS pinned]
   REG --> PG[(PostgreSQL 18 + FORCE RLS)]

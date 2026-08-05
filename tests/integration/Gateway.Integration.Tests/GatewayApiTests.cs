@@ -113,8 +113,9 @@ public sealed class GatewayM3TestingStartupTests
             {
                 builder.UseEnvironment("M3Testing");
                 builder.UseSetting("ConnectionStrings:GatewayDatabase", "Host=127.0.0.1;Port=1;Database=m3_regression;Username=unused;Password=unused;Timeout=1");
-                builder.UseSetting("Gateway:SyntheticVaultUri", "https://vault.m3.test/");
-                builder.UseSetting("Gateway:SyntheticVaultTokenEnvironmentVariable", tokenVariable);
+                builder.UseSetting("Gateway:Provider:Kind", "Synthetic");
+                builder.UseSetting("Gateway:Provider:Endpoint", "https://vault.m3.test/");
+                builder.UseSetting("Gateway:Provider:AccessTokenEnvironmentVariable", tokenVariable);
                 builder.UseSetting("Gateway:ActivationHmacKeyBase64", Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
             });
             using HttpClient client = factory.CreateClient();

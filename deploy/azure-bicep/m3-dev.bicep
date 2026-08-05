@@ -254,10 +254,14 @@ resource gateway 'Microsoft.Web/sites@2025-03-01' = {
         { name: 'WEBSITES_PORT', value: '8080' }
         { name: 'ASPNETCORE_ENVIRONMENT', value: 'Production' }
         { name: 'ConnectionStrings__GatewayDatabase', value: '@Microsoft.KeyVault(SecretUri=${vault.properties.vaultUri}secrets/gateway-database-connection/)' }
-        { name: 'Gateway__KeyVaultUri', value: vault.properties.vaultUri }
-        { name: 'Gateway__ManagedIdentityClientId', value: identity.properties.clientId }
+        { name: 'Gateway__Provider__Kind', value: 'ExternalPack' }
+        { name: 'Gateway__Provider__Endpoint', value: vault.properties.vaultUri }
+        { name: 'Gateway__Provider__ClientIdentity', value: identity.properties.clientId }
+        { name: 'Gateway__Provider__AssemblyPath', value: '/app/packs/azure/SecureIntegration.Providers.Azure.dll' }
+        { name: 'Gateway__Provider__FactoryType', value: 'SecureIntegration.Providers.Azure.AzureProviderPackFactory' }
         { name: 'Gateway__ActivationHmacSecretReference', value: 'keyvault://${replace(replace(vault.properties.vaultUri, 'https://', ''), '/', '')}/activation-hmac' }
-        { name: 'Gateway__TrustAzureAppServiceClientCertificateForwarding', value: 'true' }
+        { name: 'Gateway__TrustPlatformClientCertificateForwarding', value: 'true' }
+        { name: 'GATEWAY_TRUSTED_CERTIFICATE_FORWARDING_BOUNDARY', value: 'true' }
         { name: 'Gateway__Operations__0__ConnectorId', value: 'm3-vendor' }
         { name: 'Gateway__Operations__0__OperationId', value: 'submit' }
         { name: 'Gateway__Operations__0__Version', value: '3.0.0-m3b' }

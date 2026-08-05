@@ -93,7 +93,7 @@ jobs:
           set -euo pipefail
           registry='${{ steps.deploy.outputs.registry }}'
           registry_server='${{ steps.deploy.outputs.registry_server }}'
-          az acr build --registry "$registry" --image "gateway:$GITHUB_SHA" --file src/Gateway/Gateway.Api/Dockerfile . >/dev/null
+          az acr build --registry "$registry" --image "gateway:$GITHUB_SHA" --file packs/deployment/azure/Dockerfile . >/dev/null
           az acr build --registry "$registry" --image "vendor-mock:$GITHUB_SHA" --file tools/m3/VendorMock/Dockerfile . >/dev/null
           gateway_digest="$(az acr repository show --name "$registry" --image "gateway:$GITHUB_SHA" --query digest -o tsv)"
           vendor_digest="$(az acr repository show --name "$registry" --image "vendor-mock:$GITHUB_SHA" --query digest -o tsv)"

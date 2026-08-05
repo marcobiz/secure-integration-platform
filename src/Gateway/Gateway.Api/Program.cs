@@ -3,8 +3,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Azure.Core;
-using Azure.Identity;
+using System.Runtime.Loader;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
@@ -12,6 +11,8 @@ using Npgsql;
 using SecureIntegration.Gateway.Api;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Infrastructure;
+using SecureIntegration.Providers.Abstractions;
+using SecureIntegration.Providers.Synthetic;
 
 if (args is ["--health-probe"])
 {
@@ -46,11 +47,11 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 GatewayHostOptions hostOptions = builder.Configuration.GetSection("Gateway").Get<GatewayHostOptions>() ?? new();
-bool useAzureCertificateForwarding = hostOptions.TrustAzureAppServiceClientCertificateForwarding;
-if (useAzureCertificateForwarding)
+bool usePlatformCertificateForwarding = hostOptions.TrustPlatformClientCertificateForwarding;
+if (usePlatformCertificateForwarding)
 {
-    if (!builder.Environment.IsProduction() || string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("WEBSITE_INSTANCE_ID")))
-        throw new InvalidOperationException("Azure App Service certificate forwarding is valid only in the Production App Service boundary.");
+    if (!builder.Environment.IsProduction() || !string.Equals(Environment.GetEnvironmentVariable("GATEWAY_TRUSTED_CERTIFICATE_FORWARDING_BOUNDARY"), "true", StringComparison.Ordinal))
+        throw new InvalidOperationException("Platform certificate forwarding requires an explicit trusted Production boundary.");
     builder.Services.AddCertificateForwarding(options => options.CertificateHeader = "X-ARR-ClientCert");
 }
 builder.Services.AddSingleton(hostOptions);
@@ -84,36 +85,22 @@ else
         services.GetRequiredService<IGatewayClock>(),
         TimeSpan.FromSeconds(hostOptions.ConnectorCacheTtlSeconds is >= 1 and <= 300 ? hostOptions.ConnectorCacheTtlSeconds : throw new InvalidOperationException("Gateway Connector cache TTL must be between 1 and 300 seconds."))));
 
-ISecretProvider secretProvider;
-if ((builder.Environment.IsEnvironment("M3Testing") || builder.Environment.IsEnvironment("M4Testing")) && Uri.TryCreate(hostOptions.SyntheticVaultUri, UriKind.Absolute, out Uri? syntheticVaultUri) && syntheticVaultUri.Scheme == Uri.UriSchemeHttps)
-{
-    string? token = Environment.GetEnvironmentVariable(hostOptions.SyntheticVaultTokenEnvironmentVariable, EnvironmentVariableTarget.Process);
-    if (string.IsNullOrWhiteSpace(token)) throw new InvalidOperationException("The M3 synthetic Vault token is required in M3Testing.");
-    secretProvider = new SyntheticVaultSecretProvider(syntheticVaultUri, token);
-    builder.Services.AddSingleton(secretProvider);
-}
-else if (Uri.TryCreate(hostOptions.KeyVaultUri, UriKind.Absolute, out Uri? vaultUri) && vaultUri.Scheme == Uri.UriSchemeHttps)
-{
-    TokenCredential tokenCredential = string.IsNullOrWhiteSpace(hostOptions.ManagedIdentityClientId)
-        ? new ManagedIdentityCredential(ManagedIdentityId.SystemAssigned)
-        : new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(hostOptions.ManagedIdentityClientId));
-    secretProvider = new CachingSecretProvider(new AzureKeyVaultSecretProvider(vaultUri, tokenCredential), TimeSpan.FromMinutes(5));
-    builder.Services.AddSingleton(tokenCredential);
-    builder.Services.AddSingleton(secretProvider);
-}
-else
-{
-    if (!builder.Environment.IsDevelopment() && !builder.Environment.IsEnvironment("Testing"))
-        throw new InvalidOperationException("An HTTPS Azure Key Vault URI is required outside Development/Testing.");
-    secretProvider = new InMemorySecretProvider(new Dictionary<string, string>());
-    builder.Services.AddSingleton(secretProvider);
-}
+ProviderServices providerServices = CreateProviderServices(hostOptions.Provider, builder.Environment);
+ISecretValueProvider secretProvider = providerServices.SecretValues is CachingSecretValueProvider
+    ? providerServices.SecretValues
+    : new CachingSecretValueProvider(providerServices.SecretValues, TimeSpan.FromMinutes(5));
+builder.Services.AddSingleton(secretProvider);
+builder.Services.AddSingleton(providerServices.ClientCertificates);
+builder.Services.AddSingleton(providerServices.Health);
+builder.Services.AddSingleton(providerServices.CapabilitySource);
+if (providerServices.SigningKeys is not null) builder.Services.AddSingleton(providerServices.SigningKeys);
+if (providerServices.Mac is not null) builder.Services.AddSingleton(providerServices.Mac);
 
 byte[] activationKey;
 string? encodedActivationKey = hostOptions.ActivationHmacKeyBase64;
 if (!builder.Environment.IsDevelopment() && !builder.Environment.IsEnvironment("Testing") && !builder.Environment.IsEnvironment("M3Testing") && !builder.Environment.IsEnvironment("M4Testing"))
 {
-    if (string.IsNullOrWhiteSpace(hostOptions.ActivationHmacSecretReference)) throw new InvalidOperationException("Gateway activation HMAC Key Vault reference is required outside Development/Testing/M3Testing.");
+    if (string.IsNullOrWhiteSpace(hostOptions.ActivationHmacSecretReference)) throw new InvalidOperationException("Gateway activation HMAC provider reference is required outside Development/Testing/M3Testing.");
     encodedActivationKey = await secretProvider.GetSecretAsync(hostOptions.ActivationHmacSecretReference, CancellationToken.None).ConfigureAwait(false);
 }
 try { activationKey = string.IsNullOrWhiteSpace(encodedActivationKey) ? RandomNumberGenerator.GetBytes(32) : Convert.FromBase64String(encodedActivationKey); }
@@ -127,7 +114,7 @@ builder.Services.AddSingleton<RestrictedEgressService>();
 builder.Services.AddSingleton<ConnectorAdministrationService>();
 
 WebApplication app = builder.Build();
-if (useAzureCertificateForwarding) app.UseCertificateForwarding();
+if (usePlatformCertificateForwarding) app.UseCertificateForwarding();
 ILogger gatewayLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SecureIntegration.Gateway.Requests");
 app.Use(async (context, next) =>
 {
@@ -159,6 +146,15 @@ app.Use(async (context, next) =>
         GatewayLog.RequestRejected(gatewayLogger, "BGW-PROTOCOL-REQUEST", requestCorrelationId);
         await context.Response.WriteAsJsonAsync(new { type = "about:blank", title = "Invalid request", status, code = "BGW-PROTOCOL-REQUEST", correlationId = requestCorrelationId, retryable = false }).ConfigureAwait(false);
     }
+    catch (ProviderAccessException exception)
+    {
+        if (context.Response.HasStarted) throw;
+        int status = exception.Retryable ? StatusCodes.Status503ServiceUnavailable : StatusCodes.Status500InternalServerError;
+        context.Response.StatusCode = status;
+        context.Response.ContentType = "application/problem+json";
+        GatewayLog.RequestRejected(gatewayLogger, exception.Code, requestCorrelationId);
+        await context.Response.WriteAsJsonAsync(new { type = "about:blank", title = "Provider request failed", status, code = exception.Code, correlationId = requestCorrelationId, retryable = exception.Retryable }).ConfigureAwait(false);
+    }
     catch (Exception)
     {
         if (context.Response.HasStarted) throw;
@@ -170,8 +166,8 @@ app.Use(async (context, next) =>
 });
 
 app.MapGet("/health/live", () => Results.Ok(new { status = "healthy" }));
-app.MapGet("/health/ready", async (IGatewayRegistry registry, ISecretProvider secrets, CancellationToken cancellationToken) =>
-    await registry.IsReadyAsync(cancellationToken).ConfigureAwait(false) && await secrets.IsReadyAsync(cancellationToken).ConfigureAwait(false)
+app.MapGet("/health/ready", async (IGatewayRegistry registry, IProviderHealthCheck provider, CancellationToken cancellationToken) =>
+    await registry.IsReadyAsync(cancellationToken).ConfigureAwait(false) && await provider.IsReadyAsync(cancellationToken).ConfigureAwait(false)
         ? Results.Ok(new { status = "healthy" })
         : Results.Json(new { status = "unhealthy" }, statusCode: 503));
 
@@ -281,6 +277,45 @@ app.MapPost("/admin/v1/connectors/{connectorId}:test", async (string connectorId
 });
 
 app.Run();
+
+static ProviderServices CreateProviderServices(GatewayProviderOptions options, IHostEnvironment environment)
+{
+    if (string.Equals(options.Kind, "Synthetic", StringComparison.Ordinal))
+    {
+        if (!environment.IsEnvironment("M3Testing") && !environment.IsEnvironment("M4Testing") && !environment.IsDevelopment() && !environment.IsEnvironment("Testing"))
+            throw new InvalidOperationException("Synthetic provider is not allowed in this environment.");
+        if (!Uri.TryCreate(options.Endpoint, UriKind.Absolute, out Uri? endpoint) || endpoint.Scheme != Uri.UriSchemeHttps)
+            throw new InvalidOperationException("Synthetic provider requires an HTTPS endpoint.");
+        string? token = Environment.GetEnvironmentVariable(options.AccessTokenEnvironmentVariable, EnvironmentVariableTarget.Process);
+        if (string.IsNullOrWhiteSpace(token)) throw new InvalidOperationException("Synthetic provider access token is required.");
+        SyntheticProvider provider = new(endpoint, token);
+        return new ProviderServices(provider, provider, provider, provider);
+    }
+
+    if (string.Equals(options.Kind, "ExternalPack", StringComparison.Ordinal))
+    {
+        if (!Uri.TryCreate(options.Endpoint, UriKind.Absolute, out Uri? endpoint) || endpoint.Scheme != Uri.UriSchemeHttps || string.IsNullOrWhiteSpace(options.AssemblyPath) || string.IsNullOrWhiteSpace(options.FactoryType))
+            throw new InvalidOperationException("External provider pack configuration is incomplete.");
+        string assemblyPath = Path.GetFullPath(options.AssemblyPath);
+        if (!Path.IsPathFullyQualified(options.AssemblyPath) || !File.Exists(assemblyPath)) throw new InvalidOperationException("External provider pack assembly is unavailable.");
+        System.Reflection.Assembly assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(assemblyPath);
+        Type factoryType = assembly.GetType(options.FactoryType, throwOnError: true, ignoreCase: false) ?? throw new InvalidOperationException("External provider pack factory type was not found.");
+        if (!typeof(IProviderPackFactory).IsAssignableFrom(factoryType) || factoryType.IsAbstract || factoryType.GetConstructor(Type.EmptyTypes) is null)
+            throw new InvalidOperationException("External provider pack factory does not implement the required contract.");
+        IProviderPackFactory factory = (IProviderPackFactory)Activator.CreateInstance(factoryType)!;
+        ProviderServices services = factory.Create(new ProviderPackContext(endpoint, options.ClientIdentity, options.Settings));
+        if (!services.CapabilitySource.Capabilities.SecretValues || !services.CapabilitySource.Capabilities.ClientCertificates)
+            throw new InvalidOperationException("External provider pack lacks required capabilities.");
+        return services;
+    }
+
+    if (!string.Equals(options.Kind, "Disabled", StringComparison.Ordinal) && !string.Equals(options.Kind, "InMemory", StringComparison.Ordinal))
+        throw new InvalidOperationException("Unknown provider kind.");
+    if (!environment.IsDevelopment() && !environment.IsEnvironment("Testing"))
+        throw new InvalidOperationException("A configured provider pack is required outside Development/Testing.");
+    InMemoryProvider inMemory = new(new Dictionary<string, string>());
+    return new ProviderServices(inMemory, inMemory, inMemory, inMemory);
+}
 
 static async Task<AuthenticatedInstallation> AuthenticateAsync(HttpContext context, RuntimeIdentityService service, ReadOnlyMemory<byte> body, Guid correlationId, CancellationToken cancellationToken)
 {

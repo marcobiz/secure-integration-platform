@@ -4,6 +4,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using SecureIntegration.Gateway.Domain;
+using SecureIntegration.Providers.Abstractions;
 
 namespace SecureIntegration.Gateway.Application;
 
@@ -67,7 +68,8 @@ public sealed class GatewayOperationCatalog : IGatewayOperationCatalog
 public sealed class RestrictedEgressService(
     IGatewayRegistry registry,
     IGatewayOperationCatalog catalog,
-    ISecretProvider secrets,
+    ISecretValueProvider secrets,
+    IClientCertificateProvider certificates,
     IHostResolver resolver,
     IRestrictedTransport transport,
     IGatewayClock clock,
@@ -145,11 +147,11 @@ public sealed class RestrictedEgressService(
                 request.Headers.TryAddWithoutValidation(operation.ApiKeyHeaderName!, key);
                 return null;
             case GatewayAuthenticationKind.MutualTls:
-                return await secrets.GetClientCertificateAsync(operation.ClientCertificateReference!, cancellationToken).ConfigureAwait(false);
+                return await certificates.GetClientCertificateAsync(operation.ClientCertificateReference!, cancellationToken).ConfigureAwait(false);
             case GatewayAuthenticationKind.ApiKeyAndMutualTls:
                 string combinedKey = await secrets.GetSecretAsync(operation.ApiKeySecretReference!, cancellationToken).ConfigureAwait(false);
                 request.Headers.TryAddWithoutValidation(operation.ApiKeyHeaderName!, combinedKey);
-                return await secrets.GetClientCertificateAsync(operation.ClientCertificateReference!, cancellationToken).ConfigureAwait(false);
+                return await certificates.GetClientCertificateAsync(operation.ClientCertificateReference!, cancellationToken).ConfigureAwait(false);
             default:
                 throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 500);
         }

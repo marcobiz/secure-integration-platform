@@ -57,17 +57,6 @@ public interface IEnrollmentChallengeStore
     EnrollmentChallenge? Consume(Guid challengeId, DateTimeOffset now);
 }
 
-/// <summary>Central secret provider. Values are usable only by Gateway runtime code.</summary>
-public interface ISecretProvider
-{
-    /// <summary>Gets a secret for internal request construction.</summary>
-    Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken);
-    /// <summary>Gets an outbound client certificate.</summary>
-    Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken);
-    /// <summary>Checks secret-provider readiness.</summary>
-    Task<bool> IsReadyAsync(CancellationToken cancellationToken);
-}
-
 /// <summary>DNS seam for deterministic SSRF tests.</summary>
 public interface IHostResolver
 {

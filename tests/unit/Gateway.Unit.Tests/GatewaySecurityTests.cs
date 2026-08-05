@@ -1,10 +1,11 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-using Azure.Core;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
+using SecureIntegration.Providers.Abstractions;
+using SecureIntegration.Providers.Synthetic;
 using Xunit;
 
 namespace SecureIntegration.Gateway.Unit.Tests;
@@ -143,7 +144,7 @@ public sealed class GatewaySecurityTests
         RegisteredInstallationIdentity identity = await fixture.EnrollAsync();
         await fixture.AddGrantAsync();
         RecordingTransport transport = new();
-        InMemorySecretProvider provider = new(new Dictionary<string, string>(), new Dictionary<string, byte[]> { ["client-cert"] = fixture.Certificate.Export(X509ContentType.Pkcs12) });
+        InMemoryProvider provider = new(new Dictionary<string, string>(), new Dictionary<string, byte[]> { ["client-cert"] = fixture.Certificate.Export(X509ContentType.Pkcs12) });
         RestrictedEgressService service = fixture.CreateEgress(new StaticResolver(IPAddress.Parse("1.1.1.1")), transport, GatewayAuthenticationKind.MutualTls, provider);
 
         await service.InvokeAsync(new(identity, Guid.NewGuid()), "vendor", "send", Invoke(), TestContext.Current.CancellationToken);
@@ -157,7 +158,7 @@ public sealed class GatewaySecurityTests
         RegisteredInstallationIdentity identity = await fixture.EnrollAsync();
         await fixture.AddGrantAsync();
         RecordingTransport transport = new();
-        InMemorySecretProvider provider = new(
+        InMemoryProvider provider = new(
             new Dictionary<string, string> { ["api-key"] = "server-api-key" },
             new Dictionary<string, byte[]> { ["client-cert"] = fixture.Certificate.Export(X509ContentType.Pkcs12) });
         RestrictedEgressService service = fixture.CreateEgress(new StaticResolver(IPAddress.Parse("1.1.1.1")), transport, GatewayAuthenticationKind.ApiKeyAndMutualTls, provider);
@@ -176,11 +177,13 @@ public sealed class GatewaySecurityTests
         await fixture.AddGrantAsync();
         RecordingTransport transport = new();
         M3PrivateDestinationAllowance allowance = new("vendor.example.test", "172.29.44.0/28");
-        RestrictedEgressService allowed = new(fixture.Registry, new GatewayOperationCatalog([Operation(GatewayAuthenticationKind.None)]), new InMemorySecretProvider(new Dictionary<string, string>()), new StaticResolver(IPAddress.Parse("172.29.44.6")), transport, fixture.Clock, allowance);
+        InMemoryProvider allowedProvider = new(new Dictionary<string, string>());
+        RestrictedEgressService allowed = new(fixture.Registry, new GatewayOperationCatalog([Operation(GatewayAuthenticationKind.None)]), allowedProvider, allowedProvider, new StaticResolver(IPAddress.Parse("172.29.44.6")), transport, fixture.Clock, allowance);
         await allowed.InvokeAsync(new(identity, Guid.NewGuid()), "vendor", "send", Invoke(), TestContext.Current.CancellationToken);
         Assert.Equal(1, transport.CallCount);
 
-        RestrictedEgressService metadata = new(fixture.Registry, new GatewayOperationCatalog([Operation(GatewayAuthenticationKind.None)]), new InMemorySecretProvider(new Dictionary<string, string>()), new StaticResolver(IPAddress.Parse("169.254.169.254")), transport, fixture.Clock, allowance);
+        InMemoryProvider metadataProvider = new(new Dictionary<string, string>());
+        RestrictedEgressService metadata = new(fixture.Registry, new GatewayOperationCatalog([Operation(GatewayAuthenticationKind.None)]), metadataProvider, metadataProvider, new StaticResolver(IPAddress.Parse("169.254.169.254")), transport, fixture.Clock, allowance);
         GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => metadata.InvokeAsync(new(identity, Guid.NewGuid()), "vendor", "send", Invoke(), TestContext.Current.CancellationToken));
         Assert.Equal("BGW-EGRESS-DESTINATION-DENIED", denied.Code);
         Assert.False(allowance.IsAllowed("attacker.example.test", IPAddress.Parse("172.29.44.6")));
@@ -250,7 +253,8 @@ public sealed class GatewaySecurityTests
         await fixture.AddGrantAsync();
         FailOnceTransport transport = new();
         GatewayOperationDefinition operation = Operation(GatewayAuthenticationKind.None) with { Idempotent = true, MaximumRetries = 1 };
-        RestrictedEgressService service = new(fixture.Registry, new GatewayOperationCatalog([operation]), new InMemorySecretProvider(new Dictionary<string, string>()), new StaticResolver(IPAddress.Parse("9.9.9.9")), transport, fixture.Clock);
+        InMemoryProvider provider = new(new Dictionary<string, string>());
+        RestrictedEgressService service = new(fixture.Registry, new GatewayOperationCatalog([operation]), provider, provider, new StaticResolver(IPAddress.Parse("9.9.9.9")), transport, fixture.Clock);
         await service.InvokeAsync(new(identity, Guid.NewGuid()), "vendor", "send", Invoke(), TestContext.Current.CancellationToken);
         Assert.Equal(2, transport.CallCount);
     }
@@ -299,7 +303,7 @@ public sealed class GatewaySecurityTests
     public async Task UT_VLT_Secret_cache_is_bounded_and_deduplicates_reads()
     {
         CountingSecretProvider inner = new();
-        CachingSecretProvider cache = new(inner, TimeSpan.FromMinutes(5));
+        CachingSecretValueProvider cache = new(inner, TimeSpan.FromMinutes(5));
         string first = await cache.GetSecretAsync("keyvault://vault.example.test/vendor", TestContext.Current.CancellationToken);
         string second = await cache.GetSecretAsync("keyvault://vault.example.test/vendor", TestContext.Current.CancellationToken);
         Assert.Equal(first, second);
@@ -307,23 +311,15 @@ public sealed class GatewaySecurityTests
     }
 
     [Fact]
-    public async Task UT_VLT_Reference_cannot_select_another_vault()
-    {
-        AzureKeyVaultSecretProvider provider = new(new Uri("https://allowed.vault.azure.net/"), new NeverCredential());
-        GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => provider.GetSecretAsync("keyvault://other.vault.azure.net/vendor-key", TestContext.Current.CancellationToken));
-        Assert.Equal("BGW-VAULT-REFERENCE-DENIED", denied.Code);
-    }
-
-    [Fact]
     public async Task M3_UT_VLT_Synthetic_provider_is_fixed_origin_authenticated_and_reference_scoped()
     {
         RecordingVaultHandler handler = new();
-        using SyntheticVaultSecretProvider provider = new(new Uri("https://vault.m3.test/"), new string('t', 32), handler);
+        using SyntheticProvider provider = new(new Uri("https://vault.m3.test/"), new string('t', 32), handler);
         Assert.Equal("synthetic-vendor-value", await provider.GetSecretAsync("synthetic-vault://vault.m3.test/vendor-api-key", TestContext.Current.CancellationToken));
         Assert.Equal(new string('t', 32), handler.Token);
         Assert.Equal(new Uri("https://vault.m3.test/v1/secrets/vendor-api-key"), handler.Uri);
-        GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => provider.GetSecretAsync("synthetic-vault://other.m3.test/vendor-api-key", TestContext.Current.CancellationToken));
-        Assert.Equal("BGW-VAULT-REFERENCE-DENIED", denied.Code);
+        ProviderAccessException denied = await Assert.ThrowsAsync<ProviderAccessException>(() => provider.GetSecretAsync("synthetic-vault://other.m3.test/vendor-api-key", TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-PROVIDER-REFERENCE-DENIED", denied.Code);
     }
 
     [Theory]
@@ -437,8 +433,11 @@ public sealed class GatewaySecurityTests
 
         public Task AddGrantAsync() => registry.AddGrantAsync(new(Guid.NewGuid(), InstallationId, TenantId, "vendor", "send", true, Clock.UtcNow), TestContext.Current.CancellationToken);
 
-        public RestrictedEgressService CreateEgress(IHostResolver resolver, IRestrictedTransport transport, GatewayAuthenticationKind authentication, ISecretProvider? provider = null) => new(
-            registry, new GatewayOperationCatalog([Operation(authentication)]), provider ?? new InMemorySecretProvider(new Dictionary<string, string> { ["api-key"] = "server-api-key", ["user"] = "server-user", ["pass"] = "server-password" }), resolver, transport, Clock);
+        public RestrictedEgressService CreateEgress(IHostResolver resolver, IRestrictedTransport transport, GatewayAuthenticationKind authentication, InMemoryProvider? provider = null)
+        {
+            InMemoryProvider selected = provider ?? new InMemoryProvider(new Dictionary<string, string> { ["api-key"] = "server-api-key", ["user"] = "server-user", ["pass"] = "server-password" });
+            return new RestrictedEgressService(registry, new GatewayOperationCatalog([Operation(authentication)]), selected, selected, resolver, transport, Clock);
+        }
 
         public void Dispose() { Certificate.Dispose(); key.Dispose(); }
     }
@@ -484,18 +483,10 @@ public sealed class GatewaySecurityTests
         }
     }
 
-    private sealed class CountingSecretProvider : ISecretProvider
+    private sealed class CountingSecretProvider : ISecretValueProvider
     {
         public int CallCount { get; private set; }
         public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken) { CallCount++; return Task.FromResult("synthetic-value"); }
-        public Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<bool> IsReadyAsync(CancellationToken cancellationToken) => Task.FromResult(true);
-    }
-
-    private sealed class NeverCredential : TokenCredential
-    {
-        public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken) => throw new InvalidOperationException("Credential must not be used for a denied reference.");
-        public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken) => throw new InvalidOperationException("Credential must not be used for a denied reference.");
     }
 
     private sealed class RecordingVaultHandler : HttpMessageHandler
