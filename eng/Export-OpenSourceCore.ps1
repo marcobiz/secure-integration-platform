@@ -74,7 +74,11 @@ $manifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash
 Set-Content -LiteralPath ($manifestPath + '.sha256') -Value "$manifestHash  OPEN_SOURCE_EXPORT_MANIFEST.json" -Encoding ASCII
 
 if (-not $SkipVerification) {
-    & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $destination 'eng\scan-secrets.ps1')
+    $powerShellExecutable = (Get-Process -Id $PID).Path
+    $powerShellArguments = @('-NoLogo', '-NoProfile')
+    if ($PSVersionTable.PSEdition -eq 'Desktop') { $powerShellArguments += @('-ExecutionPolicy', 'Bypass') }
+    $powerShellArguments += @('-File', (Join-Path (Join-Path $destination 'eng') 'scan-secrets.ps1'))
+    & $powerShellExecutable @powerShellArguments
     if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_SECRET_SCAN_FAILED' }
     $scanTargets = @((Join-Path $destination 'src'), (Join-Path $destination 'sdk'))
     $forbiddenContent = & rg -l --hidden --glob '!**/packages.lock.json' --glob '!**/obj/**' --glob '!**/bin/**' '(Azure\.Identity|Azure\.Security|ManagedIdentityCredential|SecretClient|packs/deployment|BEGIN (RSA |EC )?PRIVATE KEY)' @scanTargets 2>$null
