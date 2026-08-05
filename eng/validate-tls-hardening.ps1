@@ -44,5 +44,8 @@ if ($securityDriver -notmatch 'OperatingSystem\.IsWindows\(\)[\s\S]*X509KeyStora
     $securityDriver -match 'LoadPkcs12FromFile\([^\r\n]+X509KeyStorageFlags\.EphemeralKeySet\s*\)') {
     $violations += 'SecurityDriver must use a Schannel-compatible persisted client key on Windows while retaining ephemeral keys elsewhere'
 }
+if ($securityDriver -notmatch 'CreateSelfSignedInstallationCertificateForTls[\s\S]*X509CertificateLoader\.LoadPkcs12\(pfx, null, X509KeyStorageFlags\.UserKeySet\)') {
+    $violations += 'SecurityDriver self-signed boundary probe must persist its synthetic client key for Windows Schannel'
+}
 if ($violations.Count -ne 0) { throw ('TLS hardening validation failed: ' + ($violations -join '; ')) }
 Write-Output 'TLS_HARDENING_VALIDATION_PASS'

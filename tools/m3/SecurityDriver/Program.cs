@@ -121,7 +121,7 @@ async Task EnrollAsync()
 async Task VerifySelfSignedCertificateBoundaryAsync()
 {
     using ECDsa probeKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-    using X509Certificate2 probeCertificate = CreateSelfSignedInstallationCertificate(probeKey);
+    using X509Certificate2 probeCertificate = CreateSelfSignedInstallationCertificateForTls(probeKey);
     using HttpClient probeClient = CreateClient(new Uri(gatewayBase), probeCertificate);
     const string target = "/v1/broker-policy";
     byte[] body = [];
@@ -266,6 +266,22 @@ static X509Certificate2 CreateSelfSignedInstallationCertificate(ECDsa key)
     request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
     request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new Oid("1.3.6.1.5.5.7.3.2") }, true));
     return request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddHours(1));
+}
+static X509Certificate2 CreateSelfSignedInstallationCertificateForTls(ECDsa key)
+{
+    X509Certificate2 certificate = CreateSelfSignedInstallationCertificate(key);
+    if (!OperatingSystem.IsWindows()) return certificate;
+
+    byte[] pfx = certificate.Export(X509ContentType.Pkcs12);
+    certificate.Dispose();
+    try
+    {
+        return X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.UserKeySet);
+    }
+    finally
+    {
+        CryptographicOperations.ZeroMemory(pfx);
+    }
 }
 static string Required(string name) => Environment.GetEnvironmentVariable(name) is { Length: > 0 } value ? value : throw new InvalidOperationException(name + " is required.");
 static string Base64Url(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
