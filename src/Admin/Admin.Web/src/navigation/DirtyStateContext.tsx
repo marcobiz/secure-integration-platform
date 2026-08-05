@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Button, Dialog, DialogActions, DialogContent, DialogTitle } from '@mui/material';
 import { useHistory } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
 interface DirtyStateValue {
   dirty: boolean;
@@ -12,6 +13,7 @@ const DirtyStateContext = createContext<DirtyStateValue | undefined>(undefined);
 
 export function DirtyStateProvider({ children }: { children: ReactNode }) {
   const history = useHistory();
+  const { t } = useTranslation();
   const [dirty, setDirty] = useState(false);
   const [pendingPath, setPendingPath] = useState<string>();
   useEffect(() => {
@@ -19,9 +21,14 @@ export function DirtyStateProvider({ children }: { children: ReactNode }) {
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
+  useEffect(() => history.block((location, action) => {
+    if (!dirty || action !== 'POP') return undefined;
+    setPendingPath(`${location.pathname}${location.search}${location.hash}`);
+    return false;
+  }), [dirty, history]);
   const navigate = useCallback((path: string) => { if (dirty) setPendingPath(path); else history.push(path); }, [dirty, history]);
   const value = useMemo(() => ({ dirty, setDirty, navigate }), [dirty, navigate]);
-  return <DirtyStateContext.Provider value={value}>{children}<Dialog open={Boolean(pendingPath)} onClose={() => setPendingPath(undefined)} aria-labelledby="unsaved-title"><DialogTitle id="unsaved-title">Unsaved changes</DialogTitle><DialogContent>Discard your changes and leave this page?</DialogContent><DialogActions><Button onClick={() => setPendingPath(undefined)} autoFocus>Stay</Button><Button color="error" onClick={() => { const path = pendingPath; setPendingPath(undefined); setDirty(false); if (path) history.push(path); }}>Discard</Button></DialogActions></Dialog></DirtyStateContext.Provider>;
+  return <DirtyStateContext.Provider value={value}>{children}<Dialog open={Boolean(pendingPath)} onClose={() => setPendingPath(undefined)} aria-labelledby="unsaved-title"><DialogTitle id="unsaved-title">{t('unsavedTitle')}</DialogTitle><DialogContent>{t('unsavedQuestion')}</DialogContent><DialogActions><Button onClick={() => setPendingPath(undefined)} autoFocus>{t('stay')}</Button><Button color="error" onClick={() => { const path = pendingPath; setPendingPath(undefined); setDirty(false); if (path) history.push(path); }}>{t('discard')}</Button></DialogActions></Dialog></DirtyStateContext.Provider>;
 }
 
 export function useDirtyState() {

@@ -12,7 +12,7 @@ describe('canonical Connector Definition client validation', () => {
     const invalid: Record<string, unknown> = structuredClone(sample);
     delete invalid.connectorId;
     expect(validateConnectorDefinition(schema, invalid)).toContainEqual({
-      code: 'CONNECTOR_SCHEMA_REQUIRED',
+      code: 'BGW-CONNECTOR-SCHEMA-REQUIRED',
       location: '/',
       message: 'Connector definition validation failed.',
     });

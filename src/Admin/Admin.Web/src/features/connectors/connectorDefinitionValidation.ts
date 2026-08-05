@@ -7,7 +7,7 @@ export function validateConnectorDefinition(schema: object, definition: unknown)
   const validate = new Ajv2020({ allErrors: true, strict: true }).compile(schema);
   if (validate(definition)) return [];
   return (validate.errors ?? []).map((error: ErrorObject) => ({
-    code: `CONNECTOR_SCHEMA_${error.keyword.toUpperCase().replaceAll('-', '_')}`,
+    code: `BGW-CONNECTOR-SCHEMA-${error.keyword.toUpperCase().replaceAll('_', '-').replaceAll(' ', '-').replaceAll('--', '-')}`,
     location: error.instancePath || '/',
     message: 'Connector definition validation failed.',
   }));

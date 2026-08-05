@@ -1,4 +1,4 @@
-import type { components } from './schema';
+import type { components, paths } from './schema';
 
 export type AdminSession = components['schemas']['AdminSession'];
 export type Dashboard = components['schemas']['Dashboard'];
@@ -58,41 +58,70 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return parse<T>(await fetch(path, { ...init, headers, credentials: 'same-origin' }));
 }
 
+type HttpMethod = 'get' | 'post' | 'put' | 'delete' | 'patch';
+type ContractMethod<Path extends keyof paths> = {
+  [Method in HttpMethod]: Method extends keyof paths[Path]
+    ? paths[Path][Method] extends undefined | never ? never : Method
+    : never
+}[HttpMethod];
+
+interface ContractRequest {
+  path?: Record<string, string>;
+  query?: Record<string, string | number | boolean | null | undefined>;
+  headers?: HeadersInit;
+  body?: unknown;
+}
+
+/** Executes only operations declared by the generated OpenAPI paths contract. */
+export function openApi<T, Path extends keyof paths>(template: Path, method: ContractMethod<Path>, request: ContractRequest = {}): Promise<T> {
+  let target = String(template);
+  for (const [name, value] of Object.entries(request.path ?? {})) target = target.replace(`{${name}}`, encodeURIComponent(value));
+  if (/\{[^}]+\}/.test(target)) throw new Error('BGW-ADMIN-CLIENT-PATH-PARAMETER');
+  const query = new URLSearchParams();
+  for (const [name, value] of Object.entries(request.query ?? {})) if (value !== undefined && value !== null && value !== '') query.set(name, String(value));
+  if (query.size > 0) target += `?${query.toString()}`;
+  return api<T>(target, {
+    method: method.toUpperCase(),
+    headers: request.headers,
+    body: request.body === undefined ? undefined : JSON.stringify(request.body)
+  });
+}
+
 export const adminApi = {
-  session: () => api<AdminSession>('/admin/auth/me'),
-  dashboard: () => api<Dashboard>('/admin/api/v1/dashboard'),
-  tenants: (offset = 0, limit = 50) => api<TenantPage>(`/admin/api/v1/tenants?offset=${offset}&limit=${limit}`),
-  applications: (offset = 0, limit = 50) => api<ApplicationPage>(`/admin/api/v1/applications?offset=${offset}&limit=${limit}`),
-  environments: (offset = 0, limit = 50) => api<EnvironmentPage>(`/admin/api/v1/environments?offset=${offset}&limit=${limit}`),
-  installations: (tenantId: string, offset = 0, limit = 50) => api<InstallationPage>(`/admin/api/v1/installations?tenantId=${encodeURIComponent(tenantId)}&offset=${offset}&limit=${limit}`),
-  grants: (tenantId: string, offset = 0, limit = 50) => api<GrantPage>(`/admin/api/v1/grants?tenantId=${encodeURIComponent(tenantId)}&offset=${offset}&limit=${limit}`),
-  audit: (tenantId: string, offset = 0, limit = 50) => api<AuditPage>(`/admin/api/v1/audit?tenantId=${encodeURIComponent(tenantId)}&offset=${offset}&limit=${limit}`),
-  connectors: (offset = 0, limit = 50, filter = '') => api<Page<ConnectorSummary>>(`/admin/api/v1/connectors?offset=${offset}&limit=${limit}&filter=${encodeURIComponent(filter)}`),
-  createTenant: (value: { code: string; displayName: string }) => api<Tenant>('/admin/api/v1/tenants', { method: 'POST', body: JSON.stringify(value) }),
-  createApplication: (value: { code: string; displayName: string; minimumBrokerVersion: string }) => api<Application>('/admin/api/v1/applications', { method: 'POST', body: JSON.stringify(value) }),
-  createInstallation: (value: { tenantId: string; applicationId: string; environmentId: string }) => api<ProvisionedActivation>('/admin/api/v1/installations', { method: 'POST', body: JSON.stringify(value) }),
-  revokeInstallation: (tenantId: string, installationId: string, reason: string) => api<{ status: string }>(`/admin/api/v1/installations/${encodeURIComponent(installationId)}:revoke?tenantId=${encodeURIComponent(tenantId)}`, { method: 'POST', body: JSON.stringify({ reason }) }),
-  createGrant: (value: { tenantId: string; installationId: string; connectorId: string; operationId: string; validUntil?: string | null }) => api<Record<string, unknown>>('/admin/api/v1/grants', { method: 'POST', body: JSON.stringify(value) }),
-  connectorSchema: () => api<object>('/admin/api/v1/connectors/schema'),
-  connectorSample: () => api<object>('/admin/api/v1/connectors/sample'),
-  validateConnector: (definition: object) => api<components['schemas']['ConnectorValidationResult']>('/admin/api/v1/connectors:validate', { method: 'POST', body: JSON.stringify({ definition }) }),
-  importConnector: (definition: object, expectedChecksumSha256: string) => api<Record<string, unknown>>('/admin/api/v1/connectors:import', { method: 'POST', body: JSON.stringify({ definition, expectedChecksumSha256 }) }),
-  connectorVersions: (id: string, offset = 0, limit = 50, filter = '') => api<Page<ConnectorVersion>>(`/admin/api/v1/connectors/${encodeURIComponent(id)}/versions?offset=${offset}&limit=${limit}&filter=${encodeURIComponent(filter)}`),
-  approvals: (id: string, version: string, offset = 0, limit = 50) => api<Page<Approval>>(`/admin/api/v1/connectors/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/approvals?offset=${offset}&limit=${limit}`),
-  bindings: (id: string, version: string, environmentId = '', offset = 0, limit = 50) => api<Page<ConnectorBinding>>(`/admin/api/v1/connectors/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/bindings?offset=${offset}&limit=${limit}${environmentId ? `&environmentId=${encodeURIComponent(environmentId)}` : ''}`),
-  putBindings: (id: string, value: ConnectorBindingRequest, revision?: number) => api<{ revision: number }>(`/admin/api/v1/connectors/${encodeURIComponent(id)}/bindings`, { method: 'PUT', headers: revision === undefined ? undefined : { 'If-Match': `"${revision}"` }, body: JSON.stringify(value) }),
-  roleAssignments: (offset = 0, limit = 50, principalId = '', tenantId = '') => api<Page<RoleAssignment>>(`/admin/api/v1/role-assignments?offset=${offset}&limit=${limit}${principalId ? `&principalId=${encodeURIComponent(principalId)}` : ''}${tenantId ? `&tenantId=${encodeURIComponent(tenantId)}` : ''}`),
-  connectorDefinition: (id: string, version: string) => api<Record<string, unknown>>(`/admin/api/v1/connectors/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/definition`),
-  validateStored: (id: string, version: ConnectorVersion) => api<ConnectorVersion>(`/admin/api/v1/connectors/${encodeURIComponent(id)}/versions/${encodeURIComponent(version.version)}:validate`, { method: 'POST', headers: { 'If-Match': `"${version.rowVersion}"` } }),
-  requestApproval: (id: string, version: string) => api<Record<string, unknown>>(`/admin/api/v1/connectors/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/approval-requests`, { method: 'POST' }),
-  approve: (id: string, version: string) => api<Record<string, unknown>>(`/admin/api/v1/connectors/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/approvals`, { method: 'POST' }),
-  reject: (id: string, version: string, comment?: string) => api<Record<string, unknown>>(`/admin/api/v1/connectors/${encodeURIComponent(id)}/versions/${encodeURIComponent(version)}/rejections`, { method: 'POST', body: JSON.stringify({ comment: comment || null }) }),
-  assignRole: (value: { principal: { issuer: string; subject: string; displayName: string; email?: string | null }; role: string; tenantId?: string | null }) => api<Record<string, unknown>>('/admin/api/v1/role-assignments', { method: 'POST', body: JSON.stringify(value) }),
-  revokeRole: (assignmentId: string) => api<void>(`/admin/api/v1/role-assignments/${encodeURIComponent(assignmentId)}`, { method: 'DELETE' }),
-  publish: (id: string, version: ConnectorVersion, expectedPublicationRevision: number) => api<ConnectorVersion>(`/admin/api/v1/connectors/${encodeURIComponent(id)}/versions/${encodeURIComponent(version.version)}:publish`, { method: 'POST', headers: { 'If-Match': `"${version.rowVersion}"` }, body: JSON.stringify({ expectedRowVersion: version.rowVersion, expectedPublicationRevision }) }),
-  rollback: (id: string, targetVersion: string, expectedActiveRowVersion: number) => api<ConnectorVersion>(`/admin/api/v1/connectors/${encodeURIComponent(id)}:rollback`, { method: 'POST', body: JSON.stringify({ targetVersion, expectedActiveRowVersion }) }),
-  retire: (id: string, version: ConnectorVersion) => api<ConnectorVersion>(`/admin/api/v1/connectors/${encodeURIComponent(id)}/versions/${encodeURIComponent(version.version)}:retire`, { method: 'POST', headers: { 'If-Match': `"${version.rowVersion}"` } }),
-  testConnector: (id: string, environmentId: string, operationId: string) => api<{ status: string; connectorId: string; operationId: string; connectorVersion: string }>(`/admin/api/v1/connectors/${encodeURIComponent(id)}:test`, { method: 'POST', body: JSON.stringify({ environmentId, operationId }) }),
-  logout: () => api<{ status: string }>('/admin/auth/logout', { method: 'POST' }),
-  developmentLogin: (userName: string) => api<{ status: string }>('/admin/auth/development/login', { method: 'POST', body: JSON.stringify({ userName }) })
+  session: () => openApi<AdminSession, '/admin/auth/me'>('/admin/auth/me', 'get'),
+  dashboard: () => openApi<Dashboard, '/admin/api/v1/dashboard'>('/admin/api/v1/dashboard', 'get'),
+  tenants: (offset = 0, limit = 50) => openApi<TenantPage, '/admin/api/v1/tenants'>('/admin/api/v1/tenants', 'get', { query: { offset, limit } }),
+  applications: (offset = 0, limit = 50) => openApi<ApplicationPage, '/admin/api/v1/applications'>('/admin/api/v1/applications', 'get', { query: { offset, limit } }),
+  environments: (offset = 0, limit = 50) => openApi<EnvironmentPage, '/admin/api/v1/environments'>('/admin/api/v1/environments', 'get', { query: { offset, limit } }),
+  installations: (tenantId: string, offset = 0, limit = 50) => openApi<InstallationPage, '/admin/api/v1/installations'>('/admin/api/v1/installations', 'get', { query: { tenantId, offset, limit } }),
+  grants: (tenantId: string, offset = 0, limit = 50) => openApi<GrantPage, '/admin/api/v1/grants'>('/admin/api/v1/grants', 'get', { query: { tenantId, offset, limit } }),
+  audit: (tenantId: string, offset = 0, limit = 50) => openApi<AuditPage, '/admin/api/v1/audit'>('/admin/api/v1/audit', 'get', { query: { tenantId, offset, limit } }),
+  connectors: (offset = 0, limit = 50, filter = '') => openApi<Page<ConnectorSummary>, '/admin/api/v1/connectors'>('/admin/api/v1/connectors', 'get', { query: { offset, limit, filter } }),
+  createTenant: (value: components['schemas']['CreateTenant']) => openApi<Tenant, '/admin/api/v1/tenants'>('/admin/api/v1/tenants', 'post', { body: value }),
+  createApplication: (value: components['schemas']['CreateApplication']) => openApi<Application, '/admin/api/v1/applications'>('/admin/api/v1/applications', 'post', { body: value }),
+  createInstallation: (value: components['schemas']['CreateInstallation']) => openApi<ProvisionedActivation, '/admin/api/v1/installations'>('/admin/api/v1/installations', 'post', { body: value }),
+  revokeInstallation: (tenantId: string, installationId: string, reason: string) => openApi<{ status: string }, '/admin/api/v1/installations/{installationId}:revoke'>('/admin/api/v1/installations/{installationId}:revoke', 'post', { path: { installationId }, query: { tenantId }, body: { reason } }),
+  createGrant: (value: components['schemas']['CreateGrant']) => openApi<Record<string, unknown>, '/admin/api/v1/grants'>('/admin/api/v1/grants', 'post', { body: value }),
+  connectorSchema: () => openApi<object, '/admin/api/v1/connectors/schema'>('/admin/api/v1/connectors/schema', 'get'),
+  connectorSample: () => openApi<object, '/admin/api/v1/connectors/sample'>('/admin/api/v1/connectors/sample', 'get'),
+  validateConnector: (definition: object) => openApi<components['schemas']['ConnectorValidationResult'], '/admin/api/v1/connectors:validate'>('/admin/api/v1/connectors:validate', 'post', { body: { definition } }),
+  importConnector: (definition: object, expectedChecksumSha256: string) => openApi<Record<string, unknown>, '/admin/api/v1/connectors:import'>('/admin/api/v1/connectors:import', 'post', { body: { definition, expectedChecksumSha256 } }),
+  connectorVersions: (id: string, offset = 0, limit = 50, filter = '') => openApi<Page<ConnectorVersion>, '/admin/api/v1/connectors/{connectorId}/versions'>('/admin/api/v1/connectors/{connectorId}/versions', 'get', { path: { connectorId: id }, query: { offset, limit, filter } }),
+  approvals: (id: string, version: string, offset = 0, limit = 50) => openApi<Page<Approval>, '/admin/api/v1/connectors/{connectorId}/versions/{version}/approvals'>('/admin/api/v1/connectors/{connectorId}/versions/{version}/approvals', 'get', { path: { connectorId: id, version }, query: { offset, limit } }),
+  bindings: (id: string, version: string, environmentId = '', offset = 0, limit = 50) => openApi<Page<ConnectorBinding>, '/admin/api/v1/connectors/{connectorId}/versions/{version}/bindings'>('/admin/api/v1/connectors/{connectorId}/versions/{version}/bindings', 'get', { path: { connectorId: id, version }, query: { offset, limit, environmentId } }),
+  putBindings: (id: string, value: ConnectorBindingRequest, revision?: number) => openApi<{ revision: number }, '/admin/api/v1/connectors/{connectorId}/bindings'>('/admin/api/v1/connectors/{connectorId}/bindings', 'put', { path: { connectorId: id }, headers: revision === undefined ? undefined : { 'If-Match': `"${revision}"` }, body: value }),
+  roleAssignments: (offset = 0, limit = 50, principalId = '', tenantId = '') => openApi<Page<RoleAssignment>, '/admin/api/v1/role-assignments'>('/admin/api/v1/role-assignments', 'get', { query: { offset, limit, principalId, tenantId } }),
+  connectorDefinition: (id: string, version: string) => openApi<Record<string, unknown>, '/admin/api/v1/connectors/{connectorId}/versions/{version}/definition'>('/admin/api/v1/connectors/{connectorId}/versions/{version}/definition', 'get', { path: { connectorId: id, version } }),
+  validateStored: (id: string, version: ConnectorVersion) => openApi<ConnectorVersion, '/admin/api/v1/connectors/{connectorId}/versions/{version}:validate'>('/admin/api/v1/connectors/{connectorId}/versions/{version}:validate', 'post', { path: { connectorId: id, version: version.version }, headers: { 'If-Match': `"${version.rowVersion}"` } }),
+  requestApproval: (id: string, version: string) => openApi<Approval, '/admin/api/v1/connectors/{connectorId}/versions/{version}/approval-requests'>('/admin/api/v1/connectors/{connectorId}/versions/{version}/approval-requests', 'post', { path: { connectorId: id, version } }),
+  approve: (id: string, version: string, bindingDigestSha256: string) => openApi<Approval, '/admin/api/v1/connectors/{connectorId}/versions/{version}/approvals'>('/admin/api/v1/connectors/{connectorId}/versions/{version}/approvals', 'post', { path: { connectorId: id, version }, body: { bindingDigestSha256 } }),
+  reject: (id: string, version: string, comment?: string) => openApi<Approval, '/admin/api/v1/connectors/{connectorId}/versions/{version}/rejections'>('/admin/api/v1/connectors/{connectorId}/versions/{version}/rejections', 'post', { path: { connectorId: id, version }, body: { comment: comment || null } }),
+  assignRole: (value: components['schemas']['RoleAssignmentRequest']) => openApi<Record<string, unknown>, '/admin/api/v1/role-assignments'>('/admin/api/v1/role-assignments', 'post', { body: value }),
+  revokeRole: (assignmentId: string) => openApi<void, '/admin/api/v1/role-assignments/{assignmentId}'>('/admin/api/v1/role-assignments/{assignmentId}', 'delete', { path: { assignmentId } }),
+  publish: (id: string, version: ConnectorVersion, expectedPublicationRevision: number) => openApi<ConnectorVersion, '/admin/api/v1/connectors/{connectorId}/versions/{version}:publish'>('/admin/api/v1/connectors/{connectorId}/versions/{version}:publish', 'post', { path: { connectorId: id, version: version.version }, headers: { 'If-Match': `"${version.rowVersion}"` }, body: { expectedRowVersion: version.rowVersion, expectedPublicationRevision } }),
+  rollback: (id: string, targetVersion: string, expectedActiveRowVersion: number) => openApi<ConnectorVersion, '/admin/api/v1/connectors/{connectorId}:rollback'>('/admin/api/v1/connectors/{connectorId}:rollback', 'post', { path: { connectorId: id }, body: { targetVersion, expectedActiveRowVersion } }),
+  retire: (id: string, version: ConnectorVersion) => openApi<ConnectorVersion, '/admin/api/v1/connectors/{connectorId}/versions/{version}:retire'>('/admin/api/v1/connectors/{connectorId}/versions/{version}:retire', 'post', { path: { connectorId: id, version: version.version }, headers: { 'If-Match': `"${version.rowVersion}"` } }),
+  testConnector: (id: string, environmentId: string, operationId: string) => openApi<{ status: string; connectorId: string; operationId: string; connectorVersion: string }, '/admin/api/v1/connectors/{connectorId}:test'>('/admin/api/v1/connectors/{connectorId}:test', 'post', { path: { connectorId: id }, body: { environmentId, operationId } }),
+  logout: () => openApi<{ status: string }, '/admin/auth/logout'>('/admin/auth/logout', 'post'),
+  developmentLogin: (userName: string) => openApi<{ status: string }, '/admin/auth/development/login'>('/admin/auth/development/login', 'post', { body: { userName } })
 };

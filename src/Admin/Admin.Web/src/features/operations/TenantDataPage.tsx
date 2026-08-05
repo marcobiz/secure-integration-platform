@@ -1,4 +1,3 @@
-import { FormControl, InputLabel, MenuItem, Select } from '@mui/material';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -7,12 +6,14 @@ import { ErrorState, LoadingState } from '../../components/AsyncState';
 import { DataTable } from '../../components/DataTable';
 import { PageTitle } from '../../components/PageTitle';
 import { PaginationControls } from '../../components/PaginationControls';
+import { PagedSelector } from '../../components/PagedSelector';
 
 export function TenantDataPage({ kind }: { kind: 'grants' | 'audit' }) {
   const { t, i18n } = useTranslation();
   const [tenant, setTenant] = useState('');
   const [offset, setOffset] = useState(0);
-  const tenants = useQuery({ queryKey: ['tenants'], queryFn: () => adminApi.tenants() });
+  const [tenantOffset, setTenantOffset] = useState(0);
+  const tenants = useQuery({ queryKey: ['tenants', 'selector', tenantOffset], queryFn: () => adminApi.tenants(tenantOffset) });
   const query = useQuery<Page<Record<string, unknown>>>({
     queryKey: [kind, tenant, offset],
     queryFn: async () => {
@@ -28,7 +29,7 @@ export function TenantDataPage({ kind }: { kind: 'grants' | 'audit' }) {
     : [{ key: 'action', label: t('action'), render: (row: Record<string, unknown>) => String(row.action) }, { key: 'target', label: t('target'), render: (row: Record<string, unknown>) => `${String(row.targetType)} · ${String(row.targetId)}` }, { key: 'outcome', label: t('outcome'), render: (row: Record<string, unknown>) => String(row.outcome) }, { key: 'reason', label: t('reason'), render: (row: Record<string, unknown>) => String(row.reasonCode) }];
   return <>
     <PageTitle title={t(kind)} />
-    <FormControl sx={{ minWidth: 280, mb: 3 }}><InputLabel id={`${kind}-tenant-label`}>{t('selectTenant')}</InputLabel><Select labelId={`${kind}-tenant-label`} label={t('selectTenant')} value={tenant} onChange={event => { setTenant(event.target.value); setOffset(0); }}>{(tenants.data?.items ?? []).map(value => <MenuItem key={value.id} value={value.id}>{value.displayName}</MenuItem>)}</Select></FormControl>
+    <PagedSelector id={`${kind}-tenant`} label={t('selectTenant')} value={tenant} page={tenants.data!} onChange={value => { setTenant(value); setOffset(0); }} onOffset={setTenantOffset} itemLabel={value => value.displayName} />
     {query.isPending && tenant ? <LoadingState /> : query.error ? <ErrorState error={query.error} retry={() => void query.refetch()} /> : <><DataTable rows={rows} columns={columns} label={t(kind)} />{query.data && <PaginationControls page={query.data} onOffset={setOffset} />}</>}
   </>;
 }

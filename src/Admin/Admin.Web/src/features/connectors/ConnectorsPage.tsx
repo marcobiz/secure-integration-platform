@@ -9,6 +9,7 @@ import { DataTable } from '../../components/DataTable';
 import { ErrorState, LoadingState } from '../../components/AsyncState';
 import { PageTitle } from '../../components/PageTitle';
 import { PaginationControls } from '../../components/PaginationControls';
+import { PagedSelector } from '../../components/PagedSelector';
 import { validateConnectorDefinition, type ConnectorValidationIssue } from './connectorDefinitionValidation';
 import { diffCanonicalJson } from './canonicalJsonDiff';
 import { useFormDirty } from '../../navigation/DirtyStateContext';
@@ -47,13 +48,14 @@ export function ConnectorsPage() {
   const [connectorOffset, setConnectorOffset] = useState(0);
   const [versionOffset, setVersionOffset] = useState(0);
   const [filter, setFilter] = useState('');
+  const [environmentOffset, setEnvironmentOffset] = useState(0);
   const [validation, setValidation] = useState<{ valid: boolean; checksumSha256: string | null; issues: ConnectorValidationIssue[] }>();
   const validationSummary = useRef<HTMLDivElement>(null);
   useFormDirty(editorChanged);
 
   const query = useQuery({ queryKey: ['connectors', connectorOffset, filter], queryFn: () => adminApi.connectors(connectorOffset, 50, filter) });
   const versions = useQuery({ queryKey: ['connector-versions', selected, versionOffset], queryFn: () => adminApi.connectorVersions(selected, versionOffset), enabled: Boolean(selected) });
-  const environments = useQuery({ queryKey: ['environments'], queryFn: () => adminApi.environments() });
+  const environments = useQuery({ queryKey: ['environments', 'selector', environmentOffset], queryFn: () => adminApi.environments(environmentOffset) });
   const schema = useQuery({ queryKey: ['connector-schema'], queryFn: adminApi.connectorSchema });
   const sample = useQuery({ queryKey: ['connector-sample'], queryFn: adminApi.connectorSample });
 
@@ -110,7 +112,7 @@ export function ConnectorsPage() {
 
   return <>
     <PageTitle title={t('connectors')} />
-    <TextField label="Filter connectors" value={filter} onChange={event => { setFilter(event.target.value); setConnectorOffset(0); }} sx={{ mb: 2 }} />
+    <TextField label={t('filterConnectors')} value={filter} onChange={event => { setFilter(event.target.value); setConnectorOffset(0); }} sx={{ mb: 2 }} />
     <DataTable rows={query.data.items} label={t('connectors')} columns={[
       { key: 'id', label: t('code'), render: (row: ConnectorSummary) => <Button onClick={() => { setSelected(row.connectorId); setVersionOffset(0); }}>{row.connectorId}</Button> },
       { key: 'name', label: t('name'), render: row => row.displayName },
@@ -137,7 +139,7 @@ export function ConnectorsPage() {
         <VersionComparison connectorId={selected} versions={versions.data?.items ?? []} />
       </>}
       {canTest && <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mt: 3 }}>
-        <FormControl sx={{ minWidth: 220 }}><InputLabel id="connector-test-environment">{t('environment')}</InputLabel><Select labelId="connector-test-environment" label={t('environment')} value={environmentId} onChange={event => setEnvironment(event.target.value)}>{(environments.data?.items ?? []).map(value => <MenuItem key={value.id} value={value.id}>{value.displayName}</MenuItem>)}</Select></FormControl>
+        {environments.data && <PagedSelector id="connector-test-environment" label={t('environment')} value={environmentId} page={environments.data} onChange={setEnvironment} onOffset={setEnvironmentOffset} itemLabel={value => value.displayName} />}
         <TextField label={t('operation')} value={operationId} onChange={event => setOperation(event.target.value)} />
         <Button variant="outlined" disabled={!environmentId || !operationId} onClick={() => controlledTest.mutate()}>{t('testConnector')}</Button>
         {testResult && <Alert severity="success">{testResult}</Alert>}
@@ -145,7 +147,7 @@ export function ConnectorsPage() {
     </CardContent></Card>}
     {canEdit && <Card sx={{ mt: 3 }}><CardContent>
       <Typography variant="h2" sx={{ mb: 2 }}>{t('connectorJson')}</Typography>
-      <Typography id="connector-json-help" color="text.secondary">Canonical Connector Definition JSON. Secret values and provider references are not accepted here.</Typography>
+      <Typography id="connector-json-help" color="text.secondary">{t('connectorJsonHelp')}</Typography>
       <Box sx={{ border: 1, borderColor: 'divider' }}><CodeMirror value={editorJson} height="360px" extensions={[EditorView.contentAttributes.of({ 'aria-label': t('connectorJson'), 'aria-describedby': 'connector-json-help connector-json-result' })]} onChange={value => { setJson(value); setEditorChanged(true); setValidation(undefined); }} /></Box>
       <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
         <Button variant="outlined" disabled={!schema.data || !editorJson} onClick={() => validate.mutate()}>{t('validate')}</Button>

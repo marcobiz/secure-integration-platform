@@ -1,4 +1,4 @@
-import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, FormControl, InputLabel, MenuItem, Select, Stack, TextField } from '@mui/material';
+import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, TextField } from '@mui/material';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -8,6 +8,7 @@ import { ErrorState, LoadingState } from '../../components/AsyncState';
 import { DataTable } from '../../components/DataTable';
 import { PageTitle } from '../../components/PageTitle';
 import { PaginationControls } from '../../components/PaginationControls';
+import { PagedSelector } from '../../components/PagedSelector';
 
 export function InstallationsPage() {
   const { t, i18n } = useTranslation();
@@ -19,9 +20,12 @@ export function InstallationsPage() {
   const [activation, setActivation] = useState<ProvisionedActivation>();
   const [reason, setReason] = useState('administrative-revocation');
   const [offset, setOffset] = useState(0);
-  const tenants = useQuery({ queryKey: ['tenants'], queryFn: () => adminApi.tenants() });
-  const applications = useQuery({ queryKey: ['applications'], queryFn: () => adminApi.applications() });
-  const environments = useQuery({ queryKey: ['environments'], queryFn: () => adminApi.environments() });
+  const [tenantOffset, setTenantOffset] = useState(0);
+  const [applicationOffset, setApplicationOffset] = useState(0);
+  const [environmentOffset, setEnvironmentOffset] = useState(0);
+  const tenants = useQuery({ queryKey: ['tenants', 'selector', tenantOffset], queryFn: () => adminApi.tenants(tenantOffset) });
+  const applications = useQuery({ queryKey: ['applications', 'selector', applicationOffset], queryFn: () => adminApi.applications(applicationOffset) });
+  const environments = useQuery({ queryKey: ['environments', 'selector', environmentOffset], queryFn: () => adminApi.environments(environmentOffset) });
   const installations = useQuery({ queryKey: ['installations', tenant, offset], queryFn: () => adminApi.installations(tenant, offset), enabled: Boolean(tenant) });
   const create = useMutation({ mutationFn: () => adminApi.createInstallation({ tenantId: tenant, applicationId, environmentId }), onSuccess: async value => { setActivation(value); await cache.invalidateQueries({ queryKey: ['installations', tenant] }); } });
   const revoke = useMutation({ mutationFn: (id: string) => adminApi.revokeInstallation(tenant, id, reason), onSuccess: async () => cache.invalidateQueries({ queryKey: ['installations', tenant] }) });
@@ -33,8 +37,8 @@ export function InstallationsPage() {
   return <>
     <PageTitle title={t('installations')} />
     <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mb: 3 }}>
-      <FormControl sx={{ minWidth: 240 }}><InputLabel id="tenant-installations-label">{t('selectTenant')}</InputLabel><Select labelId="tenant-installations-label" label={t('selectTenant')} value={tenant} onChange={event => { setTenant(event.target.value); setOffset(0); }}>{(tenants.data?.items ?? []).map(value => <MenuItem key={value.id} value={value.id}>{value.displayName}</MenuItem>)}</Select></FormControl>
-      {canAdmin && <><FormControl sx={{ minWidth: 240 }}><InputLabel id="application-installations-label">{t('application')}</InputLabel><Select labelId="application-installations-label" label={t('application')} value={applicationId} onChange={event => setApplication(event.target.value)}>{(applications.data?.items ?? []).map(value => <MenuItem key={value.id} value={value.id}>{value.displayName}</MenuItem>)}</Select></FormControl><FormControl sx={{ minWidth: 220 }}><InputLabel id="environment-installations-label">{t('environment')}</InputLabel><Select labelId="environment-installations-label" label={t('environment')} value={environmentId} onChange={event => setEnvironment(event.target.value)}>{(environments.data?.items ?? []).map(value => <MenuItem key={value.id} value={value.id}>{value.displayName}</MenuItem>)}</Select></FormControl><Button variant="contained" disabled={!tenant || !applicationId || !environmentId || create.isPending} onClick={() => create.mutate()}>{t('createInstallation')}</Button></>}
+      <PagedSelector id="tenant-installations" label={t('selectTenant')} value={tenant} page={tenants.data!} onChange={value => { setTenant(value); setOffset(0); }} onOffset={setTenantOffset} itemLabel={value => value.displayName} />
+      {canAdmin && <><PagedSelector id="application-installations" label={t('application')} value={applicationId} page={applications.data!} onChange={setApplication} onOffset={setApplicationOffset} itemLabel={value => value.displayName} /><PagedSelector id="environment-installations" label={t('environment')} value={environmentId} page={environments.data!} onChange={setEnvironment} onOffset={setEnvironmentOffset} itemLabel={value => value.displayName} /><Button variant="contained" disabled={!tenant || !applicationId || !environmentId || create.isPending} onClick={() => create.mutate()}>{t('createInstallation')}</Button></>}
     </Stack>
     {installations.isPending && tenant ? <LoadingState /> : installations.error ? <ErrorState error={installations.error} retry={() => void installations.refetch()} /> : <><DataTable rows={rows} label={t('installations')} columns={[{ key: 'id', label: t('id'), render: (row: Installation) => row.id }, { key: 'status', label: t('status'), render: row => row.status }, { key: 'app', label: t('application'), render: row => row.applicationId }, { key: 'env', label: t('environment'), render: row => row.environmentId }, { key: 'seen', label: t('lastSeen'), render: row => row.lastSeenAt ? new Intl.DateTimeFormat(i18n.language, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(row.lastSeenAt)) : '—' }, { key: 'action', label: t('action'), render: row => canAdmin && row.status !== 'Revoked' ? <Button color="error" size="small" onClick={() => revoke.mutate(row.id)}>{t('revoke')}</Button> : null }]} />{installations.data && <PaginationControls page={installations.data} onOffset={setOffset} />}</>}
     {(create.error || revoke.error) && <ErrorState error={create.error ?? revoke.error} />}
