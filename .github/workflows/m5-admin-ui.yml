@@ -56,15 +56,98 @@ jobs:
         with: { global-json-file: global.json, cache: true, cache-dependency-path: '**/packages.lock.json' }
       - run: dotnet test tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj -c Release --filter FullyQualifiedName~AdminApiSecurityTests
 
-  admin-ui-playwright:
+  admin-auth-oidc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - uses: actions/setup-dotnet@v5
+        with: { global-json-file: global.json, cache: true, cache-dependency-path: '**/packages.lock.json' }
+      - name: Exercise synthetic OIDC protocol and session revocation
+        run: dotnet test tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj -c Release --filter FullyQualifiedName~AdminOidcProtocolTests
+
+  admin-ui-browser-mock:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
       - uses: actions/setup-node@v6
         with: { node-version: 22.22.1, cache: npm, cache-dependency-path: src/Admin/Admin.Web/package-lock.json }
-      - run: npm ci --ignore-scripts && npx playwright install --with-deps chromium && npm run test:e2e
+      - run: npm ci --ignore-scripts && npx playwright install --with-deps chromium && npm run test:ui-mock
         working-directory: ${{ env.WEB }}
+
+  admin-ui-full-stack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - uses: actions/setup-dotnet@v5
+        with: { global-json-file: global.json, cache: true, cache-dependency-path: '**/packages.lock.json' }
+      - uses: actions/setup-node@v6
+        with: { node-version: 22.22.1, cache: npm, cache-dependency-path: src/Admin/Admin.Web/package-lock.json }
+      - run: npm ci --ignore-scripts && npx playwright install --with-deps chromium
+        working-directory: ${{ env.WEB }}
+      - name: Run production-build M5 stack and browser workflow
+        shell: pwsh
+        run: ./tools/m5/Invoke-M5FullStack.ps1
+      - name: Verify Docker cleanup
+        if: always()
+        shell: bash
+        run: |
+          test -z "$(docker ps -aq --filter label=com.docker.compose.project=secure-integration-m5-quickstart)"
+          test -z "$(docker volume ls -q --filter label=com.docker.compose.project=secure-integration-m5-quickstart)"
+          test -z "$(docker network ls -q --filter label=com.docker.compose.project=secure-integration-m5-quickstart)"
+
+  m5-postgresql-18:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: broker_gateway_m5
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d broker_gateway_m5"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      GATEWAY_MIGRATION_CONNECTION: Host=127.0.0.1;Port=5432;Database=broker_gateway_m5;Username=postgres;SSL Mode=Disable;GSS Encryption Mode=Disable
+      GATEWAY_POSTGRES_MIGRATION_CONNECTION: Host=127.0.0.1;Port=5432;Database=broker_gateway_m5;Username=postgres;SSL Mode=Disable;GSS Encryption Mode=Disable
+    steps:
+      - uses: actions/checkout@v6
+        with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - uses: actions/setup-dotnet@v5
+        with: { global-json-file: global.json, cache: true, cache-dependency-path: '**/packages.lock.json' }
+      - name: Apply all migrations and prove second application is a no-op
+        shell: bash
+        run: |
+          set -euo pipefail
+          first="$(dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release -- apply)"
+          grep -F 'Applied 0005_admin_sessions_m5.sql' <<<"$first"
+          second="$(dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release --no-build -- apply)"
+          ! grep -Fq 'Applied ' <<<"$second"
+      - name: Exercise real M5 PostgreSQL stores and fault boundaries
+        env:
+          GATEWAY_POSTGRES_ADMIN_CONNECTION: Host=127.0.0.1;Port=5432;Database=broker_gateway_m5;Username=m5_test_admin;SSL Mode=Disable;GSS Encryption Mode=Disable
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec "${{ job.services.postgres.id }}" psql -v ON_ERROR_STOP=1 -U postgres -d broker_gateway_m5 -c "CREATE ROLE m5_test_admin LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION; GRANT gateway_admin TO m5_test_admin;"
+          dotnet test tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj -c Release --filter FullyQualifiedName~PostgresIsolationTests
+      - name: Verify runtime roles remain non-superuser
+        shell: bash
+        env: { POSTGRES_SERVICE_ID: '${{ job.services.postgres.id }}' }
+        run: |
+          set -euo pipefail
+          docker exec "$POSTGRES_SERVICE_ID" psql -v ON_ERROR_STOP=1 -U postgres -d broker_gateway_m5 -Atc "SELECT bool_and(NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole) FROM pg_roles WHERE rolname IN ('gateway_runtime','gateway_admin');" | grep -Fx t
+      - name: Clean M5 PostgreSQL schema
+        if: always()
+        shell: bash
+        env: { POSTGRES_SERVICE_ID: '${{ job.services.postgres.id }}' }
+        run: docker exec "$POSTGRES_SERVICE_ID" psql -v ON_ERROR_STOP=1 -U postgres -d broker_gateway_m5 -c 'DROP SCHEMA IF EXISTS gateway CASCADE;'
 
   admin-ui-accessibility:
     runs-on: ubuntu-latest
@@ -158,10 +241,5 @@ jobs:
         with: { node-version: 22.22.1 }
       - shell: pwsh
         run: ./eng/generate-sbom.ps1 -Version 0.5.0-preview.1
-      - shell: bash
-        run: |
-          cd "$WEB"
-          npm ci --ignore-scripts
-          npm sbom --sbom-format spdx > ../../../.artifacts/sbom/admin-web.spdx.json
       - uses: actions/upload-artifact@v6
         with: { name: 'm5-sbom-${{ env.CANDIDATE_COMMIT_SHA }}', path: .artifacts/sbom, if-no-files-found: error }

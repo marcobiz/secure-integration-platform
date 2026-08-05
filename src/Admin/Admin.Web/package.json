@@ -14,7 +14,8 @@
     "lint": "eslint . --max-warnings=0",
     "test": "vitest run --coverage.enabled=false",
     "test:a11y": "vitest run src/accessibility.test.tsx",
-    "test:e2e": "playwright test",
+    "test:ui-mock": "playwright test",
+    "test:e2e": "playwright test --config playwright.fullstack.config.ts",
     "generate:api": "openapi-typescript ../../../docs/api/gateway-openapi.yaml -o src/api/schema.d.ts",
     "check:api": "npm run generate:api && git diff --exit-code -- src/api/schema.d.ts",
     "capture:screenshot": "node tests/capture-sanitized-screenshot.mjs"

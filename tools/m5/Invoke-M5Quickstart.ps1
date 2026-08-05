@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Validate', 'Start', 'Stop')]
-    [string] $Phase = 'Start'
+    [string] $Phase = 'Start',
+    [switch] $SkipBuild
 )
 
 Set-StrictMode -Version Latest
@@ -59,7 +60,9 @@ $adminPassword = [Convert]::ToBase64String($adminPasswordBytes)
 $adminPassword = $null
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { Invoke-Checked 'chmod' @('0777', $rawRoot) }
 Invoke-Checked 'docker' (ComposeArguments @('config', '--quiet'))
-Invoke-Checked 'docker' (ComposeArguments @('up', '--build', '--detach'))
+$up = @('up', '--detach')
+if (-not $SkipBuild) { $up = @('up', '--build', '--detach') }
+Invoke-Checked 'docker' (ComposeArguments $up)
 
 $deadline = [DateTimeOffset]::UtcNow.AddMinutes(6)
 $ready = $false
