@@ -10,9 +10,11 @@ Commit test negativi: `1485a0d`
 
 Branch: `m4/connector-configuration`
 
-## Esito candidato
+## Esito
 
-L'implementazione e il gate HOST sono PASS. La dichiarazione formale Done richiede ancora la CI sul commit documentale finale. M3B non è stata eseguita ed è correttamente non bloccante perché appartiene al Deployment Pack Azure; M5 e provider/pack ulteriori non sono iniziati.
+**M4 Done.** Il gate HOST è PASS e la CI PR #4 run `30992487718` è PASS 6/6 sul candidate correttivo `cf3cf6c7d8fb7deddcaa6886c29bef8b329eae1b`. M3B non è stata eseguita ed è correttamente non bloccante perché appartiene al Deployment Pack Azure; M5 e provider/pack ulteriori non sono iniziati.
+
+La prima run CI `30992197169` è stata conservata come failure: il nuovo job quick start non rendeva scrivibile su Linux la directory fixture bind-mounted per il Provisioner non-root. Il fix `cf3cf6c` applica soltanto il permesso alla directory raw effimera su host non-Windows; non eleva container né amplia permessi runtime. La run completa successiva dimostra la regressione chiusa.
 
 ## Confini architetturali
 
@@ -53,7 +55,7 @@ La modifica di Published non è esposta da alcuna API e il trigger `connector_ve
 | Controllo | Risultato |
 |---|---|
 | Release build | PASS, zero warning/error |
-| suite ordinarie | PASS, 99 test dopo la chiusura dei negativi |
+| suite ordinarie | PASS, 99 test |
 | PostgreSQL 18 reale | PASS, apply 0001+0002, seconda apply no-op, lifecycle/tamper |
 | migration M4 SHA-256 | `9D991B0E4E8268D47C32121DECE2D3593B183623059BB17F4A82A479DC8D322C` |
 | M4 quick start Compose | PASS, Published list/test e cleanup zero risorse |
@@ -63,8 +65,9 @@ La modifica di Published non è esposta da alcuna API e il trigger `connector_ve
 | vulnerable NuGet packages | zero rilevate |
 | SBOM SPDX | PASS |
 | `git diff --check` | PASS |
+| CI PR #4 | PASS 6/6, run `30992487718` |
 
-Il quick start è stato eseguito con Docker Engine 29.6.2 e Compose 5.3.1. Il job CI `m4-connector-quickstart` ripete Start/Stop su un runner pulito e verifica zero container, volumi e network residui.
+Il quick start è stato eseguito con Docker Engine 29.6.2 e Compose 5.3.1, anche da clone pulito del branch. L'HOST aveva globalmente solo .NET 8, quindi l'SDK 10.0.302 richiesto da `global.json` è stato esposto esplicitamente come prerequisito installato; non è una dipendenza implicita del repository. Il job CI `m4-connector-quickstart` ripete Start/Stop su un runner pulito e verifica zero container, volumi e network residui.
 
 ## Open source readiness
 
@@ -83,4 +86,4 @@ Prima di una pubblicazione open source generale restano obbligatori: decisione/l
 
 ## Decisione gate
 
-La decisione finale viene registrata dopo i job CI sul commit finale. Se tutti passano: M4 Done, GO tecnico per M5 e per un primo Connector Pack pilota sintetico/privato; nessun avvio automatico. Se un job fallisce: M4 resta NO-GO e il commit fallito non diventa baseline.
+**PASS — M4 Done. GO tecnico per M5 e GO per un primo Connector Pack pilota sintetico/privato; nessun avvio automatico.** La distribuzione pubblica generale resta NO-GO fino alla scelta della licenza e al completamento degli altri punti di preview indicati sopra.

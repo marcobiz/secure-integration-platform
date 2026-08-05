@@ -11,7 +11,7 @@ Aggiornato: 2026-08-05
 | Primo vertical slice E2E | Completato come harness ripetibile | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` |
 | M2 — Gateway minimo | **Done** | gate CI `30896803567`: build/test, PostgreSQL 18, container hardening, Gitleaks e SBOM PASS |
 | M3 — vertical slice production-like | **M3A product gate PASS** | tag `m3a-product-gate-pass-20260805`; M3B PENDING non bloccante per il Core |
-| M4 — Connector Configuration MVP | **Implementato; gate CI in corso** | schema v1, lifecycle, PG18, Published runtime, CLI, sample E2E e quick start locale PASS |
+| M4 — Connector Configuration MVP | **Done** | PR #4 CI `30992487718`: 6/6 job PASS; schema v1, lifecycle, PG18, Published runtime, CLI, sample E2E e quick start |
 | M5 e milestone successive | Non iniziate | nessuna Admin UI o funzionalità fuori perimetro M4 |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
