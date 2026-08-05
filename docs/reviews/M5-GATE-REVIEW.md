@@ -3,7 +3,15 @@
 **Baseline M4:** `m4-connector-configuration-baseline-20260805` (`49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b`)  
 **Branch:** `m5/admin-ui-mvp`  
 **Implementation candidate:** `c3a448763ed80e9427d1828e95009996d0a9554d`
-**Stato:** **PASS — M5 Done sul candidate; PR #5 resta aperta e non unita.**
+**Stato:** **SUPERSEDED — historical pre-remediation review; M5 is not declared Done. PR #5 remains open and unmerged.**
+
+> The evidence and counts below describe the historical candidate only. They must not attest the remediation HEAD. The authoritative remediation status is recorded in `M5-MULTI-AGENT-REMEDIATION.md` and a new external evidence bundle is required before delta review.
+
+## Remediation delta
+
+The merge-blocking delta review is tracked in `M5-MULTI-AGENT-REMEDIATION.md`. The corrected candidate adds immutable approved binding bundles, atomic approval/publication, revocable server-side sessions, durable denial audit, complete pagination/OpenAPI, accessible administration workflows and trustworthy production-like test boundaries. It also separates runtime and administrative registry credentials after the real PostgreSQL/full-stack gate exposed the previous privilege-routing defect.
+
+The new evidence directory is `C:\SecureEvidence\m5-remediation-gate-20260805-200259` and its manifest binds the exact final remediation HEAD. This remains a delta-review candidate: M5 is not declared Done here, PR #5 is not merged, and M6 is not started.
 
 ## Product result
 
@@ -67,6 +75,6 @@ M3B Azure live qualification, AWS/HashiCorp providers, real healthcare connector
 
 ## Gate decision and open items
 
-M5 is technically Done and is **GO for reviewed merge of PR #5**, but the PR must not be merged automatically. The private preview is GO. Public distribution is NO-GO until legal/business chooses Apache-2.0 or MPL-2.0 and adds the definitive license. The first real healthcare Connector Pack is NO-GO: it remains a later, separately threat-modelled and qualified product milestone.
+This historical review does not declare the remediated M5 candidate Done and does not authorize merge of PR #5. Public distribution remains NO-GO until legal/business chooses Apache-2.0 or MPL-2.0 and adds the definitive license. The first real healthcare Connector Pack remains a later, separately threat-modelled and qualified product milestone.
 
 Residual work is limited to PR review/merge, the definitive license decision, real external OIDC interoperability and later release qualification. M3B, M6+, cloud deployment, healthcare connectors and commercial adapters remain unstarted.

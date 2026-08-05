@@ -127,6 +127,7 @@ jobs:
           set -euo pipefail
           first="$(dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release -- apply)"
           grep -F 'Applied 0005_admin_sessions_m5.sql' <<<"$first"
+          grep -F 'Applied 0006_admin_role_revocation_m5.sql' <<<"$first"
           second="$(dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release --no-build -- apply)"
           ! grep -Fq 'Applied ' <<<"$second"
       - name: Exercise real M5 PostgreSQL stores and fault boundaries

@@ -80,7 +80,14 @@ Ogni scenario usa mock server controllabile per timeout, TLS, redirect, malforme
 
 ### UI
 
-Playwright:
+The Playwright suites are deliberately classified by trust boundary:
+
+- `npm run test:ui-mock` is a browser/component suite. It intercepts Admin HTTP calls with `page.route` and is never reported as product E2E.
+- `tools/m5/Invoke-M5FullStack.ps1` is the M5 full-stack suite. It runs the production Gateway/Admin build, PostgreSQL 18, synthetic Vault and vendor mock; Playwright shares only the Gateway network namespace so DevelopmentAuth observes an actual loopback peer. It does not intercept authentication or Admin APIs.
+
+The full-stack flow uses distinct Editor, Approver, Operator and Security Administrator sessions and covers persisted Draft/validation, version-bound bindings, four-eyes denial/approval, publication, enrollment state, grant, controlled test, rollback, retire, audit, logout and replay denial.
+
+UI coverage includes:
 
 - Entra test identity/role mapping;
 - Viewer read-only;
@@ -89,6 +96,21 @@ Playwright:
 - published immutabile;
 - rollback e audit;
 - nessun valore Vault nell'HTML/API/browser log.
+
+Synthetic OIDC integration uses the real ASP.NET Core OIDC handler and an in-process HTTPS-equivalent test host. It verifies authorization code, PKCE, state, nonce, issuer, subject, callback, secure cookie flags, server-side session rotation, logout/replay denial and negative state/nonce/issuer cases.
+
+### SBOM deliverables
+
+`eng/generate-sbom.ps1` emits one SPDX document per distributed artefact:
+
+- `gateway.spdx.json`;
+- `broker.spdx.json`;
+- `sdk-dotnet.spdx.json`;
+- `connector-cli.spdx.json`;
+- `admin-frontend.spdx.json`;
+- `gateway-container.spdx.json`.
+
+The .NET and npm inventories are SPDX 2.3; Docker Scout may emit SPDX 2.2 or 2.3. `aggregate-manifest.json` binds every file to SHA-256 and the exact Git commit. `eng/validate-sbom.ps1` rejects missing documents, unsupported formats, hash drift or absence of a known component for any artefact.
 
 ### Performance e resilienza
 
