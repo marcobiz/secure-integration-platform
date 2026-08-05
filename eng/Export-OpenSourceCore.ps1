@@ -81,8 +81,18 @@ if (-not $SkipVerification) {
     & $powerShellExecutable @powerShellArguments
     if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_SECRET_SCAN_FAILED' }
     $scanTargets = @((Join-Path $destination 'src'), (Join-Path $destination 'sdk'))
-    $forbiddenContent = & rg -l --hidden --glob '!**/packages.lock.json' --glob '!**/obj/**' --glob '!**/bin/**' '(Azure\.Identity|Azure\.Security|ManagedIdentityCredential|SecretClient|packs/deployment|BEGIN (RSA |EC )?PRIVATE KEY)' @scanTargets 2>$null
-    if ($LASTEXITCODE -notin 0, 1) { throw 'OSS_EXPORT_BOUNDARY_SCAN_FAILED' }
+    $boundaryPattern = '(Azure\.Identity|Azure\.Security|ManagedIdentityCredential|SecretClient|packs/deployment|BEGIN (RSA |EC )?PRIVATE KEY)'
+    $ripgrep = Get-Command rg -ErrorAction SilentlyContinue
+    if ($ripgrep) {
+        $forbiddenContent = & $ripgrep.Source -l --hidden --glob '!**/packages.lock.json' --glob '!**/obj/**' --glob '!**/bin/**' $boundaryPattern @scanTargets 2>$null
+        if ($LASTEXITCODE -notin 0, 1) { throw 'OSS_EXPORT_BOUNDARY_SCAN_FAILED' }
+    }
+    else {
+        $forbiddenContent = @(Get-ChildItem -LiteralPath $scanTargets -Recurse -File |
+            Where-Object { $_.Name -ne 'packages.lock.json' -and $_.FullName -notmatch '[/\\](obj|bin)[/\\]' -and $_.Length -le 10MB } |
+            Select-String -Pattern $boundaryPattern |
+            Select-Object -ExpandProperty Path -Unique)
+    }
     if ($forbiddenContent) { throw ('OSS_EXPORT_FORBIDDEN_CONTENT: ' + (($forbiddenContent | Sort-Object -Unique) -join ', ')) }
     & $dotnet restore (Join-Path $destination 'BrokerGateway.Core.slnx')
     if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_RESTORE_FAILED' }
