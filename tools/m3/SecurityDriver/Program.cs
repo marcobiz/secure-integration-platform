@@ -86,7 +86,7 @@ await SetVaultAvailabilityAsync(false).ConfigureAwait(false);
 try
 {
     Result unavailable = await SendSignedAsync(authenticated, "m3-vendor", "submit", normalBody).ConfigureAwait(false);
-    Record("M3-N13", unavailable.Status == HttpStatusCode.ServiceUnavailable && unavailable.Code.StartsWith("BGW-VAULT-", StringComparison.Ordinal), unavailable.Code);
+    Record("M3-N13", unavailable.Status == HttpStatusCode.ServiceUnavailable && unavailable.Code == "BGW-PROVIDER-UNAVAILABLE", unavailable.Code);
 }
 finally { await SetVaultAvailabilityAsync(true).ConfigureAwait(false); }
 
