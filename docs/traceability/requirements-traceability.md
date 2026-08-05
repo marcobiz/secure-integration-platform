@@ -13,7 +13,7 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | FR-005 | M1 | AEAD roundtrip/tamper/rotation + nonce/AAD/unknown-version/malformed suite + Installation differentiation |
 | FR-006 | M1/M7 | M1 HMAC lifecycle/grant/reopen; firma/certificato: M7 |
 | FR-007 | M2 | `UT_GTW_Enrollment_PoP_derives_tenant_and_replay_is_rejected`, `UT_GTW_Invoke_contract_has_no_client_controlled_endpoint_or_secret_reference`, `UT_GTW_Cross_tenant_grant_is_rejected` |
-| FR-008 | M3 | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay`; CI `m3-deterministic-container-slice` M3-P01/P03-P07 e M3-N01..N15 PASS; M3-P02 con vero Windows Service PENDING |
+| FR-008 | M3 | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay`; CI `m3-deterministic-container-slice` M3-P01/P03-P07 e M3-N01..N15 PASS; run `m3a-live-20260805-091023` dimostra P02/Windows Service ma resta BLOCKED prima della matrice HOST completa e non chiude M3A |
 | FR-009 | M8 | `E2E-CON-ManagedConnector` |
 | FR-010 | M7/M8 | local/gateway/hybrid sequence suites |
 | FR-011 | M4 | `IT-CON-BindingScope`, secret absence scan |

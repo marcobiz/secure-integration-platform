@@ -1,6 +1,6 @@
 # Implementation status
 
-Aggiornato: 2026-08-04
+Aggiornato: 2026-08-05
 
 ## Stato sintetico
 
@@ -105,6 +105,15 @@ Tailscale e ricreazione dinamica del laboratorio non sono criteri M3. Il prototi
 interrotto è conservato solo nel branch `experimental/m3a-system-executor` al commit
 `b081c527186d4b66b1c03511c0c17856b9ea217a`.
 
+La run `m3a-live-20260805-091023` ha attraversato realmente il Broker Windows Service e
+ha prodotto evidenze VM redatte PASS per P02, identità/ACL, applicazione non autorizzata,
+grant negato, Event Log/canary e cleanup. La run resta **BLOCKED**, non PASS: durante il
+`Finalize` il SecurityDriver HOST ha usato una chiave client effimera incompatibile con
+Windows Schannel, quindi la matrice negativa HOST e il bundle finale non sono stati
+completati. Il cleanup ha lasciato zero risorse Docker della run e ha ripristinato rete e
+Firewall. Il fix harness/test è `678aa07`; serve una run interamente nuova dopo CI verde.
+Dettagli: `docs/reviews/M3A-SPLIT-HOST-BLOCKED-20260805.md`.
+
 ## Test ed esiti
 
 | Suite/comando | Esito atteso dell'ultima verifica | Copertura |
@@ -115,11 +124,11 @@ interrotto è conservato solo nel branch `experimental/m3a-system-executor` al c
 | `eng/scan-secrets.ps1` | PASS | repository escluso materiale sorgente riservato |
 | `eng/generate-sbom.ps1` | PASS | SBOM SPDX degli artefatti |
 | `Broker.Core.Tests` | 26 PASS | lifecycle/grant, AEAD/nonce/AAD/version, framing e hard limits |
-| `Broker.Integration.Tests` | 27 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction, CNG e regressioni harness M3 |
+| `Broker.Integration.Tests` | 28 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction, CNG, handshake Schannel e regressioni harness M3 |
 | `VerticalSlice.Tests` | 1 PASS | vertical slice e negative/security path |
 | `Gateway.Unit.Tests` | 25 PASS | enrollment/PoP/replay/renew/revoke/version, tenant/grant, Vault/cache/auth modes, SSRF, retry, redaction e confini M3 |
 | `Gateway.Integration.Tests` | 7 PASS ordinari | API/Problem/health, startup M3Testing, schema/RLS statico; test PostgreSQL condizionali |
-| Totale suite ordinarie | 86 PASS | 26 Broker Core + 27 Broker integration + 25 Gateway unit + 7 Gateway integration + 1 E2E |
+| Totale suite ordinarie | 87 PASS | 26 Broker Core + 28 Broker integration + 25 Gateway unit + 7 Gateway integration + 1 E2E |
 | CI `m3-deterministic-container-slice` | PASS, run `30903757495`, commit `91963ce` | Gateway/PostgreSQL 18/Vault/vendor reali, matrice positiva/negativa, non-root/read-only, redazione, cleanup ed evidence SHA-256 `A52CACB8…FCA30` |
 | PostgreSQL 18 effimero locale | 2 PASS | migration, FORCE RLS, registry enrollment/grant/replay/revoca |
 | CI `gateway-postgresql-18` | PASS | run `30896803567`: PostgreSQL 18, migration apply/no-op, checksum, ruoli, FORCE RLS, tenant isolation e cleanup |

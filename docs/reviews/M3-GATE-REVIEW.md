@@ -176,7 +176,7 @@ PENDING-LIVE e non viene rappresentato come eseguito.
 | Controllo sul commit `91963ce` | Risultato |
 |---|---|
 | build Release | PASS, 0 warning/error locale e CI |
-| suite ordinarie | PASS, 86/86 sul branch corrente |
+| suite ordinarie | PASS, 87/87 sul branch corrente, incluso handshake mTLS Schannel reale |
 | Gateway PostgreSQL 18 | PASS, migration apply/no-op, checksum, ruoli, FORCE RLS, tenant isolation, cleanup |
 | `m3-deterministic-container-slice` | PASS, run `30903757495` |
 | container hardening/SBOM | PASS, non-root, read-only, health/readiness, fail-closed, shutdown e digest |
@@ -192,6 +192,18 @@ PENDING-LIVE e non viene rappresentato come eseguito.
   Service e acquisizione di `RESULT.json`/evidence redatta PASS;
 - environment GitHub `azure-dev`, OIDC federato e variabili elencate nel runbook;
 - smoke Azure PASS con Managed Identity/Key Vault reali e bundle redatto verificato.
+
+### Ultima run split-host
+
+La run `m3a-live-20260805-091023` sul commit `febd8b3` ha dimostrato live il tratto P02
+attraverso il vero Windows Service, il Legacy Simulator standard user e il vendor mock
+mTLS. Non è tuttavia accettata come PASS: il SecurityDriver HOST è terminato durante
+`Finalize` perché Windows Schannel non supporta il client key importato come
+`EphemeralKeySet`; N01–N14 HOST e il bundle finale non sono stati completati. Il cleanup
+HOST/VM è stato verificato e le evidenze VM originali redatte sono preservate fuori Git.
+La classificazione, gli hash e il fix harness `678aa07` sono documentati in
+`M3A-SPLIT-HOST-BLOCKED-20260805.md`. È richiesta una nuova run completa con materiale
+nuovo; M3A resta aperta.
 
 ## Non-blocker e debito rinviato
 
