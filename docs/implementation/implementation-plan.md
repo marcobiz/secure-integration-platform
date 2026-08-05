@@ -93,7 +93,7 @@ alla qualificazione dell'Azure Deployment Pack e non blocca il Core o M4.
 
 ## M5 — Admin UI
 
-**Stato 2026-08-05:** **Done sul candidate `c3a4487`**; CI M5 12/12 e regressione 6/6 PASS. PR #5 resta aperta per review e non è stata unita. M3B e M6+ non sono iniziati.
+**Stato 2026-08-05:** final remediation candidate `9eea56f` con gate locale verde; review read-only e replica CI della PR #5 ancora richieste. M5 non è dichiarata Done, la PR non è unita, `main` resta sulla baseline M4 e M3B/M6+ non sono iniziati.
 
 **Obiettivo:** amministrazione sicura senza accesso ai valori Vault.
 
@@ -101,7 +101,7 @@ alla qualificazione dell'Azure Deployment Pack e non blocca il Core o M4.
 
 **Dipendenze:** M4.
 
-**Test:** Playwright RBAC/four-eyes/immutabilità, CSRF, secret absence nel browser.
+**Test:** Playwright RBAC/four-eyes/immutabilità, CSRF, secret absence nel browser; PostgreSQL 18 per trigger/privilegi/atomicità; full-stack import-to-runtime sulla stessa versione pubblicata.
 
 **Completamento:** tutte le operazioni amministrative hanno policy e audit.
 

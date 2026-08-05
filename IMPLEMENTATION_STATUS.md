@@ -12,7 +12,7 @@ Aggiornato: 2026-08-05
 | M2 — Gateway minimo | **Done** | gate CI `30896803567`: build/test, PostgreSQL 18, container hardening, Gitleaks e SBOM PASS |
 | M3 — vertical slice production-like | **M3A product gate PASS** | tag `m3a-product-gate-pass-20260805`; M3B PENDING non bloccante per il Core |
 | M4 — Connector Configuration MVP | **Done** | PR #4 CI `30992487718`: 6/6 job PASS; schema v1, lifecycle, PG18, Published runtime, CLI, sample E2E e quick start |
-| M5 — Admin UI MVP | **Done sul candidate; PR #5 aperta e non unita** | CI M5 `31005091580` 12/12 e regressione `31005091566` 6/6; 117 .NET, 14 Vitest, 24 Playwright |
+| M5 — Admin UI MVP | **Final remediation candidate; review read-only richiesta** | implementation HEAD `9eea56f632bcf20e0eb8f0bec438796d36097eed`; PR #5 aperta/non unita; main invariato a `49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b` |
 | M3B, M6 e milestone successive | Non iniziate | nessun cloud reale, connector sanitario o adapter commerciale |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
@@ -109,12 +109,12 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 - Core provider-neutral compilabile tramite `BrokerGateway.Core.slnx`; Azure resta pack opzionale escluso dall'export.
 - OIDC Authorization Code server-side con PKCE/state/nonce, cookie `__Host-` sicuro, CSRF, logout e DevelopmentAuth fail-closed in Production.
 - RBAC globale/tenant-scoped e principal `(issuer, subject)`; five roles e bootstrap SecurityAdministrator controllato.
-- Four-eyes checksum-specific con self/requester/creator denial e publish enforcement nell'application service.
+- Four-eyes checksum-specific fail-closed: Production e OIDC non possono disabilitarlo; soltanto DevelopmentAuth esplicito e loopback può usare la policy semplificata. Self/requester/creator denial, binding activation e publication sono verificati anche al confine PostgreSQL.
 - Admin API paginata con ProblemDetails/correlation, ETag/If-Match, audit e DTO privi di secret.
 - React/TypeScript strict same-origin con dashboard, risorse, connector lifecycle, binding, grant, approval, audit, health, IT/EN e light/dark/system.
-- Migrazione `0003_admin_ui_m5.sql` SHA-256 `F527C6747ED2AB0FC984B28986CBEA2AF8175AE61C4FDFEAD848B8CD4F0034CB` e pool amministrativo separato dal runtime.
+- Migration additive fino a `0007_binding_bundle_immutability_m5.sql` SHA-256 `EC3B4E9A85FB050A1FDFC16E4E7B89042A7A6D93972CA46DF2BCEA2AE51FEE4A`; trigger e privilegi colonnari impediscono tamper delle revisioni binding Active/Approved. Pool amministrativo separato dal runtime.
 - Container non-root include asset hashati/CSP nonce; quickstart locale usa PostgreSQL 18 e Synthetic Provider senza cloud.
-- Gate CI finale PASS sul candidate `c3a448763ed80e9427d1828e95009996d0a9554d`; evidence redatta esterna in `C:\SecureEvidence\m5-gate-20260805-142300`. PR #5 resta aperta e non viene unita automaticamente.
+- Remediation locale sul candidate `9eea56f632bcf20e0eb8f0bec438796d36097eed`: 144 test .NET ordinari PASS e 7 PostgreSQL SKIP espliciti; PostgreSQL 18 dedicato 8/8 PASS; 22 Vitest, 32 browser-mock e FULLSTACK-01 PASS. Il full-stack importa/pubblica `2.0.0`, usa l'Installation realmente iscritta, attraversa runtime BGW1+mTLS, Vault sintetico e vendor mock, correla l'audit e nega dopo retire. Evidence finale e CI della PR sono ancora da finalizzare; M5 non è Done e PR #5 non viene unita automaticamente.
 
 La run split-host `m3a-live-20260804-131718` è stata classificata **BLOCKED — PRE-HANDOFF INFRASTRUCTURE VALIDATION**: live/readiness erano HTTP 200, ma Docker health falliva per SAN incompatibile e i profili Windows Firewall erano disabilitati. Il runner VM non è stato eseguito e P02 non è stato testato. Cleanup PASS ha lasciato zero risorse della run e ha rimosso l'handoff non utilizzato. I fix health/TLS e firewall reversibile sono implementati. Il runner predispone ora un secondo switch Hyper-V Internal e una NIC VM `M3A-Isolated`, senza NAT/gateway/DNS/forwarding, con rollback SYSTEM, isolamento del profilo Private e probe VM→HOST pre-handoff. La run è storica ed è superata dal PASS product gate `m3a-live-20260805-094131`. Dettagli: `docs/reviews/M3A-BLOCKED-RUN-20260804-131718.md`.
 

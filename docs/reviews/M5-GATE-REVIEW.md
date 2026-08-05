@@ -2,16 +2,16 @@
 
 **Baseline M4:** `m4-connector-configuration-baseline-20260805` (`49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b`)  
 **Branch:** `m5/admin-ui-mvp`  
-**Implementation candidate:** `c3a448763ed80e9427d1828e95009996d0a9554d`
-**Stato:** **SUPERSEDED — historical pre-remediation review; M5 is not declared Done. PR #5 remains open and unmerged.**
+**Implementation candidate:** `9eea56f632bcf20e0eb8f0bec438796d36097eed`
+**Stato:** **FINAL REMEDIATION CANDIDATE — read-only review and final CI replica pending. M5 is not declared Done; PR #5 remains open and unmerged.**
 
-> The evidence and counts below describe the historical candidate only. They must not attest the remediation HEAD. The authoritative remediation status is recorded in `M5-MULTI-AGENT-REMEDIATION.md` and a new external evidence bundle is required before delta review.
+> Historical evidence and counts below remain provenance only. The authoritative final-cycle status is recorded in `M5-MULTI-AGENT-REMEDIATION.md`; the new external evidence bundle must bind the exact final documentation HEAD before read-only delta review.
 
 ## Remediation delta
 
 The merge-blocking delta review is tracked in `M5-MULTI-AGENT-REMEDIATION.md`. The corrected candidate adds immutable approved binding bundles, atomic approval/publication, revocable server-side sessions, durable denial audit, complete pagination/OpenAPI, accessible administration workflows and trustworthy production-like test boundaries. It also separates runtime and administrative registry credentials after the real PostgreSQL/full-stack gate exposed the previous privilege-routing defect.
 
-The new evidence directory is `C:\SecureEvidence\m5-remediation-gate-20260805-200259` and its manifest binds the exact final remediation HEAD. This remains a delta-review candidate: M5 is not declared Done here, PR #5 is not merged, and M6 is not started.
+The final-cycle evidence directory is newly generated under `C:\SecureEvidence\m5-final-remediation-gate-*`; earlier bundles are not reused. This remains a delta-review candidate: M5 is not declared Done here, PR #5 is not merged, and M6 is not started.
 
 ## Product result
 

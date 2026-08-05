@@ -16,7 +16,7 @@ With Docker Linux containers, .NET SDK, Node 22 and PowerShell:
 
 ```powershell
 ./tools/m5/Invoke-M5Quickstart.ps1 -Phase Validate
-./tools/m5/Invoke-M5Quickstart.ps1 -Phase Start
+./tools/m5/Invoke-M5Quickstart.ps1 -Phase Workflow
 # UI: https://localhost:18443/admin/
 ./tools/m5/Invoke-M5Quickstart.ps1 -Phase Stop
 ```

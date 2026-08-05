@@ -2,6 +2,26 @@
 
 This ledger covers only the merge-blocking findings supplied for PR #5. LOW and NOTE observations remain outside this remediation gate. M5 is not declared Done by this document and PR #5 remains open and unmerged.
 
+## Final merge-blocking cycle
+
+Initial delta-review HEAD: `8d269509201bf320c98a65f6c7495c1b8cc16cce`. Implementation candidate exercised locally before this documentation-only update: `9eea56f632bcf20e0eb8f0bec438796d36097eed`. `main` remains `49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b`; no history rewrite or merge was performed.
+
+| Residual finding | Remediation and exact evidence | Status |
+|---|---|---|
+| SEC-01 four-eyes fail-closed | Production/OIDC startup rejects `RequireFourEyes=false`; only explicit loopback DevelopmentAuth can use the simplified policy. Publication, binding activation, self approval and stale approval are denied by application policy and PostgreSQL. | RESOLVED-LOCAL; read-only review pending |
+| Binding DB immutability | Additive migration `0007_binding_bundle_immutability_m5.sql` uses trigger plus column-only `UPDATE(state)` grant. PG18 tests reject endpoint/checksum/scope/environment/revision tamper by non-superuser and preserve the published snapshot/provider boundary. | RESOLVED-LOCAL; read-only review pending |
+| Remaining state/audit atomicity | Tenant/application create-update-disable and connector import/validate share their state transaction with audit. Fault injection, cancellation and middleware/application denial paths roll back or fail closed and emit one redacted event. | RESOLVED-LOCAL; read-only review pending |
+| Exact approval UX | Canonical definition plus endpoint/secret/certificate binding revisions expose added/removed/changed redacted paths and component checksums. Approve submits the exact displayed publication digest; stale digest returns conflict. | RESOLVED-LOCAL; read-only review pending |
+| Pagination/selectors | Total ordering has a unique tie-breaker; count is independent from empty pages; paged selectors reach records 51 and 101 with keyboard and accessible labels. | RESOLVED-LOCAL; read-only review pending |
+| Dirty navigation, focus, i18n | Browser Back/Forward invokes the dirty guard, error summaries receive focus/live announcement, and remediation strings are present in EN/IT without key fallback. | RESOLVED-LOCAL; read-only review pending |
+| Operational OpenAPI client | Runtime client operations derive routes/methods from OpenAPI `paths`; route/contract parity and generated-file drift checks fail closed; validation codes use the `BGW-*` convention. | RESOLVED-LOCAL; read-only review pending |
+| Quickstart and full-stack invoke | `Workflow` creates version `2.0.0`, validates, binds the enrolled Installation Environment, requests/distinctly approves/publishes, grants, invokes through BGW1+mTLS, proves server-side API key/certificate, correlated audit, retire and deny. The synthetic provisioner itself now uses two-principal four-eyes. | RESOLVED-LOCAL; read-only review pending |
+| PostgreSQL fail-closed tests | Missing connection configuration produces seven explicit SKIP results in the ordinary run; the dedicated PG18 gate executes eight real tests, including stores, SQL tamper, concurrency, sessions and pagination. | RESOLVED-LOCAL; read-only review pending |
+| Canary/redaction | FULLSTACK-01 scans DOM, console/network capture, ProblemDetails/audit surfaces, container logs, screenshots/traces and result artefacts for per-run activation/session/binding/secret canaries. | RESOLVED-LOCAL; read-only review pending |
+| Secret scanner control | The scanner now includes hidden and untracked files. A temporary synthetic `client_secret` fixture fails non-zero, is removed, and the clean tree passes. | RESOLVED-LOCAL; read-only review pending |
+
+The local gate records 144 ordinary .NET PASS plus seven explicit PG SKIP, eight dedicated PostgreSQL 18 PASS, 22 Vitest PASS, 32 browser-mock PASS and one production-build full-stack PASS. Migration `0007` SHA-256 is `EC3B4E9A85FB050A1FDFC16E4E7B89042A7A6D93972CA46DF2BCEA2AE51FEE4A`. Final CI and evidence sidecar are intentionally recorded only after the documentation commit is published; this section does not declare M5 Done.
+
 | Finding | Stato | Causa | Remediation applicata | Test regressivo / evidenza | Commit | Esito |
 |---|---|---|---|---|---|---|
 | A1 — FE-01 / PROD-01 | RESOLVED | The browser used a reduced hand-written schema and a non-canonical initial document. | The UI now consumes the repository-owned Draft 2020-12 schema and sample; AJV is preliminary and server validation remains authoritative. | `connectorSchema.test.ts`; Admin import API tests; `FULLSTACK-01` persists the canonical Draft in PostgreSQL. | `7f1126e` | PASS |
