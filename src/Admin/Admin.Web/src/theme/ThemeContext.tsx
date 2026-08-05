@@ -19,7 +19,12 @@ export function AppTheme({ children }: { children: ReactNode }) {
     },
     typography: { fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', h1: { fontSize: '1.75rem', fontWeight: 700 }, h2: { fontSize: '1.2rem', fontWeight: 650 } },
     shape: { borderRadius: 10 },
-    components: { MuiButton: { defaultProps: { disableElevation: true } }, MuiCard: { styleOverrides: { root: { border: '1px solid', borderColor: mode === 'dark' ? '#1f3548' : '#dbe5ec' } } } }
+    components: {
+      MuiButton: { defaultProps: { disableElevation: true } },
+      MuiCard: { styleOverrides: { root: { border: '1px solid', borderColor: mode === 'dark' ? '#1f3548' : '#dbe5ec' } } },
+      MuiFormLabel: { styleOverrides: { root: { color: mode === 'dark' ? '#c7d4de' : '#303030' } } },
+      MuiFormHelperText: { styleOverrides: { root: { color: mode === 'dark' ? '#c7d4de' : '#303030' } } }
+    }
   }), [mode]);
   const setChoice = (value: ThemeChoice) => { localStorage.setItem('sip.theme', value); update(value); };
   return <ThemeChoiceContext.Provider value={{ choice, setChoice }}><ThemeProvider theme={theme}><CssBaseline />{children}</ThemeProvider></ThemeChoiceContext.Provider>;
