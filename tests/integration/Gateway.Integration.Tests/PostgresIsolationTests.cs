@@ -278,19 +278,41 @@ public sealed class PostgresIsolationTests
         Task<ConnectorVersionRecord> publication = store.PublishApprovedAsync(stored.Id, approvedDigest, validated.RowVersion, 0, approver.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow.AddSeconds(2), TestContext.Current.CancellationToken);
         await blockerTransaction.CommitAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(2, await mutation);
-        GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => publication);
-        Assert.True(denied.Code is "BGW-ADMIN-APPROVAL-STALE" or "BGW-ADMIN-APPROVAL-REQUIRED" or "BGW-CONCURRENCY-CONFLICT", denied.Code);
-        ConnectorVersionRecord after = (await store.GetVersionAsync(connectorId, imported.Version, TestContext.Current.CancellationToken))!;
-        Assert.Equal(ConnectorVersionState.Validated, after.State);
+        long? mutationRevision = null;
+        ConnectorVersionRecord? firstPublication = null;
+        Exception? mutationFailure = null;
+        Exception? publicationFailure = null;
+        try { mutationRevision = await mutation; } catch (Exception exception) { mutationFailure = exception; }
+        try { firstPublication = await publication; } catch (Exception exception) { publicationFailure = exception; }
+        Assert.NotEqual(mutationFailure is null, publicationFailure is null);
+
         await using NpgsqlConnection auditConnection = await adminPool.Value.OpenConnectionAsync(TestContext.Current.CancellationToken);
         await using NpgsqlCommand audit = new("SELECT count(*) FROM gateway.audit_event WHERE action='connector.publish' AND target_id=$1", auditConnection);
         audit.Parameters.AddWithValue(connectorId + "/" + imported.Version);
-        Assert.Equal(0L, await audit.ExecuteScalarAsync(TestContext.Current.CancellationToken));
-        byte[] currentDigest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
-        _ = await security.RequestApprovalAsync(after, currentDigest, editor.Id, Guid.NewGuid(), clock.UtcNow.AddSeconds(3), TestContext.Current.CancellationToken);
-        _ = await security.ApproveAsync(after.Id, after.ChecksumSha256, currentDigest, after.CreatedBy, approver.Id, Guid.NewGuid(), clock.UtcNow.AddSeconds(4), TestContext.Current.CancellationToken);
-        ConnectorVersionRecord published = await store.PublishApprovedAsync(after.Id, currentDigest, after.RowVersion, 0, approver.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow.AddSeconds(5), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord published;
+        string expectedEndpoint;
+        if (mutationFailure is null)
+        {
+            Assert.Equal(2, mutationRevision);
+            GatewayException denied = Assert.IsType<GatewayException>(publicationFailure);
+            Assert.True(denied.Code is "BGW-ADMIN-APPROVAL-STALE" or "BGW-ADMIN-APPROVAL-REQUIRED" or "BGW-CONCURRENCY-CONFLICT", denied.Code);
+            ConnectorVersionRecord after = (await store.GetVersionAsync(connectorId, imported.Version, TestContext.Current.CancellationToken))!;
+            Assert.Equal(ConnectorVersionState.Validated, after.State);
+            Assert.Equal(0L, await audit.ExecuteScalarAsync(TestContext.Current.CancellationToken));
+            byte[] currentDigest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
+            _ = await security.RequestApprovalAsync(after, currentDigest, editor.Id, Guid.NewGuid(), clock.UtcNow.AddSeconds(3), TestContext.Current.CancellationToken);
+            _ = await security.ApproveAsync(after.Id, after.ChecksumSha256, currentDigest, after.CreatedBy, approver.Id, Guid.NewGuid(), clock.UtcNow.AddSeconds(4), TestContext.Current.CancellationToken);
+            published = await store.PublishApprovedAsync(after.Id, currentDigest, after.RowVersion, 0, approver.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow.AddSeconds(5), TestContext.Current.CancellationToken);
+            expectedEndpoint = "https://controlled-attacker.example.test/";
+        }
+        else
+        {
+            GatewayException denied = Assert.IsType<GatewayException>(mutationFailure);
+            Assert.Equal("BGW-CONCURRENCY-CONFLICT", denied.Code);
+            Assert.Null(publicationFailure);
+            published = Assert.IsType<ConnectorVersionRecord>(firstPublication);
+            expectedEndpoint = "https://approved.example.test/";
+        }
         Assert.Equal(ConnectorVersionState.Published, published.State);
         Assert.Equal(1L, await audit.ExecuteScalarAsync(TestContext.Current.CancellationToken));
 
@@ -317,7 +339,7 @@ public sealed class PostgresIsolationTests
 
         PublishedConnectorSnapshot unchanged = await store.GetPublishedSnapshotAsync(connectorId, environmentId, TestContext.Current.CancellationToken)
             ?? throw new InvalidOperationException("Published snapshot disappeared after a rejected tamper attempt.");
-        Assert.Equal("https://controlled-attacker.example.test/", unchanged.Bindings.Endpoints["sample-vendor-endpoint"].AbsoluteUri);
+        Assert.Equal(expectedEndpoint, unchanged.Bindings.Endpoints["sample-vendor-endpoint"].AbsoluteUri);
         Assert.Equal(activeBinding.Revision, unchanged.Bindings.Revision);
         Assert.Equal(activeBinding.ChecksumSha256, unchanged.Bindings.ChecksumSha256);
     }

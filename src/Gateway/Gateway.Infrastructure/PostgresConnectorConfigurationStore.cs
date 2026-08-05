@@ -246,34 +246,41 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
     /// <inheritdoc />
     public async Task<ConnectorBindingSet> PutBindingsAsync(ConnectorBindingSet bindings, long? expectedRevision, Guid correlationId, CancellationToken cancellationToken)
     {
-        string endpointJson = JsonSerializer.Serialize(bindings.Endpoints.ToDictionary(item => item.Key, item => item.Value.AbsoluteUri, StringComparer.Ordinal));
-        string secretJson = JsonSerializer.Serialize(bindings.SecretReferences);
-        string certificateJson = JsonSerializer.Serialize(bindings.CertificateReferences);
-        await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
-        await using (NpgsqlCommand versionLock = Command(connection, transaction, "SELECT state FROM gateway.connector_version WHERE id=$1 FOR UPDATE", bindings.ConnectorVersionId))
+        try
         {
-            object? state = await versionLock.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-            if (!string.Equals(state as string, "validated", StringComparison.Ordinal)) throw new GatewayException("BGW-CONNECTOR-BINDING-REQUIRES-VALIDATED-VERSION", 409);
+            string endpointJson = JsonSerializer.Serialize(bindings.Endpoints.ToDictionary(item => item.Key, item => item.Value.AbsoluteUri, StringComparer.Ordinal));
+            string secretJson = JsonSerializer.Serialize(bindings.SecretReferences);
+            string certificateJson = JsonSerializer.Serialize(bindings.CertificateReferences);
+            await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+            await using (NpgsqlCommand versionLock = Command(connection, transaction, "SELECT state FROM gateway.connector_version WHERE id=$1 FOR UPDATE", bindings.ConnectorVersionId))
+            {
+                object? state = await versionLock.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+                if (!string.Equals(state as string, "validated", StringComparison.Ordinal)) throw new GatewayException("BGW-CONNECTOR-BINDING-REQUIRES-VALIDATED-VERSION", 409);
+            }
+            long current = 0;
+            await using (NpgsqlCommand select = Command(connection, transaction, "SELECT revision FROM gateway.connector_binding_bundle_version WHERE connector_version_id=$1 AND environment_id=$2 ORDER BY revision DESC LIMIT 1 FOR UPDATE", bindings.ConnectorVersionId, bindings.EnvironmentId))
+            {
+                object? value = await select.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+                if (value is long revision) current = revision;
+            }
+            if (current > 0 && expectedRevision is null) throw new GatewayException("BGW-CONCURRENCY-PRECONDITION", 428);
+            if (current == 0 && expectedRevision is not null) throw new GatewayException("BGW-CONCURRENCY-CONFLICT", 409);
+            if (expectedRevision is not null && expectedRevision.Value != current) throw new GatewayException("BGW-CONCURRENCY-CONFLICT", 409);
+            long next = current + 1;
+            await ExecuteAsync(connection, transaction, "INSERT INTO gateway.connector_binding_bundle_version(id,connector_id,connector_version_id,environment_id,revision,state,endpoints_json,secret_references_json,certificate_references_json,checksum_sha256,created_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12)", cancellationToken,
+                bindings.Id, bindings.ConnectorId, bindings.ConnectorVersionId, bindings.EnvironmentId, next, bindings.State.ToString().ToLowerInvariant(), endpointJson, secretJson, certificateJson, Convert.FromHexString(bindings.ChecksumSha256), bindings.UpdatedAt, bindings.UpdatedBy).ConfigureAwait(false);
+            await ExecuteAsync(connection, transaction, "UPDATE gateway.connector_approval SET status='invalidated',invalidated_at=$2 WHERE connector_version_id=$1 AND status IN ('requested','approved')", cancellationToken, bindings.ConnectorVersionId, bindings.UpdatedAt).ConfigureAwait(false);
+            faultInjector?.Check("connector.binding.after-state");
+            string metadata = JsonSerializer.Serialize(new Dictionary<string, string> { ["revision"] = next.ToString(System.Globalization.CultureInfo.InvariantCulture), ["checksum"] = bindings.ChecksumSha256 });
+            await ExecuteAsync(connection, transaction, "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,$2,NULL,'administrator',$3,'connector.bindings.update','connectorVersion',$4,$5,'success','BGW-CONNECTOR-BINDINGS-UPDATED',$6::jsonb)", cancellationToken, Guid.NewGuid(), bindings.UpdatedAt, bindings.UpdatedBy, bindings.ConnectorVersionId.ToString("D"), correlationId, metadata).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return bindings with { Revision = next };
         }
-        long current = 0;
-        await using (NpgsqlCommand select = Command(connection, transaction, "SELECT revision FROM gateway.connector_binding_bundle_version WHERE connector_version_id=$1 AND environment_id=$2 ORDER BY revision DESC LIMIT 1 FOR UPDATE", bindings.ConnectorVersionId, bindings.EnvironmentId))
+        catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.SerializationFailure)
         {
-            object? value = await select.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-            if (value is long revision) current = revision;
+            throw new GatewayException("BGW-CONCURRENCY-CONFLICT", 409);
         }
-        if (current > 0 && expectedRevision is null) throw new GatewayException("BGW-CONCURRENCY-PRECONDITION", 428);
-        if (current == 0 && expectedRevision is not null) throw new GatewayException("BGW-CONCURRENCY-CONFLICT", 409);
-        if (expectedRevision is not null && expectedRevision.Value != current) throw new GatewayException("BGW-CONCURRENCY-CONFLICT", 409);
-        long next = current + 1;
-        await ExecuteAsync(connection, transaction, "INSERT INTO gateway.connector_binding_bundle_version(id,connector_id,connector_version_id,environment_id,revision,state,endpoints_json,secret_references_json,certificate_references_json,checksum_sha256,created_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11,$12)", cancellationToken,
-            bindings.Id, bindings.ConnectorId, bindings.ConnectorVersionId, bindings.EnvironmentId, next, bindings.State.ToString().ToLowerInvariant(), endpointJson, secretJson, certificateJson, Convert.FromHexString(bindings.ChecksumSha256), bindings.UpdatedAt, bindings.UpdatedBy).ConfigureAwait(false);
-        await ExecuteAsync(connection, transaction, "UPDATE gateway.connector_approval SET status='invalidated',invalidated_at=$2 WHERE connector_version_id=$1 AND status IN ('requested','approved')", cancellationToken, bindings.ConnectorVersionId, bindings.UpdatedAt).ConfigureAwait(false);
-        faultInjector?.Check("connector.binding.after-state");
-        string metadata = JsonSerializer.Serialize(new Dictionary<string, string> { ["revision"] = next.ToString(System.Globalization.CultureInfo.InvariantCulture), ["checksum"] = bindings.ChecksumSha256 });
-        await ExecuteAsync(connection, transaction, "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,$2,NULL,'administrator',$3,'connector.bindings.update','connectorVersion',$4,$5,'success','BGW-CONNECTOR-BINDINGS-UPDATED',$6::jsonb)", cancellationToken, Guid.NewGuid(), bindings.UpdatedAt, bindings.UpdatedBy, bindings.ConnectorVersionId.ToString("D"), correlationId, metadata).ConfigureAwait(false);
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return bindings with { Revision = next };
     }
 
     /// <inheritdoc />
