@@ -40,5 +40,9 @@ $securityDriver = [IO.File]::ReadAllText((Join-Path $root 'tools/m3/SecurityDriv
 if ($gatewayProgram -notmatch '\bAllowAnyClientCertificate\s*\(' -or $securityDriver -notmatch 'M3-TLS-SELF-SIGNED-APPLICATION-BOUNDARY') {
     $violations += 'Gateway self-signed installation TLS boundary is not paired with its application-rejection regression'
 }
+if ($securityDriver -notmatch 'OperatingSystem\.IsWindows\(\)[\s\S]*X509KeyStorageFlags\.UserKeySet[\s\S]*X509KeyStorageFlags\.EphemeralKeySet' -or
+    $securityDriver -match 'LoadPkcs12FromFile\([^\r\n]+X509KeyStorageFlags\.EphemeralKeySet\s*\)') {
+    $violations += 'SecurityDriver must use a Schannel-compatible persisted client key on Windows while retaining ephemeral keys elsewhere'
+}
 if ($violations.Count -ne 0) { throw ('TLS hardening validation failed: ' + ($violations -join '; ')) }
 Write-Output 'TLS_HARDENING_VALIDATION_PASS'

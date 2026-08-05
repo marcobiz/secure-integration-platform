@@ -73,6 +73,10 @@ foreach ($required in @(
 if ($vmRunner -match "Invoke-NativeChecked\s+-FilePath\s+'git\.exe'" -or $vmRunner -match '&\s+git(?:\.exe)?[^\r\n]+switch') {
     throw 'VM runner must use the PowerShell 5.1-safe Git wrapper.'
 }
+if ($vmRunner.IndexOf('[Parameter(Mandatory)] [AllowEmptyString()] [string] $Suffix', [StringComparison]::Ordinal) -lt 0 -or
+    $vmRunner.IndexOf("New-VmEvidenceArchive -Suffix '' -Result `$successResult", [StringComparison]::Ordinal) -lt 0) {
+    throw 'VM runner must allow the empty success-archive suffix used by Windows PowerShell 5.1.'
+}
 if ($legacySimulator.IndexOf('exception.Code == "gateway_operation_not_granted"', [StringComparison]::Ordinal) -lt 0 -or
     $legacySimulator.IndexOf('exception.Code == "operation_not_granted"', [StringComparison]::Ordinal) -ge 0) {
     throw 'M3 Legacy Simulator must assert the Gateway grant denial contract, not the local operation denial code.'

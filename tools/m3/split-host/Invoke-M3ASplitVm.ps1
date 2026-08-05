@@ -65,7 +65,7 @@ function Invoke-GitVmChecked {
 
 function New-VmEvidenceArchive {
     param(
-        [Parameter(Mandatory)] [string] $Suffix,
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $Suffix,
         [Parameter(Mandatory)] $Result,
         [switch] $ResultOnly
     )

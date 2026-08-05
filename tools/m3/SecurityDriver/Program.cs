@@ -22,7 +22,15 @@ Guid installationId = root.GetProperty("securityInstallationId").GetGuid();
 Guid tenantId = root.GetProperty("securityTenantId").GetGuid();
 Guid activationCodeId = root.GetProperty("securityActivationCodeId").GetGuid();
 string activationCode = root.GetProperty("securityActivationCode").GetString() ?? throw new InvalidOperationException("Security activation code missing.");
-using X509Certificate2 certificate = X509CertificateLoader.LoadPkcs12FromFile(certificatePath, certificatePassword, X509KeyStorageFlags.EphemeralKeySet);
+// Windows Schannel cannot present an ephemeral private key as a TLS client
+// credential. Keep the synthetic key process-scoped on other platforms, but
+// let Windows import it into the current user's key store for the lifetime of
+// this process. The certificate is disposed before the driver exits and the
+// PersistKeySet flag is deliberately not used.
+X509KeyStorageFlags clientCertificateKeyStorageFlags = OperatingSystem.IsWindows()
+    ? X509KeyStorageFlags.UserKeySet
+    : X509KeyStorageFlags.EphemeralKeySet;
+using X509Certificate2 certificate = X509CertificateLoader.LoadPkcs12FromFile(certificatePath, certificatePassword, clientCertificateKeyStorageFlags);
 using ECDsa privateKey = certificate.GetECDsaPrivateKey() ?? throw new InvalidOperationException("Security driver certificate has no ECDSA private key.");
 using HttpClient bootstrap = new() { BaseAddress = new Uri(gatewayBase), Timeout = TimeSpan.FromSeconds(15) };
 using HttpClient authenticated = CreateClient(new Uri(gatewayBase), certificate);
