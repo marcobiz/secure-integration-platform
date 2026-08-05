@@ -33,6 +33,9 @@ eng/generate-sbom.ps1
 eng/open-source-core.allowlist
 eng/scan-secrets.ps1
 eng/test.ps1
+eng/test-m3-operator-handoff.ps1
+eng/test-m3-split-firewall.ps1
+eng/test-m3-split-network.ps1
 eng/validate-docs.ps1
 eng/validate-tls-hardening.ps1
 eng/Export-OpenSourceCore.ps1
@@ -48,4 +51,5 @@ tools/m3/SecurityDriver/
 tools/m3/SyntheticVault/
 tools/m3/VendorMock/
 tools/m3/Invoke-M3A.ps1
+tools/m3/split-host/
 tools/m4/
