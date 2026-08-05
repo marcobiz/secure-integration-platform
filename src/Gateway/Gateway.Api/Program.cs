@@ -211,9 +211,11 @@ app.UseAuthentication();
 app.UseRateLimiter();
 app.Use(async (context, next) =>
 {
+    string cspNonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(18));
+    context.Items["AdminCspNonce"] = cspNonce;
     context.Response.OnStarting(() =>
     {
-        context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'";
+        context.Response.Headers["Content-Security-Policy"] = $"default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'nonce-{cspNonce}'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'";
         context.Response.Headers["X-Content-Type-Options"] = "nosniff";
         context.Response.Headers["Referrer-Policy"] = "no-referrer";
         context.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=(), usb=()";
@@ -225,6 +227,15 @@ app.Use(async (context, next) =>
     if (mutation && context.Request.Path.StartsWithSegments("/admin/api"))
         await context.RequestServices.GetRequiredService<IAntiforgery>().ValidateRequestAsync(context).ConfigureAwait(false);
     await next(context).ConfigureAwait(false);
+});
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = context =>
+    {
+        context.Context.Response.Headers.CacheControl = context.Context.Request.Path.StartsWithSegments("/admin/assets")
+            ? "public,max-age=31536000,immutable"
+            : "no-cache";
+    }
 });
 app.UseAuthorization();
 
@@ -634,6 +645,20 @@ adminApi.MapPost("/connectors/{connectorId}:test", async (string connectorId, Co
     GatewayOperationDefinition operation = await catalog.GetRequiredAsync(connectorId, request.OperationId, request.EnvironmentId, cancellationToken).ConfigureAwait(false);
     return Results.Ok(new { status = "valid", connectorId, operationId = operation.OperationId, connectorVersion = operation.Version });
 });
+
+app.MapGet("/admin", () => Results.Redirect("/admin/"));
+string adminIndexPath = Path.Combine(app.Environment.WebRootPath ?? "wwwroot", "admin", "index.html");
+if (File.Exists(adminIndexPath))
+{
+    app.MapFallback("/admin/{*path:nonfile}", async context =>
+    {
+        string nonce = context.Items["AdminCspNonce"] as string ?? throw new InvalidOperationException("Admin CSP nonce missing.");
+        string index = (await File.ReadAllTextAsync(adminIndexPath, context.RequestAborted).ConfigureAwait(false)).Replace("__CSP_NONCE__", nonce, StringComparison.Ordinal);
+        context.Response.ContentType = "text/html; charset=utf-8";
+        context.Response.Headers.CacheControl = "no-cache";
+        await context.Response.WriteAsync(index, context.RequestAborted).ConfigureAwait(false);
+    });
+}
 
 app.Run();
 
