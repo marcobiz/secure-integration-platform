@@ -24,7 +24,7 @@ public sealed class ProvisionerSecurityTests
         DirectoryInfo? directory = new(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "BrokerGateway.slnx"))) return directory.FullName;
+            if (Directory.Exists(Path.Combine(directory.FullName, ".git")) || File.Exists(Path.Combine(directory.FullName, "BrokerGateway.Core.slnx"))) return directory.FullName;
             directory = directory.Parent;
         }
         throw new InvalidOperationException("Repository root not found.");
