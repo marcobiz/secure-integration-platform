@@ -43,12 +43,18 @@ public sealed class PostgresAdminSecurityStore(AdminPostgresDataSource adminData
     /// <inheritdoc />
     public async Task<AdminPage<AdminRoleAssignmentRecord>> ListAssignmentsAsync(int offset, int limit, Guid? principalId, Guid? tenantId, CancellationToken cancellationToken)
     {
-        ValidatePage(offset, limit); List<AdminRoleAssignmentRecord> result = []; int total = 0;
+        ValidatePage(offset, limit); List<AdminRoleAssignmentRecord> result = [];
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using NpgsqlCommand command = new("SELECT id,principal_id,role,tenant_id,granted_by,granted_at,count(*) OVER() FROM gateway.admin_role_assignment WHERE ($3::uuid IS NULL OR principal_id=$3) AND ($4::uuid IS NULL OR tenant_id=$4) ORDER BY role,principal_id,tenant_id NULLS FIRST OFFSET $1 LIMIT $2", connection);
+        int total;
+        await using (NpgsqlCommand count = new("SELECT count(*) FROM gateway.admin_role_assignment WHERE ($1::uuid IS NULL OR principal_id=$1) AND ($2::uuid IS NULL OR tenant_id=$2)", connection))
+        {
+            Add(count, principalId, tenantId);
+            total = Convert.ToInt32(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+        }
+        await using NpgsqlCommand command = new("SELECT id,principal_id,role,tenant_id,granted_by,granted_at FROM gateway.admin_role_assignment WHERE ($3::uuid IS NULL OR principal_id=$3) AND ($4::uuid IS NULL OR tenant_id=$4) ORDER BY role,principal_id,tenant_id NULLS FIRST,id OFFSET $1 LIMIT $2", connection);
         Add(command, offset, limit, principalId, tenantId);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) { result.Add(ReadAssignment(reader)); total = checked((int)reader.GetInt64(6)); }
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) result.Add(ReadAssignment(reader));
         return new(result, offset, limit, total);
     }
 
@@ -207,12 +213,18 @@ public sealed class PostgresAdminSecurityStore(AdminPostgresDataSource adminData
     /// <inheritdoc />
     public async Task<AdminPage<ConnectorApprovalRecord>> ListApprovalsPageAsync(Guid connectorVersionId, int offset, int limit, CancellationToken cancellationToken)
     {
-        ValidatePage(offset, limit); List<ConnectorApprovalRecord> result = []; int total = 0;
+        ValidatePage(offset, limit); List<ConnectorApprovalRecord> result = [];
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using NpgsqlCommand command = new("SELECT id,connector_version_id,checksum_sha256,binding_digest_sha256,requested_by,approved_by,rejected_by,status,requested_at,approved_at,rejected_at,decision_comment,invalidated_at,count(*) OVER() FROM gateway.connector_approval WHERE connector_version_id=$1 ORDER BY requested_at DESC OFFSET $2 LIMIT $3", connection);
+        int total;
+        await using (NpgsqlCommand count = new("SELECT count(*) FROM gateway.connector_approval WHERE connector_version_id=$1", connection))
+        {
+            Add(count, connectorVersionId);
+            total = Convert.ToInt32(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+        }
+        await using NpgsqlCommand command = new("SELECT id,connector_version_id,checksum_sha256,binding_digest_sha256,requested_by,approved_by,rejected_by,status,requested_at,approved_at,rejected_at,decision_comment,invalidated_at FROM gateway.connector_approval WHERE connector_version_id=$1 ORDER BY requested_at DESC,id DESC OFFSET $2 LIMIT $3", connection);
         Add(command, connectorVersionId, offset, limit);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) { result.Add(ReadApproval(reader)); total = checked((int)reader.GetInt64(13)); }
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) result.Add(ReadApproval(reader));
         return new(result, offset, limit, total);
     }
 

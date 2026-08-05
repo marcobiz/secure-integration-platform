@@ -12,6 +12,13 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
 {
     /// <inheritdoc />
     public async Task<ConnectorVersionRecord> CreateDraftAsync(ConnectorVersionRecord draft, CancellationToken cancellationToken)
+        => await CreateDraftCoreAsync(draft, null, cancellationToken).ConfigureAwait(false);
+
+    /// <inheritdoc />
+    public async Task<ConnectorVersionRecord> CreateDraftWithAuditAsync(ConnectorVersionRecord draft, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+        => await CreateDraftCoreAsync(draft, auditEvent, cancellationToken).ConfigureAwait(false);
+
+    private async Task<ConnectorVersionRecord> CreateDraftCoreAsync(ConnectorVersionRecord draft, GatewayAuditEvent? auditEvent, CancellationToken cancellationToken)
     {
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
@@ -29,6 +36,11 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
             throw new GatewayException("BGW-CONNECTOR-VERSION-DUPLICATE", 409);
         }
         if (inserted != 1) throw new GatewayException("BGW-CONNECTOR-STORE", 503);
+        if (auditEvent is not null)
+        {
+            faultInjector?.Check("connector.import.after-state");
+            await InsertAuditAsync(connection, transaction, auditEvent, cancellationToken).ConfigureAwait(false);
+        }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return draft with { ConnectorId = connectorId, RowVersion = 1 };
     }
@@ -59,12 +71,15 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
     public async Task<AdminPage<ConnectorSummary>> ListConnectorsPageAsync(int offset, int limit, string? filter, CancellationToken cancellationToken)
     {
         ValidatePage(offset, limit, filter);
-        List<ConnectorSummary> result = []; int total = 0;
+        List<ConnectorSummary> result = [];
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        const string sql = "SELECT q.slug,q.display_name,q.version_count,q.published_version,q.publication_revision,count(*) OVER() FROM (SELECT c.slug,c.display_name,count(v.id)::int version_count,p.version published_version,c.publication_revision FROM gateway.connector_definition c LEFT JOIN gateway.connector_version p ON p.id=c.active_version_id LEFT JOIN gateway.connector_version v ON v.connector_id=c.id WHERE $3::text IS NULL OR c.slug ILIKE '%'||$3||'%' OR c.display_name ILIKE '%'||$3||'%' GROUP BY c.slug,c.display_name,p.version,c.publication_revision) q ORDER BY q.slug OFFSET $1 LIMIT $2";
+        int total;
+        await using (NpgsqlCommand count = Command(connection, null, "SELECT count(*) FROM gateway.connector_definition c WHERE $1::text IS NULL OR c.slug ILIKE '%'||$1||'%' OR c.display_name ILIKE '%'||$1||'%'", filter))
+            total = Convert.ToInt32(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+        const string sql = "SELECT q.slug,q.display_name,q.version_count,q.published_version,q.publication_revision FROM (SELECT c.slug,c.display_name,count(v.id)::int version_count,p.version published_version,c.publication_revision FROM gateway.connector_definition c LEFT JOIN gateway.connector_version p ON p.id=c.active_version_id LEFT JOIN gateway.connector_version v ON v.connector_id=c.id WHERE $3::text IS NULL OR c.slug ILIKE '%'||$3||'%' OR c.display_name ILIKE '%'||$3||'%' GROUP BY c.slug,c.display_name,p.version,c.publication_revision) q ORDER BY q.slug OFFSET $1 LIMIT $2";
         await using NpgsqlCommand command = Command(connection, null, sql, offset, limit, filter);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) { result.Add(new(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt64(4))); total = checked((int)reader.GetInt64(5)); }
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) result.Add(new(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt64(4)));
         return new(result, offset, limit, total);
     }
 
@@ -91,18 +106,25 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
     public async Task<AdminPage<ConnectorVersionRecord>> ListVersionsPageAsync(string connectorId, int offset, int limit, string? filter, CancellationToken cancellationToken)
     {
         ValidatePage(offset, limit, filter);
-        List<ConnectorVersionRecord> result = []; int total = 0;
+        List<ConnectorVersionRecord> result = [];
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        const string sql = "SELECT v.id,v.connector_id,c.slug,v.version,v.schema_version,v.state,v.configuration_json::text,v.checksum_sha256,v.created_by,v.created_at,v.row_version,v.validated_at,v.published_at,v.retired_at,count(*) OVER() FROM gateway.connector_version v JOIN gateway.connector_definition c ON c.id=v.connector_id WHERE c.slug=$1 AND ($4::text IS NULL OR v.version ILIKE '%'||$4||'%') ORDER BY v.created_at DESC,v.version OFFSET $2 LIMIT $3";
+        int total;
+        await using (NpgsqlCommand count = Command(connection, null, "SELECT count(*) FROM gateway.connector_version v JOIN gateway.connector_definition c ON c.id=v.connector_id WHERE c.slug=$1 AND ($2::text IS NULL OR v.version ILIKE '%'||$2||'%')", connectorId, filter))
+            total = Convert.ToInt32(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+        const string sql = "SELECT v.id,v.connector_id,c.slug,v.version,v.schema_version,v.state,v.configuration_json::text,v.checksum_sha256,v.created_by,v.created_at,v.row_version,v.validated_at,v.published_at,v.retired_at FROM gateway.connector_version v JOIN gateway.connector_definition c ON c.id=v.connector_id WHERE c.slug=$1 AND ($4::text IS NULL OR v.version ILIKE '%'||$4||'%') ORDER BY v.created_at DESC,v.version,v.id OFFSET $2 LIMIT $3";
         await using NpgsqlCommand command = Command(connection, null, sql, connectorId, offset, limit, filter);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) { result.Add(ReadVersion(reader)); total = checked((int)reader.GetInt64(14)); }
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) result.Add(ReadVersion(reader));
         return new(result, offset, limit, total);
     }
 
     /// <inheritdoc />
     public Task<ConnectorVersionRecord> MarkValidatedAsync(Guid versionId, long expectedRowVersion, DateTimeOffset now, CancellationToken cancellationToken) =>
-        TransitionAsync(versionId, expectedRowVersion, "draft", "validated", "validated_at", now, cancellationToken);
+        TransitionAsync(versionId, expectedRowVersion, "draft", "validated", "validated_at", now, null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<ConnectorVersionRecord> MarkValidatedWithAuditAsync(Guid versionId, long expectedRowVersion, DateTimeOffset now, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) =>
+        TransitionAsync(versionId, expectedRowVersion, "draft", "validated", "validated_at", now, auditEvent, cancellationToken);
 
     /// <inheritdoc />
     public async Task<ConnectorVersionRecord> PublishAsync(Guid versionId, long expectedRowVersion, long expectedPublicationRevision, string actor, DateTimeOffset now, CancellationToken cancellationToken)
@@ -258,10 +280,13 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
     public async Task<AdminPage<ConnectorBindingSet>> ListBindingsPageAsync(Guid connectorVersionId, int offset, int limit, Guid? environmentId, CancellationToken cancellationToken)
     {
         ValidatePage(offset, limit, null);
-        List<ConnectorBindingSet> result = []; int total = 0;
+        List<ConnectorBindingSet> result = [];
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         ConnectorVersionRecord version = await GetByIdAsync(connection, null, connectorVersionId, false, cancellationToken).ConfigureAwait(false);
-        const string sql = "SELECT id,environment_id,endpoints_json::text,secret_references_json::text,certificate_references_json::text,revision,encode(checksum_sha256,'hex'),state,created_at,created_by,count(*) OVER() FROM gateway.connector_binding_bundle_version WHERE connector_version_id=$1 AND ($4::uuid IS NULL OR environment_id=$4) ORDER BY environment_id,revision DESC OFFSET $2 LIMIT $3";
+        int total;
+        await using (NpgsqlCommand count = Command(connection, null, "SELECT count(*) FROM gateway.connector_binding_bundle_version WHERE connector_version_id=$1 AND ($2::uuid IS NULL OR environment_id=$2)", connectorVersionId, environmentId))
+            total = Convert.ToInt32(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+        const string sql = "SELECT id,environment_id,endpoints_json::text,secret_references_json::text,certificate_references_json::text,revision,encode(checksum_sha256,'hex'),state,created_at,created_by FROM gateway.connector_binding_bundle_version WHERE connector_version_id=$1 AND ($4::uuid IS NULL OR environment_id=$4) ORDER BY environment_id,revision DESC,id OFFSET $2 LIMIT $3";
         await using NpgsqlCommand command = Command(connection, null, sql, connectorVersionId, offset, limit, environmentId);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -271,7 +296,6 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
             Dictionary<string, string> secrets = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(3)) ?? [];
             Dictionary<string, string> certificates = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(4)) ?? [];
             result.Add(new(reader.GetGuid(0), version.ConnectorId, connectorVersionId, reader.GetGuid(1), endpoints, secrets, certificates, reader.GetInt64(5), reader.GetString(6).ToUpperInvariant(), Enum.Parse<ConnectorBindingState>(reader.GetString(7), true), reader.GetFieldValue<DateTimeOffset>(8), reader.GetString(9)));
-            total = checked((int)reader.GetInt64(10));
         }
         return new(result, offset, limit, total);
     }
@@ -341,18 +365,29 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
         return result;
     }
 
-    private async Task<ConnectorVersionRecord> TransitionAsync(Guid versionId, long expectedRowVersion, string expectedState, string nextState, string timestampColumn, DateTimeOffset now, CancellationToken cancellationToken)
+    private async Task<ConnectorVersionRecord> TransitionAsync(Guid versionId, long expectedRowVersion, string expectedState, string nextState, string timestampColumn, DateTimeOffset now, GatewayAuditEvent? auditEvent, CancellationToken cancellationToken)
     {
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
         string sql = $"UPDATE gateway.connector_version SET state='{nextState}',{timestampColumn}=$3,row_version=row_version+1 WHERE id=$1 AND row_version=$2 AND state='{expectedState}' RETURNING id";
-        await using NpgsqlCommand command = new(sql, connection);
+        await using NpgsqlCommand command = new(sql, connection, transaction);
         command.Parameters.AddWithValue(versionId);
         command.Parameters.AddWithValue(expectedRowVersion);
         command.Parameters.AddWithValue(now);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null) throw new GatewayException("BGW-CONCURRENCY-CONFLICT", 409);
-        ConnectorVersionRecord result = await GetByIdAsync(connection, null, versionId, false, cancellationToken).ConfigureAwait(false);
+        if (auditEvent is not null)
+        {
+            faultInjector?.Check("connector.validate.after-state");
+            await InsertAuditAsync(connection, transaction, auditEvent, cancellationToken).ConfigureAwait(false);
+        }
+        ConnectorVersionRecord result = await GetByIdAsync(connection, transaction, versionId, false, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
     }
+
+    private static Task<int> InsertAuditAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) =>
+        ExecuteAsync(connection, transaction, "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)", cancellationToken,
+            auditEvent.Id, auditEvent.OccurredAt, (object?)auditEvent.TenantId ?? DBNull.Value, auditEvent.ActorType, auditEvent.ActorId, auditEvent.Action, auditEvent.TargetType, auditEvent.TargetId, auditEvent.CorrelationId, auditEvent.Outcome, auditEvent.ReasonCode, JsonSerializer.Serialize(auditEvent.Metadata));
 
     private static async Task<ConnectorVersionRecord> ReadVersionForUpdateAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, Guid id, CancellationToken cancellationToken) =>
         await GetByIdAsync(connection, transaction, id, true, cancellationToken).ConfigureAwait(false);

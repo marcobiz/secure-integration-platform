@@ -388,6 +388,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/api/v1/tenants/{tenantId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["updateTenant"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/tenants/{tenantId}:disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["disableTenant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/api/v1/applications": {
         parameters: {
             query?: never;
@@ -398,6 +430,38 @@ export interface paths {
         get: operations["listApplications"];
         put?: never;
         post: operations["createApplication"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/applications/{applicationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["updateApplication"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/api/v1/applications/{applicationId}:disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["disableApplication"];
         delete?: never;
         options?: never;
         head?: never;
@@ -935,6 +999,9 @@ export interface components {
             code: string;
             displayName: string;
         };
+        UpdateTenant: {
+            displayName: string;
+        };
         Application: {
             /** Format: uuid */
             id: string;
@@ -951,6 +1018,11 @@ export interface components {
         };
         CreateApplication: {
             code: string;
+            displayName: string;
+            minimumBrokerVersion: string;
+            maximumBrokerVersion?: string | null;
+        };
+        UpdateApplication: {
             displayName: string;
             minimumBrokerVersion: string;
             maximumBrokerVersion?: string | null;
@@ -1107,15 +1179,21 @@ export interface components {
             connectorVersionId: string;
             /** Format: uuid */
             environmentId: string;
+            /** @description Logical keys with redacted values. */
             endpoints: {
                 [key: string]: string;
             };
+            /** @description Logical keys with redacted values. */
             secretReferences: {
                 [key: string]: string;
             };
+            /** @description Logical keys with redacted values. */
             certificateReferences: {
                 [key: string]: string;
             };
+            endpointChecksumSha256: string;
+            secretChecksumSha256: string;
+            certificateChecksumSha256: string;
             revision: number;
             checksumSha256: string;
             state: string;
@@ -1142,6 +1220,9 @@ export interface components {
             status: string;
             /** Format: date-time */
             requestedAt: string;
+        };
+        ApprovalAcceptanceRequest: {
+            bindingDigestSha256: string;
         };
         ApprovalPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Approval"][];
@@ -1803,6 +1884,62 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    updateTenant: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path: {
+                tenantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateTenant"];
+            };
+        };
+        responses: {
+            /** @description Tenant and audit updated atomically */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Tenant"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    disableTenant: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path: {
+                tenantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tenant disabled and audited atomically */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Tenant"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
     listApplications: {
         parameters: {
             query?: {
@@ -1849,6 +1986,62 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    updateApplication: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path: {
+                applicationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateApplication"];
+            };
+        };
+        responses: {
+            /** @description Application and audit updated atomically */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Application"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    disableApplication: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Opaque token obtained from /admin/auth/csrf. */
+                "X-CSRF-TOKEN": components["parameters"]["Csrf"];
+            };
+            path: {
+                applicationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Application disabled and audited atomically */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Application"];
+                };
             };
             default: components["responses"]["Problem"];
         };
@@ -2559,7 +2752,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalAcceptanceRequest"];
+            };
+        };
         responses: {
             /** @description Exact checksum approved by a distinct principal. */
             200: {

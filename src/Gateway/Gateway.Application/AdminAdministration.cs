@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text.Json.Serialization;
 using SecureIntegration.Gateway.Domain;
 
@@ -116,6 +117,8 @@ public sealed record ConnectorApprovalRecord(
 
 /// <summary>Redacted approval decision input.</summary>
 public sealed record ConnectorApprovalDecisionRequest(string? Comment);
+/// <summary>Approval acceptance bound to the exact digest displayed to the approver.</summary>
+public sealed record ConnectorApprovalAcceptanceRequest(string BindingDigestSha256);
 
 /// <summary>Minimal persistence contract for identities, roles and four-eyes records.</summary>
 public interface IAdminSecurityStore
@@ -151,19 +154,29 @@ public interface IAdminSecurityStore
 /// <summary>Policy hook applied inside the Connector service, not only at the HTTP endpoint.</summary>
 public interface IConnectorApprovalPolicy
 {
-    /// <summary>Rejects publication unless the exact checksum has a distinct valid approval.</summary>
-    Task EnsurePublishApprovedAsync(ConnectorVersionRecord version, byte[] bindingDigestSha256, string actor, CancellationToken cancellationToken);
+    /// <summary>Publishes through the policy-specific, fail-closed persistence path.</summary>
+    Task<ConnectorVersionRecord> PublishAsync(IConnectorConfigurationStore connectorStore, ConnectorVersionRecord version, long expectedRowVersion, long expectedPublicationRevision, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
 }
 
 /// <summary>Default production four-eyes policy.</summary>
 public sealed class FourEyesConnectorApprovalPolicy(IAdminSecurityStore store) : IConnectorApprovalPolicy
 {
     /// <inheritdoc />
-    public async Task EnsurePublishApprovedAsync(ConnectorVersionRecord version, byte[] bindingDigestSha256, string actor, CancellationToken cancellationToken)
+    public async Task<ConnectorVersionRecord> PublishAsync(IConnectorConfigurationStore connectorStore, ConnectorVersionRecord version, long expectedRowVersion, long expectedPublicationRevision, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
+        byte[] bindingDigestSha256 = await connectorStore.GetBindingBundleDigestAsync(version.Id, cancellationToken).ConfigureAwait(false);
         if (!await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, bindingDigestSha256, actor, cancellationToken).ConfigureAwait(false))
             throw new GatewayException("BGW-ADMIN-APPROVAL-REQUIRED", 409);
+        return await connectorStore.PublishApprovedAsync(version.Id, bindingDigestSha256, expectedRowVersion, expectedPublicationRevision, actor, correlationId, now, cancellationToken).ConfigureAwait(false);
     }
+}
+
+/// <summary>Explicit non-production compatibility policy. Registration is guarded by the host environment.</summary>
+public sealed class DevelopmentConnectorApprovalPolicy : IConnectorApprovalPolicy
+{
+    /// <inheritdoc />
+    public Task<ConnectorVersionRecord> PublishAsync(IConnectorConfigurationStore connectorStore, ConnectorVersionRecord version, long expectedRowVersion, long expectedPublicationRevision, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken) =>
+        connectorStore.PublishAsync(version.Id, expectedRowVersion, expectedPublicationRevision, actor, now, cancellationToken);
 }
 
 /// <summary>Resolves claims and enforces provider-neutral RBAC with optional tenant scope.</summary>
@@ -204,11 +217,15 @@ public sealed class ConnectorApprovalService(IAdminSecurityStore store, IConnect
     }
 
     /// <summary>Approves only as a distinct ConnectorApprover or SecurityAdministrator.</summary>
-    public async Task<ConnectorApprovalRecord> ApproveAsync(string connectorId, string version, AdminAccessContext actor, Guid correlationId, CancellationToken cancellationToken)
+    public async Task<ConnectorApprovalRecord> ApproveAsync(string connectorId, string version, string expectedBindingDigestSha256, AdminAccessContext actor, Guid correlationId, CancellationToken cancellationToken)
     {
         AdminAccessService.Require(actor, null, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
         ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
         byte[] bindingDigest = await connectors.GetBindingBundleDigestAsync(current.Id, cancellationToken).ConfigureAwait(false);
+        byte[] expected;
+        try { expected = Convert.FromHexString(expectedBindingDigestSha256); }
+        catch (FormatException) { throw new GatewayException("BGW-ADMIN-APPROVAL-DIGEST", 400); }
+        if (expected.Length != 32 || !CryptographicOperations.FixedTimeEquals(expected, bindingDigest)) throw new GatewayException("BGW-ADMIN-APPROVAL-STALE", 409);
         return await store.ApproveAsync(current.Id, current.ChecksumSha256, bindingDigest, current.CreatedBy, actor.Principal.Id, correlationId, clock.UtcNow, cancellationToken).ConfigureAwait(false);
     }
 

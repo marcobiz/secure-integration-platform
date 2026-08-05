@@ -31,10 +31,10 @@ public sealed class ConnectorConfigurationTests
         using JsonDocument sample = Sample();
         string json = sample.RootElement.GetRawText();
 
-        AssertIssue(json.Replace("\"1.0\"", "\"2.0\"", StringComparison.Ordinal), "CONNECTOR_SCHEMA_VERSION_UNSUPPORTED");
-        AssertIssue(json.Replace("sample-vendor-endpoint", "missing-endpoint", 1, StringComparison.Ordinal), "CONNECTOR_ENDPOINT_BINDING_UNKNOWN");
-        AssertIssue(json.Replace("\"allowedClientHeaders\": []", "\"allowedClientHeaders\": [\"Authorization\"]", StringComparison.Ordinal), "CONNECTOR_HEADER_FORBIDDEN");
-        AssertIssue(json.Replace("\"maximumRetries\": 0", "\"maximumRetries\": 1", StringComparison.Ordinal), "CONNECTOR_RETRY_REQUIRES_IDEMPOTENCY");
+        AssertIssue(json.Replace("\"1.0\"", "\"2.0\"", StringComparison.Ordinal), "BGW-CONNECTOR-SCHEMA-VERSION-UNSUPPORTED");
+        AssertIssue(json.Replace("sample-vendor-endpoint", "missing-endpoint", 1, StringComparison.Ordinal), "BGW-CONNECTOR-ENDPOINT-BINDING-UNKNOWN");
+        AssertIssue(json.Replace("\"allowedClientHeaders\": []", "\"allowedClientHeaders\": [\"Authorization\"]", StringComparison.Ordinal), "BGW-CONNECTOR-HEADER-FORBIDDEN");
+        AssertIssue(json.Replace("\"maximumRetries\": 0", "\"maximumRetries\": 1", StringComparison.Ordinal), "BGW-CONNECTOR-RETRY-REQUIRES-IDEMPOTENCY");
 
         void AssertIssue(string candidate, string expected)
         {
@@ -263,7 +263,7 @@ public sealed class ConnectorConfigurationTests
         public Fixture()
         {
             Catalog = new(Store, Validator, Clock, TimeSpan.FromMinutes(5));
-            Admin = new(Store, Validator, Catalog, Registry, Clock);
+            Admin = new(Store, Validator, Catalog, Registry, Clock, new DevelopmentConnectorApprovalPolicy());
         }
 
         public Guid EnvironmentId { get; } = Guid.NewGuid();

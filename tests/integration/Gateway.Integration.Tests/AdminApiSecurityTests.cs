@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using SecureIntegration.Gateway.Api;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
@@ -27,6 +28,16 @@ public sealed class AdminApiSecurityTests
         Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
         Assert.Contains("frame-ancestors 'none'", response.Headers.GetValues("Content-Security-Policy").Single(), StringComparison.Ordinal);
         Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
+    }
+
+    [Fact]
+    public async Task M5_IT_Middleware_denial_is_fail_closed_when_persistent_audit_fails()
+    {
+        await using DenialAuditFailureFactory factory = new();
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        using HttpResponseMessage response = await client.GetAsync("/admin/api/v1/dashboard", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Empty(factory.Services.GetRequiredService<InMemoryGatewayRegistry>().SnapshotAuditEvents());
     }
 
     [Fact]
@@ -70,6 +81,21 @@ public sealed class AdminApiSecurityTests
         string csrf = await LoginAsync(client, "security-admin", TestContext.Current.CancellationToken);
         Guid tenantId = await CreateAndGetIdAsync(client, "/admin/api/v1/tenants", new { code = "tenant-m5", displayName = "Tenant M5" }, csrf);
         Guid applicationId = await CreateAndGetIdAsync(client, "/admin/api/v1/applications", new { code = "app-m5", displayName = "App M5", minimumBrokerVersion = "3.0.0", maximumBrokerVersion = (string?)null }, csrf);
+        using (HttpRequestMessage updateTenant = new(HttpMethod.Put, $"/admin/api/v1/tenants/{tenantId:D}") { Content = JsonContent.Create(new { displayName = "Tenant M5 updated" }) })
+        {
+            updateTenant.Headers.Add("X-CSRF-TOKEN", csrf);
+            using HttpResponseMessage updated = await client.SendAsync(updateTenant, TestContext.Current.CancellationToken);
+            updated.EnsureSuccessStatusCode();
+        }
+        using (HttpRequestMessage disableApplication = new(HttpMethod.Post, $"/admin/api/v1/applications/{applicationId:D}:disable"))
+        {
+            disableApplication.Headers.Add("X-CSRF-TOKEN", csrf);
+            using HttpResponseMessage disabled = await client.SendAsync(disableApplication, TestContext.Current.CancellationToken);
+            disabled.EnsureSuccessStatusCode();
+        }
+        GatewayAuditEvent[] atomicAudit = factory.Services.GetRequiredService<InMemoryGatewayRegistry>().SnapshotAuditEvents().ToArray();
+        Assert.Single(atomicAudit, value => value.Action == "tenant.update" && value.TargetId == tenantId.ToString("D"));
+        Assert.Single(atomicAudit, value => value.Action == "application.disable" && value.TargetId == applicationId.ToString("D"));
 
         // Development catalogue is seeded only with resources explicitly created by this test.
         Guid environmentId = Guid.NewGuid();
@@ -296,7 +322,12 @@ public sealed class AdminApiSecurityTests
         approvalRequest.Headers.Add("X-CSRF-TOKEN", csrf);
         using HttpResponseMessage requested = await client.SendAsync(approvalRequest, TestContext.Current.CancellationToken);
         requested.EnsureSuccessStatusCode();
-        using HttpRequestMessage approve = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approvals");
+        using JsonDocument requestedBody = JsonDocument.Parse(await requested.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        using HttpRequestMessage staleApprove = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approvals") { Content = JsonContent.Create(new { bindingDigestSha256 = new string('A', 64) }) };
+        staleApprove.Headers.Add("X-CSRF-TOKEN", csrf);
+        using HttpResponseMessage staleApproval = await client.SendAsync(staleApprove, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Conflict, staleApproval.StatusCode);
+        using HttpRequestMessage approve = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approvals") { Content = JsonContent.Create(new { bindingDigestSha256 = requestedBody.RootElement.GetProperty("bindingDigestSha256").GetString() }) };
         approve.Headers.Add("X-CSRF-TOKEN", csrf);
         using HttpResponseMessage selfApproval = await client.SendAsync(approve, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, selfApproval.StatusCode);
@@ -309,6 +340,7 @@ public sealed class AdminApiSecurityTests
         GatewayAuditEvent[] denials = factory.Services.GetRequiredService<InMemoryGatewayRegistry>().SnapshotAuditEvents().Where(value => value.Outcome == "denied").ToArray();
         Assert.Single(denials, value => value.ReasonCode == "BGW-CONNECTOR-BINDING-SCOPE");
         Assert.Single(denials, value => value.ReasonCode == "BGW-ADMIN-FOUR-EYES");
+        Assert.Single(denials, value => value.ReasonCode == "BGW-ADMIN-APPROVAL-STALE");
         Assert.Single(denials, value => value.ReasonCode == "BGW-ADMIN-BOOTSTRAP-DENIED");
         Assert.All(denials, value => { Assert.Equal("admin.request.denied", value.Action); Assert.Equal("method", Assert.Single(value.Metadata.Keys)); });
         Assert.DoesNotContain("canary-not-a-secret", System.Text.Json.JsonSerializer.Serialize(denials), StringComparison.OrdinalIgnoreCase);
@@ -323,6 +355,50 @@ public sealed class AdminApiSecurityTests
             builder.UseSetting("Gateway:Admin:Mode", "DevelopmentAuth");
         });
         Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+    }
+
+    [Fact]
+    public void M5_IT_Production_cannot_disable_four_eyes()
+    {
+        using WebApplicationFactory<Program> factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Production");
+            builder.UseSetting("Gateway:Admin:Mode", "Disabled");
+            builder.UseSetting("Gateway:Admin:RequireFourEyes", "false");
+        });
+
+        Exception failure = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+        Assert.Contains("four-eyes", failure.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void M5_IT_Oidc_cannot_disable_four_eyes_even_in_test_environment()
+    {
+        using WebApplicationFactory<Program> factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Testing");
+            builder.UseSetting("Gateway:Admin:Mode", "Oidc");
+            builder.UseSetting("Gateway:Admin:RequireFourEyes", "false");
+        });
+
+        Exception failure = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+        Assert.Contains("OIDC requires four-eyes", failure.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task M5_IT_Explicit_loopback_development_can_use_development_publication_policy()
+    {
+        await using WebApplicationFactory<Program> factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Testing");
+            builder.UseSetting("Gateway:Admin:Mode", "DevelopmentAuth");
+            builder.UseSetting("Gateway:Admin:RequireFourEyes", "false");
+        });
+
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        using HttpResponseMessage response = await client.GetAsync("/health/live", TestContext.Current.CancellationToken);
+        response.EnsureSuccessStatusCode();
+        Assert.IsType<DevelopmentConnectorApprovalPolicy>(factory.Services.GetRequiredService<IConnectorApprovalPolicy>());
     }
 
     [Theory]
@@ -465,5 +541,27 @@ public sealed class AdminDevelopmentFactory : WebApplicationFactory<Program>
     {
         builder.UseEnvironment("Testing");
         builder.UseSetting("Gateway:Admin:Mode", "DevelopmentAuth");
+    }
+}
+
+public sealed class DenialAuditFailureFactory : WebApplicationFactory<Program>
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.UseEnvironment("Testing");
+        builder.UseSetting("Gateway:Admin:Mode", "DevelopmentAuth");
+        builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<IAdminTransactionFaultInjector>();
+            services.AddSingleton<IAdminTransactionFaultInjector>(new DenialAuditFaultInjector());
+        });
+    }
+
+    private sealed class DenialAuditFaultInjector : IAdminTransactionFaultInjector
+    {
+        public void Check(string boundary)
+        {
+            if (boundary == "audit.append.before-state") throw new InvalidOperationException("Synthetic audit persistence failure.");
+        }
     }
 }

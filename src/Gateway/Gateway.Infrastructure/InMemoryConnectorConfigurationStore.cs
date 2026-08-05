@@ -5,7 +5,7 @@ using SecureIntegration.Gateway.Domain;
 namespace SecureIntegration.Gateway.Infrastructure;
 
 /// <summary>Deterministic Connector lifecycle store for Development and tests.</summary>
-public sealed class InMemoryConnectorConfigurationStore : IConnectorConfigurationStore
+public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditRegistry = null) : IConnectorConfigurationStore
 {
     private readonly object gate = new();
     private readonly Dictionary<string, Guid> connectorIds = new(StringComparer.Ordinal);
@@ -34,6 +34,31 @@ public sealed class InMemoryConnectorConfigurationStore : IConnectorConfiguratio
             versionKeys.Add(key, created.Id);
             return Task.FromResult(Clone(created));
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<ConnectorVersionRecord> CreateDraftWithAuditAsync(ConnectorVersionRecord draft, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        ConnectorVersionRecord created = await CreateDraftAsync(draft, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (auditRegistry is not null) await auditRegistry.AppendAuditAsync(auditEvent, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            lock (gate)
+            {
+                versions.Remove(created.Id);
+                versionKeys.Remove(VersionKey(created.ConnectorSlug, created.Version));
+                if (!versions.Values.Any(value => value.ConnectorId == created.ConnectorId))
+                {
+                    connectorIds.Remove(created.ConnectorSlug);
+                    publicationRevisions.Remove(created.ConnectorId);
+                }
+            }
+            throw;
+        }
+        return created;
     }
 
     /// <inheritdoc />
@@ -90,6 +115,24 @@ public sealed class InMemoryConnectorConfigurationStore : IConnectorConfiguratio
             versions[versionId] = updated;
             return Task.FromResult(Clone(updated));
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<ConnectorVersionRecord> MarkValidatedWithAuditAsync(Guid versionId, long expectedRowVersion, DateTimeOffset now, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        ConnectorVersionRecord previous;
+        lock (gate) previous = Clone(Required(versionId));
+        ConnectorVersionRecord validated = await MarkValidatedAsync(versionId, expectedRowVersion, now, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (auditRegistry is not null) await auditRegistry.AppendAuditAsync(auditEvent, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            lock (gate) versions[versionId] = previous;
+            throw;
+        }
+        return validated;
     }
 
     /// <inheritdoc />

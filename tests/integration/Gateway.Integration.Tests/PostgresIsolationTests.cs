@@ -16,7 +16,7 @@ public sealed class PostgresIsolationTests
     public async Task IT_DAT_PostgreSQL18_migration_and_RLS_isolate_tenants_when_configured()
     {
         string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION") ?? Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connectionString)) return;
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("PostgreSQL migration/admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
 
         await using NpgsqlConnection connection = new(connectionString);
         await connection.OpenAsync(TestContext.Current.CancellationToken);
@@ -49,7 +49,7 @@ public sealed class PostgresIsolationTests
     public async Task IT_DAT_PostgreSQL18_registry_enrollment_grant_replay_and_revocation_when_configured()
     {
         string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connectionString)) return;
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
         await using NpgsqlDataSource adminDataSource = NpgsqlDataSource.Create(connectionString);
         string migrationConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION") ?? connectionString;
         string runtimeRole = "gateway_test_" + Guid.NewGuid().ToString("N");
@@ -137,21 +137,63 @@ public sealed class PostgresIsolationTests
         string roleRevocationSql = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0006_admin_role_revocation_m5.sql"));
         Assert.Contains("GRANT DELETE ON gateway.admin_role_assignment TO gateway_admin", roleRevocationSql, StringComparison.Ordinal);
         Assert.DoesNotContain("gateway_runtime", roleRevocationSql, StringComparison.Ordinal);
+        string bindingImmutabilitySql = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0007_binding_bundle_immutability_m5.sql"));
+        Assert.Contains("GRANT UPDATE (state)", bindingImmutabilitySql, StringComparison.Ordinal);
+        Assert.Contains("connector binding revisions are immutable", bindingImmutabilitySql, StringComparison.Ordinal);
+        Assert.Contains("binding activation requires a current four-eyes approval", bindingImmutabilitySql, StringComparison.Ordinal);
+        Assert.DoesNotContain("GRANT UPDATE ON gateway.connector_binding_bundle_version", bindingImmutabilitySql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task M5_IT_DAT_PostgreSQL18_admin_pagination_has_total_order_and_empty_page_count_when_configured()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        await ApplyMigrationAsync();
+        await using AdminPostgresDataSource pool = new(connectionString);
+        PostgresGatewayRegistry registry = new(pool.Value);
+        PostgresAdminDirectoryStore directory = new(pool);
+        int tenantBaseline = (await directory.ListTenantsAsync(0, 1, TestContext.Current.CancellationToken)).Total;
+        int applicationBaseline = (await directory.ListApplicationsAsync(0, 1, TestContext.Current.CancellationToken)).Total;
+        DateTimeOffset tiedCreatedAt = DateTimeOffset.UtcNow;
+        string prefix = "page-" + Guid.NewGuid().ToString("N")[..12];
+        for (int index = 0; index < 101; index++)
+        {
+            await registry.AddTenantAsync(new(Guid.NewGuid(), $"{prefix}-t-{index:D3}", $"Tenant {index:D3}", TenantStatus.Active, tiedCreatedAt), TestContext.Current.CancellationToken);
+            await registry.AddApplicationAsync(new(Guid.NewGuid(), $"{prefix}-a-{index:D3}", $"Application {index:D3}", ApplicationStatus.Active, "1.0.0", null, tiedCreatedAt), TestContext.Current.CancellationToken);
+        }
+
+        int tenantTotal = tenantBaseline + 101;
+        AdminPage<TenantRecord> page51 = await directory.ListTenantsAsync(50, 1, TestContext.Current.CancellationToken);
+        AdminPage<TenantRecord> page101 = await directory.ListTenantsAsync(100, 1, TestContext.Current.CancellationToken);
+        AdminPage<TenantRecord> page101Repeat = await directory.ListTenantsAsync(100, 1, TestContext.Current.CancellationToken);
+        AdminPage<TenantRecord> empty = await directory.ListTenantsAsync(tenantTotal, 1, TestContext.Current.CancellationToken);
+        Assert.Equal(tenantTotal, page51.Total); Assert.Single(page51.Items);
+        Assert.Equal(tenantTotal, page101.Total); Assert.Single(page101.Items);
+        Assert.Equal(page101.Items[0].Id, page101Repeat.Items[0].Id);
+        Assert.Equal(tenantTotal, empty.Total); Assert.Empty(empty.Items);
+        int applicationTotal = applicationBaseline + 101;
+        AdminPage<ApplicationRecord> applications = await directory.ListApplicationsAsync(applicationTotal, 1, TestContext.Current.CancellationToken);
+        Assert.Equal(applicationTotal, applications.Total); Assert.Empty(applications.Items);
     }
 
     [Fact]
     public async Task M4_IT_DAT_PostgreSQL18_connector_publication_binding_and_rollback_when_configured()
     {
         string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connectionString)) return;
-        await using NpgsqlDataSource dataSource = NpgsqlDataSource.Create(connectionString);
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        await using AdminPostgresDataSource adminPool = new(connectionString);
+        NpgsqlDataSource dataSource = adminPool.Value;
         await ApplyMigrationAsync();
         PostgresConnectorConfigurationStore store = new(dataSource);
         PostgresGatewayRegistry registry = new(dataSource);
+        PostgresAdminSecurityStore security = new(adminPool);
         TestClock clock = new(DateTimeOffset.UtcNow);
         ConnectorDefinitionValidator validator = new();
         PublishedConnectorCatalog catalog = new(store, validator, clock, TimeSpan.FromMinutes(5));
-        ConnectorAdministrationService admin = new(store, validator, catalog, registry, clock);
+        ConnectorAdministrationService admin = new(store, validator, catalog, registry, clock, new FourEyesConnectorApprovalPolicy(security));
+        AdminPrincipalRecord editor = await security.EnsurePrincipalAsync(new("https://m4-postgres.invalid", "editor-" + Guid.NewGuid().ToString("N"), "Editor", null), TestContext.Current.CancellationToken);
+        AdminPrincipalRecord approver = await security.EnsurePrincipalAsync(new("https://m4-postgres.invalid", "approver-" + Guid.NewGuid().ToString("N"), "Approver", null), TestContext.Current.CancellationToken);
         Guid suffix = Guid.NewGuid();
         string connectorId = "postgres-" + suffix.ToString("N");
         Guid environmentId = Guid.NewGuid();
@@ -162,13 +204,17 @@ public sealed class PostgresIsolationTests
         {
             string candidate = source.RootElement.GetRawText().Replace("sample-secure-service", connectorId, StringComparison.Ordinal).Replace("\"version\": \"1.0.0\"", $"\"version\": \"{version}\"", StringComparison.Ordinal);
             using JsonDocument definition = JsonDocument.Parse(candidate);
-            ConnectorVersionResource imported = await admin.ImportAsync(definition.RootElement, null, "postgres-test", Guid.NewGuid(), TestContext.Current.CancellationToken);
-            ConnectorVersionResource validated = await admin.ValidateStoredAsync(connectorId, version, imported.RowVersion, "postgres-test", Guid.NewGuid(), TestContext.Current.CancellationToken);
+            ConnectorVersionResource imported = await admin.ImportAsync(definition.RootElement, null, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+            ConnectorVersionResource validated = await admin.ValidateStoredAsync(connectorId, version, imported.RowVersion, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
             _ = await admin.PutBindingsAsync(connectorId, new(environmentId,
                 new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/" },
                 new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://key", ["sample-vendor-client-certificate"] = "synthetic://cert" },
-                ConnectorVersion: version), "postgres-test", Guid.NewGuid(), TestContext.Current.CancellationToken);
-            return await admin.PublishAsync(connectorId, version, validated.RowVersion, revision, "postgres-test", Guid.NewGuid(), TestContext.Current.CancellationToken);
+                ConnectorVersion: version), editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+            ConnectorVersionRecord stored = await store.GetVersionAsync(connectorId, version, TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("Imported version missing.");
+            byte[] digest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
+            _ = await security.RequestApprovalAsync(stored, digest, editor.Id, Guid.NewGuid(), clock.UtcNow, TestContext.Current.CancellationToken);
+            _ = await security.ApproveAsync(stored.Id, stored.ChecksumSha256, digest, stored.CreatedBy, approver.Id, Guid.NewGuid(), clock.UtcNow.AddMilliseconds(1), TestContext.Current.CancellationToken);
+            return await admin.PublishAsync(connectorId, version, validated.RowVersion, revision, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
         }
 
         ConnectorVersionResource v1 = await ImportPublishAsync("1.0.0", 0);
@@ -191,7 +237,7 @@ public sealed class PostgresIsolationTests
     public async Task M5_IT_DAT_Approved_binding_digest_and_publication_are_atomic_under_concurrent_mutation_when_configured()
     {
         string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connectionString)) return;
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
         await using AdminPostgresDataSource adminPool = new(connectionString);
         await ApplyMigrationAsync();
         PostgresConnectorConfigurationStore store = new(adminPool.Value);
@@ -200,7 +246,7 @@ public sealed class PostgresIsolationTests
         TestClock clock = new(DateTimeOffset.UtcNow);
         ConnectorDefinitionValidator validator = new();
         PublishedConnectorCatalog catalog = new(store, validator, clock, TimeSpan.FromMinutes(5));
-        ConnectorAdministrationService admin = new(store, validator, catalog, registry, clock);
+        ConnectorAdministrationService admin = new(store, validator, catalog, registry, clock, new DevelopmentConnectorApprovalPolicy());
         AdminPrincipalRecord editor = await security.EnsurePrincipalAsync(new("https://m5-postgres.invalid", "editor-" + Guid.NewGuid().ToString("N"), "Editor", null), TestContext.Current.CancellationToken);
         AdminPrincipalRecord approver = await security.EnsurePrincipalAsync(new("https://m5-postgres.invalid", "approver-" + Guid.NewGuid().ToString("N"), "Approver", null), TestContext.Current.CancellationToken);
         Guid environmentId = Guid.NewGuid();
@@ -247,13 +293,40 @@ public sealed class PostgresIsolationTests
         ConnectorVersionRecord published = await store.PublishApprovedAsync(after.Id, currentDigest, after.RowVersion, 0, approver.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow.AddSeconds(5), TestContext.Current.CancellationToken);
         Assert.Equal(ConnectorVersionState.Published, published.State);
         Assert.Equal(1L, await audit.ExecuteScalarAsync(TestContext.Current.CancellationToken));
+
+        AdminPage<ConnectorBindingSet> bindingPage = await store.ListBindingsPageAsync(published.Id, 0, 10, environmentId, TestContext.Current.CancellationToken);
+        ConnectorBindingSet activeBinding = Assert.Single(bindingPage.Items, value => value.State == ConnectorBindingState.Active);
+        await using NpgsqlConnection tamperConnection = await adminPool.Value.OpenConnectionAsync(TestContext.Current.CancellationToken);
+        await using (NpgsqlCommand roleCheck = new("SELECT rolsuper FROM pg_roles WHERE rolname=current_user", tamperConnection))
+            Assert.False((bool)(await roleCheck.ExecuteScalarAsync(TestContext.Current.CancellationToken))!);
+
+        async Task AssertBindingTamperDeniedAsync(string assignment, object value)
+        {
+            await using NpgsqlCommand command = new($"UPDATE gateway.connector_binding_bundle_version SET {assignment}=$2 WHERE id=$1", tamperConnection);
+            command.Parameters.AddWithValue(activeBinding.Id);
+            command.Parameters.AddWithValue(value);
+            _ = await Assert.ThrowsAsync<PostgresException>(() => command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken));
+        }
+
+        await AssertBindingTamperDeniedAsync("endpoints_json", JsonSerializer.Serialize(new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://tamper.invalid/" }));
+        await AssertBindingTamperDeniedAsync("checksum_sha256", RandomNumberGenerator.GetBytes(32));
+        await AssertBindingTamperDeniedAsync("connector_id", "tampered-connector");
+        await AssertBindingTamperDeniedAsync("environment_id", Guid.NewGuid());
+        await AssertBindingTamperDeniedAsync("revision", activeBinding.Revision + 1);
+        await AssertBindingTamperDeniedAsync("state", "draft");
+
+        PublishedConnectorSnapshot unchanged = await store.GetPublishedSnapshotAsync(connectorId, environmentId, TestContext.Current.CancellationToken)
+            ?? throw new InvalidOperationException("Published snapshot disappeared after a rejected tamper attempt.");
+        Assert.Equal("https://controlled-attacker.example.test/", unchanged.Bindings.Endpoints["sample-vendor-endpoint"].AbsoluteUri);
+        Assert.Equal(activeBinding.Revision, unchanged.Bindings.Revision);
+        Assert.Equal(activeBinding.ChecksumSha256, unchanged.Bindings.ChecksumSha256);
     }
 
     [Fact]
     public async Task M5_IT_DAT_Fault_injection_rolls_back_admin_state_and_audit_when_configured()
     {
         string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connectionString)) return;
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
         string migrationConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION") ?? connectionString;
         await using AdminPostgresDataSource adminPool = new(migrationConnectionString);
         await using AdminPostgresDataSource storePool = new(connectionString);
@@ -264,6 +337,52 @@ public sealed class PostgresIsolationTests
         await setupRegistry.AddTenantAsync(new(tenantId, "fault-" + tenantId.ToString("N"), "Fault tenant", TenantStatus.Active, now), TestContext.Current.CancellationToken);
         await setupRegistry.AddApplicationAsync(new(applicationId, "fault-" + applicationId.ToString("N"), "Fault app", ApplicationStatus.Active, "1.0.0", null, now), TestContext.Current.CancellationToken);
         await setupRegistry.AddEnvironmentAsync(new(environmentId, "f-" + environmentId.ToString("N")[..20], "Fault environment", false), TestContext.Current.CancellationToken);
+
+        Guid failedTenantId = Guid.NewGuid(); Guid failedTenantCorrelation = Guid.NewGuid();
+        PostgresGatewayRegistry faultedTenant = new(storePool.Value, new ThrowingFaultInjector("tenant.create.after-state"));
+        await Assert.ThrowsAsync<InjectedFailureException>(() => faultedTenant.AddTenantWithAuditAsync(new(failedTenantId, "failed-" + failedTenantId.ToString("N"), "Failed tenant", TenantStatus.Active, now), Audit(failedTenantId, failedTenantCorrelation, "tenant.create", failedTenantId.ToString("D"), now), TestContext.Current.CancellationToken));
+        Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.tenant WHERE id=$1", failedTenantId));
+        Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", failedTenantCorrelation));
+
+        Guid failedApplicationId = Guid.NewGuid(); Guid failedApplicationCorrelation = Guid.NewGuid();
+        PostgresGatewayRegistry faultedApplication = new(storePool.Value, new ThrowingFaultInjector("application.create.after-state"));
+        GatewayAuditEvent applicationAudit = new(Guid.NewGuid(), now, null, "administrator", "fault-test", "application.create", "application", failedApplicationId.ToString("D"), failedApplicationCorrelation, "success", "BGW-FAULT-TEST", new Dictionary<string, string>());
+        await Assert.ThrowsAsync<InjectedFailureException>(() => faultedApplication.AddApplicationWithAuditAsync(new(failedApplicationId, "failed-" + failedApplicationId.ToString("N"), "Failed application", ApplicationStatus.Active, "1.0.0", null, now), applicationAudit, TestContext.Current.CancellationToken));
+        Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.application WHERE id=$1", failedApplicationId));
+        Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", failedApplicationCorrelation));
+
+        foreach (string point in new[] { "tenant.update.after-state", "tenant.disable.after-state" })
+        {
+            Guid correlation = Guid.NewGuid(); PostgresGatewayRegistry faulted = new(storePool.Value, new ThrowingFaultInjector(point));
+            Task mutation = point.Contains("update", StringComparison.Ordinal)
+                ? faulted.UpdateTenantWithAuditAsync(tenantId, "Tampered tenant", Audit(tenantId, correlation, "tenant.update", tenantId.ToString("D"), now), TestContext.Current.CancellationToken)
+                : faulted.DisableTenantWithAuditAsync(tenantId, Audit(tenantId, correlation, "tenant.disable", tenantId.ToString("D"), now), TestContext.Current.CancellationToken);
+            await Assert.ThrowsAsync<InjectedFailureException>(() => mutation);
+            Assert.Equal("Fault tenant", await TextScalarAsync(adminPool.Value, "SELECT display_name FROM gateway.tenant WHERE id=$1", tenantId));
+            Assert.Equal("active", await TextScalarAsync(adminPool.Value, "SELECT status FROM gateway.tenant WHERE id=$1", tenantId));
+            Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", correlation));
+        }
+
+        foreach (string point in new[] { "application.update.after-state", "application.disable.after-state" })
+        {
+            Guid correlation = Guid.NewGuid(); PostgresGatewayRegistry faulted = new(storePool.Value, new ThrowingFaultInjector(point));
+            GatewayAuditEvent eventValue = new(Guid.NewGuid(), now, null, "administrator", "fault-test", point.Replace(".after-state", "", StringComparison.Ordinal), "application", applicationId.ToString("D"), correlation, "success", "BGW-FAULT-TEST", new Dictionary<string, string>());
+            Task mutation = point.Contains("update", StringComparison.Ordinal)
+                ? faulted.UpdateApplicationWithAuditAsync(applicationId, "Tampered app", "9.0.0", null, eventValue, TestContext.Current.CancellationToken)
+                : faulted.DisableApplicationWithAuditAsync(applicationId, eventValue, TestContext.Current.CancellationToken);
+            await Assert.ThrowsAsync<InjectedFailureException>(() => mutation);
+            Assert.Equal("Fault app", await TextScalarAsync(adminPool.Value, "SELECT display_name FROM gateway.application WHERE id=$1", applicationId));
+            Assert.Equal("active", await TextScalarAsync(adminPool.Value, "SELECT status FROM gateway.application WHERE id=$1", applicationId));
+            Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", correlation));
+        }
+
+        using (CancellationTokenSource cancelled = new())
+        {
+            cancelled.Cancel(); Guid cancellationCorrelation = Guid.NewGuid();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => setupRegistry.UpdateTenantWithAuditAsync(tenantId, "Cancelled tenant", Audit(tenantId, cancellationCorrelation, "tenant.update", tenantId.ToString("D"), now), cancelled.Token));
+            Assert.Equal("Fault tenant", await TextScalarAsync(adminPool.Value, "SELECT display_name FROM gateway.tenant WHERE id=$1", tenantId));
+            Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", cancellationCorrelation));
+        }
 
         foreach (string point in new[] { "installation.create.after-installation", "installation.create.after-activation" })
         {
@@ -321,7 +440,19 @@ public sealed class PostgresIsolationTests
         using JsonDocument definition = JsonDocument.Parse(source.RootElement.GetRawText().Replace("sample-secure-service", connectorId, StringComparison.Ordinal));
         ValidatedConnectorDefinition canonical = validator.ValidateRequired(definition.RootElement);
         PostgresConnectorConfigurationStore connectorStore = new(storePool.Value);
+        Guid failedImportCorrelation = Guid.NewGuid(); Guid failedDraftId = Guid.NewGuid();
+        PostgresConnectorConfigurationStore faultedImport = new(storePool.Value, new ThrowingFaultInjector("connector.import.after-state"));
+        GatewayAuditEvent importAudit = new(Guid.NewGuid(), now, null, "administrator", editor.Id.ToString("D"), "connector.import", "connectorVersion", connectorId + "/" + canonical.Version, failedImportCorrelation, "success", "BGW-CONNECTOR-IMPORTED", new Dictionary<string, string>());
+        await Assert.ThrowsAsync<InjectedFailureException>(() => faultedImport.CreateDraftWithAuditAsync(new(failedDraftId, Guid.Empty, connectorId, canonical.Version, canonical.SchemaVersion, ConnectorVersionState.Draft, canonical.CanonicalJson, Convert.FromHexString(canonical.ChecksumSha256), editor.Id.ToString("D"), now, 0), importAudit, TestContext.Current.CancellationToken));
+        Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.connector_version WHERE id=$1", failedDraftId));
+        Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", failedImportCorrelation));
         ConnectorVersionRecord draft = await connectorStore.CreateDraftAsync(new(Guid.NewGuid(), Guid.Empty, connectorId, canonical.Version, canonical.SchemaVersion, ConnectorVersionState.Draft, canonical.CanonicalJson, Convert.FromHexString(canonical.ChecksumSha256), editor.Id.ToString("D"), now, 0), TestContext.Current.CancellationToken);
+        Guid failedValidationCorrelation = Guid.NewGuid();
+        PostgresConnectorConfigurationStore faultedValidation = new(storePool.Value, new ThrowingFaultInjector("connector.validate.after-state"));
+        GatewayAuditEvent validationAudit = new(Guid.NewGuid(), now, null, "administrator", editor.Id.ToString("D"), "connector.validate", "connectorVersion", connectorId + "/" + canonical.Version, failedValidationCorrelation, "success", "BGW-CONNECTOR-VALIDATED", new Dictionary<string, string>());
+        await Assert.ThrowsAsync<InjectedFailureException>(() => faultedValidation.MarkValidatedWithAuditAsync(draft.Id, draft.RowVersion, now, validationAudit, TestContext.Current.CancellationToken));
+        Assert.Equal("draft", await TextScalarAsync(adminPool.Value, "SELECT state FROM gateway.connector_version WHERE id=$1", draft.Id));
+        Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", failedValidationCorrelation));
         ConnectorVersionRecord validated = await connectorStore.MarkValidatedAsync(draft.Id, draft.RowVersion, now, TestContext.Current.CancellationToken);
         Guid approvalCorrelation = Guid.NewGuid();
         PostgresAdminSecurityStore faultedApproval = new(storePool, new ThrowingFaultInjector("connector.approval.request.after-state"));
@@ -393,7 +524,7 @@ public sealed class PostgresIsolationTests
     public async Task M5_IT_DAT_Postgres_admin_sessions_are_hashed_expiring_and_revoked_on_privilege_change_when_configured()
     {
         string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connectionString)) return;
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
         await using AdminPostgresDataSource adminPool = new(connectionString);
         await ApplyMigrationAsync();
         PostgresAdminSecurityStore security = new(adminPool);

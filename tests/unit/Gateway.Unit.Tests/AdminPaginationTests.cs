@@ -34,10 +34,12 @@ public sealed class AdminPaginationTests
         }
         InMemoryAdminDirectoryStore directory = new(registry);
 
-        AssertPage(await directory.ListTenantsAsync(100, 1, TestContext.Current.CancellationToken));
-        AssertPage(await directory.ListInstallationsAsync(firstTenant, 100, 1, TestContext.Current.CancellationToken));
-        AssertPage(await directory.ListGrantsAsync(firstTenant, 100, 1, TestContext.Current.CancellationToken));
-        AssertPage(await directory.ListAuditAsync(firstTenant, 100, 1, TestContext.Current.CancellationToken));
+        AssertPage(await directory.ListTenantsAsync(50, 1, TestContext.Current.CancellationToken), 50);
+        AssertPage(await directory.ListTenantsAsync(100, 1, TestContext.Current.CancellationToken), 100);
+        AssertEmptyPage(await directory.ListTenantsAsync(101, 1, TestContext.Current.CancellationToken));
+        AssertPage(await directory.ListInstallationsAsync(firstTenant, 100, 1, TestContext.Current.CancellationToken), 100);
+        AssertPage(await directory.ListGrantsAsync(firstTenant, 100, 1, TestContext.Current.CancellationToken), 100);
+        AssertPage(await directory.ListAuditAsync(firstTenant, 100, 1, TestContext.Current.CancellationToken), 100);
     }
 
     [Fact]
@@ -51,7 +53,7 @@ public sealed class AdminPaginationTests
             firstVersion ??= draft;
         }
         AdminPage<ConnectorVersionRecord> versions = await connectors.ListVersionsPageAsync("paged-connector", 100, 1, null, TestContext.Current.CancellationToken);
-        AssertPage(versions);
+        AssertPage(versions, 100);
 
         ConnectorVersionRecord validated = await connectors.MarkValidatedAsync(firstVersion!.Id, firstVersion.RowVersion, Now, TestContext.Current.CancellationToken);
         Guid environmentId = Guid.NewGuid();
@@ -63,7 +65,7 @@ public sealed class AdminPaginationTests
                 new Dictionary<string, string> { ["secret"] = "synthetic://secret" },
                 new Dictionary<string, string>(), 0, Convert.ToHexString(SHA256.HashData(BitConverter.GetBytes(index))), ConnectorBindingState.Draft, Now.AddSeconds(index), "editor"), expected, Guid.NewGuid(), TestContext.Current.CancellationToken);
         }
-        AssertPage(await connectors.ListBindingsPageAsync(validated.Id, 100, 1, environmentId, TestContext.Current.CancellationToken));
+        AssertPage(await connectors.ListBindingsPageAsync(validated.Id, 100, 1, environmentId, TestContext.Current.CancellationToken), 100);
 
         InMemoryAdminSecurityStore security = new();
         AdminPrincipalRecord principal = await security.EnsurePrincipalAsync(new("https://issuer.example.invalid", "paged", "Paged", null), TestContext.Current.CancellationToken);
@@ -72,15 +74,22 @@ public sealed class AdminPaginationTests
             await security.AssignRoleAsync(principal.Id, AdminRole.Viewer, Guid.NewGuid(), principal.Id, Guid.NewGuid(), Now.AddSeconds(index), TestContext.Current.CancellationToken);
             await security.RequestApprovalAsync(validated, SHA256.HashData(BitConverter.GetBytes(index)), principal.Id, Guid.NewGuid(), Now.AddSeconds(index), TestContext.Current.CancellationToken);
         }
-        AssertPage(await security.ListAssignmentsAsync(100, 1, principal.Id, null, TestContext.Current.CancellationToken));
-        AssertPage(await security.ListApprovalsPageAsync(validated.Id, 100, 1, TestContext.Current.CancellationToken));
+        AssertPage(await security.ListAssignmentsAsync(100, 1, principal.Id, null, TestContext.Current.CancellationToken), 100);
+        AssertPage(await security.ListApprovalsPageAsync(validated.Id, 100, 1, TestContext.Current.CancellationToken), 100);
     }
 
-    private static void AssertPage<T>(AdminPage<T> page)
+    private static void AssertPage<T>(AdminPage<T> page, int offset)
     {
         Assert.Equal(101, page.Total);
-        Assert.Equal(100, page.Offset);
+        Assert.Equal(offset, page.Offset);
         Assert.Equal(1, page.Limit);
         Assert.Single(page.Items);
+    }
+
+    private static void AssertEmptyPage<T>(AdminPage<T> page)
+    {
+        Assert.Equal(101, page.Total);
+        Assert.Equal(101, page.Offset);
+        Assert.Empty(page.Items);
     }
 }

@@ -170,7 +170,7 @@ public sealed class SecureLayerVerticalSliceTests
             InMemoryConnectorConfigurationStore connectorStore = new();
             ConnectorDefinitionValidator connectorValidator = new();
             PublishedConnectorCatalog connectorCatalog = new(connectorStore, connectorValidator, gatewayClock, TimeSpan.FromMinutes(5));
-            ConnectorAdministrationService connectorAdmin = new(connectorStore, connectorValidator, connectorCatalog, gatewayRegistry, gatewayClock);
+            ConnectorAdministrationService connectorAdmin = new(connectorStore, connectorValidator, connectorCatalog, gatewayRegistry, gatewayClock, new DevelopmentConnectorApprovalPolicy());
             ConnectorVersionResource validated;
             using (JsonDocument sample = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "Samples", "sample-secure-service.connector.json"))))
             {

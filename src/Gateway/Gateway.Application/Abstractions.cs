@@ -23,8 +23,20 @@ public interface IGatewayRegistry
 {
     /// <summary>Adds a Tenant.</summary>
     Task AddTenantAsync(TenantRecord tenant, CancellationToken cancellationToken);
+    /// <summary>Adds a Tenant and its administrative audit event atomically.</summary>
+    Task AddTenantWithAuditAsync(TenantRecord tenant, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
+    /// <summary>Updates Tenant metadata and audit atomically.</summary>
+    Task<TenantRecord> UpdateTenantWithAuditAsync(Guid tenantId, string displayName, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
+    /// <summary>Disables a Tenant and appends its audit atomically.</summary>
+    Task<TenantRecord> DisableTenantWithAuditAsync(Guid tenantId, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Adds an Application.</summary>
     Task AddApplicationAsync(ApplicationRecord application, CancellationToken cancellationToken);
+    /// <summary>Adds an Application and its administrative audit event atomically.</summary>
+    Task AddApplicationWithAuditAsync(ApplicationRecord application, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
+    /// <summary>Updates Application metadata and audit atomically.</summary>
+    Task<ApplicationRecord> UpdateApplicationWithAuditAsync(Guid applicationId, string displayName, string minimumBrokerVersion, string? maximumBrokerVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
+    /// <summary>Disables an Application and appends its audit atomically.</summary>
+    Task<ApplicationRecord> DisableApplicationWithAuditAsync(Guid applicationId, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Adds an Environment.</summary>
     Task AddEnvironmentAsync(GatewayEnvironmentRecord environment, CancellationToken cancellationToken);
     /// <summary>Adds a tenant-bound Installation.</summary>
@@ -111,6 +123,8 @@ public interface IConnectorConfigurationStore
 {
     /// <summary>Creates a new Draft; Connector/version pairs are unique.</summary>
     Task<ConnectorVersionRecord> CreateDraftAsync(ConnectorVersionRecord draft, CancellationToken cancellationToken);
+    /// <summary>Creates a Draft and its audit event in one persistence transaction.</summary>
+    Task<ConnectorVersionRecord> CreateDraftWithAuditAsync(ConnectorVersionRecord draft, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Gets a version by Connector and semantic version.</summary>
     Task<ConnectorVersionRecord?> GetVersionAsync(string connectorId, string version, CancellationToken cancellationToken);
     /// <summary>Lists all known Connectors.</summary>
@@ -134,6 +148,8 @@ public interface IConnectorConfigurationStore
     }
     /// <summary>Transitions Draft to Validated using optimistic concurrency.</summary>
     Task<ConnectorVersionRecord> MarkValidatedAsync(Guid versionId, long expectedRowVersion, DateTimeOffset now, CancellationToken cancellationToken);
+    /// <summary>Marks a Draft validated and appends its audit event atomically.</summary>
+    Task<ConnectorVersionRecord> MarkValidatedWithAuditAsync(Guid versionId, long expectedRowVersion, DateTimeOffset now, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Publishes a Validated version and supersedes the current one atomically.</summary>
     Task<ConnectorVersionRecord> PublishAsync(Guid versionId, long expectedRowVersion, long expectedPublicationRevision, string actor, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Publishes only after locking and verifying the exact approved connector/binding digest, and appends audit in the same transaction.</summary>

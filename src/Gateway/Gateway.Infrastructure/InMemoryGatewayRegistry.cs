@@ -6,7 +6,7 @@ using SecureIntegration.Gateway.Domain;
 namespace SecureIntegration.Gateway.Infrastructure;
 
 /// <summary>Deterministic registry for unit/API tests and Development only.</summary>
-public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null) : IGatewayRegistry, IAdminGatewayRegistry
+public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null, IAdminTransactionFaultInjector? faultInjector = null) : IGatewayRegistry, IAdminGatewayRegistry
 {
     private readonly object gate = new();
     private readonly Dictionary<Guid, TenantRecord> tenants = [];
@@ -45,6 +45,28 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null) : IGate
     }
 
     /// <inheritdoc />
+    public Task AddTenantWithAuditAsync(TenantRecord tenant, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            if (auditEvent.TenantId != tenant.Id) throw new ArgumentException("Tenant audit scope is inconsistent.", nameof(auditEvent));
+            if (tenants.Values.Any(item => string.Equals(item.Code, tenant.Code, StringComparison.OrdinalIgnoreCase)) || !tenants.TryAdd(tenant.Id, tenant)) throw new GatewayException("BGW-VALIDATION-TENANT-DUPLICATE", 409);
+            try { faultInjector?.Check("tenant.create.after-state"); auditEvents.Add(auditEvent); }
+            catch { tenants.Remove(tenant.Id); throw; }
+        }
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task<TenantRecord> UpdateTenantWithAuditAsync(Guid tenantId, string displayName, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) =>
+        MutateTenantWithAuditAsync(tenantId, value => value with { DisplayName = displayName }, "tenant.update.after-state", auditEvent, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TenantRecord> DisableTenantWithAuditAsync(Guid tenantId, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) =>
+        MutateTenantWithAuditAsync(tenantId, value => value with { Status = TenantStatus.Suspended }, "tenant.disable.after-state", auditEvent, cancellationToken);
+
+    /// <inheritdoc />
     public Task AddApplicationAsync(ApplicationRecord application, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -53,6 +75,64 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null) : IGate
             if (applications.Values.Any(item => string.Equals(item.Code, application.Code, StringComparison.OrdinalIgnoreCase)) || !applications.TryAdd(application.Id, application)) throw new GatewayException("BGW-VALIDATION-APPLICATION-DUPLICATE", 409);
         }
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task AddApplicationWithAuditAsync(ApplicationRecord application, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            if (applications.Values.Any(item => string.Equals(item.Code, application.Code, StringComparison.OrdinalIgnoreCase)) || !applications.TryAdd(application.Id, application)) throw new GatewayException("BGW-VALIDATION-APPLICATION-DUPLICATE", 409);
+            try { faultInjector?.Check("application.create.after-state"); auditEvents.Add(auditEvent); }
+            catch { applications.Remove(application.Id); throw; }
+        }
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task<ApplicationRecord> UpdateApplicationWithAuditAsync(Guid applicationId, string displayName, string minimumBrokerVersion, string? maximumBrokerVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            if (!applications.TryGetValue(applicationId, out ApplicationRecord? current)) throw new GatewayException("BGW-APPLICATION-NOT-FOUND", 404);
+            ApplicationRecord updated = current with { DisplayName = displayName, MinimumBrokerVersion = minimumBrokerVersion, MaximumBrokerVersion = maximumBrokerVersion };
+            applications[applicationId] = updated;
+            try { faultInjector?.Check("application.update.after-state"); auditEvents.Add(auditEvent); }
+            catch { applications[applicationId] = current; throw; }
+            return Task.FromResult(updated);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<ApplicationRecord> DisableApplicationWithAuditAsync(Guid applicationId, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            if (!applications.TryGetValue(applicationId, out ApplicationRecord? current)) throw new GatewayException("BGW-APPLICATION-NOT-FOUND", 404);
+            ApplicationRecord updated = current with { Status = ApplicationStatus.Suspended };
+            applications[applicationId] = updated;
+            try { faultInjector?.Check("application.disable.after-state"); auditEvents.Add(auditEvent); }
+            catch { applications[applicationId] = current; throw; }
+            return Task.FromResult(updated);
+        }
+    }
+
+    private Task<TenantRecord> MutateTenantWithAuditAsync(Guid tenantId, Func<TenantRecord, TenantRecord> mutation, string faultBoundary, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            if (auditEvent.TenantId != tenantId) throw new ArgumentException("Tenant audit scope is inconsistent.", nameof(auditEvent));
+            if (!tenants.TryGetValue(tenantId, out TenantRecord? current)) throw new GatewayException("BGW-TENANT-NOT-FOUND", 404);
+            TenantRecord updated = mutation(current);
+            tenants[tenantId] = updated;
+            try { faultInjector?.Check(faultBoundary); auditEvents.Add(auditEvent); }
+            catch { tenants[tenantId] = current; throw; }
+            return Task.FromResult(updated);
+        }
     }
 
     /// <inheritdoc />
@@ -237,6 +317,7 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null) : IGate
     public Task AppendAuditAsync(GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        faultInjector?.Check("audit.append.before-state");
         lock (gate) auditEvents.Add(auditEvent);
         return Task.CompletedTask;
     }

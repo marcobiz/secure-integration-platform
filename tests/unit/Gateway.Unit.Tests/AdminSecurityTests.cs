@@ -78,7 +78,7 @@ public sealed class AdminSecurityTests
         ConnectorApprovalRecord approval = await store.ApproveAsync(version.Id, version.ChecksumSha256, BindingDigest, version.CreatedBy, approver.Id, Guid.NewGuid(), Now.AddMinutes(1), TestContext.Current.CancellationToken);
 
         Assert.Equal(ConnectorApprovalStatus.Approved, approval.Status);
-        await new FourEyesConnectorApprovalPolicy(store).EnsurePublishApprovedAsync(version, BindingDigest, editor.Id.ToString("D"), TestContext.Current.CancellationToken);
+        Assert.True(await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, BindingDigest, editor.Id.ToString("D"), TestContext.Current.CancellationToken));
         Assert.False(await store.HasValidApprovalAsync(version.Id, SHA256.HashData("other"u8), BindingDigest, editor.Id.ToString("D"), TestContext.Current.CancellationToken));
     }
 
@@ -126,8 +126,6 @@ public sealed class AdminSecurityTests
         await store.ApproveAsync(version.Id, version.ChecksumSha256, BindingDigest, version.CreatedBy, approver.Id, Guid.NewGuid(), Now.AddMinutes(1), TestContext.Current.CancellationToken);
 
         byte[] changedBindingDigest = SHA256.HashData("changed-binding-bundle"u8);
-        GatewayException stale = await Assert.ThrowsAsync<GatewayException>(() => new FourEyesConnectorApprovalPolicy(store).EnsurePublishApprovedAsync(version, changedBindingDigest, approver.Id.ToString("D"), TestContext.Current.CancellationToken));
-        Assert.Equal("BGW-ADMIN-APPROVAL-REQUIRED", stale.Code);
         Assert.False(await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, changedBindingDigest, approver.Id.ToString("D"), TestContext.Current.CancellationToken));
     }
 

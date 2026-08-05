@@ -29,6 +29,8 @@ public sealed class RoutingConnectorConfigurationStore : IConnectorConfiguration
     /// <inheritdoc />
     public Task<ConnectorVersionRecord> CreateDraftAsync(ConnectorVersionRecord draft, CancellationToken cancellationToken) => admin.CreateDraftAsync(draft, cancellationToken);
     /// <inheritdoc />
+    public Task<ConnectorVersionRecord> CreateDraftWithAuditAsync(ConnectorVersionRecord draft, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) => admin.CreateDraftWithAuditAsync(draft, auditEvent, cancellationToken);
+    /// <inheritdoc />
     public Task<ConnectorVersionRecord?> GetVersionAsync(string connectorId, string version, CancellationToken cancellationToken) => admin.GetVersionAsync(connectorId, version, cancellationToken);
     /// <inheritdoc />
     public Task<IReadOnlyList<ConnectorSummary>> ListConnectorsAsync(CancellationToken cancellationToken) => admin.ListConnectorsAsync(cancellationToken);
@@ -40,6 +42,8 @@ public sealed class RoutingConnectorConfigurationStore : IConnectorConfiguration
     public Task<AdminPage<ConnectorVersionRecord>> ListVersionsPageAsync(string connectorId, int offset, int limit, string? filter, CancellationToken cancellationToken) => admin.ListVersionsPageAsync(connectorId, offset, limit, filter, cancellationToken);
     /// <inheritdoc />
     public Task<ConnectorVersionRecord> MarkValidatedAsync(Guid versionId, long expectedRowVersion, DateTimeOffset now, CancellationToken cancellationToken) => admin.MarkValidatedAsync(versionId, expectedRowVersion, now, cancellationToken);
+    /// <inheritdoc />
+    public Task<ConnectorVersionRecord> MarkValidatedWithAuditAsync(Guid versionId, long expectedRowVersion, DateTimeOffset now, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) => admin.MarkValidatedWithAuditAsync(versionId, expectedRowVersion, now, auditEvent, cancellationToken);
     /// <inheritdoc />
     public Task<ConnectorVersionRecord> PublishAsync(Guid versionId, long expectedRowVersion, long expectedPublicationRevision, string actor, DateTimeOffset now, CancellationToken cancellationToken) => admin.PublishAsync(versionId, expectedRowVersion, expectedPublicationRevision, actor, now, cancellationToken);
     /// <inheritdoc />

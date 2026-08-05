@@ -133,6 +133,10 @@ public static class ConnectorCanonicalJson
 /// <summary>Canonical checksums binding a Connector version to immutable server-owned resources.</summary>
 public static class ConnectorBindingDigests
 {
+    /// <summary>Checksums one redaction-safe logical binding component for approval comparison.</summary>
+    public static string Component(IReadOnlyDictionary<string, string> values) =>
+        Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(values.OrderBy(value => value.Key, StringComparer.Ordinal).ToDictionary(value => value.Key, value => value.Value, StringComparer.Ordinal))));
+
     /// <summary>Checksums one exact Environment binding revision.</summary>
     public static string Revision(Guid connectorVersionId, Guid environmentId, IReadOnlyDictionary<string, Uri> endpoints, IReadOnlyDictionary<string, string> secrets, IReadOnlyDictionary<string, string> certificates)
     {
@@ -180,14 +184,14 @@ public sealed class ConnectorDefinitionValidator
         if (!schemaResult.IsValid)
         {
             foreach (EvaluationResults detail in (schemaResult.Details ?? []).Where(result => !result.IsValid && result.Errors is { Count: > 0 }))
-                issues.Add(new("CONNECTOR_SCHEMA_INVALID", Pointer(detail.InstanceLocation.ToString())));
-            if (issues.Count == 0) issues.Add(new("CONNECTOR_SCHEMA_INVALID", "/"));
+                issues.Add(new("BGW-CONNECTOR-SCHEMA-INVALID", Pointer(detail.InstanceLocation.ToString())));
+            if (issues.Count == 0) issues.Add(new("BGW-CONNECTOR-SCHEMA-INVALID", "/"));
         }
         if (definition.ValueKind != JsonValueKind.Object)
             return new(false, null, issues);
 
         string? schemaVersion = OptionalString(definition, "schemaVersion");
-        if (!string.Equals(schemaVersion, "1.0", StringComparison.Ordinal)) issues.Add(new("CONNECTOR_SCHEMA_VERSION_UNSUPPORTED", "$.schemaVersion"));
+        if (!string.Equals(schemaVersion, "1.0", StringComparison.Ordinal)) issues.Add(new("BGW-CONNECTOR-SCHEMA-VERSION-UNSUPPORTED", "$.schemaVersion"));
 
         if (issues.Count == 0) ValidateSemantics(definition, issues);
         if (issues.Count != 0) return new(false, null, issues);
@@ -200,7 +204,7 @@ public sealed class ConnectorDefinitionValidator
     public ValidatedConnectorDefinition ValidateRequired(JsonElement definition, string? expectedChecksum = null)
     {
         ConnectorValidationResult result = Validate(definition);
-        if (!result.Valid) throw new GatewayException(result.Issues.Any(issue => issue.Code == "CONNECTOR_SCHEMA_VERSION_UNSUPPORTED") ? "BGW-CONNECTOR-SCHEMA-VERSION" : "BGW-CONNECTOR-VALIDATION", 400);
+        if (!result.Valid) throw new GatewayException(result.Issues.Any(issue => issue.Code == "BGW-CONNECTOR-SCHEMA-VERSION-UNSUPPORTED") ? "BGW-CONNECTOR-SCHEMA-VERSION" : "BGW-CONNECTOR-VALIDATION", 400);
         string canonical = ConnectorCanonicalJson.Canonicalize(definition);
         if (expectedChecksum is not null && !string.Equals(expectedChecksum, result.ChecksumSha256, StringComparison.OrdinalIgnoreCase))
             throw new GatewayException("BGW-CONNECTOR-CHECKSUM", 409);
@@ -229,17 +233,17 @@ public sealed class ConnectorDefinitionValidator
         foreach (JsonElement operation in definition.GetProperty("operations").EnumerateArray())
         {
             string operationId = operation.GetProperty("operationId").GetString()!;
-            if (!operations.Add(operationId)) issues.Add(new("CONNECTOR_OPERATION_DUPLICATE", $"$.operations[{index}].operationId"));
+            if (!operations.Add(operationId)) issues.Add(new("BGW-CONNECTOR-OPERATION-DUPLICATE", $"$.operations[{index}].operationId"));
             string endpoint = operation.GetProperty("endpointBinding").GetString()!;
-            if (!endpoints.ContainsKey(endpoint)) issues.Add(new("CONNECTOR_ENDPOINT_BINDING_UNKNOWN", $"$.operations[{index}].endpointBinding"));
+            if (!endpoints.ContainsKey(endpoint)) issues.Add(new("BGW-CONNECTOR-ENDPOINT-BINDING-UNKNOWN", $"$.operations[{index}].endpointBinding"));
             bool idempotent = operation.TryGetProperty("idempotent", out JsonElement idempotentElement) && idempotentElement.GetBoolean();
             int retries = operation.TryGetProperty("maximumRetries", out JsonElement retriesElement) ? retriesElement.GetInt32() : 0;
-            if (retries > 0 && !idempotent) issues.Add(new("CONNECTOR_RETRY_REQUIRES_IDEMPOTENCY", $"$.operations[{index}].maximumRetries"));
+            if (retries > 0 && !idempotent) issues.Add(new("BGW-CONNECTOR-RETRY-REQUIRES-IDEMPOTENCY", $"$.operations[{index}].maximumRetries"));
             foreach (JsonElement headerElement in operation.GetProperty("allowedClientHeaders").EnumerateArray())
             {
                 string header = headerElement.GetString()!;
                 if (ForbiddenHeaders.Contains(header) || header.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase) || header.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase))
-                    issues.Add(new("CONNECTOR_HEADER_FORBIDDEN", $"$.operations[{index}].allowedClientHeaders"));
+                    issues.Add(new("BGW-CONNECTOR-HEADER-FORBIDDEN", $"$.operations[{index}].allowedClientHeaders"));
             }
             ValidateAuthentication(operation.GetProperty("authentication"), secrets, issues, index);
             index++;
@@ -254,7 +258,7 @@ public sealed class ConnectorDefinitionValidator
         {
             string name = value.GetProperty("name").GetString()!;
             string kind = includeKind ? value.GetProperty("kind").GetString()! : category;
-            if (!result.TryAdd(name, kind)) issues.Add(new("CONNECTOR_BINDING_DUPLICATE", $"$.bindings.{category}s[{index}].name"));
+            if (!result.TryAdd(name, kind)) issues.Add(new("BGW-CONNECTOR-BINDING-DUPLICATE", $"$.bindings.{category}s[{index}].name"));
             index++;
         }
         return result;
@@ -305,7 +309,7 @@ public sealed class ConnectorAdministrationService(
     IGatewayOperationCatalog runtimeCatalog,
     IGatewayRegistry registry,
     IGatewayClock clock,
-    IConnectorApprovalPolicy? approvalPolicy = null)
+    IConnectorApprovalPolicy approvalPolicy)
 {
     /// <summary>Validates without persisting a definition.</summary>
     public ConnectorValidationResult Validate(JsonElement definition) => validator.Validate(definition);
@@ -315,8 +319,8 @@ public sealed class ConnectorAdministrationService(
     {
         ValidatedConnectorDefinition validated = validator.ValidateRequired(definition, expectedChecksum);
         ConnectorVersionRecord draft = new(Guid.NewGuid(), Guid.Empty, validated.ConnectorId, validated.Version, validated.SchemaVersion, ConnectorVersionState.Draft, validated.CanonicalJson, Convert.FromHexString(validated.ChecksumSha256), actor, clock.UtcNow, 1);
-        ConnectorVersionRecord created = await store.CreateDraftAsync(draft, cancellationToken).ConfigureAwait(false);
-        await AuditAsync(actor, "connector.import", created, correlationId, "success", "BGW-CONNECTOR-IMPORTED", cancellationToken).ConfigureAwait(false);
+        GatewayAuditEvent audit = Audit(actor, "connector.import", draft, correlationId, "success", "BGW-CONNECTOR-IMPORTED");
+        ConnectorVersionRecord created = await store.CreateDraftWithAuditAsync(draft, audit, cancellationToken).ConfigureAwait(false);
         return Resource(created);
     }
 
@@ -326,8 +330,8 @@ public sealed class ConnectorAdministrationService(
         ConnectorVersionRecord existing = await RequiredAsync(connectorId, version, cancellationToken).ConfigureAwait(false);
         if (existing.State != ConnectorVersionState.Draft) throw new GatewayException("BGW-CONNECTOR-STATE", 409);
         _ = validator.ParseStored(existing.CanonicalJson, existing.ChecksumSha256);
-        ConnectorVersionRecord updated = await store.MarkValidatedAsync(existing.Id, expectedRowVersion, clock.UtcNow, cancellationToken).ConfigureAwait(false);
-        await AuditAsync(actor, "connector.validate", updated, correlationId, "success", "BGW-CONNECTOR-VALIDATED", cancellationToken).ConfigureAwait(false);
+        GatewayAuditEvent audit = Audit(actor, "connector.validate", existing with { State = ConnectorVersionState.Validated }, correlationId, "success", "BGW-CONNECTOR-VALIDATED");
+        ConnectorVersionRecord updated = await store.MarkValidatedWithAuditAsync(existing.Id, expectedRowVersion, clock.UtcNow, audit, cancellationToken).ConfigureAwait(false);
         return Resource(updated);
     }
 
@@ -336,18 +340,9 @@ public sealed class ConnectorAdministrationService(
     {
         ConnectorVersionRecord existing = await RequiredAsync(connectorId, version, cancellationToken).ConfigureAwait(false);
         _ = validator.ParseStored(existing.CanonicalJson, existing.ChecksumSha256);
-        ConnectorVersionRecord updated;
-        if (approvalPolicy is not null)
-        {
-            byte[] bindingDigest = await store.GetBindingBundleDigestAsync(existing.Id, cancellationToken).ConfigureAwait(false);
-            updated = await store.PublishApprovedAsync(existing.Id, bindingDigest, expectedRowVersion, expectedPublicationRevision, actor, correlationId, clock.UtcNow, cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            updated = await store.PublishAsync(existing.Id, expectedRowVersion, expectedPublicationRevision, actor, clock.UtcNow, cancellationToken).ConfigureAwait(false);
-        }
+        ConnectorVersionRecord updated = await approvalPolicy.PublishAsync(store, existing, expectedRowVersion, expectedPublicationRevision, actor, correlationId, clock.UtcNow, cancellationToken).ConfigureAwait(false);
         runtimeCatalog.Invalidate(connectorId);
-        if (approvalPolicy is null) await AuditAsync(actor, "connector.publish", updated, correlationId, "success", "BGW-CONNECTOR-PUBLISHED", cancellationToken).ConfigureAwait(false);
+        if (approvalPolicy is DevelopmentConnectorApprovalPolicy) await AuditAsync(actor, "connector.publish", updated, correlationId, "success", "BGW-CONNECTOR-PUBLISHED", cancellationToken).ConfigureAwait(false);
         return Resource(updated);
     }
 
@@ -420,7 +415,10 @@ public sealed class ConnectorAdministrationService(
         await store.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
 
     private Task AuditAsync(string actor, string action, ConnectorVersionRecord version, Guid correlationId, string outcome, string reason, CancellationToken cancellationToken) =>
-        registry.AppendAuditAsync(new(Guid.NewGuid(), clock.UtcNow, null, "administrator", actor, action, "connectorVersion", version.ConnectorSlug + "/" + version.Version, correlationId, outcome, reason, new Dictionary<string, string> { ["state"] = version.State.ToString(), ["checksum"] = Convert.ToHexString(version.ChecksumSha256) }), cancellationToken);
+        registry.AppendAuditAsync(Audit(actor, action, version, correlationId, outcome, reason), cancellationToken);
+
+    private GatewayAuditEvent Audit(string actor, string action, ConnectorVersionRecord version, Guid correlationId, string outcome, string reason) =>
+        new(Guid.NewGuid(), clock.UtcNow, null, "administrator", actor, action, "connectorVersion", version.ConnectorSlug + "/" + version.Version, correlationId, outcome, reason, new Dictionary<string, string> { ["state"] = version.State.ToString(), ["checksum"] = Convert.ToHexString(version.ChecksumSha256) });
 
     /// <summary>Projects internal persistence metadata to the redacted Admin API resource.</summary>
     public static ConnectorVersionResource Resource(ConnectorVersionRecord value) => new(value.ConnectorSlug, value.Version, value.SchemaVersion, value.State, Convert.ToHexString(value.ChecksumSha256), value.RowVersion, value.CreatedAt, value.PublishedAt);
