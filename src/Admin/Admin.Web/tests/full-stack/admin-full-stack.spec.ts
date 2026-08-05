@@ -101,8 +101,25 @@ test('FULLSTACK-01 production Admin build persists and governs the connector lif
   expect(validated.status).toBe(200);
   expect(validated.body.state).toBe('Validated');
 
-  const environments = await api<{ items: Array<{ id: string }> }>(security, '/admin/api/v1/environments?offset=0&limit=10');
-  const environmentId = environments.body.items[0]?.id;
+  const tenants = await api<{ items: Array<{ id: string }> }>(security, '/admin/api/v1/tenants?offset=0&limit=50');
+  let tenantId: string | undefined;
+  let enrolled: { id: string; status: string; environmentId: string } | undefined;
+  for (const tenant of tenants.body.items) {
+    const installations = await api<{ items: Array<{ id: string; status: string; environmentId: string }> }>(security, `/admin/api/v1/installations?tenantId=${tenant.id}&offset=0&limit=50`);
+    const grants = await api<{ items: Array<{ installationId: string; connectorId: string; operationId: string }> }>(security, `/admin/api/v1/grants?tenantId=${tenant.id}&offset=0&limit=50`);
+    for (const active of installations.body.items.filter(value => value.status === 'Active')) {
+      const alreadyGranted = grants.body.items.some(value => value.installationId === active.id && value.connectorId === 'sample-secure-service' && value.operationId === 'submit');
+      if (!alreadyGranted) {
+        enrolled = active;
+        tenantId = tenant.id;
+        break;
+      }
+    }
+    if (enrolled) break;
+  }
+  expect(tenantId, 'quick-start tenant containing an Active installation without the target grant must exist').toBeTruthy();
+  expect(enrolled, 'quick-start challenge/PoP enrollment must persist an Active installation available for grant mutation').toBeTruthy();
+  const environmentId = enrolled!.environmentId;
   expect(environmentId).toBeTruthy();
   const binding = await api<{ revision: number }>(security, '/admin/api/v1/connectors/sample-secure-service/bindings', 'PUT', {
     environmentId,
@@ -133,24 +150,6 @@ test('FULLSTACK-01 production Admin build persists and governs the connector lif
   expect(controlledTest.status).toBe(200);
   expect(controlledTest.body).toMatchObject({ status: 'valid', connectorVersion: '2.0.0' });
 
-  const tenants = await api<{ items: Array<{ id: string }> }>(security, '/admin/api/v1/tenants?offset=0&limit=50');
-  let tenantId: string | undefined;
-  let enrolled: { id: string; status: string } | undefined;
-  for (const tenant of tenants.body.items) {
-    const installations = await api<{ items: Array<{ id: string; status: string }> }>(security, `/admin/api/v1/installations?tenantId=${tenant.id}&offset=0&limit=50`);
-    const grants = await api<{ items: Array<{ installationId: string; connectorId: string; operationId: string }> }>(security, `/admin/api/v1/grants?tenantId=${tenant.id}&offset=0&limit=50`);
-    for (const active of installations.body.items.filter(value => value.status === 'Active')) {
-      const alreadyGranted = grants.body.items.some(value => value.installationId === active.id && value.connectorId === 'sample-secure-service' && value.operationId === 'submit');
-      if (!alreadyGranted) {
-        enrolled = active;
-        tenantId = tenant.id;
-        break;
-      }
-    }
-    if (enrolled) break;
-  }
-  expect(tenantId, 'quick-start tenant containing an Active installation without the target grant must exist').toBeTruthy();
-  expect(enrolled, 'quick-start challenge/PoP enrollment must persist an Active installation available for grant mutation').toBeTruthy();
   const grant = await api<Record<string, unknown>>(security, '/admin/api/v1/grants', 'POST', { tenantId, installationId: enrolled!.id, connectorId: 'sample-secure-service', operationId: 'submit' });
   expect(grant.status).toBe(201);
 
