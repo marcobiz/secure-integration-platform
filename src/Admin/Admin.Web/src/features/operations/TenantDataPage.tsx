@@ -6,7 +6,7 @@ import { adminApi } from '../../api/client';
 import { DataTable } from '../../components/DataTable'; import { ErrorState, LoadingState } from '../../components/AsyncState'; import { PageTitle } from '../../components/PageTitle';
 
 export function TenantDataPage({ kind }: { kind: 'grants' | 'audit' }) {
-  const { t, i18n } = useTranslation(); const [tenant, setTenant] = useState(''); const tenants = useQuery({ queryKey: ['tenants'], queryFn: adminApi.tenants });
+  const { t, i18n } = useTranslation(); const [tenant, setTenant] = useState(''); const tenants = useQuery({ queryKey: ['tenants'], queryFn: () => adminApi.tenants() });
   const query = useQuery<{ items: Array<Record<string, unknown>> }>({ queryKey: [kind, tenant], queryFn: async () => { const result = kind === 'grants' ? await adminApi.grants(tenant) : await adminApi.audit(tenant); return { items: result.items as Array<Record<string, unknown>> }; }, enabled: Boolean(tenant) });
   if (tenants.isPending) return <LoadingState />;
   const rows = (query.data?.items ?? []) as Array<Record<string, unknown>>;

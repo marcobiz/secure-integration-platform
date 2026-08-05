@@ -672,6 +672,7 @@ export interface components {
             displayName: string;
             versions: number;
             publishedVersion?: string | null;
+            publicationRevision: number;
         };
         InvokeRequest: {
             /** Format: uuid */

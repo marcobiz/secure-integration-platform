@@ -16,7 +16,7 @@ public sealed record ConnectorValidationIssue(string Code, string Location);
 public sealed record ConnectorValidationResult(bool Valid, string? ChecksumSha256, IReadOnlyList<ConnectorValidationIssue> Issues);
 
 /// <summary>Connector list projection without definition contents or bindings.</summary>
-public sealed record ConnectorSummary(string ConnectorId, string? PublishedVersion, int VersionCount);
+public sealed record ConnectorSummary(string ConnectorId, string DisplayName, int Versions, string? PublishedVersion, long PublicationRevision);
 
 /// <summary>Admin API projection for one version.</summary>
 public sealed record ConnectorVersionResource(

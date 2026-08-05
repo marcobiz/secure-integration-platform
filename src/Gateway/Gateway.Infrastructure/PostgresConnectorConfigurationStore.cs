@@ -15,7 +15,7 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
         Guid connectorId;
-        await using (NpgsqlCommand insertConnector = Command(connection, transaction, "INSERT INTO gateway.connector_definition(id,slug,display_name,status,created_at,created_by) VALUES($1,$2,$3,'active',$4,$5) ON CONFLICT(slug) DO UPDATE SET slug=excluded.slug RETURNING id", Guid.NewGuid(), draft.ConnectorSlug, draft.ConnectorSlug, draft.CreatedAt, draft.CreatedBy))
+        await using (NpgsqlCommand insertConnector = Command(connection, transaction, "INSERT INTO gateway.connector_definition(id,slug,display_name,status,created_at,created_by) VALUES($1,$2,$3,'active',$4,$5) ON CONFLICT(slug) DO UPDATE SET display_name=excluded.display_name RETURNING id", Guid.NewGuid(), draft.ConnectorSlug, DisplayName(draft.CanonicalJson, draft.ConnectorSlug), draft.CreatedAt, draft.CreatedBy))
             connectorId = (Guid)(await insertConnector.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-STORE", 503));
         int inserted;
         try
@@ -48,10 +48,16 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
     {
         List<ConnectorSummary> result = [];
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using NpgsqlCommand command = new("SELECT c.slug,p.version,count(v.id)::int FROM gateway.connector_definition c LEFT JOIN gateway.connector_version p ON p.id=c.active_version_id LEFT JOIN gateway.connector_version v ON v.connector_id=c.id GROUP BY c.slug,p.version ORDER BY c.slug", connection);
+        await using NpgsqlCommand command = new("SELECT c.slug,c.display_name,count(v.id)::int,p.version,c.publication_revision FROM gateway.connector_definition c LEFT JOIN gateway.connector_version p ON p.id=c.active_version_id LEFT JOIN gateway.connector_version v ON v.connector_id=c.id GROUP BY c.slug,c.display_name,p.version,c.publication_revision ORDER BY c.slug", connection);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) result.Add(new(reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.GetInt32(2)));
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) result.Add(new(reader.GetString(0), reader.GetString(1), reader.GetInt32(2), reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt64(4)));
         return result;
+    }
+
+    private static string DisplayName(string canonicalJson, string fallback)
+    {
+        using JsonDocument document = JsonDocument.Parse(canonicalJson);
+        return document.RootElement.TryGetProperty("displayName", out JsonElement value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? fallback : fallback;
     }
 
     /// <inheritdoc />

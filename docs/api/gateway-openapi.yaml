@@ -430,8 +430,8 @@ components:
       allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } } } }]
     ConnectorSummary:
       type: object
-      required: [connectorId, displayName, versions]
-      properties: { connectorId: { type: string }, displayName: { type: string }, versions: { type: integer }, publishedVersion: { type: [string, 'null'] } }
+      required: [connectorId, displayName, versions, publicationRevision]
+      properties: { connectorId: { type: string }, displayName: { type: string }, versions: { type: integer }, publishedVersion: { type: [string, 'null'] }, publicationRevision: { type: integer, minimum: 0 } }
     InvokeRequest:
       type: object
       additionalProperties: false

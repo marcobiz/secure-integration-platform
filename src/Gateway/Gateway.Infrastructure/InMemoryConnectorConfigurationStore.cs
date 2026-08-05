@@ -1,3 +1,4 @@
+using System.Text.Json;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
 
@@ -52,10 +53,18 @@ public sealed class InMemoryConnectorConfigurationStore : IConnectorConfiguratio
             {
                 string? published = activeVersions.TryGetValue(item.Value, out Guid active) ? versions[active].Version : null;
                 int count = versions.Values.Count(version => version.ConnectorId == item.Value);
-                return new ConnectorSummary(item.Key, published, count);
+                ConnectorVersionRecord? newest = versions.Values.Where(version => version.ConnectorId == item.Value).OrderByDescending(version => version.CreatedAt).FirstOrDefault();
+                string displayName = newest is null ? item.Key : DisplayName(newest.CanonicalJson, item.Key);
+                return new ConnectorSummary(item.Key, displayName, count, published, publicationRevisions[item.Value]);
             }).ToArray();
             return Task.FromResult<IReadOnlyList<ConnectorSummary>>(result);
         }
+    }
+
+    private static string DisplayName(string canonicalJson, string fallback)
+    {
+        using JsonDocument document = JsonDocument.Parse(canonicalJson);
+        return document.RootElement.TryGetProperty("displayName", out JsonElement value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? fallback : fallback;
     }
 
     /// <inheritdoc />

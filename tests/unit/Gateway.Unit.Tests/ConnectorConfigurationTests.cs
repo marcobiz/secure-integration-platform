@@ -59,11 +59,18 @@ public sealed class ConnectorConfigurationTests
     {
         Fixture fixture = new();
         ConnectorVersionResource v1 = await fixture.ImportAsync(Sample());
+        ConnectorSummary summary = Assert.Single(await fixture.Admin.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("Sample Secure Service", summary.DisplayName);
+        Assert.Equal(1, summary.Versions);
+        Assert.Equal(0, summary.PublicationRevision);
         GatewayException draftPublish = await Assert.ThrowsAsync<GatewayException>(() => fixture.Admin.PublishAsync(v1.ConnectorId, v1.Version, v1.RowVersion, 0, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken));
         Assert.Equal("BGW-CONNECTOR-STATE", draftPublish.Code);
         v1 = await fixture.Admin.ValidateStoredAsync(v1.ConnectorId, v1.Version, v1.RowVersion, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
         v1 = await fixture.Admin.PublishAsync(v1.ConnectorId, v1.Version, v1.RowVersion, 0, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
         Assert.Equal(ConnectorVersionState.Published, v1.State);
+        summary = Assert.Single(await fixture.Admin.ListAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(1, summary.PublicationRevision);
+        Assert.Equal("1.0.0", summary.PublishedVersion);
 
         using JsonDocument second = WithVersion("2.0.0");
         ConnectorVersionResource v2 = await fixture.ImportAsync(second);
