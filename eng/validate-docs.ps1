@@ -4,7 +4,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $jsonFiles = @(
     'docs/connectors/connector-definition.schema.json',
     'docs/connectors/examples/secure-layer.example.json',
-    'docs/connectors/examples/managed-connector.example.json'
+    'docs/connectors/examples/managed-connector.example.json',
+    'docs/connectors/examples/sample-secure-service.connector.json'
 )
 
 foreach ($relative in $jsonFiles) {

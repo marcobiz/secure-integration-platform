@@ -100,36 +100,35 @@ Tenant/Application/Environment diventano immutabili dopo activation. Un cambio p
 
 Challenge di enrollment sono effimeri in memoria; se serve scalare prima dell'activation, la challenge può essere firmata e stateless o conservata in una tabella TTL senza secret.
 
-### `connector_definition`
+### `connector_definition` (M4 implementato)
 
-- `id uuid PK`
-- `slug varchar(100) UNIQUE`
-- `display_name`, `description`
-- `owner_tenant_id uuid NULL` per Connector privato; NULL per globale
-- `status CHECK active|retired`
-- `created_at`, `created_by`
+- `id uuid PK`, `slug varchar(100) UNIQUE`, display metadata;
+- `active_version_id uuid NULL` punta alla Published corrente;
+- `publication_revision bigint` serializza publish concorrenti;
+- `row_version bigint`.
 
-### `connector_version`
+### `connector_version` (M4 implementato)
 
-- `id uuid PK`
-- `connector_id uuid NOT NULL FK`
-- `version varchar(64) NOT NULL`
-- `schema_version varchar(32) NOT NULL`
-- `configuration_json jsonb NOT NULL`
-- `canonical_sha256 bytea NOT NULL`
-- `state CHECK Draft|Validated|Approved|Published|Superseded|Retired`
-- `plugin_definition_id uuid NULL FK`
-- `runtime_min_version`, `runtime_max_version`
-- `release_notes varchar(4000)`
-- `created_by`, `created_at`, `validated_at`, `approved_by`, `approved_at`, `published_at`
-- unique `(connector_id, version)` e `(connector_id, canonical_sha256)`
-- check di produzione: `approved_by <> created_by`
+- `id uuid PK`, `connector_id uuid FK`, `version`, `schema_version`;
+- `configuration_json jsonb` canonico e `checksum_sha256 bytea` di 32 byte;
+- `state CHECK draft|validated|published|superseded|retired`;
+- `created_by`, timestamp lifecycle e `row_version`;
+- unique `(connector_id, version)` e unique parziale su una sola Published per Connector.
 
-Una riga Published è immutabile tramite trigger e permission; solo transizione di stato a Superseded/Retired è consentita.
+Una versione già pubblicata è immutabile per JSON, checksum, version, schema e Connector tramite trigger; solo le transizioni lifecycle revisionate sono consentite.
+
+### `connector_environment_binding` (M4 implementato)
+
+- PK `(connector_id, environment_id)`;
+- `endpoints_json` associa logical endpoint a URI HTTPS;
+- `secret_references_json` associa logical secret a provider reference opaca;
+- `revision`, `updated_at`, `updated_by`.
+
+Non contiene secret value. I binding non fanno parte del JSON canonico né dell'export Connector.
 
 ### `connector_operation`
 
-Proiezione derivata, non source of truth:
+Proiezione futura, non implementata in M4 e non source of truth:
 
 - `connector_version_id uuid`
 - `operation_id varchar(100)`
@@ -140,6 +139,9 @@ Proiezione derivata, non source of truth:
 Viene rigenerata nella stessa transazione che valida la ConnectorVersion.
 
 ### `secret_binding`
+
+Modello futuro normalizzato. M4 usa `connector_environment_binding.secret_references_json`
+con soli riferimenti opachi; nessun valore segreto è memorizzato.
 
 - `id uuid PK`
 - `logical_name varchar(100)`
@@ -172,6 +174,9 @@ Viene rigenerata nella stessa transazione che valida la ConnectorVersion.
 - composite FK `(installation_id, tenant_id)` → installation
 
 ### `deployment`
+
+Modello futuro di promotion multi-environment. M4 usa `active_version_id` e
+`publication_revision` sul Connector; rollback riattiva una Superseded.
 
 - `id uuid PK`
 - `environment_id uuid NOT NULL`
@@ -277,4 +282,3 @@ RLS è `ENABLE` e `FORCE` sulle tabelle tenant-scoped. Ogni transazione imposta 
 - Nessun auto-migrate all'avvio dell'app.
 - Backup/PITR verificato prima di migration classificata high-risk.
 - Connector rollback non implica database rollback.
-

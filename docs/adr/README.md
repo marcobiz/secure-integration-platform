@@ -21,3 +21,4 @@ Formato: contesto, decisione, conseguenze e alternative. Tutti gli ADR elencati 
 | [0015](0015-execution-location.md) | Esecuzione locale/centrale/ibrida |
 | [0016](0016-application-process-identification.md) | Identificazione Application locale |
 | [0017](0017-msi-installation-provisioning.md) | Provisioning MSI dell'identità Installation |
+| [0018](0018-connector-lifecycle-and-runtime-cache.md) | Lifecycle, pubblicazione e cache dei Connector |

@@ -16,9 +16,9 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | FR-008 | M3 | CI `m3-deterministic-container-slice` PASS; **M3A PASS-LIVE** run `m3a-live-20260805-094131`: P02/Windows Service, Legacy standard user, P01/P03–P07 e N01–N14; M3B PENDING |
 | FR-009 | M8 | `E2E-CON-ManagedConnector` |
 | FR-010 | M7/M8 | local/gateway/hybrid sequence suites |
-| FR-011 | M4 | `IT-CON-BindingScope`, secret absence scan |
-| FR-012 | M4 | `UT-CON-LifecycleStateMachine` |
-| FR-013 | M4 | `IT-CON-AtomicPublishRollback` |
+| FR-011 | M4 | `M4_UT_Published_runtime_resolves_only_server_side_bindings_and_rejects_stale_cache`, `M4_E2E_sample_secure_service_uses_Published_definition_and_server_side_bindings`, secret scan |
+| FR-012 | M4 | `M4_UT_Lifecycle_is_immutable_concurrent_and_rollback_reactivates_prior_publication`, `M4_UT_Runtime_denies_Draft_Validated_Retired_missing_and_missing_bindings` |
+| FR-013 | M4 | `M4_IT_DAT_PostgreSQL18_connector_publication_binding_and_rollback_when_configured`, `M4_IT_Admin_API_requires_key_and_supports_import_validate_publish_export_and_test` |
 | FR-014 | M5 | Playwright RBAC/four-eyes suite |
 | FR-015 | M1/M6 | M1 SDK: Windows pipe/E2E suite; COM/C ABI/CLI: M6 |
 | FR-016 | M2/M5 | M2: `UT_SEC_Audit_is_metadata_only_and_excludes_payload_and_credentials`, API Problem redaction tests; admin audit/RBAC: M5 |
@@ -35,7 +35,7 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | NFR-004 | IPC exact boundary/oversize pass; aggregate stream/backpressure aperti |
 | NFR-005 | M1 deadline/cancel/idempotent delete; M2 `UT_EGR_Transient_retry_occurs_only_for_idempotent_operation`; circuit breaker resta M7 |
 | NFR-006 | M2 correlation ID firmato/auditato e `traceparent` obbligatorio; propagazione Gateway→vendor PASS M3A container e Broker→Gateway PASS-LIVE run `m3a-live-20260805-094131` |
-| NFR-007 | canonical checksum/immutability/tamper tests |
+| NFR-007 | `M4_CT_Sample_conforms_to_Draft_2020_12_and_is_canonical`, `M4_CT_Checksum_mismatch_is_rejected`, migration trigger + PG tamper test |
 | NFR-008 | clean build, SBOM, signature verification report |
 | NFR-009 | Windows and adapter compatibility matrix |
 | NFR-010 | schema M2 contiene solo metadata redatti e nessun response body/secret value; test `IT_DAT_Migration_forces_RLS_and_contains_no_secret_value_columns` |
@@ -57,10 +57,10 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | AC-011 | enrollment/PoP unit + M3-P01, N02 e N03 PASS container |
 | AC-012 | cross-Tenant/RLS unit e PostgreSQL 18 + M3-P03/N04 PASS container |
 | AC-013 | revoca unit + M3-N01 PASS nella run split-host; percorso completo via Broker Service PASS-LIVE M3A |
-| AC-014 | ConnectorVersion persistence/API test |
-| AC-015 | atomic rollback and cache invalidation E2E |
-| AC-016 | JSON Schema/semantic/security validation corpus |
-| AC-017 | Draft/Validated/Retired runtime denial tests |
+| AC-014 | `M4_IT_DAT_PostgreSQL18_connector_publication_binding_and_rollback_when_configured`, Admin API integration test |
+| AC-015 | `M4_UT_Lifecycle_is_immutable_concurrent_and_rollback_reactivates_prior_publication`, PostgreSQL rollback test |
+| AC-016 | `M4_CT_Sample_conforms_to_Draft_2020_12_and_is_canonical`, invalid schema/version/binding/header/retry/checksum corpus |
+| AC-017 | `M4_UT_Runtime_denies_Draft_Validated_Retired_missing_and_missing_bindings`, stale cache and corrupted store tests |
 | AC-018 | PASS `gateway-container` run `30896803567`: build/esecuzione, non-root, read-only, live/ready, fail-closed, secret scan, SBOM e shutdown |
 | AC-019 | ADR-0017 Accepted; MSI install/upgrade/repair/uninstall/reinstall matrix prevista in M9 |
 | AC-020 | `eng/build.ps1`, pinned toolchain e istruzioni root |

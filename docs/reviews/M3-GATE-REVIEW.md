@@ -10,22 +10,20 @@ Pull request: `#3`, branch `m3/production-like-vertical-slice`
 
 CI: run `30903757495`
 
-## Esito
+## Esito aggiornato per la strategia Core/Deployment Pack
 
-**M3 non è ancora Done. NO-GO per M4.**
+**M3A product gate PASS. GO per M4 Core. M3B è non bloccante.**
 
 La parte container deterministica e il product gate split-host M3A sono PASS: Gateway reale,
 PostgreSQL 18.4, synthetic Vault HTTPS, vendor mock HTTPS/mTLS, enrollment, percorso
 positivo, vero Broker Windows Service, Legacy standard user, 14 negative applicative e
 canary/log scan correlati. I bundle redatti sono fuori dal repository e verificati.
 
-Resta un blocker non sostituibile con simulazioni:
-
-1. M3B deve ancora essere eseguita in Azure dev; il repository non ha environment
-   `azure-dev`, variabili OIDC o subscription autorizzata.
-
-Per questo non sono stati creati tag/baseline M3, non è stato aggiornato `main` e M4 non
-è stata avviata.
+La qualificazione M3B richiede ancora un environment Azure dev, OIDC federato, Managed
+Identity e Key Vault reale. Dal 2026-08-05 è classificata come gate dell'Azure Deployment
+Pack separato, non come requisito del Gateway Core provider-neutral. La baseline usata da
+M4 è il tag `m3a-product-gate-pass-20260805` sul product gate attestato. Questa modifica di
+sequenziamento non trasforma M3B in PASS e non autorizza l'avvio di M5.
 
 ## Perimetro del gate M3A semplificato
 
@@ -214,6 +212,6 @@ composizione sono in `M3A-PRODUCT-GATE-20260805.md`.
 
 ## Decisione
 
-Nessuna deviazione architetturale richiede una nuova ADR: synthetic Vault e allowlist
-privata sono confinati all'ambiente di test; Azure usa OIDC, Managed Identity e Key Vault
-come previsto. **M3A è PASS; M3 resta aperto per M3B. Nessun tag M3 viene creato. NO-GO per M4.**
+Synthetic Vault e allowlist privata sono confinati all'ambiente di test; Azure usa OIDC,
+Managed Identity e Key Vault come previsto. **M3A è PASS e costituisce la baseline Core;
+M3B resta PENDING come qualificazione del Deployment Pack Azure e non blocca M4.**

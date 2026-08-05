@@ -1,499 +1,270 @@
 openapi: 3.1.0
 info:
   title: Secure Integration Platform Gateway API
-  version: 1.0.0
-  description: Runtime, enrollment and minimum administrative contract.
+  version: 1.1.0-m4
+  description: Provider-neutral runtime and Connector Configuration MVP Admin API.
 servers:
   - url: https://gateway.example.invalid
 tags:
   - name: Runtime
   - name: Enrollment
-  - name: Admin
+  - name: ConnectorsAdmin
   - name: Health
 paths:
-  /v1/connectors/{connectorId}/operations/{operationId}:invoke:
-    post:
-      tags: [Runtime]
-      operationId: invokeConnectorOperation
-      security:
-        - InstallationMutualTLS: []
-      parameters:
-        - $ref: '#/components/parameters/ConnectorId'
-        - $ref: '#/components/parameters/OperationId'
-        - $ref: '#/components/parameters/Timestamp'
-        - $ref: '#/components/parameters/Nonce'
-        - $ref: '#/components/parameters/ContentHash'
-        - $ref: '#/components/parameters/Signature'
-        - $ref: '#/components/parameters/TraceParent'
-      requestBody:
-        required: true
-        content:
-          application/vnd.broker-gateway.invoke+json:
-            schema:
-              $ref: '#/components/schemas/InvokeRequest'
-          multipart/related:
-            schema:
-              type: string
-              contentMediaType: multipart/related
-      responses:
-        '200':
-          description: Operation completed.
-          content:
-            application/vnd.broker-gateway.result+json:
-              schema:
-                $ref: '#/components/schemas/InvokeResponse'
-        '202':
-          description: An invocation with the same idempotency key is in progress.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/InvocationStatus'
-        '400': { $ref: '#/components/responses/Problem' }
-        '401': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
-        '409': { $ref: '#/components/responses/Problem' }
-        '413': { $ref: '#/components/responses/Problem' }
-        '415': { $ref: '#/components/responses/Problem' }
-        '429': { $ref: '#/components/responses/Problem' }
-        '502': { $ref: '#/components/responses/Problem' }
-        '503': { $ref: '#/components/responses/Problem' }
-        '504': { $ref: '#/components/responses/Problem' }
   /v1/enrollments/challenges:
     post:
       tags: [Enrollment]
       operationId: createEnrollmentChallenge
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/EnrollmentChallengeRequest'
       responses:
-        '200':
-          description: Short-lived challenge.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EnrollmentChallengeResponse'
-        '400': { $ref: '#/components/responses/Problem' }
-        '429': { $ref: '#/components/responses/Problem' }
+        '200': { description: Short-lived enrollment challenge. }
+        default: { $ref: '#/components/responses/Problem' }
   /v1/enrollments:activate:
     post:
       tags: [Enrollment]
       operationId: activateInstallation
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ActivationRequest'
       responses:
-        '200':
-          description: Installation enrolled.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EnrollmentResult'
-        '400': { $ref: '#/components/responses/Problem' }
-        '401': { $ref: '#/components/responses/Problem' }
-        '409': { $ref: '#/components/responses/Problem' }
-        '429': { $ref: '#/components/responses/Problem' }
+        '200': { description: Installation enrolled. }
+        default: { $ref: '#/components/responses/Problem' }
   /v1/enrollments:renew:
     post:
       tags: [Enrollment]
       operationId: renewInstallationCredential
-      security:
-        - InstallationMutualTLS: []
-      parameters:
-        - $ref: '#/components/parameters/Timestamp'
-        - $ref: '#/components/parameters/Nonce'
-        - $ref: '#/components/parameters/ContentHash'
-        - $ref: '#/components/parameters/Signature'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RenewalRequest'
+      security: [{ InstallationMutualTLS: [] }]
       responses:
-        '200':
-          description: New credential registered with overlap period.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EnrollmentResult'
-        '400': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
+        '200': { description: Installation credential renewed. }
+        default: { $ref: '#/components/responses/Problem' }
   /v1/broker-policy:
     get:
       tags: [Runtime]
       operationId: getBrokerPolicy
-      security:
-        - InstallationMutualTLS: []
+      security: [{ InstallationMutualTLS: [] }]
       responses:
-        '200':
-          description: Compatibility and renewal policy.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BrokerPolicy'
-        '403': { $ref: '#/components/responses/Problem' }
-  /admin/v1/installations/{installationId}:revoke:
+        '200': { description: Broker compatibility policy. }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/connectors/{connectorId}/operations/{operationId}:invoke:
     post:
-      tags: [Admin]
-      operationId: revokeInstallation
-      security:
-        - AdminOidc: [security_admin]
+      tags: [Runtime]
+      operationId: invokeConnectorOperation
+      security: [{ InstallationMutualTLS: [] }]
       parameters:
-        - $ref: '#/components/parameters/InstallationId'
+        - $ref: '#/components/parameters/ConnectorId'
+        - $ref: '#/components/parameters/OperationId'
+        - { name: X-BG-Timestamp, in: header, required: true, schema: { type: string, format: date-time } }
+        - { name: X-BG-Nonce, in: header, required: true, schema: { type: string, minLength: 20, maxLength: 128 } }
+        - { name: X-BG-Content-SHA256, in: header, required: true, schema: { type: string } }
+        - { name: X-BG-Signature, in: header, required: true, schema: { type: string } }
+        - { name: traceparent, in: header, required: true, schema: { type: string } }
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              $ref: '#/components/schemas/ReasonRequest'
+            schema: { $ref: '#/components/schemas/InvokeRequest' }
       responses:
-        '204': { description: Revoked. }
-        '400': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
-        '404': { $ref: '#/components/responses/Problem' }
+        '200': { description: Sanitized connector response. }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/v1/connectors:validate:
+    post:
+      tags: [ConnectorsAdmin]
+      operationId: validateConnectorDefinition
+      security: [{ AdminBoundary: [] }]
+      requestBody: { $ref: '#/components/requestBodies/ConnectorImport' }
+      responses:
+        '200': { description: Validation result. }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/v1/connectors:import:
+    post:
+      tags: [ConnectorsAdmin]
+      operationId: importConnectorDefinition
+      security: [{ AdminBoundary: [] }]
+      requestBody: { $ref: '#/components/requestBodies/ConnectorImport' }
+      responses:
+        '201': { description: Draft created. }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/v1/connectors:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: listConnectors
+      security: [{ AdminBoundary: [] }]
+      responses:
+        '200': { description: Redacted Connector list. }
+        default: { $ref: '#/components/responses/Problem' }
   /admin/v1/connectors/{connectorId}/versions:
-    post:
-      tags: [Admin]
-      operationId: createConnectorVersion
-      security:
-        - AdminOidc: [connector_editor]
-      parameters:
-        - $ref: '#/components/parameters/ConnectorId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [configuration]
-              properties:
-                configuration: { type: object }
-                releaseNotes: { type: string, maxLength: 4000 }
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: listConnectorVersions
+      security: [{ AdminBoundary: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }]
       responses:
-        '201':
-          description: Draft version created.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ConnectorVersionResource'
-        '400': { $ref: '#/components/responses/Problem' }
-        '403': { $ref: '#/components/responses/Problem' }
-  /admin/v1/connectors/{connectorId}/versions/{versionId}:validate:
-    post:
-      tags: [Admin]
-      operationId: validateConnectorVersion
-      security:
-        - AdminOidc: [connector_editor]
+        '200': { description: Connector versions. }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/v1/connectors/{connectorId}/versions/{version}:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: showConnectorVersion
+      security: [{ AdminBoundary: [] }]
       parameters:
         - $ref: '#/components/parameters/ConnectorId'
-        - $ref: '#/components/parameters/VersionId'
+        - $ref: '#/components/parameters/Version'
+      responses:
+        '200': { description: Version metadata without bindings or secret references. }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/v1/connectors/{connectorId}/versions/{version}:export:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: exportConnectorVersion
+      security: [{ AdminBoundary: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ConnectorId'
+        - $ref: '#/components/parameters/Version'
       responses:
         '200':
-          description: Validation result.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ValidationResult'
-        '400': { $ref: '#/components/responses/Problem' }
-  /admin/v1/connectors/{connectorId}/versions/{versionId}:approve:
+          description: Canonical Connector JSON without Environment bindings.
+          content: { application/json: { schema: { type: object } } }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/v1/connectors/{connectorId}/versions/{version}:validate:
     post:
-      tags: [Admin]
-      operationId: approveConnectorVersion
-      security:
-        - AdminOidc: [connector_approver]
+      tags: [ConnectorsAdmin]
+      operationId: validateStoredConnectorVersion
+      security: [{ AdminBoundary: [] }]
       parameters:
         - $ref: '#/components/parameters/ConnectorId'
-        - $ref: '#/components/parameters/VersionId'
+        - $ref: '#/components/parameters/Version'
+      requestBody: { $ref: '#/components/requestBodies/VersionAction' }
       responses:
-        '204': { description: Approved by a distinct actor. }
-        '409': { $ref: '#/components/responses/Problem' }
-  /admin/v1/connectors/{connectorId}/versions/{versionId}:publish:
+        '200': { description: Version validated. }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/v1/connectors/{connectorId}/versions/{version}:publish:
     post:
-      tags: [Admin]
+      tags: [ConnectorsAdmin]
       operationId: publishConnectorVersion
-      security:
-        - AdminOidc: [connector_approver]
+      security: [{ AdminBoundary: [] }]
       parameters:
         - $ref: '#/components/parameters/ConnectorId'
-        - $ref: '#/components/parameters/VersionId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [environmentId]
-              properties:
-                environmentId: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Version'
+      requestBody: { $ref: '#/components/requestBodies/VersionAction' }
       responses:
-        '204': { description: Published and deployed atomically. }
-        '409': { $ref: '#/components/responses/Problem' }
+        '200': { description: Version published atomically. }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/v1/connectors/{connectorId}/versions/{version}:retire:
+    post:
+      tags: [ConnectorsAdmin]
+      operationId: retireConnectorVersion
+      security: [{ AdminBoundary: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ConnectorId'
+        - $ref: '#/components/parameters/Version'
+      requestBody: { $ref: '#/components/requestBodies/VersionAction' }
+      responses:
+        '200': { description: Version retired. }
+        default: { $ref: '#/components/responses/Problem' }
   /admin/v1/connectors/{connectorId}:rollback:
     post:
-      tags: [Admin]
+      tags: [ConnectorsAdmin]
       operationId: rollbackConnector
-      security:
-        - AdminOidc: [connector_approver]
-      parameters:
-        - $ref: '#/components/parameters/ConnectorId'
+      security: [{ AdminBoundary: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [environmentId, targetVersionId, reason]
-              properties:
-                environmentId: { type: string, format: uuid }
-                targetVersionId: { type: string, format: uuid }
-                reason: { type: string, minLength: 3, maxLength: 1000 }
+            schema: { $ref: '#/components/schemas/RollbackRequest' }
       responses:
-        '204': { description: New deployment revision points to the previous version. }
-        '409': { $ref: '#/components/responses/Problem' }
+        '200': { description: Previously Published version reactivated. }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/v1/connectors/{connectorId}/bindings:
+    put:
+      tags: [ConnectorsAdmin]
+      operationId: putConnectorBindings
+      security: [{ AdminBoundary: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }]
+      responses:
+        '200': { description: Server-side binding revision updated. }
+        default: { $ref: '#/components/responses/Problem' }
+  /admin/v1/connectors/{connectorId}:test:
+    post:
+      tags: [ConnectorsAdmin]
+      operationId: testPublishedConnector
+      security: [{ AdminBoundary: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }]
+      responses:
+        '200': { description: Published definition and bindings resolve without invocation. }
+        default: { $ref: '#/components/responses/Problem' }
   /health/live:
     get:
       tags: [Health]
-      operationId: liveness
-      security: []
-      responses:
-        '200': { description: Process is alive. }
+      responses: { '200': { description: Process alive. } }
   /health/ready:
     get:
       tags: [Health]
-      operationId: readiness
-      security: []
       responses:
-        '200': { description: Required dependencies are ready. }
-        '503': { $ref: '#/components/responses/Problem' }
+        '200': { description: Required dependencies ready. }
+        default: { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     InstallationMutualTLS:
       type: mutualTLS
-      description: Per-Installation client certificate plus signed request headers.
-    AdminOidc:
-      type: openIdConnect
-      openIdConnectUrl: https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration
+      description: Per-Installation certificate plus ECDSA signed request headers.
+    AdminBoundary:
+      type: apiKey
+      in: header
+      name: X-Gateway-Admin-Key
+      description: Development-only representation; production deployments must bind OIDC policy.
   parameters:
-    ConnectorId:
-      name: connectorId
-      in: path
+    ConnectorId: { name: connectorId, in: path, required: true, schema: { type: string, pattern: '^[a-z0-9][a-z0-9.-]{2,99}$' } }
+    OperationId: { name: operationId, in: path, required: true, schema: { type: string } }
+    Version: { name: version, in: path, required: true, schema: { type: string } }
+  requestBodies:
+    ConnectorImport:
       required: true
-      schema: { type: string, pattern: '^[a-z0-9][a-z0-9.-]{2,99}$' }
-    OperationId:
-      name: operationId
-      in: path
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ConnectorImportRequest' }
+    VersionAction:
       required: true
-      schema: { type: string, pattern: '^[a-z0-9][a-z0-9.-]{2,99}$' }
-    InstallationId:
-      name: installationId
-      in: path
-      required: true
-      schema: { type: string, format: uuid }
-    VersionId:
-      name: versionId
-      in: path
-      required: true
-      schema: { type: string, format: uuid }
-    Timestamp:
-      name: X-BG-Timestamp
-      in: header
-      required: true
-      schema: { type: string, format: date-time }
-    Nonce:
-      name: X-BG-Nonce
-      in: header
-      required: true
-      schema: { type: string, minLength: 22, maxLength: 128 }
-    ContentHash:
-      name: X-BG-Content-SHA256
-      in: header
-      required: true
-      schema: { type: string, minLength: 43, maxLength: 64 }
-    Signature:
-      name: X-BG-Signature
-      in: header
-      required: true
-      schema: { type: string, minLength: 80, maxLength: 256 }
-    TraceParent:
-      name: traceparent
-      in: header
-      required: false
-      schema: { type: string, maxLength: 128 }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/VersionActionRequest' }
   responses:
     Problem:
-      description: RFC 9457 problem details.
+      description: Redacted stable error.
       content:
         application/problem+json:
-          schema:
-            $ref: '#/components/schemas/ProblemDetails'
+          schema: { $ref: '#/components/schemas/Problem' }
   schemas:
     InvokeRequest:
       type: object
       additionalProperties: false
-      required: [protocolVersion, payload, correlationId]
-      properties:
-        protocolVersion: { const: '1.0' }
-        payload: { $ref: '#/components/schemas/Payload' }
-        operatorContext: { $ref: '#/components/schemas/OperatorContext' }
-        sessionRef: { type: [string, 'null'], maxLength: 256 }
-        metadata:
-          type: object
-          maxProperties: 32
-          additionalProperties:
-            type: [string, number, integer, boolean, 'null']
-        correlationId: { type: string, format: uuid }
-        idempotencyKey: { type: [string, 'null'], minLength: 1, maxLength: 128 }
-        extensions: { type: object, maxProperties: 16 }
-    Payload:
-      type: object
-      additionalProperties: false
-      required: [contentType, encoding, data]
-      properties:
-        contentType: { type: string, maxLength: 128 }
-        encoding: { enum: [utf8, base64] }
-        data: { type: string, maxLength: 22369624 }
-    OperatorContext:
-      type: [object, 'null']
-      additionalProperties: false
-      properties:
-        subject: { type: string, maxLength: 256 }
-        attributes:
-          type: object
-          maxProperties: 16
-          additionalProperties: { type: string, maxLength: 512 }
-    InvokeResponse:
-      type: object
-      additionalProperties: false
-      required: [correlationId, connectorVersion, result]
+      required: [correlationId, payload]
       properties:
         correlationId: { type: string, format: uuid }
-        connectorVersion: { type: string }
-        result: { $ref: '#/components/schemas/Payload' }
-        sessionRef: { type: [string, 'null'], maxLength: 256 }
-        extensions: { type: object }
-    InvocationStatus:
+        payload: { type: string, contentEncoding: base64 }
+        contentType: { type: string }
+        headers: { type: object, additionalProperties: { type: string } }
+    ConnectorImportRequest:
       type: object
       additionalProperties: false
-      required: [correlationId, status]
+      required: [definition]
       properties:
-        correlationId: { type: string, format: uuid }
-        status: { enum: [inProgress, completed, failed] }
-    EnrollmentChallengeRequest:
+        definition: { type: object }
+        expectedChecksumSha256: { type: [string, 'null'], pattern: '^[A-Fa-f0-9]{64}$' }
+    VersionActionRequest:
       type: object
       additionalProperties: false
-      required: [activationCodeId, publicKeySpki]
+      required: [expectedRowVersion]
       properties:
-        activationCodeId: { type: string, format: uuid }
-        publicKeySpki: { type: string, contentEncoding: base64 }
-    EnrollmentChallengeResponse:
+        expectedRowVersion: { type: integer, minimum: 0 }
+        expectedPublicationRevision: { type: [integer, 'null'], minimum: 0 }
+    RollbackRequest:
       type: object
       additionalProperties: false
-      required: [challengeId, challenge, expiresAt]
+      required: [targetVersion, expectedActiveRowVersion]
       properties:
-        challengeId: { type: string, format: uuid }
-        challenge: { type: string, contentEncoding: base64url }
-        expiresAt: { type: string, format: date-time }
-    ActivationRequest:
+        targetVersion: { type: string }
+        expectedActiveRowVersion: { type: integer, minimum: 0 }
+    Problem:
       type: object
-      additionalProperties: false
-      required: [challengeId, activationCode, clientCertificate, proofSignature, brokerVersion]
+      required: [status, code]
       properties:
-        challengeId: { type: string, format: uuid }
-        activationCode: { type: string, minLength: 22, maxLength: 256 }
-        clientCertificate: { type: string, contentEncoding: base64 }
-        proofSignature: { type: string, contentEncoding: base64url }
-        brokerVersion: { type: string, maxLength: 64 }
-    RenewalRequest:
-      type: object
-      additionalProperties: false
-      required: [newClientCertificate, proofSignature]
-      properties:
-        newClientCertificate: { type: string, contentEncoding: base64 }
-        proofSignature: { type: string, contentEncoding: base64url }
-    EnrollmentResult:
-      type: object
-      additionalProperties: false
-      required: [installationId, tenantId, applicationId, credentialExpiresAt]
-      properties:
-        installationId: { type: string, format: uuid }
-        tenantId: { type: string, format: uuid }
-        applicationId: { type: string, format: uuid }
-        credentialExpiresAt: { type: string, format: date-time }
-        renewalStartsAt: { type: string, format: date-time }
-    BrokerPolicy:
-      type: object
-      additionalProperties: false
-      required: [minimumBrokerVersion, protocolMajor, protocolMinor]
-      properties:
-        minimumBrokerVersion: { type: string }
-        protocolMajor: { type: integer, minimum: 1 }
-        protocolMinor: { type: integer, minimum: 0 }
-        revoked: { type: boolean, default: false }
-    ReasonRequest:
-      type: object
-      additionalProperties: false
-      required: [reason]
-      properties:
-        reason: { type: string, minLength: 3, maxLength: 1000 }
-    ConnectorVersionResource:
-      type: object
-      additionalProperties: false
-      required: [id, connectorId, state, checksum]
-      properties:
-        id: { type: string, format: uuid }
-        connectorId: { type: string }
-        state: { enum: [Draft, Validated, Approved, Published, Superseded, Retired] }
-        checksum: { type: string }
-    ValidationResult:
-      type: object
-      additionalProperties: false
-      required: [valid, issues]
-      properties:
-        valid: { type: boolean }
-        issues:
-          type: array
-          maxItems: 256
-          items:
-            type: object
-            additionalProperties: false
-            required: [path, code]
-            properties:
-              path: { type: string }
-              code: { type: string }
-              message: { type: string }
-    ProblemDetails:
-      type: object
-      additionalProperties: false
-      required: [type, title, status, code, correlationId, retryable]
-      properties:
-        type: { type: string, format: uri }
-        title: { type: string, maxLength: 256 }
         status: { type: integer, minimum: 400, maximum: 599 }
-        detail: { type: string, maxLength: 2000 }
-        instance: { type: string }
         code: { type: string, pattern: '^BGW-[A-Z0-9-]+$' }
         correlationId: { type: string, format: uuid }
-        retryable: { type: boolean }
-        retryAfterMs: { type: integer, minimum: 0, maximum: 3600000 }
-        details:
-          type: array
-          maxItems: 64
-          items:
-            type: object
-            additionalProperties: false
-            required: [field, reason]
-            properties:
-              field: { type: string, maxLength: 256 }
-              reason: { type: string, maxLength: 128 }
-

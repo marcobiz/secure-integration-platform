@@ -60,11 +60,8 @@ PostgreSQL 18, container hardening, secret scan e SBOM; review conclusiva in
 
 ## M3 — Primo vertical slice
 
-**Stato:** implementazione completata sul branch `m3/production-like-vertical-slice`; gate
-aperto. La matrice deterministica Gateway/PostgreSQL 18/synthetic Vault/vendor è PASS in
-CI. Restano obbligatorie l'esecuzione M3A con Broker come vero Windows Service e la M3B
-su Azure dev con OIDC/Managed Identity/Key Vault reali. Nessun tag M3 e nessun avvio M4
-finché entrambe non sono verdi.
+**Stato:** M3A product gate PASS sul tag `m3a-product-gate-pass-20260805`. M3B è rinviata
+alla qualificazione dell'Azure Deployment Pack e non blocca il Core o M4.
 
 **Obiettivo:** prova end-to-end senza GetSecret.
 
@@ -82,15 +79,17 @@ finché entrambe non sono verdi.
 
 **Obiettivo:** configuration plane versionato.
 
-**Task:** JSON Schema/semantic/security validation; canonical JSON; lifecycle; SecretBinding; grants; deployment revision; cache invalidation; promotion; rollback; plugin manifest validation.
+**Stato:** implementato sul branch `m4/connector-configuration`; gate in corso.
 
-**Dipendenze:** M2-M3.
+**Task:** JSON Schema/semantic/security validation; canonical JSON; lifecycle; binding logici; grants; publication revision; cache TTL/invalidation/fail-closed; import/export; rollback; CLI e contract suite.
 
-**Test:** invalid schema/security, immutabilità Published, author≠approver, atomic rollback, stale cache fallback.
+**Dipendenze:** M2 e M3A. M3B non bloccante.
+
+**Test:** schema/security, immutabilità Published, optimistic concurrency, rollback atomico, stale cache negata, PostgreSQL 18 e sample E2E.
 
 **Completamento:** runtime usa soltanto versioni Published; rollback senza restart.
 
-**Artefatti:** validator CLI/Admin API, schemas ed export/import.
+**Artefatti:** validator, CLI/Admin API, schema/sample, migration additiva, quick start senza Azure e documentazione SDK.
 
 ## M5 — Admin UI
 

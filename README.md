@@ -1,12 +1,24 @@
 # Secure Integration Platform
 
-Repository per la progettazione e, successivamente, l'implementazione di una piattaforma di sicurezza destinata a software on-premise e legacy.
+Core provider-neutral di una piattaforma di integrazione sicura per software on-premise e legacy.
 
 La piattaforma rimuove segreti hardcoded e credenziali distribuite con il minor numero possibile di modifiche ai prodotti esistenti. Il core è vendor-neutral; il sanitario costituisce il primo caso d'uso e il primo Connector Pack.
 
 ## Stato
 
-Milestone M0, Local Broker minimo M1 e primo vertical slice Secure Layer sono implementati. Lo stato verificabile, i limiti e il debito residuo sono in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+M0–M2 e il product gate M3A sono conclusi. M4 Connector Configuration MVP è implementato sul branch dedicato e in gate. M3B resta una qualificazione separata dell'Azure Deployment Pack. Lo stato verificabile è in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+
+## Quick start M4 senza Azure
+
+Con Docker Linux containers, .NET SDK e PowerShell:
+
+```powershell
+./tools/m4/Invoke-M4Quickstart.ps1 -Phase Validate
+./tools/m4/Invoke-M4Quickstart.ps1 -Phase Start
+./tools/m4/Invoke-M4Quickstart.ps1 -Phase Stop
+```
+
+Avvia PostgreSQL 18, Gateway, Synthetic Vault e mock HTTPS/mTLS, quindi verifica tramite CLI il Connector Published `sample-secure-service`. Dettagli: [M4 local quick start](docs/operations/M4-QUICKSTART.md).
 
 ## Build e test
 
@@ -34,6 +46,6 @@ I documenti sotto `input-docs/` sono riservati e costituiscono materiale sorgent
 - Nessun endpoint generico per ottenere segreti o invocare URL arbitrari.
 - Tenant e Installation derivati dall'identità autenticata, non da parametri client.
 - Operazioni locali protette dal Local Broker sotto una service identity Windows dedicata.
-- Configurazioni Connector validate, versionate, approvate, immutabili dopo la pubblicazione e reversibili.
+- Configurazioni Connector validate, versionate, Published immutabili e reversibili.
 - Il Local Broker non è una difesa completa contro un amministratore locale o SYSTEM.
 - Secure Layer è il percorso di migrazione iniziale; Managed Connector si adotta quando porta riuso concreto.

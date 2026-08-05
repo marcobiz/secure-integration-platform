@@ -34,7 +34,7 @@ Rimuovere segreti hardcoded e credenziali distribuite dai software legacy con il
 | FR-009 | Managed Connector con richiesta di dominio o protocollare. |
 | FR-010 | Execution strategy `gateway`, `broker` e `hybrid`. |
 | FR-011 | Secret binding logici con valori esclusivamente nel Vault/Broker. |
-| FR-012 | Connector lifecycle Draft/Validated/Approved/Published/Superseded/Retired. |
+| FR-012 | Connector lifecycle Draft/Validated/Published/Superseded/Retired. |
 | FR-013 | Pubblicazione, promozione e rollback atomico. |
 | FR-014 | Admin UI/API OIDC e RBAC. |
 | FR-015 | SDK .NET, COM, C ABI e CLI sottili. |
@@ -100,4 +100,3 @@ Rimuovere segreti hardcoded e credenziali distribuite dai software legacy con il
 | AC-028 | Artefatti firmabili e signature verification testata. |
 | AC-029 | Nel pilot, vecchie credenziali rimosse o revocate. |
 | AC-030 | Nel pilot, vecchio bypass ed egress diretto disabilitati. |
-

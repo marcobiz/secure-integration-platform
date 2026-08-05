@@ -48,6 +48,9 @@
 | TM-020 | D | Flood IPC o Gateway. | Concurrency, size/time/rate limits e circuit breaker. | DDoS volumetrico richiede protezione infrastrutturale. |
 | TM-021 | R | Operator nega un'operazione. | Correlation e audit metadata. | Non equivale a firma legale dell'Operator. |
 | TM-022 | I | Backup rubato. | Stesse protezioni del dato, Vault escluso dal DB, backup encryption. | Metadata exposure residua. |
+| TM-023 | T/E | Versione Draft/Retired o cache stale invocata dopo revoca. | Published-only catalog, stamp store a ogni invoke, TTL, invalidazione e no stale-on-error. | PostgreSQL indisponibile causa fail-closed/disponibilità ridotta. |
+| TM-024 | T/R | Publish concorrenti o modifica di una versione già Published. | Row version, publication revision, unique Published e trigger DB di immutabilità. | Un amministratore DB privilegiato resta parte della TCB. |
+| TM-025 | I/E | Connector/export/client seleziona URI o provider reference arbitrari. | Definition solo logica, binding server-side, export senza binding, runtime request chiusa. | Un amministratore binding autorizzato può configurare destinazioni approvate errate. |
 
 ## Analisi degli scenari obbligatori
 
@@ -69,7 +72,7 @@ La firma prova provenienza, non innocuità. Un plugin approvato viene trattato c
 
 ### Insider amministrativo
 
-Four-eyes separa editor e approver. `SecurityAdministrator` gestisce binding e publisher ma non vede secret value. Audit insert-only permette indagine; collusione o compromissione Entra resta rischio residuo.
+M4 applica autenticazione al confine Admin, optimistic concurrency, immutabilità e audit redatto, ma il Core non implementa ancora four-eyes. Il Deployment Pack di produzione deve aggiungere OIDC/RBAC e separazione editor/approver. Un amministratore autorizzato dei binding può comunque deviare traffico verso una destinazione permessa: review e audit restano necessari.
 
 ## Criteri di revisione
 
@@ -82,4 +85,3 @@ Il threat model deve essere riesaminato quando:
 - cambia hosting o TLS termination;
 - si introduce persistenza di payload o Operator Secret;
 - viene selezionato un pilot reale.
-

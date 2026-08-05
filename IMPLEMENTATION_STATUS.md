@@ -10,8 +10,9 @@ Aggiornato: 2026-08-05
 | M1 — Local Broker minimo | Implementato; **gate live tecnico PASS** | run `m0-m1-20260803-232955`; AC-002/004 PASS-LIVE sul commit testato |
 | Primo vertical slice E2E | Completato come harness ripetibile | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` |
 | M2 — Gateway minimo | **Done** | gate CI `30896803567`: build/test, PostgreSQL 18, container hardening, Gitleaks e SBOM PASS |
-| M3 — vertical slice production-like | **Implementato, gate M3 aperto** | M3A product gate PASS; M3B Azure smoke PENDING |
-| M4 e milestone successive | Non iniziate | nessun Connector lifecycle, Admin o adapter nativo |
+| M3 — vertical slice production-like | **M3A product gate PASS** | tag `m3a-product-gate-pass-20260805`; M3B PENDING non bloccante per il Core |
+| M4 — Connector Configuration MVP | **Implementato; gate CI in corso** | schema v1, lifecycle, PG18, Published runtime, CLI, sample E2E e quick start locale PASS |
+| M5 e milestone successive | Non iniziate | nessuna Admin UI o funzionalità fuori perimetro M4 |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
 ## Gate Review prima di M2
@@ -81,11 +82,26 @@ Esito conclusivo: **GO per M2**. La lineage live è stata integrata linearmente:
 
 M3A product gate è PASS con la run `m3a-live-20260805-094131`: P02 ha attraversato il
 vero Windows Service e tutti gli scenari obbligatori HOST/VM sono PASS. Il finalizzatore
-del laboratorio è separatamente BLOCKED e non viene presentato come PASS. M3 resta aperto
-perché l'environment `azure-dev` non è configurato e M3B non è stato eseguito. Non è
-richiesto un runner Codex elevato o un executor SYSTEM generico: queste automazioni sono
-rinviate alla qualificazione di release. Nessun tag M3 è stato creato e M4 resta vietata.
+del laboratorio è separatamente BLOCKED e non viene presentato come PASS. Il tag
+`m3a-product-gate-pass-20260805` è la baseline del Core. M3B non è stato eseguito ed è
+rinviato al gate dell'Azure Deployment Pack; non blocca M4. Non è richiesto un runner
+Codex elevato o un executor SYSTEM generico: queste automazioni sono rinviate alla
+qualificazione di release.
 Review: `docs/reviews/M3-GATE-REVIEW.md` e `docs/reviews/M3A-PRODUCT-GATE-20260805.md`.
+
+### M4 — Connector Configuration MVP
+
+- Connector Definition JSON v1 provider-neutral, Draft 2020-12, sample sintetico e SHA-256 del JSON canonico;
+- lifecycle Draft/Validated/Published/Superseded/Retired, Published immutabile, rollback per riattivazione e optimistic concurrency;
+- migration PostgreSQL additiva `0002_connector_configuration_m4.sql`, unique Published e trigger anti-tamper;
+- endpoint/secret binding logici per Environment, assenti da definition/export/runtime request;
+- runtime esclusivamente Published con cache TTL, invalidazione, stamp per-invocation e no stale-on-error;
+- Admin REST API autenticata, audit redatto e CLI senza accesso DB;
+- sample E2E Legacy → Broker → Gateway → Published Connector → Synthetic Secret Provider → API key+mTLS → mock;
+- quick start Compose completabile senza Azure e cleanup deterministico;
+- ADR-0018, API/CLI/SDK docs, CONTRIBUTING, SECURITY e placeholder licenza.
+
+M3B, M5, UI, YAML, plugin, provider aggiuntivi, connector reali e adapter COM/C/Java non sono iniziati.
 
 La run split-host `m3a-live-20260804-131718` è stata classificata **BLOCKED — PRE-HANDOFF INFRASTRUCTURE VALIDATION**: live/readiness erano HTTP 200, ma Docker health falliva per SAN incompatibile e i profili Windows Firewall erano disabilitati. Il runner VM non è stato eseguito e P02 non è stato testato. Cleanup PASS ha lasciato zero risorse della run e ha rimosso l'handoff non utilizzato. I fix health/TLS e firewall reversibile sono implementati. Il runner predispone ora un secondo switch Hyper-V Internal e una NIC VM `M3A-Isolated`, senza NAT/gateway/DNS/forwarding, con rollback SYSTEM, isolamento del profilo Private e probe VM→HOST pre-handoff. La run è storica ed è superata dal PASS product gate `m3a-live-20260805-094131`. Dettagli: `docs/reviews/M3A-BLOCKED-RUN-20260804-131718.md`.
 
@@ -128,9 +144,9 @@ Dettagli: `docs/reviews/M3A-SPLIT-HOST-BLOCKED-20260805.md`.
 | `Broker.Core.Tests` | 26 PASS | lifecycle/grant, AEAD/nonce/AAD/version, framing e hard limits |
 | `Broker.Integration.Tests` | 28 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction, CNG, handshake Schannel e regressioni harness M3 |
 | `VerticalSlice.Tests` | 1 PASS | vertical slice e negative/security path |
-| `Gateway.Unit.Tests` | 25 PASS | enrollment/PoP/replay/renew/revoke/version, tenant/grant, Vault/cache/auth modes, SSRF, retry, redaction e confini M3 |
-| `Gateway.Integration.Tests` | 7 PASS ordinari | API/Problem/health, startup M3Testing, schema/RLS statico; test PostgreSQL condizionali |
-| Totale suite ordinarie | 87 PASS | 26 Broker Core + 28 Broker integration + 25 Gateway unit + 7 Gateway integration + 1 E2E |
+| `Gateway.Unit.Tests` | 35 PASS | security M2/M3 e 10 contract/lifecycle/cache/bounds/corruption test M4 |
+| `Gateway.Integration.Tests` | 9 PASS | API/Admin e schema; test real-PG condizionali eseguiti nel gate PG18 |
+| Totale suite | 99 PASS | 26 Broker Core + 28 Broker integration + 35 Gateway unit + 9 Gateway integration + 1 E2E |
 | CI `m3-deterministic-container-slice` | PASS, run `30903757495`, commit `91963ce` | Gateway/PostgreSQL 18/Vault/vendor reali, matrice positiva/negativa, non-root/read-only, redazione, cleanup ed evidence SHA-256 `A52CACB8…FCA30` |
 | PostgreSQL 18 effimero locale | 2 PASS | migration, FORCE RLS, registry enrollment/grant/replay/revoca |
 | CI `gateway-postgresql-18` | PASS | run `30896803567`: PostgreSQL 18, migration apply/no-op, checksum, ruoli, FORCE RLS, tenant isolation e cleanup |
@@ -160,13 +176,17 @@ La matrice live A-F è PASS sulla VM `DESKTOP-5T30P6J` con RunId `m0-m1-20260803
 - **AC-011:** il Gateway M2 deriva Tenant/Application/Installation dal digest del certificato registrato.
 - **AC-012:** grant cross-Tenant e input Tenant client-side sono negati; FORCE RLS PASS su PostgreSQL 18 reale locale.
 - **AC-013:** revoca verificata prima di grant, Vault, DNS e dispatch; il gate E2E completo resta M3.
+- **AC-014:** ConnectorVersion persistita e amministrata via API/CLI con checksum canonico.
+- **AC-015:** publish/supersede/rollback atomici verificati in-memory e PostgreSQL 18.
+- **AC-016:** JSON Schema Draft 2020-12 e semantic/security validation corpus PASS.
+- **AC-017:** runtime Published-only, binding mancante, stale cache e storage corrotto fail-closed.
 - **AC-018:** PASS CI; immagine eseguibile non-root/read-only, health/readiness, fail-closed, secret scan, SBOM e shutdown verificati.
 - **AC-020:** sorgenti, toolchain pinned e istruzioni build/test presenti.
 - **AC-021:** E2E ripetibile interamente con servizi e certificati sintetici.
 - **AC-023:** esempio Secure Layer eseguito dalla suite E2E.
 - **AC-027:** generazione SBOM SPDX verificata.
 
-Per M3, AC-001/006/007/009/010/011/012/013/021/023 hanno evidenza container deterministica e M3A split-host PASS-LIVE. Lo smoke Azure M3B resta PENDING; pertanto M3 non è Done e non esiste una baseline M3.
+Per M3A, AC-001/006/007/009/010/011/012/013/021/023 hanno evidenza container deterministica e split-host PASS-LIVE. Lo smoke M3B resta PENDING come qualificazione separata dell'Azure Deployment Pack; la baseline Core è il tag M3A.
 
 **AC-002 e AC-004 restano PASS-LIVE sul commit testato invariato. M2 è Done.** Il gate indipendente M2 è PASS sul commit candidato `b6e1e46aebbd005d1bacf20943b358f6ccb6ea1a`; il tag annotato di baseline viene applicato soltanto dopo la replica verde sul commit documentale conclusivo.
 
