@@ -2,7 +2,8 @@
 
 **Baseline M4:** `m4-connector-configuration-baseline-20260805` (`49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b`)  
 **Branch:** `m5/admin-ui-mvp`  
-**Stato:** implementation complete; final GitHub CI/evidence pending.
+**Implementation candidate:** `c3a448763ed80e9427d1828e95009996d0a9554d`
+**Stato:** **PASS — M5 Done sul candidate; PR #5 resta aperta e non unita.**
 
 ## Product result
 
@@ -33,13 +34,23 @@ sequenceDiagram
 | Area | Evidence | Result |
 |---|---|---|
 | Auth/session/web security | Admin API integration; CSP/header/cookie/CSRF/logout and Production fail-closed tests | PASS local |
-| RBAC/four-eyes | `AdminSecurityTests`, HTTP Viewer negative, E2E-04–07 | PASS local |
+| RBAC/four-eyes | `AdminSecurityTests`, principal disabilitato, HTTP Viewer negative, E2E-04–07/21/24 | PASS local + CI |
 | Resources and activation | integration create/list, E2E-12/13 | PASS local |
 | Connector lifecycle | M4 regression plus E2E import/validate/publish/rollback/retire/concurrency | PASS local |
 | Binding/grant/test/audit/health | E2E-08/09/15/16/17 and no-arbitrary-URL unit | PASS local |
-| Frontend | lint, deterministic build, 14 Vitest, 20 Playwright | PASS local |
+| Frontend | lint, deterministic build, 14 Vitest, 24 Playwright | PASS local + CI |
 | Accessibility | axe on primary flow, zero critical/serious | PASS local |
-| Database/container/quickstart/export/scans/SBOM | dedicated M5 CI jobs | PENDING final CI |
+| Database/container/quickstart/export/scans/SBOM | M5 CI `31005091580` (12/12), regression CI `31005091566` (6/6) | PASS |
+
+## Gate artefacts
+
+- .NET: 117 test PASS (3 architecture, 26 Broker unit, 43 Gateway unit, 28 Broker integration, 16 Gateway integration, 1 vertical slice); PostgreSQL 18 integration PASS in CI.
+- Frontend: 14 Vitest and 24 Playwright PASS; axe reports zero critical/serious violations.
+- Gateway/Admin image: `sha256:9aa9f4ddb3a9cedfd57104a7a12c9868f4e91c5c5de2392a910224dce418a1d8`; quick start started healthy/non-root/read-only and cleanup left zero containers, volumes and networks.
+- Migration `0003_admin_ui_m5.sql`: SHA-256 `F527C6747ED2AB0FC984B28986CBEA2AF8175AE61C4FDFEAD848B8CD4F0034CB`.
+- Core export: 286 allowlisted files, build/test/secret/license/boundary PASS on Linux, manifest SHA-256 `7C2849F5FFB3F3D031B293D7D1482A3430D59889D4D1D6A1511BA148F39E8E1D`.
+- SBOM: backend and frontend SPDX produced; local hashes are recorded in external evidence `C:\SecureEvidence\m5-gate-20260805-142300`.
+- Secret scan, Gitleaks, NuGet/npm vulnerability scan, frontend license scan and documentation validation: PASS.
 
 ## Security review
 
@@ -54,9 +65,8 @@ sequenceDiagram
 
 M3B Azure live qualification, AWS/HashiCorp providers, real healthcare connectors, commercial legacy adapters, M6 and subsequent milestones were not started. The optional Azure pack remains physically downstream of provider-neutral abstractions.
 
-## Open items before Done
+## Gate decision and open items
 
-1. Final CI on the exact candidate commit, including PostgreSQL 18, container/quickstart, Core export, secret/vulnerability/license scans and combined SBOM.
-2. Redacted external evidence manifest/hash and final status update.
-3. PR #5 review. The PR must not be merged automatically.
-4. Final Apache-2.0 versus MPL-2.0 decision remains legal/business-owned and does not block a private preview build; it blocks public licensing.
+M5 is technically Done and is **GO for reviewed merge of PR #5**, but the PR must not be merged automatically. The private preview is GO. Public distribution is NO-GO until legal/business chooses Apache-2.0 or MPL-2.0 and adds the definitive license. The first real healthcare Connector Pack is NO-GO: it remains a later, separately threat-modelled and qualified product milestone.
+
+Residual work is limited to PR review/merge, the definitive license decision, real external OIDC interoperability and later release qualification. M3B, M6+, cloud deployment, healthcare connectors and commercial adapters remain unstarted.

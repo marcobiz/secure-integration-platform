@@ -8,7 +8,7 @@ The platform removes hard-coded secrets and distributed credentials while minimi
 
 ## Status
 
-M0–M4 and the M3A product gate are complete. M5 Admin UI MVP is in the PR #5 gate. M3B remains a separate Azure Deployment Pack qualification and is not required by the Core. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+M0–M5 and the M3A product gate are technically complete. M5 Admin UI MVP passed its candidate gate; PR #5 remains open for reviewed integration. M3B remains a separate Azure Deployment Pack qualification and is not required by the Core. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
 
 ## Local quick start, no cloud account
 

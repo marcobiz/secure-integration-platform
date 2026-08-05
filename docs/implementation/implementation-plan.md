@@ -93,7 +93,7 @@ alla qualificazione dell'Azure Deployment Pack e non blocca il Core o M4.
 
 ## M5 — Admin UI
 
-**Stato 2026-08-05:** implementazione completa sul branch `m5/admin-ui-mvp`; gate CI/evidence e review PR #5 in corso. M3B e M6+ non sono iniziati.
+**Stato 2026-08-05:** **Done sul candidate `c3a4487`**; CI M5 12/12 e regressione 6/6 PASS. PR #5 resta aperta per review e non è stata unita. M3B e M6+ non sono iniziati.
 
 **Obiettivo:** amministrazione sicura senza accesso ai valori Vault.
 

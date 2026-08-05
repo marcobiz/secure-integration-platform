@@ -80,13 +80,13 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | Requirement | Automated evidence | Status |
 |---|---|---|
 | OIDC/session/CSRF/logout | `M5_IT_Anonymous_is_denied_and_security_headers_are_present`, `M5_IT_Mutation_without_CSRF_is_denied`, `M5_IT_Logout_invalidates_cookie_session`, Production startup negative | PASS |
-| RBAC and tenant scope | `M5_UT_RBAC_honors_global_and_tenant_scoped_roles`, Viewer integration negative, E2E role rendering | PASS |
-| Four-eyes/checksum | `AdminSecurityTests` self/requester/stale/invalidation suite, publish policy integration, E2E-04–07 | PASS |
+| RBAC and tenant scope | `M5_UT_RBAC_honors_global_and_tenant_scoped_roles`, `M5_UT_Disabled_principal_is_rejected_before_role_resolution`, Viewer integration negative, E2E-24 privileged-action hiding | PASS |
+| Four-eyes/checksum | `AdminSecurityTests` self/requester/stale/invalidation/rejection suite, publish policy integration, E2E-04–07/21 | PASS |
 | Installation/activation/revoke | Admin API integration plus E2E-12/13; activation absent from list | PASS |
 | Connector lifecycle/concurrency | M4 unit/PG tests plus E2E-02/03/07/10/11/14 | PASS |
 | Binding/grant/controlled test | Application validation, E2E-08/09/15, no arbitrary URL unit | PASS |
 | i18n/theme/a11y | Vitest and E2E-18/19/20 with axe critical/serious = 0 | PASS |
-| Packaging/open-source boundary | Gateway container, clean-clone M5 quickstart, Core export build/test/license/secret gates | Gate pending final CI |
+| Packaging/open-source boundary | Gateway container, clean-clone M5 quickstart, Core export build/test/license/secret gates; CI `31005091580` | PASS |
 
 ## Security threats
 
