@@ -10,7 +10,7 @@ const width = 260;
 const groups = [
   { label: 'resources', items: [['tenants', '/tenants', Users], ['applications', '/applications', AppWindow], ['installations', '/installations', Server]] },
   { label: 'integration', items: [['connectors', '/connectors', Cable], ['bindings', '/bindings', Network], ['grants', '/grants', KeyRound], ['approvals', '/approvals', CheckCheck]] },
-  { label: 'operations', items: [['audit', '/audit', FileClock], ['health', '/health', Activity]] }
+  { label: 'operations', items: [['access', '/access', ShieldCheck], ['audit', '/audit', FileClock], ['health', '/health', Activity]] }
 ] as const;
 
 export function AdminLayout({ children }: { children: ReactNode }) {

@@ -284,6 +284,60 @@ paths:
       operationId: listAdminConnectors
       security: [{ AdminSession: [] }]
       responses: { '200': { description: Connector summaries, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/ConnectorSummary' } } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/role-assignments:
+    post:
+      tags: [Administration]
+      operationId: assignAdminRole
+      security: [{ AdminSession: [] }]
+      responses: { '200': { description: Provider-neutral role assignment created or returned idempotently. }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/{connectorId}/versions:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: listAdminConnectorVersions
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }]
+      responses: { '200': { description: Redacted version timeline. }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/{connectorId}/versions/{version}/definition:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: getAdminConnectorDefinition
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }]
+      responses: { '200': { description: Canonical Connector definition without Environment bindings, content: { application/json: { schema: { type: object } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/{connectorId}/versions/{version}/approval-requests:
+    post:
+      tags: [ConnectorsAdmin]
+      operationId: requestAdminConnectorApproval
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }]
+      responses: { '200': { description: Checksum-specific approval requested. }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/{connectorId}/versions/{version}/approvals:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: listAdminConnectorApprovals
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }]
+      responses: { '200': { description: Redacted approval decisions. }, default: { $ref: '#/components/responses/Problem' } }
+    post:
+      tags: [ConnectorsAdmin]
+      operationId: approveAdminConnectorVersion
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }]
+      responses: { '200': { description: Exact checksum approved by a distinct principal. }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/{connectorId}/versions/{version}/rejections:
+    post:
+      tags: [ConnectorsAdmin]
+      operationId: rejectAdminConnectorVersion
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }]
+      responses: { '200': { description: Exact checksum rejected by a distinct principal. }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/{connectorId}:test:
+    post:
+      tags: [ConnectorsAdmin]
+      operationId: testAdminConnector
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }]
+      responses: { '200': { description: Controlled server-side Connector resolution result. }, default: { $ref: '#/components/responses/Problem' } }
   /health/live:
     get:
       tags: [Health]

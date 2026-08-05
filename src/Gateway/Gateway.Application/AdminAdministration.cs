@@ -1,9 +1,11 @@
 using System.Security.Claims;
+using System.Text.Json.Serialization;
 using SecureIntegration.Gateway.Domain;
 
 namespace SecureIntegration.Gateway.Application;
 
 /// <summary>Provider-neutral administrative roles.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<AdminRole>))]
 public enum AdminRole
 {
     /// <summary>Read-only metadata and health access.</summary>
@@ -60,12 +62,15 @@ public sealed record AdminAccessContext(AdminPrincipalRecord Principal, IReadOnl
 }
 
 /// <summary>Approval lifecycle independent from Connector version state.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<ConnectorApprovalStatus>))]
 public enum ConnectorApprovalStatus
 {
     /// <summary>Awaiting a distinct approver.</summary>
     Requested,
     /// <summary>Approved for the exact checksum.</summary>
     Approved,
+    /// <summary>Explicitly rejected by a distinct approver.</summary>
+    Rejected,
     /// <summary>No longer usable after mutation or replacement.</summary>
     Invalidated
 }
@@ -77,10 +82,16 @@ public sealed record ConnectorApprovalRecord(
     string ChecksumSha256,
     Guid RequestedBy,
     Guid? ApprovedBy,
+    Guid? RejectedBy,
     ConnectorApprovalStatus Status,
     DateTimeOffset RequestedAt,
     DateTimeOffset? ApprovedAt,
+    DateTimeOffset? RejectedAt,
+    string? DecisionComment,
     DateTimeOffset? InvalidatedAt);
+
+/// <summary>Redacted approval decision input.</summary>
+public sealed record ConnectorApprovalDecisionRequest(string? Comment);
 
 /// <summary>Minimal persistence contract for identities, roles and four-eyes records.</summary>
 public interface IAdminSecurityStore
@@ -97,6 +108,8 @@ public interface IAdminSecurityStore
     Task<ConnectorApprovalRecord> RequestApprovalAsync(ConnectorVersionRecord version, Guid requester, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Approves the current request when approver and editor identities are distinct.</summary>
     Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, string createdBy, Guid approver, DateTimeOffset now, CancellationToken cancellationToken);
+    /// <summary>Rejects the current exact-checksum request as a distinct approver.</summary>
+    Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, string createdBy, Guid rejector, string? comment, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Checks for a current approval by a distinct principal.</summary>
     Task<bool> HasValidApprovalAsync(Guid connectorVersionId, byte[] checksumSha256, string actor, CancellationToken cancellationToken);
     /// <summary>Invalidates current approvals after an approval-relevant mutation.</summary>
@@ -169,6 +182,16 @@ public sealed class ConnectorApprovalService(IAdminSecurityStore store, IConnect
         AdminAccessService.Require(actor, null, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
         ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
         return await store.ApproveAsync(current.Id, current.ChecksumSha256, current.CreatedBy, actor.Principal.Id, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Rejects only as a distinct ConnectorApprover or SecurityAdministrator.</summary>
+    public async Task<ConnectorApprovalRecord> RejectAsync(string connectorId, string version, string? comment, AdminAccessContext actor, CancellationToken cancellationToken)
+    {
+        AdminAccessService.Require(actor, null, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
+        ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
+        string? redactedComment = string.IsNullOrWhiteSpace(comment) ? null : comment.Trim();
+        if (redactedComment?.Length > 500) throw new GatewayException("BGW-ADMIN-APPROVAL-COMMENT", 400);
+        return await store.RejectAsync(current.Id, current.ChecksumSha256, current.CreatedBy, actor.Principal.Id, redactedComment, clock.UtcNow, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Lists approval metadata.</summary>

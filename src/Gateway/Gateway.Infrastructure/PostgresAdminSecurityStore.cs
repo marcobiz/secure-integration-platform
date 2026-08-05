@@ -88,16 +88,28 @@ public sealed class PostgresAdminSecurityStore(AdminPostgresDataSource adminData
         Add(insert, id, version.Id, version.ChecksumSha256, requester, now);
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return new(id, version.Id, Convert.ToHexString(version.ChecksumSha256), requester, null, ConnectorApprovalStatus.Requested, now, null, null);
+        return new(id, version.Id, Convert.ToHexString(version.ChecksumSha256), requester, null, null, ConnectorApprovalStatus.Requested, now, null, null, null, null);
     }
 
     /// <inheritdoc />
     public async Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, string createdBy, Guid approver, DateTimeOffset now, CancellationToken cancellationToken)
     {
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        const string sql = "UPDATE gateway.connector_approval a SET status='approved',approved_by=$3,approved_at=$4 FROM gateway.connector_version v WHERE a.connector_version_id=$1 AND a.connector_version_id=v.id AND a.checksum_sha256=$2 AND a.status='requested' AND a.requested_by<>$3 AND v.created_by<>$3::text RETURNING a.id,a.connector_version_id,a.checksum_sha256,a.requested_by,a.approved_by,a.status,a.requested_at,a.approved_at,a.invalidated_at";
+        const string sql = "UPDATE gateway.connector_approval a SET status='approved',approved_by=$3,approved_at=$4 FROM gateway.connector_version v WHERE a.connector_version_id=$1 AND a.connector_version_id=v.id AND a.checksum_sha256=$2 AND a.status='requested' AND a.requested_by<>$3 AND v.created_by<>$3::text RETURNING a.id,a.connector_version_id,a.checksum_sha256,a.requested_by,a.approved_by,a.rejected_by,a.status,a.requested_at,a.approved_at,a.rejected_at,a.decision_comment,a.invalidated_at";
         await using NpgsqlCommand command = new(sql, connection);
         Add(command, connectorVersionId, checksumSha256, approver, now);
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-ADMIN-FOUR-EYES", 403);
+        return ReadApproval(reader);
+    }
+
+    /// <inheritdoc />
+    public async Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, string createdBy, Guid rejector, string? comment, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        const string sql = "UPDATE gateway.connector_approval a SET status='rejected',rejected_by=$3,rejected_at=$4,decision_comment=$5 FROM gateway.connector_version v WHERE a.connector_version_id=$1 AND a.connector_version_id=v.id AND a.checksum_sha256=$2 AND a.status='requested' AND a.requested_by<>$3 AND v.created_by<>$3::text RETURNING a.id,a.connector_version_id,a.checksum_sha256,a.requested_by,a.approved_by,a.rejected_by,a.status,a.requested_at,a.approved_at,a.rejected_at,a.decision_comment,a.invalidated_at";
+        await using NpgsqlCommand command = new(sql, connection);
+        Add(command, connectorVersionId, checksumSha256, rejector, now, comment);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-ADMIN-FOUR-EYES", 403);
         return ReadApproval(reader);
@@ -125,7 +137,7 @@ public sealed class PostgresAdminSecurityStore(AdminPostgresDataSource adminData
     {
         List<ConnectorApprovalRecord> result = [];
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using NpgsqlCommand command = new("SELECT id,connector_version_id,checksum_sha256,requested_by,approved_by,status,requested_at,approved_at,invalidated_at FROM gateway.connector_approval WHERE connector_version_id=$1 ORDER BY requested_at DESC", connection);
+        await using NpgsqlCommand command = new("SELECT id,connector_version_id,checksum_sha256,requested_by,approved_by,rejected_by,status,requested_at,approved_at,rejected_at,decision_comment,invalidated_at FROM gateway.connector_approval WHERE connector_version_id=$1 ORDER BY requested_at DESC", connection);
         command.Parameters.AddWithValue(connectorVersionId);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) result.Add(ReadApproval(reader));
@@ -141,7 +153,7 @@ public sealed class PostgresAdminSecurityStore(AdminPostgresDataSource adminData
 
     private static AdminPrincipalRecord ReadPrincipal(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetBoolean(5), reader.GetFieldValue<DateTimeOffset>(6));
     private static AdminRoleAssignmentRecord ReadAssignment(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetGuid(1), ParseRole(reader.GetString(2)), reader.IsDBNull(3) ? null : reader.GetGuid(3), reader.GetGuid(4), reader.GetFieldValue<DateTimeOffset>(5));
-    private static ConnectorApprovalRecord ReadApproval(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetGuid(1), Convert.ToHexString(reader.GetFieldValue<byte[]>(2)), reader.GetGuid(3), reader.IsDBNull(4) ? null : reader.GetGuid(4), Enum.Parse<ConnectorApprovalStatus>(reader.GetString(5), true), reader.GetFieldValue<DateTimeOffset>(6), reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7), reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8));
+    private static ConnectorApprovalRecord ReadApproval(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetGuid(1), Convert.ToHexString(reader.GetFieldValue<byte[]>(2)), reader.GetGuid(3), reader.IsDBNull(4) ? null : reader.GetGuid(4), reader.IsDBNull(5) ? null : reader.GetGuid(5), Enum.Parse<ConnectorApprovalStatus>(reader.GetString(6), true), reader.GetFieldValue<DateTimeOffset>(7), reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8), reader.IsDBNull(9) ? null : reader.GetFieldValue<DateTimeOffset>(9), reader.IsDBNull(10) ? null : reader.GetString(10), reader.IsDBNull(11) ? null : reader.GetFieldValue<DateTimeOffset>(11));
     private static string Role(AdminRole role) => role switch { AdminRole.Viewer => "viewer", AdminRole.ConnectorEditor => "connector_editor", AdminRole.ConnectorApprover => "connector_approver", AdminRole.Operator => "operator", AdminRole.SecurityAdministrator => "security_administrator", _ => throw new ArgumentOutOfRangeException(nameof(role)) };
     private static AdminRole ParseRole(string role) => role switch { "viewer" => AdminRole.Viewer, "connector_editor" => AdminRole.ConnectorEditor, "connector_approver" => AdminRole.ConnectorApprover, "operator" => AdminRole.Operator, "security_administrator" => AdminRole.SecurityAdministrator, _ => throw new InvalidOperationException("Unknown Admin role.") };
     private static void Add(NpgsqlCommand command, params object?[] values) { foreach (object? value in values) command.Parameters.AddWithValue(value ?? DBNull.Value); }

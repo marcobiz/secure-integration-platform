@@ -35,12 +35,17 @@ CREATE TABLE IF NOT EXISTS gateway.connector_approval (
   checksum_sha256 bytea NOT NULL CHECK (octet_length(checksum_sha256) = 32),
   requested_by uuid NOT NULL REFERENCES gateway.admin_principal(id),
   approved_by uuid REFERENCES gateway.admin_principal(id),
-  status varchar(32) NOT NULL CHECK (status IN ('requested','approved','invalidated')),
+  rejected_by uuid REFERENCES gateway.admin_principal(id),
+  status varchar(32) NOT NULL CHECK (status IN ('requested','approved','rejected','invalidated')),
   requested_at timestamptz NOT NULL,
   approved_at timestamptz,
+  rejected_at timestamptz,
+  decision_comment varchar(500),
   invalidated_at timestamptz,
   CHECK ((status = 'approved' AND approved_by IS NOT NULL AND approved_at IS NOT NULL) OR status <> 'approved'),
-  CHECK (approved_by IS NULL OR approved_by <> requested_by)
+  CHECK ((status = 'rejected' AND rejected_by IS NOT NULL AND rejected_at IS NOT NULL) OR status <> 'rejected'),
+  CHECK (approved_by IS NULL OR approved_by <> requested_by),
+  CHECK (rejected_by IS NULL OR rejected_by <> requested_by)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_connector_approval_current

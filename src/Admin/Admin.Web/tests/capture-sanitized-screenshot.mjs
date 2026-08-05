@@ -1,3 +1,4 @@
+/* global process, fetch, setTimeout */
 import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { chromium } from 'playwright';

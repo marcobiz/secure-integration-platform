@@ -74,7 +74,7 @@ public sealed class InMemoryAdminSecurityStore : IAdminSecurityStore
         lock (sync)
         {
             InvalidateCore(version.Id, now);
-            ConnectorApprovalRecord created = new(Guid.NewGuid(), version.Id, Convert.ToHexString(version.ChecksumSha256), requester, null, ConnectorApprovalStatus.Requested, now, null, null);
+            ConnectorApprovalRecord created = new(Guid.NewGuid(), version.Id, Convert.ToHexString(version.ChecksumSha256), requester, null, null, ConnectorApprovalStatus.Requested, now, null, null, null, null);
             approvals.Add(created);
             return Task.FromResult(created);
         }
@@ -93,6 +93,22 @@ public sealed class InMemoryAdminSecurityStore : IAdminSecurityStore
             ConnectorApprovalRecord approved = current with { ApprovedBy = approver, Status = ConnectorApprovalStatus.Approved, ApprovedAt = now };
             approvals[index] = approved;
             return Task.FromResult(approved);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, string createdBy, Guid rejector, string? comment, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (sync)
+        {
+            int index = approvals.FindIndex(value => value.ConnectorVersionId == connectorVersionId && value.Status == ConnectorApprovalStatus.Requested && FixedChecksum(value.ChecksumSha256, checksumSha256));
+            if (index < 0) throw new GatewayException("BGW-ADMIN-APPROVAL-NOT-FOUND", 409);
+            ConnectorApprovalRecord current = approvals[index];
+            if (current.RequestedBy == rejector || (Guid.TryParse(createdBy, out Guid creator) && creator == rejector)) throw new GatewayException("BGW-ADMIN-FOUR-EYES", 403);
+            ConnectorApprovalRecord rejected = current with { RejectedBy = rejector, Status = ConnectorApprovalStatus.Rejected, RejectedAt = now, DecisionComment = comment };
+            approvals[index] = rejected;
+            return Task.FromResult(rejected);
         }
     }
 

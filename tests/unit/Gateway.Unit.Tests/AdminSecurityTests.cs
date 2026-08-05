@@ -82,6 +82,23 @@ public sealed class AdminSecurityTests
     }
 
     [Fact]
+    public async Task M5_UT_Distinct_approver_can_reject_with_bounded_redacted_comment()
+    {
+        InMemoryAdminSecurityStore store = new();
+        AdminPrincipalRecord editor = await PrincipalAsync(store, "editor-reject");
+        AdminPrincipalRecord approver = await PrincipalAsync(store, "approver-reject");
+        ConnectorVersionRecord version = Version(editor.Id);
+        await store.RequestApprovalAsync(version, editor.Id, Now, TestContext.Current.CancellationToken);
+
+        ConnectorApprovalRecord rejection = await store.RejectAsync(version.Id, version.ChecksumSha256, version.CreatedBy, approver.Id, "schema requires revision", Now.AddMinutes(1), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ConnectorApprovalStatus.Rejected, rejection.Status);
+        Assert.Equal(approver.Id, rejection.RejectedBy);
+        Assert.Equal("schema requires revision", rejection.DecisionComment);
+        Assert.False(await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, editor.Id.ToString("D"), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task M5_UT_Modification_invalidation_revokes_previous_approval()
     {
         InMemoryAdminSecurityStore store = new();
