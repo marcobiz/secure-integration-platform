@@ -82,7 +82,7 @@ builder.Services.AddSingleton<IGatewayClock, SystemGatewayClock>();
 builder.Services.AddSingleton<IEnrollmentChallengeStore, InMemoryEnrollmentChallengeStore>();
 builder.Services.AddSingleton<IHostResolver, SystemHostResolver>();
 builder.Services.AddSingleton<IRestrictedTransport, SystemRestrictedTransport>();
-if ((builder.Environment.IsEnvironment("M3Testing") || builder.Environment.IsEnvironment("M4Testing")) && !string.IsNullOrWhiteSpace(hostOptions.M3PrivateMockHost) && !string.IsNullOrWhiteSpace(hostOptions.M3PrivateMockCidr))
+if ((builder.Environment.IsEnvironment("M3Testing") || builder.Environment.IsEnvironment("M4Testing") || builder.Environment.IsEnvironment("M5Testing")) && !string.IsNullOrWhiteSpace(hostOptions.M3PrivateMockHost) && !string.IsNullOrWhiteSpace(hostOptions.M3PrivateMockCidr))
     builder.Services.AddSingleton<IPrivateDestinationAllowance>(new M3PrivateDestinationAllowance(hostOptions.M3PrivateMockHost, hostOptions.M3PrivateMockCidr));
 string? connectionString = builder.Configuration.GetConnectionString("GatewayDatabase");
 if (string.IsNullOrWhiteSpace(connectionString))
@@ -134,7 +134,7 @@ if (providerServices.Mac is not null) builder.Services.AddSingleton(providerServ
 
 byte[] activationKey;
 string? encodedActivationKey = hostOptions.ActivationHmacKeyBase64;
-if (!builder.Environment.IsDevelopment() && !builder.Environment.IsEnvironment("Testing") && !builder.Environment.IsEnvironment("M3Testing") && !builder.Environment.IsEnvironment("M4Testing"))
+if (!builder.Environment.IsDevelopment() && !builder.Environment.IsEnvironment("Testing") && !builder.Environment.IsEnvironment("M3Testing") && !builder.Environment.IsEnvironment("M4Testing") && !builder.Environment.IsEnvironment("M5Testing"))
 {
     if (string.IsNullOrWhiteSpace(hostOptions.ActivationHmacSecretReference)) throw new InvalidOperationException("Gateway activation HMAC provider reference is required outside Development/Testing/M3Testing.");
     encodedActivationKey = await secretProvider.GetSecretAsync(hostOptions.ActivationHmacSecretReference, CancellationToken.None).ConfigureAwait(false);
@@ -380,7 +380,7 @@ app.MapGet("/admin/auth/csrf", (HttpContext context, IAntiforgery antiforgery) =
 app.MapPost("/admin/auth/development/login", async (DevelopmentLoginRequest request, HttpContext context, IAntiforgery antiforgery, IAdminSecurityStore securityStore, CancellationToken cancellationToken) =>
 {
     await antiforgery.ValidateRequestAsync(context).ConfigureAwait(false);
-    if ((!app.Environment.IsDevelopment() && !app.Environment.IsEnvironment("Testing")) || !string.Equals(hostOptions.Admin.Mode, "DevelopmentAuth", StringComparison.Ordinal) || !DevelopmentAuthenticationBoundary.IsLoopbackPeer(context.Connection.RemoteIpAddress))
+    if ((!app.Environment.IsDevelopment() && !app.Environment.IsEnvironment("Testing") && !app.Environment.IsEnvironment("M5Testing")) || !string.Equals(hostOptions.Admin.Mode, "DevelopmentAuth", StringComparison.Ordinal) || !DevelopmentAuthenticationBoundary.IsLoopbackPeer(context.Connection.RemoteIpAddress))
         throw new GatewayException("BGW-ADMIN-DEVELOPMENT-AUTH-DISABLED", 404);
     (string Subject, AdminRole[] Roles) user = request.UserName switch
     {
@@ -741,7 +741,7 @@ static ProviderServices CreateProviderServices(GatewayProviderOptions options, I
 {
     if (string.Equals(options.Kind, "Synthetic", StringComparison.Ordinal))
     {
-        if (!environment.IsEnvironment("M3Testing") && !environment.IsEnvironment("M4Testing") && !environment.IsDevelopment() && !environment.IsEnvironment("Testing"))
+        if (!environment.IsEnvironment("M3Testing") && !environment.IsEnvironment("M4Testing") && !environment.IsEnvironment("M5Testing") && !environment.IsDevelopment() && !environment.IsEnvironment("Testing"))
             throw new InvalidOperationException("Synthetic provider is not allowed in this environment.");
         if (!Uri.TryCreate(options.Endpoint, UriKind.Absolute, out Uri? endpoint) || endpoint.Scheme != Uri.UriSchemeHttps)
             throw new InvalidOperationException("Synthetic provider requires an HTTPS endpoint.");

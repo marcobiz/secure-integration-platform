@@ -10,7 +10,13 @@ export function AppTheme({ children }: { children: ReactNode }) {
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
   const mode = choice === 'system' ? (prefersDark ? 'dark' : 'light') : choice;
   const theme = useMemo(() => createTheme({
-    palette: { mode, primary: { main: mode === 'dark' ? '#7dd3fc' : '#075985' }, secondary: { main: '#0f766e' }, background: { default: mode === 'dark' ? '#07131f' : '#f4f7fa', paper: mode === 'dark' ? '#0d1c2b' : '#ffffff' } },
+    palette: {
+      mode,
+      primary: { main: mode === 'dark' ? '#7dd3fc' : '#075985' },
+      secondary: { main: '#0f766e' },
+      text: { secondary: mode === 'dark' ? '#b8c7d3' : '#505050' },
+      background: { default: mode === 'dark' ? '#07131f' : '#f4f7fa', paper: mode === 'dark' ? '#0d1c2b' : '#ffffff' }
+    },
     typography: { fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', h1: { fontSize: '1.75rem', fontWeight: 700 }, h2: { fontSize: '1.2rem', fontWeight: 650 } },
     shape: { borderRadius: 10 },
     components: { MuiButton: { defaultProps: { disableElevation: true } }, MuiCard: { styleOverrides: { root: { border: '1px solid', borderColor: mode === 'dark' ? '#1f3548' : '#dbe5ec' } } } }

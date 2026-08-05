@@ -81,7 +81,7 @@ public sealed partial class AdminOpenApiParityTests
         DirectoryInfo? current = new(AppContext.BaseDirectory);
         while (current is not null)
         {
-            if (File.Exists(Path.Combine(current.FullName, "BrokerGateway.slnx"))) return current.FullName;
+            if (File.Exists(Path.Combine(current.FullName, "BrokerGateway.slnx")) || File.Exists(Path.Combine(current.FullName, "BrokerGateway.Core.slnx"))) return current.FullName;
             current = current.Parent;
         }
         throw new DirectoryNotFoundException("Repository root not found.");

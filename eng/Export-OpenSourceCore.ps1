@@ -94,6 +94,25 @@ if (-not $SkipVerification) {
             Select-Object -ExpandProperty Path -Unique)
     }
     if ($forbiddenContent) { throw ('OSS_EXPORT_FORBIDDEN_CONTENT: ' + (($forbiddenContent | Sort-Object -Unique) -join ', ')) }
+    $brokenLinks = [Collections.Generic.List[string]]::new()
+    foreach ($markdown in Get-ChildItem -LiteralPath $destination -Recurse -Filter '*.md' -File) {
+        $content = Get-Content -LiteralPath $markdown.FullName -Raw
+        foreach ($match in [regex]::Matches($content, '\[[^\]]+\]\(([^)]+)\)')) {
+            $target = $match.Groups[1].Value
+            if ($target -match '^(https?://|mailto:|#)') { continue }
+            $relativeTarget = [uri]::UnescapeDataString(($target -split '#')[0])
+            if (-not [string]::IsNullOrWhiteSpace($relativeTarget)) {
+                $resolved = [IO.Path]::GetFullPath((Join-Path $markdown.DirectoryName $relativeTarget))
+                if (-not $resolved.StartsWith($destination + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $resolved)) {
+                    $brokenLinks.Add("$($markdown.FullName): $target")
+                }
+            }
+        }
+    }
+    if ($brokenLinks.Count -gt 0) { throw ('OSS_EXPORT_BROKEN_LINKS: ' + (($brokenLinks | Sort-Object -Unique) -join ', ')) }
+    $publicTextFiles = @(Get-ChildItem -LiteralPath $destination -Recurse -File | Where-Object { $_.Extension -in '.md', '.json', '.yml', '.yaml' -and $_.Length -le 5MB })
+    $excludedReferences = @($publicTextFiles | Select-String -Pattern 'docs[/\\](reviews|implementation|traceability)[/\\]|C:\\(Users|SecureEvidence|Lab|Codice)\\' | Select-Object -ExpandProperty Path -Unique)
+    if ($excludedReferences) { throw ('OSS_EXPORT_EXCLUDED_REFERENCE: ' + (($excludedReferences | Sort-Object -Unique) -join ', ')) }
     $solution = Join-Path $destination 'BrokerGateway.Core.slnx'
     $isWindowsHost = [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Windows)
     $platformArguments = @()
@@ -102,21 +121,23 @@ if (-not $SkipVerification) {
     if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_RESTORE_FAILED' }
     & $dotnet build $solution --configuration Release --no-restore @platformArguments
     if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_BUILD_FAILED' }
+    $coreTests = @(
+        @{ Path = 'tests/architecture/Architecture.Tests/Architecture.Tests.csproj'; Filter = $null },
+        @{ Path = 'tests/unit/Broker.Core.Tests/Broker.Core.Tests.csproj'; Filter = $null },
+        @{ Path = 'tests/unit/Gateway.Unit.Tests/Gateway.Unit.Tests.csproj'; Filter = $null },
+        @{ Path = 'tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj'; Filter = $null }
+    )
     if ($isWindowsHost) {
-        & $dotnet test $solution --configuration Release --no-restore --no-build
-        if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_TEST_FAILED' }
-    }
-    else {
-        $portableTests = @(
-            'tests/architecture/Architecture.Tests/Architecture.Tests.csproj',
-            'tests/unit/Broker.Core.Tests/Broker.Core.Tests.csproj',
-            'tests/unit/Gateway.Unit.Tests/Gateway.Unit.Tests.csproj',
-            'tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj'
+        $coreTests += @(
+            @{ Path = 'tests/integration/Broker.Integration.Tests/Broker.Integration.Tests.csproj'; Filter = 'FullyQualifiedName!~Live_matrix&FullyQualifiedName!~Windows_service_uses_the_event_source_provisioned_by_the_installer' },
+            @{ Path = 'tests/e2e/VerticalSlice.Tests/VerticalSlice.Tests.csproj'; Filter = $null }
         )
-        foreach ($testProject in $portableTests) {
-            & $dotnet test (Join-Path $destination $testProject) --configuration Release --no-restore --no-build @platformArguments
-            if ($LASTEXITCODE -ne 0) { throw "OSS_EXPORT_TEST_FAILED: $testProject" }
-        }
+    }
+    foreach ($test in $coreTests) {
+        $testArguments = @('test', (Join-Path $destination $test.Path), '--configuration', 'Release', '--no-restore', '--no-build') + $platformArguments
+        if ($test.Filter) { $testArguments += @('--filter', $test.Filter) }
+        & $dotnet @testArguments
+        if ($LASTEXITCODE -ne 0) { throw "OSS_EXPORT_TEST_FAILED: $($test.Path)" }
     }
     $web = Join-Path $destination 'src\Admin\Admin.Web'
     if (Test-Path -LiteralPath (Join-Path $web 'package-lock.json')) {

@@ -9,6 +9,8 @@ COPY src/Admin/Admin.Web/package.json src/Admin/Admin.Web/package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY src/Admin/Admin.Web/ ./
 COPY docs/api/gateway-openapi.yaml /src/docs/api/gateway-openapi.yaml
+COPY docs/connectors/connector-definition.schema.json /src/docs/connectors/connector-definition.schema.json
+COPY docs/connectors/examples/sample-secure-service.connector.json /src/docs/connectors/examples/sample-secure-service.connector.json
 RUN npm run build
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime

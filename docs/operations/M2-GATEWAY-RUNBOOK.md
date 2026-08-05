@@ -12,7 +12,7 @@
 ## Build e test locali
 
 ```powershell
-Set-Location C:\Codice\broker-gateway
+Set-Location (& git rev-parse --show-toplevel)
 .\eng\build.ps1 -Configuration Release
 .\eng\test.ps1 -Configuration Release
 .\eng\validate-docs.ps1

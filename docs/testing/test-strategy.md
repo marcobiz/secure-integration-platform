@@ -122,5 +122,4 @@ I test che richiedono Azure reale usano un Environment test isolato e sono sched
 
 ## Acceptance evidence
 
-Ogni test produce ID stabile e viene referenziato da `docs/traceability/requirements-traceability.md`. La release pipeline allega report test, scan, SBOM, artifact hash e signature verification al release manifest.
-
+Ogni test produce un ID stabile. La release pipeline allega report test, scan, SBOM, artifact hash e signature verification al release manifest; la matrice di tracciabilità riservata al ciclo di release non fa parte dell'export Core pubblico.

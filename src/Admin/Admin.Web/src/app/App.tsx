@@ -1,5 +1,7 @@
 import { lazy, Suspense } from 'react';
+import { BrowserRouter, Route, Switch } from 'react-router-dom';
 import { SessionProvider } from '../auth/SessionContext'; import { LoginPage } from '../auth/LoginPage'; import { LoadingState } from '../components/AsyncState'; import { AdminLayout } from '../layouts/AdminLayout';
+import { DirtyStateProvider } from '../navigation/DirtyStateContext';
 const Dashboard = lazy(() => import('../features/dashboard/DashboardPage').then(value => ({ default: value.DashboardPage })));
 const Tenants = lazy(() => import('../features/resources/TenantsPage').then(value => ({ default: value.TenantsPage })));
 const Applications = lazy(() => import('../features/resources/ApplicationsPage').then(value => ({ default: value.ApplicationsPage })));
@@ -12,5 +14,5 @@ const TenantData = lazy(() => import('../features/operations/TenantDataPage').th
 const Health = lazy(() => import('../features/operations/HealthPage').then(value => ({ default: value.HealthPage })));
 const Access = lazy(() => import('../features/security/AccessPage').then(value => ({ default: value.AccessPage })));
 
-function CurrentPage() { const path = window.location.pathname.replace(/^\/admin\/?/, ''); switch (path) { case 'tenants': return <Tenants />; case 'applications': return <Applications />; case 'installations': return <Installations />; case 'connectors': return <Connectors />; case 'bindings': return <Bindings />; case 'grants': return <Grants />; case 'approvals': return <Approvals />; case 'access': return <Access />; case 'audit': return <TenantData kind="audit" />; case 'health': return <Health />; default: return <Dashboard />; } }
-export function App() { return <SessionProvider fallback={<LoginPage />}><Suspense fallback={<LoadingState />}><AdminLayout><CurrentPage /></AdminLayout></Suspense></SessionProvider>; }
+function CurrentPage() { return <Switch><Route exact path="/" component={Dashboard} /><Route path="/tenants" component={Tenants} /><Route path="/applications" component={Applications} /><Route path="/installations" component={Installations} /><Route path="/connectors" component={Connectors} /><Route path="/bindings" component={Bindings} /><Route path="/grants" component={Grants} /><Route path="/approvals" component={Approvals} /><Route path="/access" component={Access} /><Route path="/audit" render={() => <TenantData kind="audit" />} /><Route path="/health" component={Health} /><Route component={Dashboard} /></Switch>; }
+export function App() { return <BrowserRouter basename="/admin"><DirtyStateProvider><SessionProvider fallback={<LoginPage />}><Suspense fallback={<LoadingState />}><AdminLayout><CurrentPage /></AdminLayout></Suspense></SessionProvider></DirtyStateProvider></BrowserRouter>; }

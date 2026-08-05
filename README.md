@@ -8,7 +8,7 @@ The platform removes hard-coded secrets and distributed credentials while minimi
 
 ## Status
 
-M0–M5 and the M3A product gate are technically complete. M5 Admin UI MVP passed its candidate gate; PR #5 remains open for reviewed integration. M3B remains a separate Azure Deployment Pack qualification and is not required by the Core. See [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+M0–M4 and the M3A product gate are complete. The M5 Admin UI MVP is undergoing review on its feature branch and is not yet a released baseline. M3B remains a separate Azure Deployment Pack qualification and is not required by the Core.
 
 ## Local quick start, no cloud account
 
@@ -53,4 +53,4 @@ The definitive open-source license is still [under legal/business review](docs/l
 
 ## Documentation
 
-The complete index and reading order are in [docs/README.md](docs/README.md). Documents under `input-docs/` are reserved source material and are never part of a public export.
+Public architecture, API, Connector, deployment, operations, security and testing documents are grouped under `docs/`. Reserved planning, review and source-input material is never part of a public export.

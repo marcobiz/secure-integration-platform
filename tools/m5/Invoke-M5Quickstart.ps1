@@ -73,6 +73,29 @@ do {
 } while ([DateTimeOffset]::UtcNow -lt $deadline)
 if (-not $ready) { throw 'M5_QUICKSTART_GATEWAY_NOT_READY' }
 
+# Consume the synthetic one-time activation through the real challenge/PoP
+# enrollment client. The report is metadata-only; provisioning secrets remain
+# confined to the ignored raw fixture directory.
+$environment = @{}
+foreach ($line in Get-Content -LiteralPath $envFile) {
+    $separator = $line.IndexOf('=')
+    if ($separator -gt 0) { $environment[$line.Substring(0, $separator)] = $line.Substring($separator + 1) }
+}
+$securityOutput = Join-Path $artifactRoot 'enrollment-status.json'
+$env:M3_GATEWAY_BASE_ADDRESS = 'https://localhost:18443/'
+$env:M3_GATEWAY_CA_FILE = Join-Path $rawRoot 'certificates\ca.crt'
+$env:M3_PROVISIONING_FILE = Join-Path $rawRoot 'provisioning.json'
+$env:M3_SECURITY_DRIVER_PFX = Join-Path $rawRoot 'certificates\security-driver.pfx'
+$env:M3_CERTIFICATE_PASSWORD = [string]$environment.M3_CERTIFICATE_PASSWORD
+$env:M3_SECURITY_OUTPUT = $securityOutput
+$env:M3_SECURITY_SCOPE = 'smoke'
+Invoke-Checked $dotnet @('run', '--project', (Join-Path $root 'tools\m3\SecurityDriver\SecurityDriver.csproj'), '--configuration', 'Release')
+$enrollment = Get-Content -LiteralPath $securityOutput -Raw | ConvertFrom-Json
+if (-not $enrollment.passed) { throw 'M5_QUICKSTART_ENROLLMENT_FAILED' }
+$provisioning = Get-Content -LiteralPath (Join-Path $rawRoot 'provisioning.json') -Raw | ConvertFrom-Json
+$status = (& docker @((ComposeArguments @('exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', 'broker_gateway_m3', '-Atc', "SELECT status FROM gateway.installation WHERE id='$($provisioning.securityInstallationId)';"))))
+if ($LASTEXITCODE -ne 0 -or $status.Trim() -ne 'active') { throw 'M5_QUICKSTART_INSTALLATION_NOT_ACTIVE' }
+
 $html = Join-Path $artifactRoot 'admin-index.html'
 # Schannel otherwise attempts Internet revocation checks for the intentionally offline,
 # per-run synthetic CA. Certificate chain and hostname validation remain enabled.
@@ -84,5 +107,6 @@ Invoke-Checked $curl $curlArguments
 $content = Get-Content -Raw -LiteralPath $html
 if ($content -notmatch '<div id="root"></div>' -or $content.IndexOf('__CSP_NONCE__', [StringComparison]::Ordinal) -ge 0) { throw 'M5_QUICKSTART_ADMIN_UI_INVALID' }
 Write-Host 'M5_QUICKSTART_START_PASS'
+Write-Host 'Synthetic enrollment: Active (challenge, proof-of-possession and activation completed).'
 Write-Host 'Admin UI: https://localhost:18443/admin/'
 Write-Host 'Stop with: powershell -NoProfile -File tools/m5/Invoke-M5Quickstart.ps1 -Phase Stop'

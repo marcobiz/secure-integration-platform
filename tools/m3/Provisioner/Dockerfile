@@ -15,6 +15,7 @@ RUN dotnet restore tools/m3/Provisioner/Provisioner.csproj --locked-mode
 COPY src/Gateway/ src/Gateway/
 COPY src/Providers/Abstractions/ src/Providers/Abstractions/
 COPY docs/connectors/connector-definition.schema.json docs/connectors/connector-definition.schema.json
+COPY docs/connectors/examples/sample-secure-service.connector.json docs/connectors/examples/sample-secure-service.connector.json
 COPY tools/m3/Provisioner/ tools/m3/Provisioner/
 RUN dotnet publish tools/m3/Provisioner/Provisioner.csproj -c Release --no-restore -o /app /p:UseAppHost=false
 FROM mcr.microsoft.com/dotnet/runtime:10.0-alpine

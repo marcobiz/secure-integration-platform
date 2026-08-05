@@ -19,8 +19,8 @@ public static class AdminAuthentication
         bool production = builder.Environment.IsProduction();
         if (production && !string.Equals(options.Mode, "Oidc", StringComparison.Ordinal))
             throw new InvalidOperationException("Production Admin authentication must use OIDC.");
-        if (string.Equals(options.Mode, "DevelopmentAuth", StringComparison.Ordinal) && !builder.Environment.IsDevelopment() && !builder.Environment.IsEnvironment("Testing"))
-            throw new InvalidOperationException("DevelopmentAuth is allowed only in Development or the in-process Testing environment.");
+        if (string.Equals(options.Mode, "DevelopmentAuth", StringComparison.Ordinal) && !builder.Environment.IsDevelopment() && !builder.Environment.IsEnvironment("Testing") && !builder.Environment.IsEnvironment("M5Testing"))
+            throw new InvalidOperationException("DevelopmentAuth is allowed only in Development or explicit test environments.");
         if (string.Equals(options.Mode, "DevelopmentApiKey", StringComparison.Ordinal) && !builder.Environment.IsEnvironment("M4Testing") && !builder.Environment.IsEnvironment("Testing"))
             throw new InvalidOperationException("DevelopmentApiKey is allowed only in compatibility tests.");
 

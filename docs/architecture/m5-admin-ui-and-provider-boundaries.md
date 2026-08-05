@@ -99,7 +99,7 @@ Una approvazione è una registrazione separata e immutabile, legata a version id
 
 ## Deployment locale
 
-Il frontend usa React 19, TypeScript strict, Vite, TanStack Query, React Hook Form, AJV 2020-12, CodeMirror 6, MUI Community, Lucide, i18next, Vitest, Testing Library, Playwright e axe. Il routing MVP usa collegamenti same-origin e un piccolo dispatcher di path: React Router è stato escluso perché la famiglia di versioni valutata introduceva advisory npm nel lockfile. La decisione è reversibile quando una versione compatibile e priva di advisory sarà disponibile. Nessun CDN, font remoto, analytics, PWA o source map di produzione.
+Il frontend usa React 19, TypeScript strict, Vite, React Router, TanStack Query, React Hook Form, AJV 2020-12, CodeMirror 6, MUI Community, Lucide, i18next, Vitest, Testing Library, Playwright e axe. La navigazione client-side mantiene il dirty state dei form complessi e richiede una scelta esplicita prima di scartare modifiche; nessun contenuto del form viene persistito in localStorage. Nessun CDN, font remoto, analytics, PWA o source map di produzione.
 
 ```mermaid
 flowchart TB

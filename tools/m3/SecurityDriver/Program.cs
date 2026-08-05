@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -13,9 +14,12 @@ string provisioningPath = Required("M3_PROVISIONING_FILE");
 string certificatePath = Required("M3_SECURITY_DRIVER_PFX");
 string certificatePassword = Required("M3_CERTIFICATE_PASSWORD");
 bool smokeOnly = string.Equals(Environment.GetEnvironmentVariable("M3_SECURITY_SCOPE"), "smoke", StringComparison.Ordinal);
-string vaultToken = smokeOnly ? string.Empty : Required("M3_SYNTHETIC_VAULT_TOKEN");
-string adminConnection = smokeOnly ? string.Empty : Required("M3_POSTGRES_ADMIN_CONNECTION");
+bool enrollmentOnly = string.Equals(Environment.GetEnvironmentVariable("M3_SECURITY_SCOPE"), "enrollment", StringComparison.Ordinal);
+bool reducedScope = smokeOnly || enrollmentOnly;
+string vaultToken = reducedScope ? string.Empty : Required("M3_SYNTHETIC_VAULT_TOKEN");
+string adminConnection = reducedScope ? string.Empty : Required("M3_POSTGRES_ADMIN_CONNECTION");
 string outputPath = Required("M3_SECURITY_OUTPUT");
+string? gatewayCaFile = Optional("M3_GATEWAY_CA_FILE");
 using JsonDocument provisioning = JsonDocument.Parse(await File.ReadAllBytesAsync(provisioningPath).ConfigureAwait(false));
 JsonElement root = provisioning.RootElement;
 Guid installationId = root.GetProperty("securityInstallationId").GetGuid();
@@ -32,16 +36,23 @@ X509KeyStorageFlags clientCertificateKeyStorageFlags = OperatingSystem.IsWindows
     : X509KeyStorageFlags.EphemeralKeySet;
 using X509Certificate2 certificate = X509CertificateLoader.LoadPkcs12FromFile(certificatePath, certificatePassword, clientCertificateKeyStorageFlags);
 using ECDsa privateKey = certificate.GetECDsaPrivateKey() ?? throw new InvalidOperationException("Security driver certificate has no ECDSA private key.");
-using HttpClient bootstrap = new() { BaseAddress = new Uri(gatewayBase), Timeout = TimeSpan.FromSeconds(15) };
-using HttpClient authenticated = CreateClient(new Uri(gatewayBase), certificate);
+using X509Certificate2? gatewayRoot = gatewayCaFile is null ? null : X509CertificateLoader.LoadCertificateFromFile(gatewayCaFile);
+using HttpClient bootstrap = CreateClient(new Uri(gatewayBase), null, gatewayRoot);
+using HttpClient authenticated = CreateClient(new Uri(gatewayBase), certificate, gatewayRoot);
 List<Scenario> scenarios = [];
 
 await VerifySelfSignedCertificateBoundaryAsync().ConfigureAwait(false);
 await EnrollAsync().ConfigureAwait(false);
+Record("M3-P01", true, "BGW-ENROLLMENT-OK");
+if (enrollmentOnly)
+{
+    bool enrollmentPassed = scenarios.All(scenario => scenario.Passed);
+    await WriteReportAsync(enrollmentPassed).ConfigureAwait(false);
+    return enrollmentPassed ? 0 : 1;
+}
 byte[] normalBody = InvokeBody();
 Result positive = await SendSignedAsync(authenticated, "m3-vendor", "submit", normalBody).ConfigureAwait(false);
 bool sanitized = positive.Status == HttpStatusCode.OK && ResponseIsSanitized(positive.Body);
-Record("M3-P01", true, "BGW-ENROLLMENT-OK");
 Record("M3-P03-P07", sanitized, positive.Code);
 if (smokeOnly)
 {
@@ -122,7 +133,7 @@ async Task VerifySelfSignedCertificateBoundaryAsync()
 {
     using ECDsa probeKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
     using X509Certificate2 probeCertificate = CreateSelfSignedInstallationCertificateForTls(probeKey);
-    using HttpClient probeClient = CreateClient(new Uri(gatewayBase), probeCertificate);
+    using HttpClient probeClient = CreateClient(new Uri(gatewayBase), probeCertificate, gatewayRoot);
     const string target = "/v1/broker-policy";
     byte[] body = [];
     Dictionary<string, string> headers = SignHeaders(probeKey, HttpMethod.Get.Method, target, body);
@@ -253,10 +264,23 @@ static string ReadCode(byte[] body)
     catch (Exception exception) when (exception is JsonException or InvalidOperationException or KeyNotFoundException) { return "BGW-INVALID-ERROR"; }
 }
 
-static HttpClient CreateClient(Uri origin, X509Certificate2 certificate)
+static HttpClient CreateClient(Uri origin, X509Certificate2? certificate, X509Certificate2? trustedRoot)
 {
     HttpClientHandler handler = new() { AllowAutoRedirect = false, UseCookies = false, UseProxy = false };
-    handler.ClientCertificates.Add(certificate);
+    if (certificate is not null) handler.ClientCertificates.Add(certificate);
+    if (trustedRoot is not null)
+    {
+        handler.ServerCertificateCustomValidationCallback = (_, serverCertificate, chain, errors) =>
+        {
+            if (serverCertificate is null || chain is null || (errors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0 || (errors & SslPolicyErrors.RemoteCertificateNotAvailable) != 0) return false;
+            chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+            chain.ChainPolicy.CustomTrustStore.Clear();
+            chain.ChainPolicy.CustomTrustStore.Add(trustedRoot);
+            chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+            chain.ChainPolicy.VerificationFlags = X509VerificationFlags.NoFlag;
+            return chain.Build(serverCertificate);
+        };
+    }
     return new HttpClient(handler) { BaseAddress = origin, Timeout = TimeSpan.FromSeconds(15) };
 }
 static X509Certificate2 CreateSelfSignedInstallationCertificate(ECDsa key)
@@ -284,6 +308,7 @@ static X509Certificate2 CreateSelfSignedInstallationCertificateForTls(ECDsa key)
     }
 }
 static string Required(string name) => Environment.GetEnvironmentVariable(name) is { Length: > 0 } value ? value : throw new InvalidOperationException(name + " is required.");
+static string? Optional(string name) => Environment.GetEnvironmentVariable(name) is { Length: > 0 } value ? value : null;
 static string Base64Url(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
 sealed record Challenge(Guid ChallengeId, [property: System.Text.Json.Serialization.JsonPropertyName("challenge")] string ChallengeValue, DateTimeOffset ExpiresAt);

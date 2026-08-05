@@ -1,5 +1,6 @@
-import { lazy, useState } from 'react';
-import { Alert, Box, Button, Card, CardContent, Chip, FormControl, InputLabel, MenuItem, Select, Stack, TextField, Typography } from '@mui/material';
+import { lazy, useRef, useState } from 'react';
+import { Alert, Box, Button, Card, CardContent, Chip, FormControl, InputLabel, MenuItem, Select, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
+import { EditorView } from '@codemirror/view';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { adminApi, type ConnectorSummary, type ConnectorVersion } from '../../api/client';
@@ -9,6 +10,8 @@ import { ErrorState, LoadingState } from '../../components/AsyncState';
 import { PageTitle } from '../../components/PageTitle';
 import { PaginationControls } from '../../components/PaginationControls';
 import { validateConnectorDefinition, type ConnectorValidationIssue } from './connectorDefinitionValidation';
+import { diffCanonicalJson } from './canonicalJsonDiff';
+import { useFormDirty } from '../../navigation/DirtyStateContext';
 
 const CodeMirror = lazy(() => import('@uiw/react-codemirror'));
 
@@ -25,10 +28,7 @@ function VersionComparison({ connectorId, versions }: { connectorId: string; ver
       <FormControl fullWidth><InputLabel id="base-version">{t('baseVersion')}</InputLabel><Select labelId="base-version" label={t('baseVersion')} value={base} onChange={event => setBase(event.target.value)}>{versions.map(value => <MenuItem key={value.version} value={value.version}>{value.version}</MenuItem>)}</Select></FormControl>
       <FormControl fullWidth><InputLabel id="target-version">{t('targetVersion')}</InputLabel><Select labelId="target-version" label={t('targetVersion')} value={target} onChange={event => setTarget(event.target.value)}>{versions.map(value => <MenuItem key={value.version} value={value.version}>{value.version}</MenuItem>)}</Select></FormControl>
     </Stack>
-    {baseDefinition.data && targetDefinition.data && <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} sx={{ mt: 2 }}>
-      <Box component="pre" aria-label={t('baseVersion')} sx={{ flex: 1, overflow: 'auto', p: 2, bgcolor: 'action.hover' }}>{JSON.stringify(baseDefinition.data, null, 2)}</Box>
-      <Box component="pre" aria-label={t('targetVersion')} sx={{ flex: 1, overflow: 'auto', p: 2, bgcolor: 'action.hover' }}>{JSON.stringify(targetDefinition.data, null, 2)}</Box>
-    </Stack>}
+    {baseDefinition.data && targetDefinition.data && <Table size="small" aria-label="Canonical JSON path diff" sx={{ mt: 2 }}><TableHead><TableRow><TableCell>Change</TableCell><TableCell>JSON path</TableCell><TableCell>Old value</TableCell><TableCell>New value</TableCell></TableRow></TableHead><TableBody>{diffCanonicalJson(baseDefinition.data, targetDefinition.data).map(change => <TableRow key={`${change.kind}-${change.path}`}><TableCell>{change.kind}</TableCell><TableCell><code>{change.path}</code></TableCell><TableCell><code>{change.oldValue ?? '—'}</code></TableCell><TableCell><code>{change.newValue ?? '—'}</code></TableCell></TableRow>)}</TableBody></Table>}
     {(baseDefinition.error || targetDefinition.error) && <ErrorState error={baseDefinition.error ?? targetDefinition.error} />}
   </Box>;
 }
@@ -48,6 +48,8 @@ export function ConnectorsPage() {
   const [versionOffset, setVersionOffset] = useState(0);
   const [filter, setFilter] = useState('');
   const [validation, setValidation] = useState<{ valid: boolean; checksumSha256: string | null; issues: ConnectorValidationIssue[] }>();
+  const validationSummary = useRef<HTMLDivElement>(null);
+  useFormDirty(editorChanged);
 
   const query = useQuery({ queryKey: ['connectors', connectorOffset, filter], queryFn: () => adminApi.connectors(connectorOffset, 50, filter) });
   const versions = useQuery({ queryKey: ['connector-versions', selected, versionOffset], queryFn: () => adminApi.connectorVersions(selected, versionOffset), enabled: Boolean(selected) });
@@ -70,14 +72,14 @@ export function ConnectorsPage() {
       const result = await adminApi.validateConnector(parsed as object);
       return { ...result, checksumSha256: result.checksumSha256 ?? null };
     },
-    onSuccess: setValidation,
+    onSuccess: value => { setValidation(value); if (!value.valid) queueMicrotask(() => validationSummary.current?.focus()); },
   });
   const importDraft = useMutation({
     mutationFn: async () => {
       if (!validation?.valid || !validation.checksumSha256) throw new Error('validation-required');
       return adminApi.importConnector(JSON.parse(editorJson) as object, validation.checksumSha256);
     },
-    onSuccess: refresh,
+    onSuccess: async () => { setEditorChanged(false); await refresh(); },
   });
   const transition = useMutation({
     mutationFn: async ({ action, version }: { action: 'validate' | 'publish' | 'retire' | 'rollback'; version: ConnectorVersion }) => {
@@ -143,12 +145,13 @@ export function ConnectorsPage() {
     </CardContent></Card>}
     {canEdit && <Card sx={{ mt: 3 }}><CardContent>
       <Typography variant="h2" sx={{ mb: 2 }}>{t('connectorJson')}</Typography>
-      <Box sx={{ border: 1, borderColor: 'divider' }}><CodeMirror value={editorJson} height="360px" onChange={value => { setJson(value); setEditorChanged(true); setValidation(undefined); }} aria-label={t('connectorJson')} /></Box>
+      <Typography id="connector-json-help" color="text.secondary">Canonical Connector Definition JSON. Secret values and provider references are not accepted here.</Typography>
+      <Box sx={{ border: 1, borderColor: 'divider' }}><CodeMirror value={editorJson} height="360px" extensions={[EditorView.contentAttributes.of({ 'aria-label': t('connectorJson'), 'aria-describedby': 'connector-json-help connector-json-result' })]} onChange={value => { setJson(value); setEditorChanged(true); setValidation(undefined); }} /></Box>
       <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
         <Button variant="outlined" disabled={!schema.data || !editorJson} onClick={() => validate.mutate()}>{t('validate')}</Button>
         <Button variant="contained" disabled={!validation?.valid} onClick={() => importDraft.mutate()}>{t('importDraft')}</Button>
       </Stack>
-      {validation && <Alert severity={validation.valid ? 'success' : 'error'} sx={{ mt: 2 }}>
+      {validation && <Alert id="connector-json-result" ref={validationSummary} tabIndex={validation.valid ? undefined : -1} severity={validation.valid ? 'success' : 'error'} sx={{ mt: 2 }}>
         {t(validation.valid ? 'validationPassed' : 'validationFailed')} {validation.valid && <Chip size="small" label={`${t('checksum')}: ${validation.checksumSha256}`} />}
         {!validation.valid && <Box component="ul">{(validation.issues.length ? validation.issues : clientIssues).map((issue, index) => <li key={`${issue.code}-${issue.location}-${index}`}><code>{issue.code}</code> <code>{issue.location}</code></li>)}</Box>}
       </Alert>}

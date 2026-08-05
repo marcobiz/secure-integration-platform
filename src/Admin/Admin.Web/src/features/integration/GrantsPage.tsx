@@ -8,6 +8,7 @@ import { ErrorState, LoadingState } from '../../components/AsyncState';
 import { DataTable } from '../../components/DataTable';
 import { PageTitle } from '../../components/PageTitle';
 import { PaginationControls } from '../../components/PaginationControls';
+import { useFormDirty } from '../../navigation/DirtyStateContext';
 
 export function GrantsPage() {
   const { t, i18n } = useTranslation();
@@ -21,7 +22,8 @@ export function GrantsPage() {
   const tenants = useQuery({ queryKey: ['tenants'], queryFn: () => adminApi.tenants() });
   const installations = useQuery({ queryKey: ['installations', tenant], queryFn: () => adminApi.installations(tenant), enabled: Boolean(tenant) });
   const query = useQuery({ queryKey: ['grants', tenant, offset], queryFn: () => adminApi.grants(tenant, offset), enabled: Boolean(tenant) });
-  const create = useMutation({ mutationFn: () => adminApi.createGrant({ tenantId: tenant, installationId, connectorId, operationId }), onSuccess: async () => { setConnector(''); setOperation(''); await cache.invalidateQueries({ queryKey: ['grants', tenant] }); } });
+  useFormDirty(Boolean(installationId || connectorId || operationId));
+  const create = useMutation({ mutationFn: () => adminApi.createGrant({ tenantId: tenant, installationId, connectorId, operationId }), onSuccess: async () => { setInstallation(''); setConnector(''); setOperation(''); await cache.invalidateQueries({ queryKey: ['grants', tenant] }); } });
   if (tenants.isPending) return <LoadingState />;
   if (tenants.error) return <ErrorState error={tenants.error} />;
   const canAdmin = hasRole(session, 'SecurityAdministrator');
