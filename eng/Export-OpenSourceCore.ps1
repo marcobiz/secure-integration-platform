@@ -94,12 +94,30 @@ if (-not $SkipVerification) {
             Select-Object -ExpandProperty Path -Unique)
     }
     if ($forbiddenContent) { throw ('OSS_EXPORT_FORBIDDEN_CONTENT: ' + (($forbiddenContent | Sort-Object -Unique) -join ', ')) }
-    & $dotnet restore (Join-Path $destination 'BrokerGateway.Core.slnx')
+    $solution = Join-Path $destination 'BrokerGateway.Core.slnx'
+    $isWindowsHost = [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Runtime.InteropServices.OSPlatform]::Windows)
+    $platformArguments = @()
+    if (-not $isWindowsHost) { $platformArguments += '/p:EnableWindowsTargeting=true' }
+    & $dotnet restore $solution @platformArguments
     if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_RESTORE_FAILED' }
-    & $dotnet build (Join-Path $destination 'BrokerGateway.Core.slnx') --configuration Release --no-restore
+    & $dotnet build $solution --configuration Release --no-restore @platformArguments
     if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_BUILD_FAILED' }
-    & $dotnet test (Join-Path $destination 'BrokerGateway.Core.slnx') --configuration Release --no-restore --no-build
-    if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_TEST_FAILED' }
+    if ($isWindowsHost) {
+        & $dotnet test $solution --configuration Release --no-restore --no-build
+        if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_TEST_FAILED' }
+    }
+    else {
+        $portableTests = @(
+            'tests/architecture/Architecture.Tests/Architecture.Tests.csproj',
+            'tests/unit/Broker.Core.Tests/Broker.Core.Tests.csproj',
+            'tests/unit/Gateway.Unit.Tests/Gateway.Unit.Tests.csproj',
+            'tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj'
+        )
+        foreach ($testProject in $portableTests) {
+            & $dotnet test (Join-Path $destination $testProject) --configuration Release --no-restore --no-build @platformArguments
+            if ($LASTEXITCODE -ne 0) { throw "OSS_EXPORT_TEST_FAILED: $testProject" }
+        }
+    }
     $web = Join-Path $destination 'src\Admin\Admin.Web'
     if (Test-Path -LiteralPath (Join-Path $web 'package-lock.json')) {
         Push-Location $web
