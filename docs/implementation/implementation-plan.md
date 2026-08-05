@@ -95,7 +95,7 @@ alla qualificazione dell'Azure Deployment Pack e non blocca il Core o M4.
 
 **Obiettivo:** amministrazione sicura senza accesso ai valori Vault.
 
-**Task:** Entra OIDC; app roles; Tenant/Application/Installation; enrollment/revocation; editor JSON; validation; four-eyes; publish/rollback; binding metadata; audit; health.
+**Task:** OIDC standard server-side; RBAC provider-neutral; Tenant/Application/Installation; enrollment/revocation; editor JSON; validation; four-eyes; publish/rollback; binding metadata; audit; health; separazione fisica Core/provider pack.
 
 **Dipendenze:** M4.
 
@@ -103,7 +103,7 @@ alla qualificazione dell'Azure Deployment Pack e non blocca il Core o M4.
 
 **Completamento:** tutte le operazioni amministrative hanno policy e audit.
 
-**Artefatti:** Admin Web e runbook amministrativo.
+**Artefatti:** Admin Web same-origin, Admin API v1, provider abstractions, export OSS verificabile e runbook amministrativo.
 
 ## M6 — Adapter legacy
 

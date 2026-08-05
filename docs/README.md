@@ -19,6 +19,8 @@ Questa directory è la fonte di verità architetturale del prodotto. Le decision
 13. [Schema database](data/database-schema.md)
 14. [Specifica Connector](connectors/connector-specification.md), [JSON Schema](connectors/connector-definition.schema.json), [CLI](connectors/connector-cli.md) e [SDK](connectors/connector-sdk.md)
 15. [M4 local quick start](operations/M4-QUICKSTART.md)
+16. [Architettura M5 e confini provider](architecture/m5-admin-ui-and-provider-boundaries.md)
+17. [Piano M5](implementation/M5-IMPLEMENTATION-PLAN.md)
 15. [Deployment](deployment/deployment-architecture.md) e [Operations](operations/observability.md)
 16. [Test strategy](testing/test-strategy.md)
 17. [Migrazione legacy](migration/legacy-migration.md)

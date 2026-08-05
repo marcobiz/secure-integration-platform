@@ -22,3 +22,4 @@ Formato: contesto, decisione, conseguenze e alternative. Tutti gli ADR elencati 
 | [0016](0016-application-process-identification.md) | Identificazione Application locale |
 | [0017](0017-msi-installation-provisioning.md) | Provisioning MSI dell'identità Installation |
 | [0018](0018-connector-lifecycle-and-runtime-cache.md) | Lifecycle, pubblicazione e cache dei Connector |
+| [0019](0019-provider-pack-boundaries.md) | Confini fisici dei provider pack |
