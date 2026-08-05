@@ -43,6 +43,11 @@ if ($Phase -eq 'Stop') {
 
 New-Item -ItemType Directory -Path $rawRoot -Force | Out-Null
 Invoke-Checked $dotnet @('run', '--project', (Join-Path $root 'tools\m3\FixtureGenerator\FixtureGenerator.csproj'), '--configuration', 'Release', '--', $rawRoot)
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+    # The fixture services use fixed non-root UIDs. The directory is disposable raw test
+    # evidence and must be writable through a Linux bind mount without running as root.
+    Invoke-Checked 'chmod' @('0777', $rawRoot)
+}
 $adminKeyBytes = New-Object byte[] 32
 $random = [Security.Cryptography.RandomNumberGenerator]::Create()
 try { $random.GetBytes($adminKeyBytes) } finally { $random.Dispose() }
