@@ -216,9 +216,9 @@ public sealed class AdminApiSecurityTests
         using HttpRequestMessage import = new(HttpMethod.Post, "/admin/api/v1/connectors:import") { Content = JsonContent.Create(new ConnectorImportRequest(definition.RootElement.Clone(), result.ChecksumSha256)) };
         import.Headers.Add("X-CSRF-TOKEN", csrf);
         using HttpResponseMessage importResponse = await client.SendAsync(import, TestContext.Current.CancellationToken);
-        ConnectorVersionResource draft = (await importResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: TestContext.Current.CancellationToken))!;
+        string importJson = await importResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Contains("\"state\":\"Draft\"", importJson, StringComparison.Ordinal);
         Assert.Equal(HttpStatusCode.Created, importResponse.StatusCode);
-        Assert.Equal(ConnectorVersionState.Draft, draft.State);
     }
 
     [Fact]

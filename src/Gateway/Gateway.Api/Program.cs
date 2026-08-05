@@ -40,6 +40,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
     options.SerializerOptions.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
+    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
 });
 builder.WebHost.ConfigureKestrel(options =>
 {
