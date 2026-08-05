@@ -26,13 +26,17 @@ foreach ($required in @(
     'M3A_SPLIT_VM_OPERATOR_HANDOFF_HASH_MISMATCH',
     'M3A_SPLIT_VM_OPERATOR_WINDOW_TOO_SHORT',
     'M3A_SPLIT_VM_OPERATOR_WORKTREE_NOT_CLEAN',
-    'switch --detach $candidateCommit',
+    "@('switch', '--detach', `$candidateCommit)",
     '-Phase ValidateVm',
     '-Phase Run',
     "Join-Path `$runEvidenceRoot 'RESULT.json'",
     "Write-CanonicalResult -Status 'BLOCKED'",
     "Write-CanonicalResult -Status 'PASS'",
     'Get-SanitizedErrorCode',
+    'Invoke-GitOperatorChecked',
+    "`$ErrorActionPreference = 'Continue'",
+    "if (`$head -ne `$candidateCommit)",
+    "stage = `$stage",
     'M3A_SPLIT_VM_OPERATOR_PASS'
 )) {
     if ($operator.IndexOf($required, [StringComparison]::Ordinal) -lt 0) { throw "Missing VM operator control: $required" }
@@ -46,6 +50,9 @@ if ($operator -match '(?im)^\s*(Write-Host|Write-Output|Out-Host).*(\$bootstrap|
 }
 if ($operator -match 'Register-ScheduledTask|New-ScheduledTaskPrincipal|NT AUTHORITY\\SYSTEM') {
     throw 'Manual operator flow must not register a privileged executor task.'
+}
+if ($operator -match '&\s+git\.exe[^\r\n]+\*>\s*\$null') {
+    throw 'Raw git invocation may not rely on PowerShell 5.1 stderr redirection.'
 }
 if ($hostRunner -match "ValidateSet\([^\)]*ExecuteVm") {
     throw 'SYSTEM ExecuteVm phase must remain outside the M3 gate branch.'
