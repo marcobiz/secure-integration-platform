@@ -46,6 +46,23 @@ function Invoke-NativeChecked {
     if ($LASTEXITCODE -ne 0) { throw "M3A_SPLIT_VM_NATIVE_FAILED: $FilePath exited with $LASTEXITCODE." }
 }
 
+function Invoke-GitVmChecked {
+    param(
+        [Parameter(Mandatory)] [string[]] $Arguments,
+        [Parameter(Mandatory)] [string] $ErrorCode,
+        [switch] $CaptureOutput
+    )
+    $previousPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $nativeOutput = @(& git.exe @Arguments 2>&1 | ForEach-Object { [string]$_ })
+        $exitCode = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $previousPreference }
+    if ($exitCode -ne 0) { throw $ErrorCode }
+    if ($CaptureOutput) { return ($nativeOutput -join [Environment]::NewLine) }
+}
+
 function New-VmEvidenceArchive {
     param(
         [Parameter(Mandatory)] [string] $Suffix,
@@ -218,14 +235,25 @@ if ($bootstrap.runId -ne $RunId -or [string]$bootstrap.candidateCommit -notmatch
 if ([string]$bootstrap.gatewayBaseAddress -match 'localhost|127\.0\.0\.1|\[::1\]') { throw 'M3A_SPLIT_VM_LOOPBACK_GATEWAY_FORBIDDEN.' }
 $gatewayUri = [Uri]$bootstrap.gatewayBaseAddress
 if (-not $gatewayUri.IsAbsoluteUri -or $gatewayUri.Scheme -ne 'https') { throw 'M3A_SPLIT_VM_GATEWAY_MUST_BE_HTTPS.' }
-if (& git -C $RepositoryRoot status --porcelain) { throw 'M3A_SPLIT_VM_WORKTREE_NOT_CLEAN.' }
-Invoke-NativeChecked -FilePath 'git.exe' -Arguments @('-C', $RepositoryRoot, 'fetch', '--prune', 'origin')
-Invoke-NativeChecked -FilePath 'git.exe' -Arguments @('-C', $RepositoryRoot, 'cat-file', '-e', ([string]$bootstrap.candidateCommit + '^{commit}'))
-Invoke-NativeChecked -FilePath 'git.exe' -Arguments @('-C', $RepositoryRoot, 'switch', '--detach', [string]$bootstrap.candidateCommit)
-$head = (& git -C $RepositoryRoot rev-parse HEAD).Trim()
+$safeRepository = $RepositoryRoot.Replace('\', '/')
+$gitPrefix = @('-c', ('safe.directory=' + $safeRepository), '-C', $RepositoryRoot)
+$worktree = (Invoke-GitVmChecked -Arguments ($gitPrefix + @('status', '--porcelain')) -ErrorCode 'M3A_SPLIT_VM_GIT_STATUS_FAILED.' -CaptureOutput).Trim()
+if ($worktree) { throw 'M3A_SPLIT_VM_WORKTREE_NOT_CLEAN.' }
+$candidateCommit = [string]$bootstrap.candidateCommit
+$candidatePresent = $true
+try { [void](Invoke-GitVmChecked -Arguments ($gitPrefix + @('cat-file', '-e', ($candidateCommit + '^{commit}'))) -ErrorCode 'M3A_SPLIT_VM_COMMIT_MISSING.') }
+catch { $candidatePresent = $false }
+if (-not $candidatePresent) {
+    [void](Invoke-GitVmChecked -Arguments ($gitPrefix + @('fetch', '--prune', 'origin')) -ErrorCode 'M3A_SPLIT_VM_FETCH_FAILED.')
+    [void](Invoke-GitVmChecked -Arguments ($gitPrefix + @('cat-file', '-e', ($candidateCommit + '^{commit}'))) -ErrorCode 'M3A_SPLIT_VM_COMMIT_MISSING.')
+}
+$head = (Invoke-GitVmChecked -Arguments ($gitPrefix + @('rev-parse', 'HEAD')) -ErrorCode 'M3A_SPLIT_VM_HEAD_READ_FAILED.' -CaptureOutput).Trim()
+if ($head -ne $candidateCommit) {
+    [void](Invoke-GitVmChecked -Arguments ($gitPrefix + @('switch', '--detach', $candidateCommit)) -ErrorCode 'M3A_SPLIT_VM_SWITCH_FAILED.')
+    $head = (Invoke-GitVmChecked -Arguments ($gitPrefix + @('rev-parse', 'HEAD')) -ErrorCode 'M3A_SPLIT_VM_HEAD_READ_FAILED.' -CaptureOutput).Trim()
+}
 if ($head -ne [string]$bootstrap.candidateCommit) { throw 'M3A_SPLIT_VM_HEAD_MISMATCH.' }
-& git -C $RepositoryRoot merge-base --is-ancestor m2-gateway-baseline-2026-08-04 $head
-if ($LASTEXITCODE -ne 0) { throw 'M3A_SPLIT_VM_M2_BASELINE_MISSING.' }
+[void](Invoke-GitVmChecked -Arguments ($gitPrefix + @('merge-base', '--is-ancestor', 'm2-gateway-baseline-2026-08-04', $head)) -ErrorCode 'M3A_SPLIT_VM_M2_BASELINE_MISSING.')
 Remove-OwnedM0M1ServiceCollision
 if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) { throw 'M3A_SPLIT_VM_SERVICE_COLLISION.' }
 if (Test-Path -LiteralPath $OutputDirectory) { throw 'M3A_SPLIT_VM_OUTPUT_ALREADY_EXISTS.' }

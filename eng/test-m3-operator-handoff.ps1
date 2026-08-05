@@ -6,8 +6,10 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $hostRunnerPath = Join-Path $root 'tools\m3\split-host\Invoke-M3ASplitHost.ps1'
 $operatorPath = Join-Path $root 'tools\m3\split-host\Invoke-M3ASplitVmOperator.ps1'
+$vmRunnerPath = Join-Path $root 'tools\m3\split-host\Invoke-M3ASplitVm.ps1'
 $hostRunner = [IO.File]::ReadAllText($hostRunnerPath)
 $operator = [IO.File]::ReadAllText($operatorPath)
+$vmRunner = [IO.File]::ReadAllText($vmRunnerPath)
 
 foreach ($required in @(
     'WAITING_FOR_OPERATOR',
@@ -56,6 +58,18 @@ if ($operator -match '&\s+git\.exe[^\r\n]+\*>\s*\$null') {
 }
 if ($hostRunner -match "ValidateSet\([^\)]*ExecuteVm") {
     throw 'SYSTEM ExecuteVm phase must remain outside the M3 gate branch.'
+}
+foreach ($required in @(
+    'function Invoke-GitVmChecked',
+    "`$ErrorActionPreference = 'Continue'",
+    "if (`$head -ne `$candidateCommit)",
+    "@('switch', '--detach', `$candidateCommit)",
+    'M3A_SPLIT_VM_SWITCH_FAILED'
+)) {
+    if ($vmRunner.IndexOf($required, [StringComparison]::Ordinal) -lt 0) { throw "Missing VM runner Git control: $required" }
+}
+if ($vmRunner -match "Invoke-NativeChecked\s+-FilePath\s+'git\.exe'" -or $vmRunner -match '&\s+git(?:\.exe)?[^\r\n]+switch') {
+    throw 'VM runner must use the PowerShell 5.1-safe Git wrapper.'
 }
 
 Write-Output 'M3A_OPERATOR_HANDOFF_TEST_PASS'
