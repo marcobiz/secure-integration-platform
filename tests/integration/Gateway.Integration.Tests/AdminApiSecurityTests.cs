@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
+using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
 using Xunit;
@@ -106,6 +107,34 @@ public sealed class AdminApiSecurityTests
         GatewayAuditEvent audit = Assert.Single(registry.SnapshotAuditEvents(), value => value.Action == "admin.role.assign");
         Assert.Equal("success", audit.Outcome);
         Assert.DoesNotContain("issuer.example.invalid", System.Text.Json.JsonSerializer.Serialize(audit), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task M5_IT_Canonical_connector_sample_is_served_validated_and_imported_as_Draft()
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        string csrf = await LoginAsync(client, "security-admin", TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage schema = await client.GetAsync("/admin/api/v1/connectors/schema", TestContext.Current.CancellationToken);
+        using HttpResponseMessage sample = await client.GetAsync("/admin/api/v1/connectors/sample", TestContext.Current.CancellationToken);
+        schema.EnsureSuccessStatusCode();
+        sample.EnsureSuccessStatusCode();
+        using System.Text.Json.JsonDocument definition = await System.Text.Json.JsonDocument.ParseAsync(await sample.Content.ReadAsStreamAsync(TestContext.Current.CancellationToken), cancellationToken: TestContext.Current.CancellationToken);
+
+        using HttpRequestMessage validate = new(HttpMethod.Post, "/admin/api/v1/connectors:validate") { Content = JsonContent.Create(new ConnectorImportRequest(definition.RootElement.Clone())) };
+        validate.Headers.Add("X-CSRF-TOKEN", csrf);
+        using HttpResponseMessage validationResponse = await client.SendAsync(validate, TestContext.Current.CancellationToken);
+        ConnectorValidationResult result = (await validationResponse.Content.ReadFromJsonAsync<ConnectorValidationResult>(cancellationToken: TestContext.Current.CancellationToken))!;
+        Assert.True(result.Valid);
+        Assert.Empty(result.Issues);
+
+        using HttpRequestMessage import = new(HttpMethod.Post, "/admin/api/v1/connectors:import") { Content = JsonContent.Create(new ConnectorImportRequest(definition.RootElement.Clone(), result.ChecksumSha256)) };
+        import.Headers.Add("X-CSRF-TOKEN", csrf);
+        using HttpResponseMessage importResponse = await client.SendAsync(import, TestContext.Current.CancellationToken);
+        ConnectorVersionResource draft = (await importResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(cancellationToken: TestContext.Current.CancellationToken))!;
+        Assert.Equal(HttpStatusCode.Created, importResponse.StatusCode);
+        Assert.Equal(ConnectorVersionState.Draft, draft.State);
     }
 
     [Fact]

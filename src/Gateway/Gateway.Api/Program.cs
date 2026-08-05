@@ -421,6 +421,20 @@ app.MapGet("/admin/auth/me", async (HttpContext context, AdminAccessService acce
 
 RouteGroupBuilder adminApi = app.MapGroup("/admin/api/v1").RequireAuthorization();
 
+adminApi.MapGet("/connectors/schema", async (HttpContext context, AdminAccessService access, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.Viewer, AdminRole.ConnectorEditor, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
+    return Results.Content(ConnectorDefinitionArtifacts.SchemaJson, "application/schema+json");
+});
+
+adminApi.MapGet("/connectors/sample", async (HttpContext context, AdminAccessService access, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.Viewer, AdminRole.ConnectorEditor, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
+    return Results.Content(ConnectorDefinitionArtifacts.SampleJson, "application/json");
+});
+
 adminApi.MapGet("/dashboard", async (HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, IGatewayRegistry registry, IProviderHealthCheck provider, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);

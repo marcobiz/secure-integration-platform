@@ -48,6 +48,27 @@ public sealed record ConnectorBindingRequest(
 /// <summary>Non-destructive contract test of one Published operation and Environment binding.</summary>
 public sealed record ConnectorTestRequest(Guid EnvironmentId, string OperationId);
 
+/// <summary>Machine-readable Connector artefacts embedded from their authoritative repository files.</summary>
+public static class ConnectorDefinitionArtifacts
+{
+    private const string SchemaResource = "SecureIntegration.Gateway.Application.Connectors.connector-definition.schema.json";
+    private const string SampleResource = "SecureIntegration.Gateway.Application.Connectors.sample-secure-service.connector.json";
+
+    /// <summary>The authoritative Connector Definition JSON Schema Draft 2020-12 document.</summary>
+    public static string SchemaJson { get; } = Read(SchemaResource);
+
+    /// <summary>The authoritative synthetic Connector Definition example.</summary>
+    public static string SampleJson { get; } = Read(SampleResource);
+
+    private static string Read(string resource)
+    {
+        using Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resource)
+            ?? throw new InvalidOperationException($"Embedded Connector artefact is missing: {resource}");
+        using StreamReader reader = new(stream, Encoding.UTF8);
+        return reader.ReadToEnd();
+    }
+}
+
 /// <summary>Canonical JSON implementation for the constrained Connector v1 number domain.</summary>
 public static class ConnectorCanonicalJson
 {
@@ -122,7 +143,12 @@ public sealed class ConnectorDefinitionValidator
     {
         List<ConnectorValidationIssue> issues = [];
         EvaluationResults schemaResult = schema.Evaluate(definition, new EvaluationOptions { OutputFormat = OutputFormat.List });
-        if (!schemaResult.IsValid) issues.Add(new("CONNECTOR_SCHEMA_INVALID", "$"));
+        if (!schemaResult.IsValid)
+        {
+            foreach (EvaluationResults detail in (schemaResult.Details ?? []).Where(result => !result.IsValid && result.Errors is { Count: > 0 }))
+                issues.Add(new("CONNECTOR_SCHEMA_INVALID", Pointer(detail.InstanceLocation.ToString())));
+            if (issues.Count == 0) issues.Add(new("CONNECTOR_SCHEMA_INVALID", "/"));
+        }
         if (definition.ValueKind != JsonValueKind.Object)
             return new(false, null, issues);
 
@@ -227,12 +253,11 @@ public sealed class ConnectorDefinitionValidator
 
     private static string? OptionalString(JsonElement element, string name) => element.TryGetProperty(name, out JsonElement property) && property.ValueKind == JsonValueKind.String ? property.GetString() : null;
 
+    private static string Pointer(string location) => string.IsNullOrEmpty(location) || location == "$" ? "/" : location.StartsWith('/') ? location : "/" + location.TrimStart('$', '.').Replace('.', '/');
+
     private static JsonSchema LoadSchema()
     {
-        using Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("SecureIntegration.Gateway.Application.Connectors.connector-definition.schema.json")
-            ?? throw new InvalidOperationException("Embedded Connector schema is missing.");
-        using StreamReader reader = new(stream, Encoding.UTF8);
-        return JsonSchema.FromText(reader.ReadToEnd());
+        return JsonSchema.FromText(ConnectorDefinitionArtifacts.SchemaJson);
     }
 }
 
