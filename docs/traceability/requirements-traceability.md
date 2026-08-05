@@ -89,7 +89,7 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | Pagination/selectors | unit and PG18 stable totals/order with 101 records; `UI-MOCK-31` selects records 51/101 by keyboard | PASS local + CI |
 | i18n/theme/a11y | 22 Vitest; `UI-MOCK-20/25/28/30/31/32`; axe critical/serious = 0, including explicit form contrast; IT/EN without fallback | PASS local + CI |
 | OpenAPI operational client | `AdminOpenApiParityTests`, generated `paths` client and `npm run check:api` | PASS local + CI |
-| Packaging/open-source boundary | production Gateway/full-stack, Core export build/test/license/secret gates; candidate export 286 files, manifest `3A630E6C...A5746C97A` | PASS local + CI |
+| Packaging/open-source boundary | production Gateway/full-stack, Core export build/test/license/secret gates; candidate export 286 files, manifest `40E17FC7...55AED240` | PASS local + CI |
 | Secret scanner negative control | hidden/untracked synthetic `client_secret` fixture must fail; fixture removal followed by clean scan must pass | PASS local + CI |
 
 ## Security threats

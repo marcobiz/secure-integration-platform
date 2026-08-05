@@ -4,7 +4,7 @@ This ledger covers only the merge-blocking findings supplied for PR #5. LOW and 
 
 ## Final merge-blocking cycle
 
-Initial delta-review HEAD: `8d269509201bf320c98a65f6c7495c1b8cc16cce`. Implementation candidate exercised locally and by exact-commit CI before this documentation-only update: `080ae20f11070382084a1c66c210129f9a309609`. `main` remains `49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b`; no history rewrite or merge was performed.
+Initial delta-review HEAD: `8d269509201bf320c98a65f6c7495c1b8cc16cce`. Implementation candidate exercised locally and by exact-commit CI before this documentation-only update: `9065d627ca3e70f9d4e56dd8a32d5aa0192735ff`. `main` remains `49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b`; no history rewrite or merge was performed.
 
 | Residual finding | Remediation and exact evidence | Status |
 |---|---|---|
@@ -20,8 +20,9 @@ Initial delta-review HEAD: `8d269509201bf320c98a65f6c7495c1b8cc16cce`. Implement
 | Canary/redaction | FULLSTACK-01 scans DOM, console/network capture, ProblemDetails/audit surfaces, container logs, screenshots/traces and result artefacts for per-run activation/session/binding/secret canaries. | RESOLVED; CI PASS; read-only review pending |
 | Secret scanner control | The scanner now includes hidden and untracked files. A temporary synthetic `client_secret` fixture fails non-zero, is removed, and the clean tree passes. | RESOLVED; CI PASS; read-only review pending |
 | Form contrast | Axe exposed MUI form labels/help text below 4.5:1 in the current Chromium. The theme now supplies explicit accessible colors without excluding the rule. | RESOLVED; `UI-MOCK-20` and 32/32 browser suite PASS |
+| Concurrent binding publication | The exact-candidate CI exposed a legitimate alternate serializable winner and an unhandled PostgreSQL `40001`. Publication/mutation remains atomic in either ordering, and the store now translates serialization aborts to redacted `BGW-CONCURRENCY-CONFLICT`/HTTP 409. | RESOLVED; PG18 race repeated 10/10 PASS; exact-candidate CI PASS |
 
-The local gate records 145 ordinary .NET PASS plus seven explicit PG SKIP, eight dedicated PostgreSQL 18 PASS, 22 Vitest PASS, 32 browser-mock PASS and one production-build full-stack PASS. Migration `0007` SHA-256 is `EC3B4E9A85FB050A1FDFC16E4E7B89042A7A6D93972CA46DF2BCEA2AE51FEE4A`. Exact-candidate CI is PASS: general run `31048418560` (6/6), M5 push run `31048413797` (15/15) and M5 PR run `31048418026` (15/15). This section does not declare M5 Done.
+The local gate records 145 ordinary .NET PASS plus seven explicit PG SKIP, eight dedicated PostgreSQL 18 PASS, 22 Vitest PASS, 32 browser-mock PASS and one production-build full-stack PASS. Migration `0007` SHA-256 is `EC3B4E9A85FB050A1FDFC16E4E7B89042A7A6D93972CA46DF2BCEA2AE51FEE4A`. Exact-candidate CI is PASS: general run `31049726466` (6/6), M5 push run `31049725534` (15/15) and M5 PR run `31049726550` (15/15). This section does not declare M5 Done.
 
 | Finding | Stato | Causa | Remediation applicata | Test regressivo / evidenza | Commit | Esito |
 |---|---|---|---|---|---|---|

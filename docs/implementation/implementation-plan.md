@@ -93,7 +93,7 @@ alla qualificazione dell'Azure Deployment Pack e non blocca il Core o M4.
 
 ## M5 — Admin UI
 
-**Stato 2026-08-05:** final remediation candidate `080ae20` con gate locale verde e CI sul commit esatto PASS (`31048418560`, `31048413797`, `31048418026`); resta richiesta la review read-only. M5 non è dichiarata Done, la PR non è unita, `main` resta sulla baseline M4 e M3B/M6+ non sono iniziati.
+**Stato 2026-08-05:** final remediation candidate `9065d62` con gate locale verde e CI sul commit esatto PASS (`31049726466`, `31049725534`, `31049726550`); resta richiesta la review read-only. M5 non è dichiarata Done, la PR non è unita, `main` resta sulla baseline M4 e M3B/M6+ non sono iniziati.
 
 **Obiettivo:** amministrazione sicura senza accesso ai valori Vault.
 
