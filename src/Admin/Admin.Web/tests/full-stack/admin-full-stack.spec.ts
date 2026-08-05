@@ -1,10 +1,12 @@
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { execFile } from 'node:child_process';
 import { createHash, createPrivateKey, randomBytes, randomUUID, sign } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { request as httpsRequest } from 'node:https';
+import { promisify } from 'node:util';
 
 type ApiResult<T> = { status: number; body: T; etag: string | null };
+const execFileAsync = promisify(execFile);
 
 async function login(context: BrowserContext, user: 'editor' | 'approver' | 'operator' | 'security-admin'): Promise<Page> {
   const baseUrl = process.env.M5_FULLSTACK_BASE_URL ?? 'https://localhost:8443/admin/';
@@ -50,23 +52,20 @@ async function invokeRuntime(connectorId: string, operationId: string, correlati
   const digest = createHash('sha256').update(body).digest('base64url');
   const privateKey = createPrivateKey(readFileSync(process.env.M5_FULLSTACK_CLIENT_KEY ?? '/m3-fixture/certificates/security-driver.key'));
   const signature = sign('sha256', Buffer.from(['BGW1', 'POST', target, timestamp, nonce, digest].join('\n')), { key: privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url');
+  const traceparent = `00-${correlationId.replaceAll('-', '')}-${randomBytes(8).toString('hex')}-01`;
   const baseUrl = process.env.M5_FULLSTACK_BASE_URL ?? 'https://localhost:8443/admin/';
-  const response = await new Promise<{ status: number; text: string }>((resolve, reject) => {
-    const request = httpsRequest(new URL(target, baseUrl), {
-      method: 'POST',
-      ca: readFileSync(process.env.M5_FULLSTACK_CA_CERT ?? '/m3-fixture/certificates/ca.crt'),
-      cert: readFileSync(process.env.M5_FULLSTACK_CLIENT_CERT ?? '/m3-fixture/certificates/security-driver.crt'),
-      key: readFileSync(process.env.M5_FULLSTACK_CLIENT_KEY ?? '/m3-fixture/certificates/security-driver.key'),
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), 'X-BG-Timestamp': timestamp, 'X-BG-Nonce': nonce, 'X-BG-Content-SHA256': digest, 'X-BG-Signature': signature }
-    }, message => {
-      const chunks: Buffer[] = [];
-      message.on('data', chunk => chunks.push(Buffer.from(chunk)));
-      message.on('end', () => resolve({ status: message.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8') }));
-    });
-    request.on('error', reject);
-    request.end(body);
-  });
-  return { status: response.status, body: response.text ? JSON.parse(response.text) as Record<string, unknown> : {} };
+  const response = await execFileAsync('curl', [
+    '--silent', '--show-error', '--cacert', process.env.M5_FULLSTACK_CA_CERT ?? '/m3-fixture/certificates/ca.crt',
+    '--cert', process.env.M5_FULLSTACK_CLIENT_CERT ?? '/m3-fixture/certificates/security-driver.crt',
+    '--key', process.env.M5_FULLSTACK_CLIENT_KEY ?? '/m3-fixture/certificates/security-driver.key',
+    '--request', 'POST', '--header', 'Content-Type: application/json', '--header', `X-BG-Timestamp: ${timestamp}`,
+    '--header', `X-BG-Nonce: ${nonce}`, '--header', `X-BG-Content-SHA256: ${digest}`, '--header', `X-BG-Signature: ${signature}`,
+    '--header', `traceparent: ${traceparent}`,
+    '--data-binary', body, '--write-out', '\n%{http_code}', new URL(target, baseUrl).toString()
+  ], { maxBuffer: 2 * 1024 * 1024 });
+  const separator = response.stdout.lastIndexOf('\n');
+  const text = response.stdout.slice(0, separator);
+  return { status: Number(response.stdout.slice(separator + 1)), body: text ? JSON.parse(text) as Record<string, unknown> : {} };
 }
 
 test('FULLSTACK-01 production Admin build persists and governs the connector lifecycle', async ({ browser }) => {
@@ -157,7 +156,7 @@ test('FULLSTACK-01 production Admin build persists and governs the connector lif
 
   const correlationId = randomUUID();
   const invoked = await invokeRuntime('sample-secure-service', 'submit', correlationId);
-  expect(invoked.status).toBe(200);
+  expect(invoked.status, `runtime invoke failed with ${JSON.stringify(invoked.body)}`).toBe(200);
   expect(invoked.body.connectorVersion).toBe('2.0.0');
   const sanitized = JSON.stringify(invoked.body);
   expect(sanitized).not.toMatch(/api.?key|certificate|secret|synthetic-vault/i);
