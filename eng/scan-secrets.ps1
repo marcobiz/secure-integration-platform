@@ -21,13 +21,22 @@ try {
                 # corruption when a regex is followed by an absolute C:\ path.
                 $matches = & $ripgrep.Source -l --pcre2 -e $pattern -- $relative 2>$null
             }
-            else {
+            elseif (Test-Path -LiteralPath (Join-Path $root '.git')) {
                 # Git is already a repository prerequisite and its PCRE engine keeps
                 # this gate functional on clean Windows runners that do not ship rg.
                 $matches = & git -C $root grep -Il -P -e $pattern -- $relative 2>$null
                 if ($LASTEXITCODE -notin 0, 1) {
                     throw "Secret scan failed while inspecting '$relative'."
                 }
+            }
+            else {
+                # Allowlisted open-source exports intentionally contain no .git directory.
+                # Select-String keeps the same fail-closed scan available on minimal CI
+                # images that do not include ripgrep.
+                $matches = @(Get-ChildItem -LiteralPath $relative -Recurse -File |
+                    Where-Object { $_.Length -le 10MB -and $_.Extension -notin @('.png', '.jpg', '.jpeg', '.gif', '.ico', '.dll', '.exe', '.zip') } |
+                    Select-String -Pattern $pattern |
+                    Select-Object -ExpandProperty Path -Unique)
             }
             if ($matches) { $hits += $matches }
         }
