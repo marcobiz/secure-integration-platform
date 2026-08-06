@@ -93,7 +93,7 @@ alla qualificazione dell'Azure Deployment Pack e non blocca il Core o M4.
 
 ## M5 — Admin UI
 
-**Stato 2026-08-06:** technical final remediation candidate `7ac956f` con gate locale verde e CI sul commit esatto PASS (`31088473433`, `31088472335`, `31088472535`). Approval semantica, Tenant FORCE RLS, concurrency Tenant/Application e localizzazione IT/EN sono qualificate; resta richiesta la review read-only. M5 non è dichiarata Done, la PR non è unita, `main` resta sulla baseline M4 e M3B/M6+ non sono iniziati.
+**Stato 2026-08-06:** final security remediation candidate `fc342b6` con gate locale e CI sul commit esatto PASS (`31098662098`, `31098659514`, `31098662290`). Il catalogo server-owned elimina le reference opache, l'approvazione ricalcola il digest in transazione, il conflict Application copre tutti i campi e i valori runtime sono localizzati IT/EN; Tenant FORCE RLS resta risolto e invariato. Resta richiesta la review read-only. M5 non è dichiarata Done, la PR non è unita, `main` resta sulla baseline M4 e M3B/M6+ non sono iniziati.
 
 **Obiettivo:** amministrazione sicura senza accesso ai valori Vault.
 

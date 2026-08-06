@@ -1,5 +1,7 @@
 # M5 technical final remediation
 
+> Superseded for the three last residual findings by `M5-FINAL-SECURITY-REMEDIATION.md` and candidate `fc342b62d8e1165e643cbead898dec4f34188969`. This report remains the evidence for the preceding four-finding cycle.
+
 **Initial reviewed HEAD:** `7039fd5adfb200b3243eaef8eb3d89c866929e32`
 **Implementation candidate:** `7ac956fe9d3fa641d420004c2f944c7a2f5a8210`
 **Branch:** `m5/admin-ui-mvp`

@@ -1,6 +1,6 @@
 # Implementation status
 
-Aggiornato: 2026-08-05
+Aggiornato: 2026-08-06
 
 ## Stato sintetico
 
@@ -12,7 +12,7 @@ Aggiornato: 2026-08-05
 | M2 — Gateway minimo | **Done** | gate CI `30896803567`: build/test, PostgreSQL 18, container hardening, Gitleaks e SBOM PASS |
 | M3 — vertical slice production-like | **M3A product gate PASS** | tag `m3a-product-gate-pass-20260805`; M3B PENDING non bloccante per il Core |
 | M4 — Connector Configuration MVP | **Done** | PR #4 CI `30992487718`: 6/6 job PASS; schema v1, lifecycle, PG18, Published runtime, CLI, sample E2E e quick start |
-| M5 — Admin UI MVP | **Technical final remediation complete; review read-only richiesta** | implementation candidate `7ac956fe9d3fa641d420004c2f944c7a2f5a8210`; CI `31088473433` (6/6) e `31088472335`/`31088472535` (15/15 ciascuna) PASS; PR #5 aperta/non unita; main invariato a `49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b` |
+| M5 — Admin UI MVP | **Final security remediation complete; review read-only richiesta** | product candidate `fc342b62d8e1165e643cbead898dec4f34188969`; CI `31098662098` (6/6) e `31098659514`/`31098662290` (15/15 ciascuna) PASS; PR #5 aperta/non unita; main invariato a `49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b` |
 | M3B, M6 e milestone successive | Non iniziate | nessun cloud reale, connector sanitario o adapter commerciale |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
@@ -112,9 +112,9 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 - Four-eyes checksum-specific fail-closed: Production e OIDC non possono disabilitarlo; soltanto DevelopmentAuth esplicito e loopback può usare la policy semplificata. Self/requester/creator denial, binding activation e publication sono verificati anche al confine PostgreSQL.
 - Admin API paginata con ProblemDetails/correlation, ETag/If-Match, audit e DTO privi di secret.
 - React/TypeScript strict same-origin con dashboard, risorse, connector lifecycle, binding, grant, approval, audit, health, IT/EN e light/dark/system.
-- Migration additive fino a `0007_binding_bundle_immutability_m5.sql` SHA-256 `EC3B4E9A85FB050A1FDFC16E4E7B89042A7A6D93972CA46DF2BCEA2AE51FEE4A`; trigger e privilegi colonnari impediscono tamper delle revisioni binding Active/Approved. Pool amministrativo separato dal runtime.
+- Migration additive fino a `0008_provider_resource_catalog_m5.sql` SHA-256 `9C3ED60348B6B161C271A63C306500EC5628E5F049238520B5639BB8DC387E6E`; catalogo metadata e locator fisico sono separati, con privilegi minimi espliciti. Trigger e privilegi colonnari continuano a impedire tamper delle revisioni binding Active/Approved. Pool amministrativo separato dal runtime.
 - Container non-root include asset hashati/CSP nonce; quickstart locale usa PostgreSQL 18 e Synthetic Provider senza cloud.
-- Technical final remediation sul candidate `7ac956fe9d3fa641d420004c2f944c7a2f5a8210`: `ApprovalReviewArtifact` semantico e digest atomico; Tenant FORCE RLS corretto; ETag/If-Match completi per Tenant/Application; risorse IT/EN separate e senza fallback. Gate locale: 149 test .NET ordinari PASS, PostgreSQL 18 dedicato 9/9 PASS con principal non-superuser/FORCE RLS, 25 Vitest, 35 browser-mock e FULLSTACK-01 PASS. CI generale `31088473433` (6/6), M5 PR `31088472335` (15/15) e M5 push `31088472535` (15/15) sono PASS sullo SHA esatto. La review read-only resta richiesta: M5 non è Done e PR #5 non viene unita automaticamente. Dettagli in `docs/reviews/M5-TECHNICAL-FINAL-REMEDIATION.md`.
+- Final security remediation sul candidate `fc342b62d8e1165e643cbead898dec4f34188969`: riferimenti provider strutturati e risolti dal catalogo server-owned; metadata certificato pubblici reali; digest ricalcolato nella transazione di approval; conflict Application completo; valori runtime localizzati IT/EN. Tenant FORCE RLS resta invariato e verde. Gate locale: 153 test .NET ordinari PASS, PostgreSQL 18 dedicato 9/9 PASS, 28 Vitest, 35 browser-mock e FULLSTACK-01 PASS. CI generale `31098662098` (6/6), M5 push `31098659514` (15/15) e M5 PR `31098662290` (15/15) sono PASS sullo SHA esatto. La review read-only resta richiesta: M5 non è Done e PR #5 non viene unita automaticamente. Dettagli in `docs/reviews/M5-FINAL-SECURITY-REMEDIATION.md`.
 
 La run split-host `m3a-live-20260804-131718` è stata classificata **BLOCKED — PRE-HANDOFF INFRASTRUCTURE VALIDATION**: live/readiness erano HTTP 200, ma Docker health falliva per SAN incompatibile e i profili Windows Firewall erano disabilitati. Il runner VM non è stato eseguito e P02 non è stato testato. Cleanup PASS ha lasciato zero risorse della run e ha rimosso l'handoff non utilizzato. I fix health/TLS e firewall reversibile sono implementati. Il runner predispone ora un secondo switch Hyper-V Internal e una NIC VM `M3A-Isolated`, senza NAT/gateway/DNS/forwarding, con rollback SYSTEM, isolamento del profilo Private e probe VM→HOST pre-handoff. La run è storica ed è superata dal PASS product gate `m3a-live-20260805-094131`. Dettagli: `docs/reviews/M3A-BLOCKED-RUN-20260804-131718.md`.
 

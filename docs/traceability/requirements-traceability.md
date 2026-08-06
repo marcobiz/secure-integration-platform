@@ -81,17 +81,18 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 |---|---|---|
 | OIDC/session/CSRF/logout | `M5_IT_Anonymous_is_denied_and_security_headers_are_present`, `M5_IT_Mutation_without_CSRF_is_denied`, `M5_IT_Logout_invalidates_cookie_session`, Production startup negative | PASS |
 | RBAC and tenant scope | `M5_UT_RBAC_honors_global_and_tenant_scoped_roles`, `M5_UT_Disabled_principal_is_rejected_before_role_resolution`, Viewer integration negative, E2E-24 privileged-action hiding | PASS |
-| Four-eyes/semantic approval | `ConnectorApprovalArtifacts` unit coverage, `AdminSecurityTests`, Admin API approval-review integration, `UI-MOCK-29/33`, `FULLSTACK-01` self-denial/distinct approval/digest equality/non-secret effective destination | PASS local + CI `31088473433`/`31088472335`/`31088472535` |
+| Four-eyes/semantic approval | `ConnectorApprovalArtifacts` unit coverage, actual-value instrumented-provider negative/positive tests, PG18 transactional race, Admin API approval-review integration, `UI-MOCK-29/33`, `FULLSTACK-01` self-denial/distinct approval/digest equality/non-secret effective destination | PASS local + CI `31098662098`/`31098659514`/`31098662290` |
+| Provider resource reference safety | Structured `ProviderResourceReference`; server catalog resolution; hostile logical-ID negatives; missing/wrong type/environment/scope denial; real certificate metadata; catalog revision invalidation; locator least-privilege checks | PASS local + CI |
 | Installation/activation/revoke | Admin API integration plus E2E-12/13; activation absent from list | PASS |
 | Connector lifecycle/concurrency | M4 unit tests; PG18 `M5_IT_DAT_Approved_binding_digest_and_publication_are_atomic_under_concurrent_mutation_when_configured`; stale endpoint/secret/certificate/scope approval denial; FULLSTACK-01 import/approve/publish/retire | PASS local + CI |
 | Tenant FORCE RLS mutations | PG18 `M5_IT_DAT_Tenant_mutations_are_FORCE_RLS_correct_atomic_and_concurrent_when_configured`: create/update/disable, atomic audit rollback, wrong/absent/cross-tenant context denial, pooled-context isolation, non-superuser and FORCE RLS assertions | PASS 9/9 PG18 + CI |
-| Tenant/Application optimistic concurrency | `AdminConcurrencyTests`, Admin API ETag/428/400/409 tests, PostgreSQL barrier concurrency, `UI-MOCK-34/35` compare and reload | PASS local + CI |
+| Tenant/Application optimistic concurrency | `AdminConcurrencyTests`, Admin API ETag/428/400/409 tests, PostgreSQL barrier concurrency, `UI-MOCK-34/35`; Application compares display name, min/max Broker versions and both ETags before reload | PASS local + CI |
 | Binding immutability and atomic audit | migration `0007`; PG18 direct tamper/non-superuser/fault-injection tests; middleware denial fail-closed integration | PASS local + CI |
 | Binding/grant/runtime invoke | exact Environment binding, grant, enrolled Installation BGW1+mTLS invoke, server-side API key/certificate, correlated audit and post-retire deny in `FULLSTACK-01` | PASS local + CI |
 | Pagination/selectors | unit and PG18 stable totals/order with 101 records; `UI-MOCK-31` selects records 51/101 by keyboard | PASS local + CI |
-| i18n/theme/a11y | 25 Vitest with exact IT/EN key parity and hardcoded-copy scan; `UI-MOCK-20/25/28/30/31/32/33`; axe critical/serious = 0; IT/EN without fallback | PASS local + CI |
+| i18n/theme/a11y | 28 Vitest with exact IT/EN key parity, typed runtime-code mapping and hardcoded-copy scan; `UI-MOCK-16/17/18/20/25/28/30/31/32/33`; axe critical/serious = 0; IT/EN without fallback | PASS local + CI |
 | OpenAPI operational client | `AdminOpenApiParityTests`, generated `paths` client and `npm run check:api` | PASS local + CI |
-| Packaging/open-source boundary | production Gateway/full-stack, Core export build/test/license/secret gates; candidate export 286 files, manifest `40E17FC7...55AED240` | PASS local + CI |
+| Packaging/open-source boundary | production Gateway/full-stack, Core export build/test/license/secret gates; candidate export 295 files, manifest `59379E70...32AAE6C4` | PASS local + CI |
 | Secret scanner negative control | hidden/untracked synthetic `client_secret` fixture must fail; fixture removal followed by clean scan must pass | PASS local + CI |
 
 ## Security threats
