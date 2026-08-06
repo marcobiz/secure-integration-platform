@@ -480,6 +480,13 @@ paths:
       security: [{ AdminSession: [] }]
       parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }, { $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }, { name: environmentId, in: query, schema: { type: string, format: uuid } }]
       responses: { '200': { description: Immutable binding revision page, content: { application/json: { schema: { $ref: '#/components/schemas/ConnectorBindingPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/provider-resources:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: listProviderResources
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }, { name: environmentId, in: query, schema: { type: string, format: uuid } }, { name: resourceType, in: query, schema: { $ref: '#/components/schemas/ProviderResourceType' } }]
+      responses: { '200': { description: Read-only server-owned logical resource catalog; physical references and values are absent., content: { application/json: { schema: { $ref: '#/components/schemas/ProviderResourceCatalogPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/connectors/{connectorId}/versions/{version}/approval-requests:
     post:
       tags: [ConnectorsAdmin]
@@ -712,18 +719,43 @@ components:
     ConnectorBindingRequest:
       type: object
       additionalProperties: false
-      required: [environmentId, endpoints, secretReferences]
+      required: [environmentId, endpoints, secretResources]
       properties:
         environmentId: { type: string, format: uuid }
         connectorVersion: { type: [string, 'null'] }
         endpoints: { type: object, additionalProperties: { type: string, format: uri } }
-        secretReferences: { type: object, additionalProperties: { type: string } }
-        certificateReferences: { type: object, additionalProperties: { type: string } }
+        secretResources: { type: object, additionalProperties: { $ref: '#/components/schemas/ProviderResourceReference' } }
+        certificateResources: { type: object, additionalProperties: { $ref: '#/components/schemas/ProviderResourceReference' } }
         expectedRevision: { type: [integer, 'null'], deprecated: true, description: If-Match is authoritative. }
     ConnectorBinding:
       type: object
-      required: [id, connectorId, connectorVersionId, environmentId, endpoints, secretReferences, certificateReferences, endpointChecksumSha256, secretChecksumSha256, certificateChecksumSha256, revision, checksumSha256, state, updatedAt, updatedBy]
-      properties: { id: { type: string, format: uuid }, connectorId: { type: string }, connectorVersionId: { type: string, format: uuid }, environmentId: { type: string, format: uuid }, endpoints: { type: object, description: Logical keys with redacted values., additionalProperties: { type: string } }, secretReferences: { type: object, description: Logical keys with redacted values., additionalProperties: { type: string } }, certificateReferences: { type: object, description: Logical keys with redacted values., additionalProperties: { type: string } }, endpointChecksumSha256: { type: string, pattern: '^[A-F0-9]{64}$' }, secretChecksumSha256: { type: string, pattern: '^[A-F0-9]{64}$' }, certificateChecksumSha256: { type: string, pattern: '^[A-F0-9]{64}$' }, revision: { type: integer, minimum: 1 }, checksumSha256: { type: string }, state: { type: string }, updatedAt: { type: string, format: date-time }, updatedBy: { type: string } }
+      required: [id, connectorId, connectorVersionId, environmentId, endpoints, secretResources, certificateResources, endpointChecksumSha256, secretChecksumSha256, certificateChecksumSha256, revision, checksumSha256, state, updatedAt, updatedBy]
+      properties: { id: { type: string, format: uuid }, connectorId: { type: string }, connectorVersionId: { type: string, format: uuid }, environmentId: { type: string, format: uuid }, endpoints: { type: object, description: Logical keys with redacted values., additionalProperties: { type: string } }, secretResources: { type: object, description: Logical keys with safe catalog metadata., additionalProperties: { $ref: '#/components/schemas/ProviderResourceBinding' } }, certificateResources: { type: object, description: Logical keys with safe catalog metadata., additionalProperties: { $ref: '#/components/schemas/ProviderResourceBinding' } }, endpointChecksumSha256: { type: string, pattern: '^[A-F0-9]{64}$' }, secretChecksumSha256: { type: string, pattern: '^[A-F0-9]{64}$' }, certificateChecksumSha256: { type: string, pattern: '^[A-F0-9]{64}$' }, revision: { type: integer, minimum: 1 }, checksumSha256: { type: string }, state: { type: string }, updatedAt: { type: string, format: date-time }, updatedBy: { type: string } }
+    ProviderResourceType:
+      type: string
+      enum: [Secret, ClientCertificate]
+    ProviderResourceReference:
+      type: object
+      additionalProperties: false
+      required: [providerId, resourceId, resourceType]
+      properties: { providerId: { type: string, pattern: '^[A-Za-z0-9_.-]{1,128}$' }, resourceId: { type: string, pattern: '^[A-Za-z0-9_.-]{1,128}$' }, resourceType: { $ref: '#/components/schemas/ProviderResourceType' }, version: { type: [string, 'null'], pattern: '^[A-Za-z0-9_.-]{1,128}$' }, publicMetadataRevision: { type: [integer, 'null'], minimum: 1 } }
+    ProviderResourceBinding:
+      type: object
+      additionalProperties: false
+      required: [providerId, resourceId, resourceType, displayName, catalogRevision, catalogChecksumSha256]
+      properties: { providerId: { type: string }, resourceId: { type: string }, resourceType: { $ref: '#/components/schemas/ProviderResourceType' }, displayName: { type: string }, version: { type: [string, 'null'] }, catalogRevision: { type: integer, minimum: 1 }, publicMetadataRevision: { type: [integer, 'null'], minimum: 1 }, catalogChecksumSha256: { type: string, pattern: '^[A-F0-9]{64}$' } }
+    CertificatePublicMetadata:
+      type: object
+      additionalProperties: false
+      required: [fingerprintSha256, subject, issuer, notBefore, notAfter, keyAlgorithm, publicKeySize, version]
+      properties: { fingerprintSha256: { type: string, pattern: '^[A-F0-9]{64}$' }, subject: { type: string }, issuer: { type: string }, notBefore: { type: string, format: date-time }, notAfter: { type: string, format: date-time }, keyAlgorithm: { type: string }, publicKeySize: { type: integer, minimum: 1 }, version: { type: string } }
+    ProviderResourceCatalog:
+      type: object
+      additionalProperties: false
+      required: [id, providerId, providerDisplayName, providerType, resourceId, resourceType, displayName, environmentId, connectorScope, operationScope, status, revision, checksumSha256]
+      properties: { id: { type: string, format: uuid }, providerId: { type: string }, providerDisplayName: { type: string }, providerType: { type: string }, resourceId: { type: string }, resourceType: { $ref: '#/components/schemas/ProviderResourceType' }, displayName: { type: string }, environmentId: { type: string, format: uuid }, connectorScope: { type: string }, operationScope: { type: string }, status: { type: string }, version: { type: [string, 'null'] }, revision: { type: integer, minimum: 1 }, publicMetadataRevision: { type: [integer, 'null'], minimum: 1 }, certificateMetadata: { oneOf: [{ $ref: '#/components/schemas/CertificatePublicMetadata' }, { type: 'null' }] }, checksumSha256: { type: string, pattern: '^[A-F0-9]{64}$' } }
+    ProviderResourceCatalogPage:
+      allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/ProviderResourceCatalog' } } } }]
     ConnectorBindingPage:
       allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/ConnectorBinding' } } } }]
     Approval:
@@ -773,11 +805,11 @@ components:
     ApprovalSecretReview:
       type: object
       required: [logicalBindingId, revision, providerDisplayName, providerType, providerId, resourceLogicalId, resourceType, environment, connectorScope, operationScope, secretBindingChecksumSha256]
-      properties: { logicalBindingId: { type: string }, revision: { type: integer }, providerDisplayName: { type: string }, providerType: { type: string }, providerId: { type: string }, resourceLogicalId: { type: string }, resourceType: { type: string }, environment: { type: string }, connectorScope: { type: string }, operationScope: { type: string }, secretBindingChecksumSha256: { type: string } }
+      properties: { logicalBindingId: { type: string }, revision: { type: integer }, providerDisplayName: { type: string }, providerType: { type: string }, providerId: { type: string }, resourceLogicalId: { type: string }, resourceType: { type: string }, version: { type: [string, 'null'] }, environment: { type: string }, connectorScope: { type: string }, operationScope: { type: string }, secretBindingChecksumSha256: { type: string } }
     ApprovalCertificateReview:
       type: object
-      required: [logicalBindingId, revision, providerDisplayName, providerType, providerId, certificateLogicalId, environment, connectorScope, operationScope, certificateBindingChecksumSha256]
-      properties: { logicalBindingId: { type: string }, revision: { type: integer }, providerDisplayName: { type: string }, providerType: { type: string }, providerId: { type: string }, certificateLogicalId: { type: string }, publicFingerprintSha256: { type: [string, 'null'] }, publicSubject: { type: [string, 'null'] }, publicIssuer: { type: [string, 'null'] }, expiresAt: { type: [string, 'null'], format: date-time }, environment: { type: string }, connectorScope: { type: string }, operationScope: { type: string }, certificateBindingChecksumSha256: { type: string } }
+      required: [logicalBindingId, revision, providerDisplayName, providerType, providerId, certificateLogicalId, publicFingerprintSha256, publicSubject, publicIssuer, notBefore, expiresAt, keyAlgorithm, publicKeySize, version, environment, connectorScope, operationScope, certificateBindingChecksumSha256]
+      properties: { logicalBindingId: { type: string }, revision: { type: integer }, providerDisplayName: { type: string }, providerType: { type: string }, providerId: { type: string }, certificateLogicalId: { type: string }, publicFingerprintSha256: { type: string }, publicSubject: { type: string }, publicIssuer: { type: string }, notBefore: { type: string, format: date-time }, expiresAt: { type: string, format: date-time }, keyAlgorithm: { type: string }, publicKeySize: { type: integer }, version: { type: string }, environment: { type: string }, connectorScope: { type: string }, operationScope: { type: string }, certificateBindingChecksumSha256: { type: string } }
     ApprovalRevisionReview:
       type: object
       required: [bindingId, environmentId, revision, checksumSha256]

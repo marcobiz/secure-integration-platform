@@ -820,6 +820,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/api/v1/provider-resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listProviderResources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/api/v1/connectors/{connectorId}/versions/{version}/approval-requests": {
         parameters: {
             query?: never;
@@ -1177,11 +1193,11 @@ export interface components {
             endpoints: {
                 [key: string]: string;
             };
-            secretReferences: {
-                [key: string]: string;
+            secretResources: {
+                [key: string]: components["schemas"]["ProviderResourceReference"];
             };
-            certificateReferences?: {
-                [key: string]: string;
+            certificateResources?: {
+                [key: string]: components["schemas"]["ProviderResourceReference"];
             };
             /**
              * @deprecated
@@ -1201,13 +1217,13 @@ export interface components {
             endpoints: {
                 [key: string]: string;
             };
-            /** @description Logical keys with redacted values. */
-            secretReferences: {
-                [key: string]: string;
+            /** @description Logical keys with safe catalog metadata. */
+            secretResources: {
+                [key: string]: components["schemas"]["ProviderResourceBinding"];
             };
-            /** @description Logical keys with redacted values. */
-            certificateReferences: {
-                [key: string]: string;
+            /** @description Logical keys with safe catalog metadata. */
+            certificateResources: {
+                [key: string]: components["schemas"]["ProviderResourceBinding"];
             };
             endpointChecksumSha256: string;
             secretChecksumSha256: string;
@@ -1218,6 +1234,60 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
             updatedBy: string;
+        };
+        /** @enum {string} */
+        ProviderResourceType: "Secret" | "ClientCertificate";
+        ProviderResourceReference: {
+            providerId: string;
+            resourceId: string;
+            resourceType: components["schemas"]["ProviderResourceType"];
+            version?: string | null;
+            publicMetadataRevision?: number | null;
+        };
+        ProviderResourceBinding: {
+            providerId: string;
+            resourceId: string;
+            resourceType: components["schemas"]["ProviderResourceType"];
+            displayName: string;
+            version?: string | null;
+            catalogRevision: number;
+            publicMetadataRevision?: number | null;
+            catalogChecksumSha256: string;
+        };
+        CertificatePublicMetadata: {
+            fingerprintSha256: string;
+            subject: string;
+            issuer: string;
+            /** Format: date-time */
+            notBefore: string;
+            /** Format: date-time */
+            notAfter: string;
+            keyAlgorithm: string;
+            publicKeySize: number;
+            version: string;
+        };
+        ProviderResourceCatalog: {
+            /** Format: uuid */
+            id: string;
+            providerId: string;
+            providerDisplayName: string;
+            providerType: string;
+            resourceId: string;
+            resourceType: components["schemas"]["ProviderResourceType"];
+            displayName: string;
+            /** Format: uuid */
+            environmentId: string;
+            connectorScope: string;
+            operationScope: string;
+            status: string;
+            version?: string | null;
+            revision: number;
+            publicMetadataRevision?: number | null;
+            certificateMetadata?: components["schemas"]["CertificatePublicMetadata"] | null;
+            checksumSha256: string;
+        };
+        ProviderResourceCatalogPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["ProviderResourceCatalog"][];
         };
         ConnectorBindingPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["ConnectorBinding"][];
@@ -1296,6 +1366,7 @@ export interface components {
             providerId: string;
             resourceLogicalId: string;
             resourceType: string;
+            version?: string | null;
             environment: string;
             connectorScope: string;
             operationScope: string;
@@ -1308,11 +1379,16 @@ export interface components {
             providerType: string;
             providerId: string;
             certificateLogicalId: string;
-            publicFingerprintSha256?: string | null;
-            publicSubject?: string | null;
-            publicIssuer?: string | null;
+            publicFingerprintSha256: string;
+            publicSubject: string;
+            publicIssuer: string;
             /** Format: date-time */
-            expiresAt?: string | null;
+            notBefore: string;
+            /** Format: date-time */
+            expiresAt: string;
+            keyAlgorithm: string;
+            publicKeySize: number;
+            version: string;
             environment: string;
             connectorScope: string;
             operationScope: string;
@@ -2861,6 +2937,32 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConnectorBindingPage"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listProviderResources: {
+        parameters: {
+            query?: {
+                offset?: components["parameters"]["Offset"];
+                limit?: components["parameters"]["Limit"];
+                environmentId?: string;
+                resourceType?: components["schemas"]["ProviderResourceType"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only server-owned logical resource catalog; physical references and values are absent. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderResourceCatalogPage"];
                 };
             };
             default: components["responses"]["Problem"];

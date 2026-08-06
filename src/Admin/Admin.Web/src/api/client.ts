@@ -21,6 +21,8 @@ export type ApprovalReview = components['schemas']['ApprovalReviewResult'];
 export type ConnectorBinding = components['schemas']['ConnectorBinding'];
 export type ConnectorBindingRequest = components['schemas']['ConnectorBindingRequest'];
 export type RoleAssignment = components['schemas']['RoleAssignment'];
+export type ProviderResourceCatalog = components['schemas']['ProviderResourceCatalog'];
+export type ProviderResourceCatalogPage = Page<ProviderResourceCatalog>;
 
 export class ApiProblem extends Error {
   constructor(public readonly status: number, public readonly code: string, public readonly correlationId?: string) {
@@ -100,6 +102,7 @@ export const adminApi = {
   grants: (tenantId: string, offset = 0, limit = 50) => openApi<GrantPage, '/admin/api/v1/grants'>('/admin/api/v1/grants', 'get', { query: { tenantId, offset, limit } }),
   audit: (tenantId: string, offset = 0, limit = 50) => openApi<AuditPage, '/admin/api/v1/audit'>('/admin/api/v1/audit', 'get', { query: { tenantId, offset, limit } }),
   connectors: (offset = 0, limit = 50, filter = '') => openApi<Page<ConnectorSummary>, '/admin/api/v1/connectors'>('/admin/api/v1/connectors', 'get', { query: { offset, limit, filter } }),
+  providerResources: (environmentId = '', resourceType = '', offset = 0, limit = 100) => openApi<ProviderResourceCatalogPage, '/admin/api/v1/provider-resources'>('/admin/api/v1/provider-resources', 'get', { query: { environmentId, resourceType, offset, limit } }),
   createTenant: (value: components['schemas']['CreateTenant']) => openApi<Tenant, '/admin/api/v1/tenants'>('/admin/api/v1/tenants', 'post', { body: value }),
   updateTenant: (id: string, value: components['schemas']['UpdateTenant'], rowVersion: number) => openApi<Tenant, '/admin/api/v1/tenants/{tenantId}'>('/admin/api/v1/tenants/{tenantId}', 'put', { path: { tenantId: id }, headers: { 'If-Match': `"${rowVersion}"` }, body: value }),
   disableTenant: (id: string, rowVersion: number) => openApi<Tenant, '/admin/api/v1/tenants/{tenantId}:disable'>('/admin/api/v1/tenants/{tenantId}:disable', 'post', { path: { tenantId: id }, headers: { 'If-Match': `"${rowVersion}"` } }),

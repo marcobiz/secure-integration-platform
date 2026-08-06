@@ -101,13 +101,21 @@ test('FULLSTACK-01 production Admin build persists and governs the connector lif
   expect(validated.status).toBe(200);
   expect(validated.body.state).toBe('Validated');
 
+  const resources = await api<{ items: Array<{ providerId: string; resourceId: string; resourceType: string; environmentId: string; connectorScope: string; publicMetadataRevision?: number | null }> }>(security, '/admin/api/v1/provider-resources?offset=0&limit=100');
+  expect(resources.status).toBe(200);
+  const secretResource = resources.body.items.find(value => value.providerId === 'synthetic-vault' && value.resourceId === 'security-sample-vendor-api-key' && value.resourceType === 'Secret' && value.connectorScope === 'sample-secure-service');
+  const certificateResource = resources.body.items.find(value => value.providerId === 'synthetic-vault' && value.resourceId === 'security-sample-vendor-client-certificate' && value.resourceType === 'ClientCertificate' && value.connectorScope === 'sample-secure-service');
+  expect(secretResource).toBeTruthy();
+  expect(certificateResource).toBeTruthy();
+  expect(certificateResource!.environmentId).toBe(secretResource!.environmentId);
+  const catalogEnvironmentId = secretResource!.environmentId;
   const tenants = await api<{ items: Array<{ id: string }> }>(security, '/admin/api/v1/tenants?offset=0&limit=50');
   let tenantId: string | undefined;
   let enrolled: { id: string; status: string; environmentId: string } | undefined;
   for (const tenant of tenants.body.items) {
     const installations = await api<{ items: Array<{ id: string; status: string; environmentId: string }> }>(security, `/admin/api/v1/installations?tenantId=${tenant.id}&offset=0&limit=50`);
     const grants = await api<{ items: Array<{ installationId: string; connectorId: string; operationId: string }> }>(security, `/admin/api/v1/grants?tenantId=${tenant.id}&offset=0&limit=50`);
-    for (const active of installations.body.items.filter(value => value.status === 'Active')) {
+    for (const active of installations.body.items.filter(value => value.status === 'Active' && value.environmentId === catalogEnvironmentId)) {
       const alreadyGranted = grants.body.items.some(value => value.installationId === active.id && value.connectorId === 'sample-secure-service' && value.operationId === 'submit');
       if (!alreadyGranted) {
         enrolled = active;
@@ -125,8 +133,8 @@ test('FULLSTACK-01 production Admin build persists and governs the connector lif
     environmentId,
     connectorVersion: '2.0.0',
     endpoints: { 'sample-vendor-endpoint': 'https://vendor.m3.test:8443/' },
-    secretReferences: { 'sample-vendor-api-key': 'synthetic-vault://vault.m3.test/vendor-api-key' },
-    certificateReferences: { 'sample-vendor-client-certificate': 'synthetic-vault://vault.m3.test/vendor-client-certificate' }
+    secretResources: { 'sample-vendor-api-key': { providerId: secretResource!.providerId, resourceId: secretResource!.resourceId, resourceType: 'Secret' } },
+    certificateResources: { 'sample-vendor-client-certificate': { providerId: certificateResource!.providerId, resourceId: certificateResource!.resourceId, resourceType: 'ClientCertificate', publicMetadataRevision: certificateResource!.publicMetadataRevision } }
   });
   expect(binding.status).toBe(200);
   expect(binding.body.revision).toBe(1);
@@ -136,7 +144,7 @@ test('FULLSTACK-01 production Admin build persists and governs the connector lif
   const review = await api<{ digestSha256: string; canonicalJson: string; artifact: { operations: Array<{ endpoint: { hostname: string; port: number; path: string; allowedMethods: string[] }; secretBindings: Array<{ providerId: string; resourceLogicalId: string }> }> } }>(approver, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approval-review');
   expect(review.status).toBe(200);
   expect(review.body.digestSha256).toBe(requested.body.bindingDigestSha256);
-  expect(review.body.artifact.operations[0]).toMatchObject({ endpoint: { hostname: 'vendor.m3.test', port: 8443, path: '/vendor/orders', allowedMethods: ['POST'] }, secretBindings: [{ providerId: 'vault.m3.test', resourceLogicalId: 'vendor-api-key' }] });
+  expect(review.body.artifact.operations).toContainEqual(expect.objectContaining({ endpoint: expect.objectContaining({ hostname: 'vendor.m3.test', port: 8443, path: '/vendor/orders', allowedMethods: ['POST'] }), secretBindings: [expect.objectContaining({ providerId: 'synthetic-vault', resourceLogicalId: 'security-sample-vendor-api-key' })] }));
   expect(review.body.canonicalJson).not.toMatch(/secretValue|privateKey|clientSecret|passwordValue|connectionString|SYNTHETIC-CANARY/i);
   const approvalBody = { approvalRequestId: requested.body.id, expectedDigestSha256: review.body.digestSha256 };
   const selfApproval = await api<{ code: string }>(editor, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approvals', 'POST', approvalBody);
