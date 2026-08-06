@@ -138,6 +138,7 @@ builder.Services.AddSingleton(secretProvider);
 builder.Services.AddSingleton(providerServices.ClientCertificates);
 builder.Services.AddSingleton(providerServices.Health);
 builder.Services.AddSingleton(providerServices.CapabilitySource);
+if (providerServices.CertificateMetadata is not null) builder.Services.AddSingleton(providerServices.CertificateMetadata);
 if (providerServices.SigningKeys is not null) builder.Services.AddSingleton(providerServices.SigningKeys);
 if (providerServices.Mac is not null) builder.Services.AddSingleton(providerServices.Mac);
 
@@ -165,6 +166,23 @@ else
 builder.Services.AddSingleton<ConnectorAdministrationService>();
 
 WebApplication app = builder.Build();
+if (hostOptions.Provider.Resources.Count > 0)
+{
+    IConnectorConfigurationStore catalog = app.Services.GetRequiredService<IConnectorConfigurationStore>();
+    foreach (GatewayProviderResourceOptions configured in hostOptions.Provider.Resources)
+    {
+        CertificatePublicMetadata? certificateMetadata = null;
+        if (configured.ResourceType == ProviderResourceType.ClientCertificate)
+        {
+            ICertificateMetadataProvider metadataProvider = providerServices.CertificateMetadata ?? throw new InvalidOperationException("Configured client certificate resources require public metadata capability.");
+            ProviderCertificatePublicMetadata metadata = await metadataProvider.GetPublicMetadataAsync(configured.ProviderReference, CancellationToken.None).ConfigureAwait(false);
+            certificateMetadata = new(metadata.FingerprintSha256, metadata.Subject, metadata.Issuer, metadata.NotBefore, metadata.NotAfter, metadata.KeyAlgorithm, metadata.PublicKeySize, metadata.Version);
+        }
+        await catalog.RegisterProviderResourceAsync(new(Guid.NewGuid(), configured.ProviderId, configured.ProviderDisplayName, configured.ProviderType, configured.ResourceId, configured.ResourceType, configured.DisplayName,
+            configured.EnvironmentId, configured.ConnectorScope, configured.OperationScope, configured.ProviderReference, ProviderResourceStatus.Active, configured.Version, 0,
+            configured.PublicMetadataRevision, certificateMetadata, string.Empty, DateTimeOffset.UtcNow), CancellationToken.None).ConfigureAwait(false);
+    }
+}
 if (app.Environment.IsEnvironment("Testing"))
     app.Use((context, next) => { context.Connection.RemoteIpAddress ??= IPAddress.Loopback; return next(context); });
 if (app.Environment.IsProduction()) app.UseHsts();
@@ -799,6 +817,15 @@ adminApi.MapGet("/connectors/{connectorId}/versions/{version}/bindings", async (
     return Results.Ok(new AdminPage<ConnectorBindingResource>(page.Items.Select(BindingResource).ToArray(), page.Offset, page.Limit, page.Total));
 });
 
+adminApi.MapGet("/provider-resources", async (Guid? environmentId, ProviderResourceType? resourceType, int? offset, int? limit, HttpContext context, AdminAccessService access, IConnectorConfigurationStore store, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.Viewer, AdminRole.ConnectorEditor, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
+    (int pageOffset, int pageLimit) = PageArgs(offset, limit, null);
+    AdminPage<ProviderResourceCatalogRecord> page = await store.ListProviderResourcesPageAsync(pageOffset, pageLimit, environmentId, resourceType, cancellationToken).ConfigureAwait(false);
+    return Results.Ok(new AdminPage<ProviderResourceCatalogResource>(page.Items.Select(ProviderResource).ToArray(), page.Offset, page.Limit, page.Total));
+});
+
 adminApi.MapGet("/role-assignments", async (Guid? principalId, Guid? tenantId, int? offset, int? limit, HttpContext context, AdminAccessService access, IAdminSecurityStore security, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
@@ -835,7 +862,7 @@ static ProviderServices CreateProviderServices(GatewayProviderOptions options, I
         string? token = Environment.GetEnvironmentVariable(options.AccessTokenEnvironmentVariable, EnvironmentVariableTarget.Process);
         if (string.IsNullOrWhiteSpace(token)) throw new InvalidOperationException("Synthetic provider access token is required.");
         SyntheticProvider provider = new(endpoint, token);
-        return new ProviderServices(provider, provider, provider, provider);
+        return new ProviderServices(provider, provider, provider, provider, CertificateMetadata: provider);
     }
 
     if (string.Equals(options.Kind, "ExternalPack", StringComparison.Ordinal))
@@ -860,7 +887,7 @@ static ProviderServices CreateProviderServices(GatewayProviderOptions options, I
     if (!environment.IsDevelopment() && !environment.IsEnvironment("Testing"))
         throw new InvalidOperationException("A configured provider pack is required outside Development/Testing.");
     InMemoryProvider inMemory = new(new Dictionary<string, string>());
-    return new ProviderServices(inMemory, inMemory, inMemory, inMemory);
+    return new ProviderServices(inMemory, inMemory, inMemory, inMemory, CertificateMetadata: inMemory);
 }
 
 static async Task<AuthenticatedInstallation> AuthenticateAsync(HttpContext context, RuntimeIdentityService service, ReadOnlyMemory<byte> body, Guid correlationId, CancellationToken cancellationToken)
@@ -903,11 +930,15 @@ static ConnectorBindingResource BindingResource(ConnectorBindingSet value)
     Dictionary<string, string> endpoints = value.Endpoints.ToDictionary(item => item.Key, item => item.Value.AbsoluteUri, StringComparer.Ordinal);
     return new(value.Id, value.ConnectorId, value.ConnectorVersionId, value.EnvironmentId,
         endpoints.ToDictionary(item => item.Key, _ => "[REDACTED]", StringComparer.Ordinal),
-        value.SecretReferences.ToDictionary(item => item.Key, _ => "[REDACTED]", StringComparer.Ordinal),
-        value.CertificateReferences.ToDictionary(item => item.Key, _ => "[REDACTED]", StringComparer.Ordinal),
-        ConnectorBindingDigests.Component(endpoints), ConnectorBindingDigests.Component(value.SecretReferences), ConnectorBindingDigests.Component(value.CertificateReferences),
+        value.SecretResources.ToDictionary(item => item.Key, item => ProviderBinding(item.Value), StringComparer.Ordinal),
+        value.CertificateResources.ToDictionary(item => item.Key, item => ProviderBinding(item.Value), StringComparer.Ordinal),
+        ConnectorBindingDigests.Component(endpoints), ConnectorBindingDigests.Component(value.SecretResources), ConnectorBindingDigests.Component(value.CertificateResources),
         value.Revision, value.ChecksumSha256, value.State.ToString(), value.UpdatedAt, value.UpdatedBy);
 }
+
+static ProviderResourceBindingResource ProviderBinding(ProviderResourceBinding value) => new(value.ProviderId, value.ResourceId, value.ResourceType.ToString(), value.DisplayName, value.Version, value.CatalogRevision, value.PublicMetadataRevision, value.CatalogChecksumSha256);
+
+static ProviderResourceCatalogResource ProviderResource(ProviderResourceCatalogRecord value) => new(value.Id, value.ProviderId, value.ProviderDisplayName, value.ProviderType, value.ResourceId, value.ResourceType.ToString(), value.DisplayName, value.EnvironmentId, value.ConnectorScope, value.OperationScope, value.Status.ToString(), value.Version, value.Revision, value.PublicMetadataRevision, value.CertificateMetadata, value.ChecksumSha256);
 
 static async Task AuditAdminDenialAsync(HttpContext context, string reasonCode, string correlationId)
 {

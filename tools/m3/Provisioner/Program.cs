@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using Npgsql;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
@@ -9,6 +11,8 @@ string runtimePassword = Required("M3_POSTGRES_RUNTIME_PASSWORD");
 string activationKeyText = Required("M3_ACTIVATION_HMAC_BASE64");
 string outputPath = Required("M3_PROVISIONING_OUTPUT");
 string? adminApiPassword = Optional("M5_POSTGRES_ADMIN_API_PASSWORD");
+using X509Certificate2 vendorCertificate = X509CertificateLoader.LoadPkcs12(Convert.FromBase64String(Required("M3_VENDOR_CLIENT_PFX_BASE64")), null, X509KeyStorageFlags.EphemeralKeySet);
+using X509Certificate2 wrongVendorCertificate = X509CertificateLoader.LoadPkcs12(Convert.FromBase64String(Required("M3_WRONG_VENDOR_CLIENT_PFX_BASE64")), null, X509KeyStorageFlags.EphemeralKeySet);
 byte[] activationKey;
 try { activationKey = Convert.FromBase64String(activationKeyText); }
 catch (FormatException) { throw new InvalidOperationException("M3 activation HMAC key must be Base64."); }
@@ -119,23 +123,46 @@ async Task PublishConnectorAsync(string connectorId, string version, bool securi
         ["private"] = new("https://172.29.44.7/"),
         ["metadata"] = new("https://169.254.169.254/")
     };
-    Dictionary<string, string> secrets = new(StringComparer.Ordinal)
+    Guid selectedEnvironment = securityOperations ? securityEnvironmentId : environmentId;
+    string catalogPrefix = securityOperations ? "security-" : string.Empty;
+    ProviderResourceCatalogRecord secretResource = await RegisterResourceAsync(selectedEnvironment, connectorId, catalogPrefix + "vendor-api-key", ProviderResourceType.Secret, "synthetic-vault://vault.m3.test/vendor-api-key", null, null).ConfigureAwait(false);
+    ProviderResourceCatalogRecord certificateResource = await RegisterResourceAsync(selectedEnvironment, connectorId, catalogPrefix + "vendor-client-certificate", ProviderResourceType.ClientCertificate, "synthetic-vault://vault.m3.test/vendor-client-certificate", vendorCertificate, 1).ConfigureAwait(false);
+    Dictionary<string, ProviderResourceBinding> secrets = new(StringComparer.Ordinal) { ["vendor-api-key"] = Binding(secretResource) };
+    Dictionary<string, ProviderResourceBinding> certificates = new(StringComparer.Ordinal) { ["vendor-client-certificate"] = Binding(certificateResource) };
+    if (securityOperations)
     {
-        ["vendor-api-key"] = "synthetic-vault://vault.m3.test/vendor-api-key"
-    };
-    Dictionary<string, string> certificates = new(StringComparer.Ordinal)
+        ProviderResourceCatalogRecord wrongCertificate = await RegisterResourceAsync(selectedEnvironment, connectorId, catalogPrefix + "vendor-wrong-client-certificate", ProviderResourceType.ClientCertificate, "synthetic-vault://vault.m3.test/vendor-wrong-client-certificate", wrongVendorCertificate, 1).ConfigureAwait(false);
+        certificates.Add("vendor-wrong-client-certificate", Binding(wrongCertificate));
+    }
+    string checksum = ConnectorBindingDigests.Revision(draft.Id, selectedEnvironment, endpoints, secrets, certificates);
+    _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, selectedEnvironment, endpoints, secrets, certificates, 0, checksum, ConnectorBindingState.Draft, clock.UtcNow, editor), null, Guid.NewGuid(), CancellationToken.None).ConfigureAwait(false);
+    if (!securityOperations)
     {
-        ["vendor-client-certificate"] = "synthetic-vault://vault.m3.test/vendor-client-certificate",
-        ["vendor-wrong-client-certificate"] = "synthetic-vault://vault.m3.test/vendor-wrong-client-certificate"
-    };
-    string primaryChecksum = ConnectorBindingDigests.Revision(draft.Id, environmentId, endpoints, secrets, certificates);
-    string securityChecksum = ConnectorBindingDigests.Revision(draft.Id, securityEnvironmentId, endpoints, secrets, certificates);
-    _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, environmentId, endpoints, secrets, certificates, 0, primaryChecksum, ConnectorBindingState.Draft, clock.UtcNow, editor), null, Guid.NewGuid(), CancellationToken.None).ConfigureAwait(false);
-    _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, securityEnvironmentId, endpoints, secrets, certificates, 0, securityChecksum, ConnectorBindingState.Draft, clock.UtcNow, editor), null, Guid.NewGuid(), CancellationToken.None).ConfigureAwait(false);
+        ProviderResourceCatalogRecord securitySecret = await RegisterResourceAsync(securityEnvironmentId, connectorId, "security-sample-vendor-api-key", ProviderResourceType.Secret, "synthetic-vault://vault.m3.test/vendor-api-key", null, null).ConfigureAwait(false);
+        ProviderResourceCatalogRecord securityCertificate = await RegisterResourceAsync(securityEnvironmentId, connectorId, "security-sample-vendor-client-certificate", ProviderResourceType.ClientCertificate, "synthetic-vault://vault.m3.test/vendor-client-certificate", vendorCertificate, 1).ConfigureAwait(false);
+        Dictionary<string, ProviderResourceBinding> securitySecrets = new(StringComparer.Ordinal) { ["vendor-api-key"] = Binding(securitySecret) };
+        Dictionary<string, ProviderResourceBinding> securityCertificates = new(StringComparer.Ordinal) { ["vendor-client-certificate"] = Binding(securityCertificate) };
+        string securityChecksum = ConnectorBindingDigests.Revision(draft.Id, securityEnvironmentId, endpoints, securitySecrets, securityCertificates);
+        _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, securityEnvironmentId, endpoints, securitySecrets, securityCertificates, 0, securityChecksum, ConnectorBindingState.Draft, clock.UtcNow, editor), null, Guid.NewGuid(), CancellationToken.None).ConfigureAwait(false);
+    }
     byte[] bindingDigest = await connectorStore.GetBindingBundleDigestAsync(draft.Id, CancellationToken.None).ConfigureAwait(false);
     ConnectorApprovalRecord approvalRequest = await adminSecurity.RequestApprovalAsync(draft, bindingDigest, provisionerEditor.Id, Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
     _ = await adminSecurity.ApproveAsync(approvalRequest.Id, draft.Id, draft.ChecksumSha256, bindingDigest, draft.CreatedBy, provisionerApprover.Id, null, Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
     _ = await connectorStore.PublishApprovedAsync(draft.Id, bindingDigest, validatedRecord.RowVersion, 0, provisionerApprover.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
+}
+
+async Task<ProviderResourceCatalogRecord> RegisterResourceAsync(Guid environment, string connector, string resourceId, ProviderResourceType type, string providerReference, X509Certificate2? certificate, long? metadataRevision)
+{
+    CertificatePublicMetadata? metadata = certificate is null ? null : CertificateMetadata(certificate);
+    return await connectorStore.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic-vault", "Synthetic vault", "synthetic-vault", resourceId, type, resourceId, environment, connector, "*", providerReference, ProviderResourceStatus.Active, null, 0, metadataRevision, metadata, string.Empty, clock.UtcNow), CancellationToken.None).ConfigureAwait(false);
+}
+
+static ProviderResourceBinding Binding(ProviderResourceCatalogRecord resource) => new(resource.ProviderId, resource.ProviderDisplayName, resource.ProviderType, resource.ResourceId, resource.ResourceType, resource.DisplayName, resource.EnvironmentId, resource.ConnectorScope, resource.OperationScope, resource.Version, resource.Revision, resource.PublicMetadataRevision, resource.CertificateMetadata, resource.ChecksumSha256);
+
+static CertificatePublicMetadata CertificateMetadata(X509Certificate2 certificate)
+{
+    using RSA? rsa = certificate.GetRSAPublicKey(); using ECDsa? ecdsa = certificate.GetECDsaPublicKey();
+    return new(Convert.ToHexString(SHA256.HashData(certificate.RawData)), certificate.Subject, certificate.Issuer, certificate.NotBefore, certificate.NotAfter, rsa is not null ? "RSA" : "ECDSA", rsa?.KeySize ?? ecdsa?.KeySize ?? 0, certificate.SerialNumber);
 }
 
 static object Operation(string operationId, string endpointBinding, string path, string authentication, string? certificateBinding)

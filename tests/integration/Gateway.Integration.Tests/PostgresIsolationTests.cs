@@ -258,6 +258,7 @@ public sealed class PostgresIsolationTests
         string connectorId = "postgres-" + suffix.ToString("N");
         Guid environmentId = Guid.NewGuid();
         await registry.AddEnvironmentAsync(new(environmentId, "m4-" + suffix.ToString("N")[..20], "M4", false), TestContext.Current.CancellationToken);
+        TestProviderResources resources = await RegisterTestResourcesAsync(store, environmentId, connectorId, clock.UtcNow);
         using JsonDocument source = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(FindRepositoryRoot(), "docs", "connectors", "examples", "sample-secure-service.connector.json"), TestContext.Current.CancellationToken));
 
         async Task<ConnectorVersionResource> ImportPublishAsync(string version, long revision)
@@ -268,12 +269,12 @@ public sealed class PostgresIsolationTests
             ConnectorVersionResource validated = await admin.ValidateStoredAsync(connectorId, version, imported.RowVersion, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
             _ = await admin.PutBindingsAsync(connectorId, new(environmentId,
                 new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/" },
-                new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://key", ["sample-vendor-client-certificate"] = "synthetic://cert" },
-                ConnectorVersion: version), editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+                new Dictionary<string, ProviderResourceReference> { ["sample-vendor-api-key"] = resources.SecretReference }, null,
+                new Dictionary<string, ProviderResourceReference> { ["sample-vendor-client-certificate"] = resources.CertificateReference }, version), editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
             ConnectorVersionRecord stored = await store.GetVersionAsync(connectorId, version, TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("Imported version missing.");
             byte[] digest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
             ConnectorApprovalRecord request = await security.RequestApprovalAsync(stored, digest, editor.Id, Guid.NewGuid(), clock.UtcNow, TestContext.Current.CancellationToken);
-            _ = await security.ApproveAsync(request.Id, stored.Id, stored.ChecksumSha256, digest, stored.CreatedBy, approver.Id, null, Guid.NewGuid(), clock.UtcNow.AddMilliseconds(1), TestContext.Current.CancellationToken);
+            _ = await store.ApproveCanonicalAsync(security, request.Id, stored.Id, Convert.ToHexString(digest), stored.CreatedBy, approver.Id, null, Guid.NewGuid(), clock.UtcNow.AddMilliseconds(1), TestContext.Current.CancellationToken);
             return await admin.PublishAsync(connectorId, version, validated.RowVersion, revision, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
         }
 
@@ -312,17 +313,31 @@ public sealed class PostgresIsolationTests
         Guid environmentId = Guid.NewGuid();
         string connectorId = "atomic-" + Guid.NewGuid().ToString("N");
         await registry.AddEnvironmentAsync(new(environmentId, "a-" + Guid.NewGuid().ToString("N")[..20], "Atomic", false), TestContext.Current.CancellationToken);
+        TestProviderResources resources = await RegisterTestResourcesAsync(store, environmentId, connectorId, clock.UtcNow);
         using JsonDocument source = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(FindRepositoryRoot(), "docs", "connectors", "examples", "sample-secure-service.connector.json"), TestContext.Current.CancellationToken));
         using JsonDocument definition = JsonDocument.Parse(source.RootElement.GetRawText().Replace("sample-secure-service", connectorId, StringComparison.Ordinal));
         ConnectorVersionResource imported = await admin.ImportAsync(definition.RootElement, null, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
         ConnectorVersionResource validated = await admin.ValidateStoredAsync(connectorId, imported.Version, imported.RowVersion, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
         _ = await admin.PutBindingsAsync(connectorId, new(environmentId,
             new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://approved.example.test/" },
-            new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://canary", ["sample-vendor-client-certificate"] = "synthetic://certificate" }), editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+            new Dictionary<string, ProviderResourceReference> { ["sample-vendor-api-key"] = resources.SecretReference }, null,
+            new Dictionary<string, ProviderResourceReference> { ["sample-vendor-client-certificate"] = resources.CertificateReference }), editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
         ConnectorVersionRecord stored = (await store.GetVersionAsync(connectorId, imported.Version, TestContext.Current.CancellationToken))!;
         byte[] approvedDigest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
         ConnectorApprovalRecord approvalRequest = await security.RequestApprovalAsync(stored, approvedDigest, editor.Id, Guid.NewGuid(), clock.UtcNow, TestContext.Current.CancellationToken);
-        _ = await security.ApproveAsync(approvalRequest.Id, stored.Id, stored.ChecksumSha256, approvedDigest, stored.CreatedBy, approver.Id, null, Guid.NewGuid(), clock.UtcNow.AddSeconds(1), TestContext.Current.CancellationToken);
+        ProviderResourceCatalogRecord previousResource = await store.ResolveProviderResourceAsync(resources.SecretReference, environmentId, connectorId, ["submit"], TestContext.Current.CancellationToken);
+        ProviderResourceCatalogRecord rotatedResource = await store.RegisterProviderResourceAsync(previousResource with { Id = Guid.NewGuid(), ProviderReference = "synthetic://rotated-api-key", Revision = 0, ChecksumSha256 = string.Empty, CreatedAt = clock.UtcNow.AddMilliseconds(1) }, TestContext.Current.CancellationToken);
+        GatewayException staleReview = await Assert.ThrowsAsync<GatewayException>(() => store.ApproveCanonicalAsync(security, approvalRequest.Id, stored.Id, Convert.ToHexString(approvedDigest), stored.CreatedBy, approver.Id, null, Guid.NewGuid(), clock.UtcNow.AddSeconds(1), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-PROVIDER-RESOURCE-REVISION-STALE", staleReview.Code);
+        Dictionary<string, ProviderResourceBinding> refreshedSecrets = new() { ["sample-vendor-api-key"] = Binding(rotatedResource) };
+        _ = await store.PutBindingsAsync(new(Guid.NewGuid(), stored.ConnectorId, stored.Id, environmentId,
+            new Dictionary<string, Uri> { ["sample-vendor-endpoint"] = new("https://approved.example.test/") }, refreshedSecrets,
+            new Dictionary<string, ProviderResourceBinding> { ["sample-vendor-client-certificate"] = resources.CertificateBinding }, 0,
+            ConnectorBindingDigests.Revision(stored.Id, environmentId, new Dictionary<string, Uri> { ["sample-vendor-endpoint"] = new("https://approved.example.test/") }, refreshedSecrets, new Dictionary<string, ProviderResourceBinding> { ["sample-vendor-client-certificate"] = resources.CertificateBinding }),
+            ConnectorBindingState.Draft, clock.UtcNow.AddSeconds(1), editor.Id.ToString("D")), 1, Guid.NewGuid(), TestContext.Current.CancellationToken);
+        approvedDigest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
+        approvalRequest = await security.RequestApprovalAsync(stored, approvedDigest, editor.Id, Guid.NewGuid(), clock.UtcNow.AddSeconds(1), TestContext.Current.CancellationToken);
+        _ = await store.ApproveCanonicalAsync(security, approvalRequest.Id, stored.Id, Convert.ToHexString(approvedDigest), stored.CreatedBy, approver.Id, null, Guid.NewGuid(), clock.UtcNow.AddSeconds(2), TestContext.Current.CancellationToken);
 
         await using NpgsqlConnection blocker = await adminPool.Value.OpenConnectionAsync(TestContext.Current.CancellationToken);
         await using NpgsqlTransaction blockerTransaction = await blocker.BeginTransactionAsync(TestContext.Current.CancellationToken);
@@ -333,7 +348,8 @@ public sealed class PostgresIsolationTests
         }
         Task<long> mutation = admin.PutBindingsAsync(connectorId, new(environmentId,
             new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://controlled-attacker.example.test/" },
-            new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://canary", ["sample-vendor-client-certificate"] = "synthetic://certificate" }, 1), editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+            new Dictionary<string, ProviderResourceReference> { ["sample-vendor-api-key"] = resources.SecretReference }, 2,
+            new Dictionary<string, ProviderResourceReference> { ["sample-vendor-client-certificate"] = resources.CertificateReference }), editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
         await WaitForVersionLockWaitAsync(adminPool.Value, TestContext.Current.CancellationToken);
         Task<ConnectorVersionRecord> publication = store.PublishApprovedAsync(stored.Id, approvedDigest, validated.RowVersion, 0, approver.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow.AddSeconds(2), TestContext.Current.CancellationToken);
         await blockerTransaction.CommitAsync(TestContext.Current.CancellationToken);
@@ -353,7 +369,7 @@ public sealed class PostgresIsolationTests
         string expectedEndpoint;
         if (mutationFailure is null)
         {
-            Assert.Equal(2, mutationRevision);
+            Assert.Equal(3, mutationRevision);
             GatewayException denied = Assert.IsType<GatewayException>(publicationFailure);
             Assert.True(denied.Code is "BGW-ADMIN-APPROVAL-STALE" or "BGW-ADMIN-APPROVAL-REQUIRED" or "BGW-CONCURRENCY-CONFLICT", denied.Code);
             ConnectorVersionRecord after = (await store.GetVersionAsync(connectorId, imported.Version, TestContext.Current.CancellationToken))!;
@@ -361,7 +377,7 @@ public sealed class PostgresIsolationTests
             Assert.Equal(0L, await audit.ExecuteScalarAsync(TestContext.Current.CancellationToken));
             byte[] currentDigest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
             ConnectorApprovalRecord currentRequest = await security.RequestApprovalAsync(after, currentDigest, editor.Id, Guid.NewGuid(), clock.UtcNow.AddSeconds(3), TestContext.Current.CancellationToken);
-            _ = await security.ApproveAsync(currentRequest.Id, after.Id, after.ChecksumSha256, currentDigest, after.CreatedBy, approver.Id, null, Guid.NewGuid(), clock.UtcNow.AddSeconds(4), TestContext.Current.CancellationToken);
+            _ = await store.ApproveCanonicalAsync(security, currentRequest.Id, after.Id, Convert.ToHexString(currentDigest), after.CreatedBy, approver.Id, null, Guid.NewGuid(), clock.UtcNow.AddSeconds(4), TestContext.Current.CancellationToken);
             published = await store.PublishApprovedAsync(after.Id, currentDigest, after.RowVersion, 0, approver.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow.AddSeconds(5), TestContext.Current.CancellationToken);
             expectedEndpoint = "https://controlled-attacker.example.test/";
         }
@@ -545,8 +561,9 @@ public sealed class PostgresIsolationTests
 
         Guid bindingCorrelation = Guid.NewGuid();
         Dictionary<string, Uri> endpoints = new() { ["sample-vendor-endpoint"] = new("https://vendor.example.test/") };
-        Dictionary<string, string> secrets = new() { ["sample-vendor-api-key"] = "synthetic://api-key" };
-        Dictionary<string, string> certificates = new() { ["sample-vendor-client-certificate"] = "synthetic://certificate" };
+        TestProviderResources resources = await RegisterTestResourcesAsync(connectorStore, environmentId, connectorId, now);
+        Dictionary<string, ProviderResourceBinding> secrets = new() { ["sample-vendor-api-key"] = resources.SecretBinding };
+        Dictionary<string, ProviderResourceBinding> certificates = new() { ["sample-vendor-client-certificate"] = resources.CertificateBinding };
         ConnectorBindingSet binding = new(Guid.NewGuid(), validated.ConnectorId, validated.Id, environmentId, endpoints, secrets, certificates, 0,
             ConnectorBindingDigests.Revision(validated.Id, environmentId, endpoints, secrets, certificates), ConnectorBindingState.Draft, now, editor.Id.ToString("D"));
         PostgresConnectorConfigurationStore faultedBinding = new(storePool.Value, new ThrowingFaultInjector("connector.binding.after-state"));
@@ -558,11 +575,11 @@ public sealed class PostgresIsolationTests
         byte[] digest = await connectorStore.GetBindingBundleDigestAsync(validated.Id, TestContext.Current.CancellationToken);
         ConnectorApprovalRecord firstApprovalRequest = await security.RequestApprovalAsync(validated, digest, editor.Id, Guid.NewGuid(), now, TestContext.Current.CancellationToken);
         Guid approveCorrelation = Guid.NewGuid();
-        PostgresAdminSecurityStore faultedApprove = new(storePool, new ThrowingFaultInjector("connector.approval.approve.after-state"));
-        await Assert.ThrowsAsync<InjectedFailureException>(() => faultedApprove.ApproveAsync(firstApprovalRequest.Id, validated.Id, validated.ChecksumSha256, digest, validated.CreatedBy, approver.Id, null, approveCorrelation, now.AddSeconds(1), TestContext.Current.CancellationToken));
+        PostgresConnectorConfigurationStore faultedApprove = new(storePool.Value, new ThrowingFaultInjector("connector.approval.approve.after-state"));
+        await Assert.ThrowsAsync<InjectedFailureException>(() => faultedApprove.ApproveCanonicalAsync(security, firstApprovalRequest.Id, validated.Id, Convert.ToHexString(digest), validated.CreatedBy, approver.Id, null, approveCorrelation, now.AddSeconds(1), TestContext.Current.CancellationToken));
         Assert.Equal("requested", await TextScalarAsync(adminPool.Value, "SELECT status FROM gateway.connector_approval WHERE connector_version_id=$1 ORDER BY requested_at DESC LIMIT 1", validated.Id));
         Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", approveCorrelation));
-        _ = await security.ApproveAsync(firstApprovalRequest.Id, validated.Id, validated.ChecksumSha256, digest, validated.CreatedBy, approver.Id, null, Guid.NewGuid(), now.AddSeconds(2), TestContext.Current.CancellationToken);
+        _ = await connectorStore.ApproveCanonicalAsync(security, firstApprovalRequest.Id, validated.Id, Convert.ToHexString(digest), validated.CreatedBy, approver.Id, null, Guid.NewGuid(), now.AddSeconds(2), TestContext.Current.CancellationToken);
         ConnectorApprovalRecord secondApprovalRequest = await security.RequestApprovalAsync(validated, digest, editor.Id, Guid.NewGuid(), now.AddSeconds(3), TestContext.Current.CancellationToken);
         Guid rejectCorrelation = Guid.NewGuid();
         PostgresAdminSecurityStore faultedReject = new(storePool, new ThrowingFaultInjector("connector.approval.reject.after-state"));
@@ -642,6 +659,21 @@ public sealed class PostgresIsolationTests
         }
         throw new TimeoutException("Binding mutation did not reach the connector-version lock barrier.");
     }
+
+    private static async Task<TestProviderResources> RegisterTestResourcesAsync(PostgresConnectorConfigurationStore store, Guid environmentId, string connectorId, DateTimeOffset now)
+    {
+        string suffix = environmentId.ToString("N");
+        string secretId = "api-" + suffix;
+        string certificateId = "cert-" + suffix;
+        CertificatePublicMetadata metadata = new(new string('A', 64), "CN=test-client", "CN=test-ca", now.AddDays(-1), now.AddDays(90), "ECDSA", 256, "1");
+        ProviderResourceCatalogRecord secret = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic", secretId, ProviderResourceType.Secret, "API key", environmentId, connectorId, "*", "synthetic://api-key", ProviderResourceStatus.Active, null, 0, null, null, string.Empty, now), TestContext.Current.CancellationToken);
+        ProviderResourceCatalogRecord certificate = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic", certificateId, ProviderResourceType.ClientCertificate, "Client certificate", environmentId, connectorId, "*", "synthetic://certificate", ProviderResourceStatus.Active, null, 0, 1, metadata, string.Empty, now), TestContext.Current.CancellationToken);
+        return new(new(secret.ProviderId, secret.ResourceId, secret.ResourceType), new(certificate.ProviderId, certificate.ResourceId, certificate.ResourceType, PublicMetadataRevision: certificate.PublicMetadataRevision), Binding(secret), Binding(certificate));
+    }
+
+    private static ProviderResourceBinding Binding(ProviderResourceCatalogRecord value) => new(value.ProviderId, value.ProviderDisplayName, value.ProviderType, value.ResourceId, value.ResourceType, value.DisplayName, value.EnvironmentId, value.ConnectorScope, value.OperationScope, value.Version, value.Revision, value.PublicMetadataRevision, value.CertificateMetadata, value.ChecksumSha256);
+
+    private sealed record TestProviderResources(ProviderResourceReference SecretReference, ProviderResourceReference CertificateReference, ProviderResourceBinding SecretBinding, ProviderResourceBinding CertificateBinding);
 
     private static async Task ExecuteAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string sql, params object[] values)
     {

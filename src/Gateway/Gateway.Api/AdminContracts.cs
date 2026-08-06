@@ -25,8 +25,14 @@ public sealed record CreateGrantRequest(Guid TenantId, Guid InstallationId, stri
 /// <summary>Redacted approval resource with canonical hexadecimal digests.</summary>
 public sealed record ConnectorApprovalResource(Guid Id, Guid ConnectorVersionId, string ChecksumSha256, string BindingDigestSha256, Guid RequestedBy, Guid? ApprovedBy, Guid? RejectedBy, string Status, DateTimeOffset RequestedAt);
 
-/// <summary>Binding approval resource exposing logical names and one-way component checksums, never provider references.</summary>
+/// <summary>Safe logical provider resource metadata exposed to Connector administrators.</summary>
+public sealed record ProviderResourceBindingResource(string ProviderId, string ResourceId, string ResourceType, string DisplayName, string? Version, long CatalogRevision, long? PublicMetadataRevision, string CatalogChecksumSha256);
+
+/// <summary>Read-only provider resource catalog projection; physical provider references and values are absent.</summary>
+public sealed record ProviderResourceCatalogResource(Guid Id, string ProviderId, string ProviderDisplayName, string ProviderType, string ResourceId, string ResourceType, string DisplayName, Guid EnvironmentId, string ConnectorScope, string OperationScope, string Status, string? Version, long Revision, long? PublicMetadataRevision, SecureIntegration.Gateway.Domain.CertificatePublicMetadata? CertificateMetadata, string ChecksumSha256);
+
+/// <summary>Binding approval resource exposing logical catalog identities and one-way component checksums, never physical provider references.</summary>
 public sealed record ConnectorBindingResource(Guid Id, Guid ConnectorId, Guid ConnectorVersionId, Guid EnvironmentId,
-    IReadOnlyDictionary<string, string> Endpoints, IReadOnlyDictionary<string, string> SecretReferences, IReadOnlyDictionary<string, string> CertificateReferences,
+    IReadOnlyDictionary<string, string> Endpoints, IReadOnlyDictionary<string, ProviderResourceBindingResource> SecretResources, IReadOnlyDictionary<string, ProviderResourceBindingResource> CertificateResources,
     string EndpointChecksumSha256, string SecretChecksumSha256, string CertificateChecksumSha256,
     long Revision, string ChecksumSha256, string State, DateTimeOffset UpdatedAt, string UpdatedBy);

@@ -62,8 +62,8 @@ public sealed class AdminPaginationTests
             long? expected = index == 0 ? null : index;
             _ = await connectors.PutBindingsAsync(new(Guid.NewGuid(), validated.ConnectorId, validated.Id, environmentId,
                 new Dictionary<string, Uri> { ["endpoint"] = new("https://vendor.example.test/") },
-                new Dictionary<string, string> { ["secret"] = "synthetic://secret" },
-                new Dictionary<string, string>(), 0, Convert.ToHexString(SHA256.HashData(BitConverter.GetBytes(index))), ConnectorBindingState.Draft, Now.AddSeconds(index), "editor"), expected, Guid.NewGuid(), TestContext.Current.CancellationToken);
+                new Dictionary<string, ProviderResourceBinding> { ["secret"] = new("synthetic", "Synthetic", "synthetic", "secret", ProviderResourceType.Secret, "Secret", environmentId, "paged-connector", "*", null, 1, null, null, new string('A', 64)) },
+                new Dictionary<string, ProviderResourceBinding>(), 0, Convert.ToHexString(SHA256.HashData(BitConverter.GetBytes(index))), ConnectorBindingState.Draft, Now.AddSeconds(index), "editor"), expected, Guid.NewGuid(), TestContext.Current.CancellationToken);
         }
         AssertPage(await connectors.ListBindingsPageAsync(validated.Id, 100, 1, environmentId, TestContext.Current.CancellationToken), 100);
 

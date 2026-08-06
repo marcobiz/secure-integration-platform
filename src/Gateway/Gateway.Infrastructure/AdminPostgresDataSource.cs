@@ -27,6 +27,15 @@ public sealed class RoutingConnectorConfigurationStore : IConnectorConfiguration
     }
 
     /// <inheritdoc />
+    public Task<ProviderResourceCatalogRecord> RegisterProviderResourceAsync(ProviderResourceCatalogRecord resource, CancellationToken cancellationToken) => admin.RegisterProviderResourceAsync(resource, cancellationToken);
+    /// <inheritdoc />
+    public Task<ProviderResourceCatalogRecord> ResolveProviderResourceAsync(ProviderResourceReference reference, Guid environmentId, string connectorId, IReadOnlyCollection<string> operationIds, CancellationToken cancellationToken) => admin.ResolveProviderResourceAsync(reference, environmentId, connectorId, operationIds, cancellationToken);
+    /// <inheritdoc />
+    public Task<AdminPage<ProviderResourceCatalogRecord>> ListProviderResourcesPageAsync(int offset, int limit, Guid? environmentId, ProviderResourceType? resourceType, CancellationToken cancellationToken) => admin.ListProviderResourcesPageAsync(offset, limit, environmentId, resourceType, cancellationToken);
+    /// <inheritdoc />
+    public Task ValidateBindingResourcesAsync(Guid connectorVersionId, CancellationToken cancellationToken) => admin.ValidateBindingResourcesAsync(connectorVersionId, cancellationToken);
+
+    /// <inheritdoc />
     public Task<ConnectorVersionRecord> CreateDraftAsync(ConnectorVersionRecord draft, CancellationToken cancellationToken) => admin.CreateDraftAsync(draft, cancellationToken);
     /// <inheritdoc />
     public Task<ConnectorVersionRecord> CreateDraftWithAuditAsync(ConnectorVersionRecord draft, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) => admin.CreateDraftWithAuditAsync(draft, auditEvent, cancellationToken);
@@ -58,6 +67,8 @@ public sealed class RoutingConnectorConfigurationStore : IConnectorConfiguration
     public Task<AdminPage<ConnectorBindingSet>> ListBindingsPageAsync(Guid connectorVersionId, int offset, int limit, Guid? environmentId, CancellationToken cancellationToken) => admin.ListBindingsPageAsync(connectorVersionId, offset, limit, environmentId, cancellationToken);
     /// <inheritdoc />
     public Task<byte[]> GetBindingBundleDigestAsync(Guid connectorVersionId, CancellationToken cancellationToken) => admin.GetBindingBundleDigestAsync(connectorVersionId, cancellationToken);
+    /// <inheritdoc />
+    public Task<ConnectorApprovalRecord> ApproveCanonicalAsync(IAdminSecurityStore fallbackStore, Guid approvalRequestId, Guid connectorVersionId, string expectedDigestSha256, string createdBy, Guid approver, string? comment, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken) => admin.ApproveCanonicalAsync(fallbackStore, approvalRequestId, connectorVersionId, expectedDigestSha256, createdBy, approver, comment, correlationId, now, cancellationToken);
     /// <inheritdoc />
     public Task<PublishedConnectorStamp?> GetPublishedStampAsync(string connectorId, Guid environmentId, CancellationToken cancellationToken) => runtime.GetPublishedStampAsync(connectorId, environmentId, cancellationToken);
     /// <inheritdoc />

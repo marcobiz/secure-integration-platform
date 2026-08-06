@@ -124,6 +124,31 @@ public sealed class GatewaySecurityTests
     }
 
     [Fact]
+    public async Task M5_UT_Instrumented_actual_canary_provider_is_called_only_for_published_approved_destination()
+    {
+        using Fixture fixture = await Fixture.CreateAsync();
+        RegisteredInstallationIdentity identity = await fixture.EnrollAsync();
+        await fixture.AddGrantAsync();
+        InstrumentedCanaryProvider provider = new();
+        RecordingTransport transport = new();
+        PublicationGateCatalog catalog = new(Operation(GatewayAuthenticationKind.ApiKey));
+        RestrictedEgressService service = new(fixture.Registry, catalog, provider, provider, new StaticResolver(IPAddress.Parse("8.8.8.8")), transport, fixture.Clock);
+
+        GatewayException unpublished = await Assert.ThrowsAsync<GatewayException>(() => service.InvokeAsync(new(identity, Guid.NewGuid()), "vendor", "send", Invoke(), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-CONNECTOR-NOT-PUBLISHED", unpublished.Code);
+        Assert.Equal(0, provider.SecretCalls);
+        Assert.Equal(0, transport.CallCount);
+
+        catalog.Published = true;
+        GatewayInvokeResponse response = await service.InvokeAsync(new(identity, Guid.NewGuid()), "vendor", "send", Invoke(), TestContext.Current.CancellationToken);
+        Assert.Equal(1, provider.SecretCalls);
+        Assert.Equal(new Uri("https://vendor.example.test/fixed"), transport.Uri);
+        Assert.Equal(InstrumentedCanaryProvider.ActualCanary, transport.ApiKey);
+        Assert.DoesNotContain(InstrumentedCanaryProvider.ActualCanary, System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(response.Result.Data)), StringComparison.Ordinal);
+        Assert.DoesNotContain(InstrumentedCanaryProvider.ActualCanary, System.Text.Json.JsonSerializer.Serialize(fixture.Registry.SnapshotAuditEvents()), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task UT_EGR_Basic_credentials_are_injected_only_into_the_outbound_request()
     {
         using Fixture fixture = await Fixture.CreateAsync();
@@ -149,6 +174,21 @@ public sealed class GatewaySecurityTests
 
         await service.InvokeAsync(new(identity, Guid.NewGuid()), "vendor", "send", Invoke(), TestContext.Current.CancellationToken);
         Assert.True(transport.ClientCertificatePresented);
+    }
+
+    [Fact]
+    public async Task M5_UT_Certificate_provider_returns_real_public_metadata_without_private_material()
+    {
+        using Fixture fixture = await Fixture.CreateAsync();
+        byte[] pfx = fixture.Certificate.Export(X509ContentType.Pkcs12);
+        InMemoryProvider provider = new(new Dictionary<string, string>(), new Dictionary<string, byte[]> { ["client-cert"] = pfx });
+        ProviderCertificatePublicMetadata metadata = await provider.GetPublicMetadataAsync("client-cert", TestContext.Current.CancellationToken);
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(fixture.Certificate.RawData)), metadata.FingerprintSha256);
+        Assert.Equal(fixture.Certificate.Subject, metadata.Subject);
+        Assert.Equal(fixture.Certificate.Issuer, metadata.Issuer);
+        Assert.True(metadata.NotAfter > metadata.NotBefore);
+        Assert.True(metadata.PublicKeySize >= 256);
+        Assert.DoesNotContain(Convert.ToBase64String(pfx), System.Text.Json.JsonSerializer.Serialize(metadata), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -445,6 +485,20 @@ public sealed class GatewaySecurityTests
     private sealed class FakeClock(DateTimeOffset value) : IGatewayClock { public DateTimeOffset UtcNow { get; set; } = value; }
     private sealed class StaticResolver(params IPAddress[] addresses) : IHostResolver { public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) => Task.FromResult(addresses); }
     private sealed class TrackingResolver : IHostResolver { public int CallCount { get; private set; } public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) { CallCount++; return Task.FromResult(new[] { IPAddress.Parse("8.8.8.8") }); } }
+    private sealed class PublicationGateCatalog(GatewayOperationDefinition operation) : IGatewayOperationCatalog
+    {
+        public bool Published { get; set; }
+        public Task<GatewayOperationDefinition> GetRequiredAsync(string connectorId, string operationId, Guid environmentId, CancellationToken cancellationToken) =>
+            Published ? Task.FromResult(operation) : Task.FromException<GatewayOperationDefinition>(new GatewayException("BGW-CONNECTOR-NOT-PUBLISHED", 404));
+        public void Invalidate(string connectorId) { }
+    }
+    private sealed class InstrumentedCanaryProvider : ISecretValueProvider, IClientCertificateProvider
+    {
+        public const string ActualCanary = "ACTUAL_API_KEY_CANARY";
+        public int SecretCalls { get; private set; }
+        public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken) { SecretCalls++; return Task.FromResult(ActualCanary); }
+        public Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken) => throw new InvalidOperationException("Certificate access was not expected.");
+    }
     private sealed class RecordingTransport : IRestrictedTransport
     {
         public int CallCount { get; private set; }

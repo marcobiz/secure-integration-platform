@@ -168,6 +168,9 @@ public sealed class SecureLayerVerticalSliceTests
             await gatewayRegistry.AddInstallationAsync(new(installationId, tenantId, applicationId, environmentId, InstallationStatus.Active, "3.0.0", gatewayClock.UtcNow), TestContext.Current.CancellationToken);
             await gatewayRegistry.AddGrantAsync(new(Guid.NewGuid(), installationId, tenantId, "sample-secure-service", "submit", true, gatewayClock.UtcNow), TestContext.Current.CancellationToken);
             InMemoryConnectorConfigurationStore connectorStore = new();
+            CertificatePublicMetadata publicMetadata = new(Convert.ToHexString(SHA256.HashData(gatewayClientCertificate.RawData)), gatewayClientCertificate.Subject, gatewayClientCertificate.Issuer, gatewayClientCertificate.NotBefore, gatewayClientCertificate.NotAfter, "ECDSA", 256, gatewayClientCertificate.SerialNumber);
+            _ = await connectorStore.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic", "vendor-key", ProviderResourceType.Secret, "Vendor key", environmentId, "sample-secure-service", "submit", "synthetic://vendor-key", ProviderResourceStatus.Active, null, 0, null, null, string.Empty, gatewayClock.UtcNow), TestContext.Current.CancellationToken);
+            _ = await connectorStore.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic", "vendor-certificate", ProviderResourceType.ClientCertificate, "Vendor certificate", environmentId, "sample-secure-service", "submit", "synthetic://vendor-certificate", ProviderResourceStatus.Active, null, 0, 1, publicMetadata, string.Empty, gatewayClock.UtcNow), TestContext.Current.CancellationToken);
             ConnectorDefinitionValidator connectorValidator = new();
             PublishedConnectorCatalog connectorCatalog = new(connectorStore, connectorValidator, gatewayClock, TimeSpan.FromMinutes(5));
             ConnectorAdministrationService connectorAdmin = new(connectorStore, connectorValidator, connectorCatalog, gatewayRegistry, gatewayClock, new DevelopmentConnectorApprovalPolicy());
@@ -179,7 +182,8 @@ public sealed class SecureLayerVerticalSliceTests
             }
             _ = await connectorAdmin.PutBindingsAsync("sample-secure-service", new(environmentId,
                 new Dictionary<string, string> { ["sample-vendor-endpoint"] = new UriBuilder(externalAddress) { Host = "localhost" }.Uri.AbsoluteUri },
-                new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://vendor-key", ["sample-vendor-client-certificate"] = "synthetic://vendor-certificate" }),
+                new Dictionary<string, ProviderResourceReference> { ["sample-vendor-api-key"] = new("synthetic", "vendor-key", ProviderResourceType.Secret) }, null,
+                new Dictionary<string, ProviderResourceReference> { ["sample-vendor-client-certificate"] = new("synthetic", "vendor-certificate", ProviderResourceType.ClientCertificate, PublicMetadataRevision: 1) }),
                 "e2e-admin", Guid.NewGuid(), TestContext.Current.CancellationToken);
             _ = await connectorAdmin.PublishAsync(validated.ConnectorId, validated.Version, validated.RowVersion, 0, "e2e-admin", Guid.NewGuid(), TestContext.Current.CancellationToken);
             InMemoryProvider gatewaySecrets = new(new Dictionary<string, string> { ["synthetic://vendor-key"] = "synthetic-vendor-key-e2e-only" }, new Dictionary<string, byte[]> { ["synthetic://vendor-certificate"] = gatewayClientCertificate.Export(X509ContentType.Pkcs12) });

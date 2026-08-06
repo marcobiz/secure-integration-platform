@@ -1,4 +1,5 @@
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.Domain;
 
 namespace SecureIntegration.Gateway.Api;
 
@@ -42,6 +43,37 @@ public sealed class GatewayProviderOptions
     public string AccessTokenEnvironmentVariable { get; init; } = "M3_SYNTHETIC_VAULT_TOKEN";
     /// <summary>Opaque non-secret provider settings. Secrets are references or process environment values.</summary>
     public Dictionary<string, string> Settings { get; init; } = new(StringComparer.Ordinal);
+    /// <summary>Server-owned logical resource catalog registrations loaded from protected deployment configuration.</summary>
+    public List<GatewayProviderResourceOptions> Resources { get; init; } = [];
+}
+
+/// <summary>One provider resource registration. ProviderReference is never exposed through Admin APIs.</summary>
+public sealed class GatewayProviderResourceOptions
+{
+    /// <summary>Stable logical provider identifier.</summary>
+    public required string ProviderId { get; init; }
+    /// <summary>Non-secret provider display name.</summary>
+    public required string ProviderDisplayName { get; init; }
+    /// <summary>Stable provider kind.</summary>
+    public required string ProviderType { get; init; }
+    /// <summary>Stable logical resource identifier selected by Connector administrators.</summary>
+    public required string ResourceId { get; init; }
+    /// <summary>Secret or ClientCertificate.</summary>
+    public required ProviderResourceType ResourceType { get; init; }
+    /// <summary>Non-secret display name.</summary>
+    public required string DisplayName { get; init; }
+    /// <summary>Exact server-owned Environment scope.</summary>
+    public required Guid EnvironmentId { get; init; }
+    /// <summary>Exact Connector slug or *.</summary>
+    public string ConnectorScope { get; init; } = "*";
+    /// <summary>Exact operation identifier or *.</summary>
+    public string OperationScope { get; init; } = "*";
+    /// <summary>Provider-owned physical locator supplied only by protected deployment configuration.</summary>
+    public required string ProviderReference { get; init; }
+    /// <summary>Optional immutable provider version.</summary>
+    public string? Version { get; init; }
+    /// <summary>Public metadata revision required for certificate resources.</summary>
+    public long? PublicMetadataRevision { get; init; }
 }
 
 /// <summary>Admin API authentication. DevelopmentApiKey is rejected outside Development/Testing.</summary>

@@ -215,6 +215,7 @@ public sealed class ConnectorApprovalService(IAdminSecurityStore store, IConnect
     {
         AdminAccessService.Require(actor, null, AdminRole.Viewer, AdminRole.ConnectorEditor, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
         ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
+        await connectors.ValidateBindingResourcesAsync(current.Id, cancellationToken).ConfigureAwait(false);
         ConnectorBindingSet[] currentBindings = Latest((await connectors.ListBindingsPageAsync(current.Id, 0, 100, null, cancellationToken).ConfigureAwait(false)).Items);
         ApprovalReviewArtifact? previous = null;
         ConnectorVersionRecord? published = (await connectors.ListVersionsAsync(connectorId, cancellationToken).ConfigureAwait(false)).FirstOrDefault(value => value.State == ConnectorVersionState.Published && value.Id != current.Id);
@@ -232,6 +233,7 @@ public sealed class ConnectorApprovalService(IAdminSecurityStore store, IConnect
         AdminAccessService.Require(actor, null, AdminRole.ConnectorEditor, AdminRole.SecurityAdministrator);
         ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
         if (current.State != ConnectorVersionState.Validated) throw new GatewayException("BGW-CONNECTOR-STATE", 409);
+        await connectors.ValidateBindingResourcesAsync(current.Id, cancellationToken).ConfigureAwait(false);
         byte[] bindingDigest = await connectors.GetBindingBundleDigestAsync(current.Id, cancellationToken).ConfigureAwait(false);
         return await store.RequestApprovalAsync(current, bindingDigest, actor.Principal.Id, correlationId, clock.UtcNow, cancellationToken).ConfigureAwait(false);
     }
@@ -241,14 +243,11 @@ public sealed class ConnectorApprovalService(IAdminSecurityStore store, IConnect
     {
         AdminAccessService.Require(actor, null, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
         ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
-        byte[] bindingDigest = await connectors.GetBindingBundleDigestAsync(current.Id, cancellationToken).ConfigureAwait(false);
-        byte[] expected;
-        try { expected = Convert.FromHexString(request.ExpectedDigestSha256); }
+        try { if (Convert.FromHexString(request.ExpectedDigestSha256).Length != 32) throw new FormatException(); }
         catch (FormatException) { throw new GatewayException("BGW-ADMIN-APPROVAL-DIGEST", 400); }
-        if (expected.Length != 32 || !CryptographicOperations.FixedTimeEquals(expected, bindingDigest)) throw new GatewayException("BGW-ADMIN-APPROVAL-STALE", 409);
         string? comment = string.IsNullOrWhiteSpace(request.Comment) ? null : request.Comment.Trim();
         if (comment?.Length > 500) throw new GatewayException("BGW-ADMIN-APPROVAL-COMMENT", 400);
-        return await store.ApproveAsync(request.ApprovalRequestId, current.Id, current.ChecksumSha256, bindingDigest, current.CreatedBy, actor.Principal.Id, comment, correlationId, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+        return await connectors.ApproveCanonicalAsync(store, request.ApprovalRequestId, current.Id, request.ExpectedDigestSha256, current.CreatedBy, actor.Principal.Id, comment, correlationId, clock.UtcNow, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Rejects only as a distinct ConnectorApprover or SecurityAdministrator.</summary>

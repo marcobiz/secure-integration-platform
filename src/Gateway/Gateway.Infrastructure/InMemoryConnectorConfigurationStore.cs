@@ -14,6 +14,83 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
     private readonly Dictionary<Guid, Guid> activeVersions = [];
     private readonly Dictionary<Guid, long> publicationRevisions = [];
     private readonly Dictionary<string, List<ConnectorBindingSet>> bindingSets = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<ProviderResourceCatalogRecord>> providerResources = new(StringComparer.Ordinal);
+
+    /// <inheritdoc />
+    public Task<ProviderResourceCatalogRecord> RegisterProviderResourceAsync(ProviderResourceCatalogRecord resource, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ProviderResourceReferenceValidator.Validate(new(resource.ProviderId, resource.ResourceId, resource.ResourceType, resource.Version, resource.PublicMetadataRevision));
+        if (resource.ResourceType == ProviderResourceType.ClientCertificate && resource.CertificateMetadata is null) throw new GatewayException("BGW-PROVIDER-CERTIFICATE-METADATA-REQUIRED", 409);
+        lock (gate)
+        {
+            string key = ResourceKey(resource.ProviderId, resource.ResourceId, resource.ResourceType, resource.Version);
+            if (!providerResources.TryGetValue(key, out List<ProviderResourceCatalogRecord>? revisions)) providerResources.Add(key, revisions = []);
+            if (revisions.Count > 0 && SameRegistration(revisions[^1], resource)) return Task.FromResult(revisions[^1]);
+            long next = revisions.Count == 0 ? 1 : revisions[^1].Revision + 1;
+            ProviderResourceCatalogRecord saved = resource with { Revision = next, ChecksumSha256 = ResourceChecksum(resource with { Revision = next }) };
+            revisions.Add(saved);
+            return Task.FromResult(saved);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<ProviderResourceCatalogRecord> ResolveProviderResourceAsync(ProviderResourceReference reference, Guid environmentId, string connectorId, IReadOnlyCollection<string> operationIds, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ProviderResourceReferenceValidator.Validate(reference);
+        lock (gate)
+        {
+            string key = ResourceKey(reference.ProviderId, reference.ResourceId, reference.ResourceType, reference.Version);
+            if (!providerResources.TryGetValue(key, out List<ProviderResourceCatalogRecord>? revisions) || revisions.Count == 0) throw new GatewayException("BGW-PROVIDER-RESOURCE-NOT-FOUND", 400);
+            ProviderResourceCatalogRecord resource = revisions[^1];
+            EnsureResourceScope(resource, reference, environmentId, connectorId, operationIds);
+            return Task.FromResult(resource);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<AdminPage<ProviderResourceCatalogRecord>> ListProviderResourcesPageAsync(int offset, int limit, Guid? environmentId, ProviderResourceType? resourceType, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            ProviderResourceCatalogRecord[] values = providerResources.Values.Select(value => value[^1])
+                .Where(value => (environmentId is null || value.EnvironmentId == environmentId) && (resourceType is null || value.ResourceType == resourceType))
+                .OrderBy(value => value.ProviderId, StringComparer.Ordinal).ThenBy(value => value.ResourceId, StringComparer.Ordinal).ToArray();
+            return Task.FromResult(new AdminPage<ProviderResourceCatalogRecord>(values.Skip(offset).Take(limit).ToArray(), offset, limit, values.Length));
+        }
+    }
+
+    /// <inheritdoc />
+    public Task ValidateBindingResourcesAsync(Guid connectorVersionId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (gate)
+        {
+            foreach (ConnectorBindingSet binding in LatestBindings(connectorVersionId)) ValidateCurrentResources(binding);
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<ConnectorApprovalRecord> ApproveCanonicalAsync(IAdminSecurityStore fallbackStore, Guid approvalRequestId, Guid connectorVersionId, string expectedDigestSha256, string createdBy, Guid approver, string? comment, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        ConnectorVersionRecord version;
+        byte[] digest;
+        lock (gate)
+        {
+            version = Clone(Required(connectorVersionId));
+            ConnectorBindingSet[] bindings = LatestBindings(connectorVersionId);
+            foreach (ConnectorBindingSet binding in bindings) ValidateCurrentResources(binding);
+            digest = ConnectorBindingDigests.Bundle(version, bindings);
+            byte[] expected;
+            try { expected = Convert.FromHexString(expectedDigestSha256); }
+            catch (FormatException) { throw new GatewayException("BGW-ADMIN-APPROVAL-DIGEST", 400); }
+            if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(expected, digest)) throw new GatewayException("BGW-ADMIN-APPROVAL-STALE", 409);
+        }
+        return await fallbackStore.ApproveAsync(approvalRequestId, connectorVersionId, version.ChecksumSha256, digest, createdBy, approver, comment, correlationId, now, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <inheritdoc />
     public Task<ConnectorVersionRecord> CreateDraftAsync(ConnectorVersionRecord draft, CancellationToken cancellationToken)
@@ -250,6 +327,7 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
             ConnectorVersionRecord version = Required(connectorVersionId);
             ConnectorBindingSet[] bindings = LatestBindings(connectorVersionId);
             if (bindings.Length == 0) throw new GatewayException("BGW-CONNECTOR-BINDING-MISSING", 409);
+            foreach (ConnectorBindingSet binding in bindings) ValidateCurrentResources(binding);
             return Task.FromResult(ConnectorBindingDigests.Bundle(version, bindings));
         }
     }
@@ -276,7 +354,10 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
             if (!connectorIds.TryGetValue(connectorId, out Guid id) || !activeVersions.TryGetValue(id, out Guid active) || !bindingSets.TryGetValue(BindingKey(active, environmentId), out List<ConnectorBindingSet>? revisions) || revisions.Count == 0 || revisions[^1].State != ConnectorBindingState.Active) return Task.FromResult<PublishedConnectorSnapshot?>(null);
             ConnectorBindingSet binding = revisions[^1];
             PublishedConnectorStamp stamp = new(active, publicationRevisions[id], binding.Revision, binding.ChecksumSha256);
-            return Task.FromResult<PublishedConnectorSnapshot?>(new(Clone(versions[active]), Clone(binding), stamp));
+            ValidateCurrentResources(binding);
+            Dictionary<string, string> secrets = binding.SecretResources.ToDictionary(value => value.Key, value => RequiredResource(value.Value).ProviderReference, StringComparer.Ordinal);
+            Dictionary<string, string> certificates = binding.CertificateResources.ToDictionary(value => value.Key, value => RequiredResource(value.Value).ProviderReference, StringComparer.Ordinal);
+            return Task.FromResult<PublishedConnectorSnapshot?>(new(Clone(versions[active]), Clone(binding), stamp, secrets, certificates));
         }
     }
 
@@ -290,5 +371,41 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
     private ConnectorBindingSet[] LatestBindings(Guid connectorVersionId) => bindingSets.Where(value => value.Key.StartsWith(connectorVersionId.ToString("N") + "\n", StringComparison.Ordinal) && value.Value.Count > 0).Select(value => value.Value[^1]).OrderBy(value => value.EnvironmentId).ToArray();
     private static string BindingKey(Guid connectorVersion, Guid environment) => connectorVersion.ToString("N") + "\n" + environment.ToString("N");
     private static ConnectorVersionRecord Clone(ConnectorVersionRecord value) => value with { ChecksumSha256 = value.ChecksumSha256.ToArray() };
-    private static ConnectorBindingSet Clone(ConnectorBindingSet value) => value with { Endpoints = new Dictionary<string, Uri>(value.Endpoints, StringComparer.Ordinal), SecretReferences = new Dictionary<string, string>(value.SecretReferences, StringComparer.Ordinal), CertificateReferences = new Dictionary<string, string>(value.CertificateReferences, StringComparer.Ordinal) };
+    private static ConnectorBindingSet Clone(ConnectorBindingSet value) => value with { Endpoints = new Dictionary<string, Uri>(value.Endpoints, StringComparer.Ordinal), SecretResources = new Dictionary<string, ProviderResourceBinding>(value.SecretResources, StringComparer.Ordinal), CertificateResources = new Dictionary<string, ProviderResourceBinding>(value.CertificateResources, StringComparer.Ordinal) };
+
+    private void ValidateCurrentResources(ConnectorBindingSet binding)
+    {
+        foreach (ProviderResourceBinding resource in binding.SecretResources.Values.Concat(binding.CertificateResources.Values)) _ = RequiredResource(resource);
+    }
+
+    private ProviderResourceCatalogRecord RequiredResource(ProviderResourceBinding binding)
+    {
+        string key = ResourceKey(binding.ProviderId, binding.ResourceId, binding.ResourceType, binding.Version);
+        if (!providerResources.TryGetValue(key, out List<ProviderResourceCatalogRecord>? revisions) || revisions.Count == 0) throw new GatewayException("BGW-PROVIDER-RESOURCE-NOT-FOUND", 409);
+        ProviderResourceCatalogRecord current = revisions[^1];
+        if (current.Status != ProviderResourceStatus.Active || current.Revision != binding.CatalogRevision || !string.Equals(current.ChecksumSha256, binding.CatalogChecksumSha256, StringComparison.Ordinal))
+            throw new GatewayException("BGW-PROVIDER-RESOURCE-REVISION-STALE", 409);
+        return current;
+    }
+
+    private static void EnsureResourceScope(ProviderResourceCatalogRecord resource, ProviderResourceReference reference, Guid environmentId, string connectorId, IReadOnlyCollection<string> operationIds)
+    {
+        if (resource.Status != ProviderResourceStatus.Active || resource.EnvironmentId != environmentId || resource.ResourceType != reference.ResourceType ||
+            resource.PublicMetadataRevision != reference.PublicMetadataRevision || !string.Equals(resource.ConnectorScope, "*", StringComparison.Ordinal) && !string.Equals(resource.ConnectorScope, connectorId, StringComparison.Ordinal) ||
+            operationIds.Any(operationId => !string.Equals(resource.OperationScope, "*", StringComparison.Ordinal) && !string.Equals(resource.OperationScope, operationId, StringComparison.Ordinal)))
+            throw new GatewayException("BGW-PROVIDER-RESOURCE-SCOPE", 403);
+    }
+
+    private static string ResourceKey(string providerId, string resourceId, ProviderResourceType type, string? version) => $"{providerId}\n{resourceId}\n{type}\n{version}";
+
+    private static string ResourceChecksum(ProviderResourceCatalogRecord resource)
+    {
+        var canonical = new { resource.ProviderId, resource.ProviderDisplayName, resource.ProviderType, resource.ResourceId, resource.ResourceType, resource.DisplayName, resource.EnvironmentId, resource.ConnectorScope, resource.OperationScope, resource.Status, resource.Version, resource.Revision, resource.PublicMetadataRevision, resource.CertificateMetadata };
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(canonical)));
+    }
+
+    private static bool SameRegistration(ProviderResourceCatalogRecord current, ProviderResourceCatalogRecord candidate) =>
+        current.ProviderDisplayName == candidate.ProviderDisplayName && current.ProviderType == candidate.ProviderType && current.DisplayName == candidate.DisplayName &&
+        current.EnvironmentId == candidate.EnvironmentId && current.ConnectorScope == candidate.ConnectorScope && current.OperationScope == candidate.OperationScope &&
+        current.ProviderReference == candidate.ProviderReference && current.Status == candidate.Status && current.PublicMetadataRevision == candidate.PublicMetadataRevision && current.CertificateMetadata == candidate.CertificateMetadata;
 }

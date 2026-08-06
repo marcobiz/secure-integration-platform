@@ -83,9 +83,14 @@ public sealed class GatewayApiTests : IClassFixture<GatewayApiFactory>
         using HttpResponseMessage validatedResponse = await client.PostAsJsonAsync($"/admin/v1/connectors/{connectorId}/versions/1.0.0:validate", new ConnectorVersionActionRequest(imported.RowVersion), TestContext.Current.CancellationToken);
         ConnectorVersionResource validated = (await validatedResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(WireJson, TestContext.Current.CancellationToken))!;
         Guid environmentId = Guid.NewGuid();
+        IConnectorConfigurationStore connectorStore = factory.Services.GetRequiredService<IConnectorConfigurationStore>();
+        _ = await connectorStore.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic", "api-key", ProviderResourceType.Secret, "API key", environmentId, connectorId, "submit", "synthetic://api-key", ProviderResourceStatus.Active, null, 0, null, null, string.Empty, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+        CertificatePublicMetadata certificateMetadata = new(new string('A', 64), "CN=test", "CN=test-ca", DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30), "ECDSA", 256, "1");
+        _ = await connectorStore.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic", "certificate", ProviderResourceType.ClientCertificate, "Certificate", environmentId, connectorId, "submit", "synthetic://certificate", ProviderResourceStatus.Active, null, 0, 1, certificateMetadata, string.Empty, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
         using HttpResponseMessage bindingResponse = await client.PutAsJsonAsync($"/admin/v1/connectors/{connectorId}/bindings", new ConnectorBindingRequest(environmentId,
             new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/" },
-            new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://api-key", ["sample-vendor-client-certificate"] = "synthetic://certificate" }), TestContext.Current.CancellationToken);
+            new Dictionary<string, ProviderResourceReference> { ["sample-vendor-api-key"] = new("synthetic", "api-key", ProviderResourceType.Secret) }, null,
+            new Dictionary<string, ProviderResourceReference> { ["sample-vendor-client-certificate"] = new("synthetic", "certificate", ProviderResourceType.ClientCertificate, PublicMetadataRevision: 1) }), TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, bindingResponse.StatusCode);
         using HttpResponseMessage publishedResponse = await client.PostAsJsonAsync($"/admin/v1/connectors/{connectorId}/versions/1.0.0:publish", new ConnectorVersionActionRequest(validated.RowVersion, 0), TestContext.Current.CancellationToken);
         ConnectorVersionResource published = (await publishedResponse.Content.ReadFromJsonAsync<ConnectorVersionResource>(WireJson, TestContext.Current.CancellationToken))!;

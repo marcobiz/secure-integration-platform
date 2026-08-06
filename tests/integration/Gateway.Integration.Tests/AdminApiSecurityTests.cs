@@ -288,13 +288,14 @@ public sealed class AdminApiSecurityTests
         Guid environmentId = Guid.NewGuid();
         await factory.Services.GetRequiredService<InMemoryGatewayRegistry>().AddEnvironmentAsync(new(environmentId, "binding-test", "Binding test", false), TestContext.Current.CancellationToken);
         ConnectorVersionResource version = await ImportAndValidateSampleAsync(client, csrf, TestContext.Current.CancellationToken);
+        await RegisterCatalogResourcesAsync(factory, environmentId, version.ConnectorId);
         object body = new
         {
             environmentId,
             connectorVersion = version.Version,
             endpoints = new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/" },
-            secretReferences = new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://api-key" },
-            certificateReferences = new Dictionary<string, string> { ["sample-vendor-client-certificate"] = "synthetic://certificate" }
+            secretResources = new Dictionary<string, object> { ["sample-vendor-api-key"] = new { providerId = "synthetic", resourceId = "api-key", resourceType = "Secret" } },
+            certificateResources = new Dictionary<string, object> { ["sample-vendor-client-certificate"] = new { providerId = "synthetic", resourceId = "certificate", resourceType = "ClientCertificate", publicMetadataRevision = 1 } }
         };
 
         using HttpResponseMessage created = await PutBindingAsync(client, version.ConnectorId, body, csrf, null);
@@ -327,12 +328,13 @@ public sealed class AdminApiSecurityTests
         Guid environmentId = Guid.NewGuid();
         await factory.Services.GetRequiredService<InMemoryGatewayRegistry>().AddEnvironmentAsync(new(environmentId, "denial-test", "Denial test", false), TestContext.Current.CancellationToken);
         ConnectorVersionResource version = await ImportAndValidateSampleAsync(client, csrf, TestContext.Current.CancellationToken);
+        await RegisterCatalogResourcesAsync(factory, environmentId, version.ConnectorId);
         object invalidBinding = new
         {
             environmentId,
             connectorVersion = version.Version,
             endpoints = new Dictionary<string, string> { ["attacker-endpoint"] = "https://controlled.example.test/" },
-            secretReferences = new Dictionary<string, string> { ["attacker-secret"] = "synthetic://canary-not-a-secret" }
+            secretResources = new Dictionary<string, object> { ["attacker-secret"] = new { providerId = "synthetic", resourceId = "ACTUAL_API_KEY_CANARY", resourceType = "Secret" } }
         };
         using HttpResponseMessage bindingDenied = await PutBindingAsync(client, version.ConnectorId, invalidBinding, csrf, null);
         Assert.Equal(HttpStatusCode.BadRequest, bindingDenied.StatusCode);
@@ -342,8 +344,8 @@ public sealed class AdminApiSecurityTests
             environmentId,
             connectorVersion = version.Version,
             endpoints = new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/" },
-            secretReferences = new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://api-key" },
-            certificateReferences = new Dictionary<string, string> { ["sample-vendor-client-certificate"] = "synthetic://certificate" }
+            secretResources = new Dictionary<string, object> { ["sample-vendor-api-key"] = new { providerId = "synthetic", resourceId = "api-key", resourceType = "Secret" } },
+            certificateResources = new Dictionary<string, object> { ["sample-vendor-client-certificate"] = new { providerId = "synthetic", resourceId = "certificate", resourceType = "ClientCertificate", publicMetadataRevision = 1 } }
         };
         using HttpResponseMessage bindingCreated = await PutBindingAsync(client, version.ConnectorId, validBinding, csrf, null);
         bindingCreated.EnsureSuccessStatusCode();
@@ -545,6 +547,15 @@ public sealed class AdminApiSecurityTests
         request.Headers.Add("X-CSRF-TOKEN", csrf);
         if (etag is not null) request.Headers.TryAddWithoutValidation("If-Match", etag);
         return client.SendAsync(request, TestContext.Current.CancellationToken);
+    }
+
+    private static async Task RegisterCatalogResourcesAsync(AdminDevelopmentFactory factory, Guid environmentId, string connectorId)
+    {
+        IConnectorConfigurationStore store = factory.Services.GetRequiredService<IConnectorConfigurationStore>();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        _ = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic", "api-key", ProviderResourceType.Secret, "Vendor API key", environmentId, connectorId, "submit", "synthetic://api-key", ProviderResourceStatus.Active, null, 0, null, null, string.Empty, now), TestContext.Current.CancellationToken);
+        CertificatePublicMetadata metadata = new(new string('A', 64), "CN=Synthetic client", "CN=Synthetic issuer", now.AddDays(-1), now.AddDays(30), "RSA", 2048, "1");
+        _ = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic", "certificate", ProviderResourceType.ClientCertificate, "Vendor certificate", environmentId, connectorId, "submit", "synthetic://certificate", ProviderResourceStatus.Active, null, 0, 1, metadata, string.Empty, now), TestContext.Current.CancellationToken);
     }
 
     private static async Task<string> GetCsrfAsync(HttpClient client, CancellationToken cancellationToken)

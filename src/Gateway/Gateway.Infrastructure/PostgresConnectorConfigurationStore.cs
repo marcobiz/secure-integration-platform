@@ -11,6 +11,102 @@ namespace SecureIntegration.Gateway.Infrastructure;
 public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSource, IAdminTransactionFaultInjector? faultInjector = null) : IConnectorConfigurationStore
 {
     /// <inheritdoc />
+    public async Task<ProviderResourceCatalogRecord> RegisterProviderResourceAsync(ProviderResourceCatalogRecord resource, CancellationToken cancellationToken)
+    {
+        ProviderResourceReferenceValidator.Validate(new(resource.ProviderId, resource.ResourceId, resource.ResourceType, resource.Version, resource.PublicMetadataRevision));
+        if (resource.ResourceType == ProviderResourceType.ClientCertificate && resource.CertificateMetadata is null) throw new GatewayException("BGW-PROVIDER-CERTIFICATE-METADATA-REQUIRED", 409);
+        await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        ProviderResourceReference registrationReference = new(resource.ProviderId, resource.ResourceId, resource.ResourceType, resource.Version, resource.PublicMetadataRevision);
+        await LockProviderResourceAsync(connection, transaction, registrationReference, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ProviderResourceCatalogRecord currentResource = await ReadCurrentResourceAsync(connection, transaction, registrationReference, cancellationToken).ConfigureAwait(false);
+            if (SameRegistration(currentResource, resource)) return currentResource;
+        }
+        catch (GatewayException exception) when (exception.Code == "BGW-PROVIDER-RESOURCE-NOT-FOUND") { }
+        long revision;
+        await using (NpgsqlCommand current = Command(connection, transaction, "SELECT coalesce(max(revision),0) FROM gateway.provider_resource_catalog_version WHERE provider_id=$1 AND resource_id=$2 AND resource_type=$3 AND coalesce(version,'')=coalesce($4,'')", resource.ProviderId, resource.ResourceId, ResourceType(resource.ResourceType), resource.Version))
+            revision = Convert.ToInt64(await current.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture) + 1;
+        ProviderResourceCatalogRecord saved = resource with { Revision = revision };
+        saved = saved with { ChecksumSha256 = ResourceChecksum(saved) };
+        await ExecuteAsync(connection, transaction, "INSERT INTO gateway.provider_resource_catalog_version(id,provider_id,provider_display_name,provider_type,resource_id,resource_type,display_name,environment_id,connector_scope,operation_scope,status,version,revision,public_metadata_revision,certificate_metadata_json,checksum_sha256,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17)", cancellationToken,
+            saved.Id, saved.ProviderId, saved.ProviderDisplayName, saved.ProviderType, saved.ResourceId, ResourceType(saved.ResourceType), saved.DisplayName, saved.EnvironmentId, saved.ConnectorScope, saved.OperationScope, saved.Status.ToString().ToLowerInvariant(), saved.Version, saved.Revision, saved.PublicMetadataRevision, saved.CertificateMetadata is null ? null : JsonSerializer.Serialize(saved.CertificateMetadata), Convert.FromHexString(saved.ChecksumSha256), saved.CreatedAt).ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction, "INSERT INTO gateway.provider_resource_locator(provider_resource_catalog_id,provider_reference) VALUES($1,$2)", cancellationToken, saved.Id, saved.ProviderReference).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return saved;
+    }
+
+    /// <inheritdoc />
+    public async Task<ProviderResourceCatalogRecord> ResolveProviderResourceAsync(ProviderResourceReference reference, Guid environmentId, string connectorId, IReadOnlyCollection<string> operationIds, CancellationToken cancellationToken)
+    {
+        ProviderResourceReferenceValidator.Validate(reference);
+        await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        ProviderResourceCatalogRecord resource = await ReadCurrentResourceAsync(connection, null, reference, cancellationToken).ConfigureAwait(false);
+        EnsureResourceScope(resource, reference, environmentId, connectorId, operationIds);
+        return resource;
+    }
+
+    /// <inheritdoc />
+    public async Task<AdminPage<ProviderResourceCatalogRecord>> ListProviderResourcesPageAsync(int offset, int limit, Guid? environmentId, ProviderResourceType? resourceType, CancellationToken cancellationToken)
+    {
+        ValidatePage(offset, limit, null);
+        await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        const string predicate = "($1::uuid IS NULL OR r.environment_id=$1) AND ($2::text IS NULL OR r.resource_type=$2) AND r.revision=(SELECT max(latest.revision) FROM gateway.provider_resource_catalog_version latest WHERE latest.provider_id=r.provider_id AND latest.resource_id=r.resource_id AND latest.resource_type=r.resource_type AND coalesce(latest.version,'')=coalesce(r.version,''))";
+        int total;
+        await using (NpgsqlCommand count = Command(connection, null, $"SELECT count(*) FROM gateway.provider_resource_catalog_version r WHERE {predicate}", environmentId, resourceType is null ? null : ResourceType(resourceType.Value)))
+            total = Convert.ToInt32(await count.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+        List<ProviderResourceCatalogRecord> values = [];
+        await using NpgsqlCommand command = Command(connection, null, $"SELECT {ResourceColumns} FROM gateway.provider_resource_catalog_version r JOIN gateway.provider_resource_locator l ON l.provider_resource_catalog_id=r.id WHERE {predicate} ORDER BY r.provider_id,r.resource_id OFFSET $3 LIMIT $4", environmentId, resourceType is null ? null : ResourceType(resourceType.Value), offset, limit);
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) values.Add(ReadResource(reader));
+        return new(values, offset, limit, total);
+    }
+
+    /// <inheritdoc />
+    public async Task ValidateBindingResourcesAsync(Guid connectorVersionId, CancellationToken cancellationToken)
+    {
+        await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        ConnectorVersionRecord version = await GetByIdAsync(connection, null, connectorVersionId, false, cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<ConnectorBindingSet> bindings = await ReadLatestBindingsAsync(connection, null, version, false, cancellationToken).ConfigureAwait(false);
+        await ValidateCurrentResourcesAsync(connection, null, bindings, false, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<ConnectorApprovalRecord> ApproveCanonicalAsync(IAdminSecurityStore fallbackStore, Guid approvalRequestId, Guid connectorVersionId, string expectedDigestSha256, string createdBy, Guid approver, string? comment, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        _ = fallbackStore;
+        byte[] expected;
+        try { expected = Convert.FromHexString(expectedDigestSha256); }
+        catch (FormatException) { throw new GatewayException("BGW-ADMIN-APPROVAL-DIGEST", 400); }
+        await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        const string select = "SELECT a.id,a.connector_version_id,a.checksum_sha256,a.binding_digest_sha256,a.requested_by,a.approved_by,a.rejected_by,a.status,a.requested_at,a.approved_at,a.rejected_at,a.decision_comment,a.invalidated_at FROM gateway.connector_approval a WHERE a.id=$1 AND a.connector_version_id=$2 FOR UPDATE";
+        ConnectorApprovalRecord request;
+        await using (NpgsqlCommand command = Command(connection, transaction, select, approvalRequestId, connectorVersionId))
+        await using (NpgsqlDataReader reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken).ConfigureAwait(false))
+        {
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-ADMIN-APPROVAL-REQUIRED", 409);
+            request = ReadApproval(reader);
+        }
+        ConnectorVersionRecord version = await ReadVersionForUpdateAsync(connection, transaction, connectorVersionId, cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<ConnectorBindingSet> bindings = await ReadLatestBindingsAsync(connection, transaction, version, true, cancellationToken).ConfigureAwait(false);
+        await ValidateCurrentResourcesAsync(connection, transaction, bindings, true, cancellationToken).ConfigureAwait(false);
+        byte[] digest = ConnectorBindingDigests.Bundle(version, bindings);
+        if (expected.Length != 32 || !CryptographicOperations.FixedTimeEquals(expected, digest)) throw new GatewayException("BGW-ADMIN-APPROVAL-STALE", 409);
+        if (request.Status != ConnectorApprovalStatus.Requested || !string.Equals(request.ChecksumSha256, Convert.ToHexString(version.ChecksumSha256), StringComparison.Ordinal) ||
+            !string.Equals(request.BindingDigestSha256, Convert.ToHexString(digest), StringComparison.Ordinal)) throw new GatewayException("BGW-ADMIN-APPROVAL-STALE", 409);
+        if (request.RequestedBy == approver || string.Equals(createdBy, approver.ToString("D"), StringComparison.OrdinalIgnoreCase) || bindings.Any(value => string.Equals(value.UpdatedBy, approver.ToString("D"), StringComparison.OrdinalIgnoreCase)))
+            throw new GatewayException("BGW-ADMIN-FOUR-EYES", 403);
+        await ExecuteAsync(connection, transaction, "UPDATE gateway.connector_approval SET status='approved',approved_by=$2,approved_at=$3,decision_comment=$4 WHERE id=$1 AND status='requested'", cancellationToken, approvalRequestId, approver, now, comment).ConfigureAwait(false);
+        faultInjector?.Check("connector.approval.approve.after-state");
+        string metadata = JsonSerializer.Serialize(new Dictionary<string, string> { ["digest"] = Convert.ToHexString(digest) });
+        await ExecuteAsync(connection, transaction, "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,$2,NULL,'administrator',$3,'connector.approval.approve','connectorVersion',$4,$5,'success','BGW-ADMIN-APPROVAL-APPROVED',$6::jsonb)", cancellationToken, Guid.NewGuid(), now, approver.ToString("D"), connectorVersionId.ToString("D"), correlationId, metadata).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return request with { ApprovedBy = approver, Status = ConnectorApprovalStatus.Approved, ApprovedAt = now, DecisionComment = comment };
+    }
+
+    /// <inheritdoc />
     public async Task<ConnectorVersionRecord> CreateDraftAsync(ConnectorVersionRecord draft, CancellationToken cancellationToken)
         => await CreateDraftCoreAsync(draft, null, cancellationToken).ConfigureAwait(false);
 
@@ -171,6 +267,7 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
 
         IReadOnlyList<ConnectorBindingSet> bindings = await ReadLatestBindingsAsync(connection, transaction, target, forUpdate: true, cancellationToken).ConfigureAwait(false);
         if (bindings.Count == 0) throw new GatewayException("BGW-CONNECTOR-BINDING-MISSING", 409);
+        await ValidateCurrentResourcesAsync(connection, transaction, bindings, true, cancellationToken).ConfigureAwait(false);
         byte[] bindingDigest = ConnectorBindingDigests.Bundle(target, bindings);
         if (!CryptographicOperations.FixedTimeEquals(bindingDigest, expectedBindingDigestSha256)) throw new GatewayException("BGW-ADMIN-APPROVAL-STALE", 409);
         const string approvalSql = "SELECT a.approved_by,a.requested_by FROM gateway.connector_approval a WHERE a.connector_version_id=$1 AND a.checksum_sha256=$2 AND a.binding_digest_sha256=$3 AND a.status='approved' FOR UPDATE";
@@ -249,8 +346,8 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
         try
         {
             string endpointJson = JsonSerializer.Serialize(bindings.Endpoints.ToDictionary(item => item.Key, item => item.Value.AbsoluteUri, StringComparer.Ordinal));
-            string secretJson = JsonSerializer.Serialize(bindings.SecretReferences);
-            string certificateJson = JsonSerializer.Serialize(bindings.CertificateReferences);
+            string secretJson = JsonSerializer.Serialize(bindings.SecretResources);
+            string certificateJson = JsonSerializer.Serialize(bindings.CertificateResources);
             await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
             await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
             await using (NpgsqlCommand versionLock = Command(connection, transaction, "SELECT state FROM gateway.connector_version WHERE id=$1 FOR UPDATE", bindings.ConnectorVersionId))
@@ -300,8 +397,8 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
         {
             Dictionary<string, string> endpointStrings = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(2)) ?? [];
             Dictionary<string, Uri> endpoints = endpointStrings.ToDictionary(value => value.Key, value => new Uri(value.Value, UriKind.Absolute), StringComparer.Ordinal);
-            Dictionary<string, string> secrets = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(3)) ?? [];
-            Dictionary<string, string> certificates = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(4)) ?? [];
+            Dictionary<string, ProviderResourceBinding> secrets = DeserializeResources(reader.GetString(3));
+            Dictionary<string, ProviderResourceBinding> certificates = DeserializeResources(reader.GetString(4));
             result.Add(new(reader.GetGuid(0), version.ConnectorId, connectorVersionId, reader.GetGuid(1), endpoints, secrets, certificates, reader.GetInt64(5), reader.GetString(6).ToUpperInvariant(), Enum.Parse<ConnectorBindingState>(reader.GetString(7), true), reader.GetFieldValue<DateTimeOffset>(8), reader.GetString(9)));
         }
         return new(result, offset, limit, total);
@@ -314,6 +411,7 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
         ConnectorVersionRecord version = await GetByIdAsync(connection, null, connectorVersionId, false, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<ConnectorBindingSet> bindings = await ReadLatestBindingsAsync(connection, null, version, forUpdate: false, cancellationToken).ConfigureAwait(false);
         if (bindings.Count == 0) throw new GatewayException("BGW-CONNECTOR-BINDING-MISSING", 409);
+        await ValidateCurrentResourcesAsync(connection, null, bindings, false, cancellationToken).ConfigureAwait(false);
         return ConnectorBindingDigests.Bundle(version, bindings);
     }
 
@@ -341,14 +439,19 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
         ConnectorVersionRecord version = ReadVersion(reader);
         Dictionary<string, string> endpointStrings = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(15)) ?? [];
         Dictionary<string, Uri> endpoints = endpointStrings.ToDictionary(item => item.Key, item => new Uri(item.Value, UriKind.Absolute), StringComparer.Ordinal);
-        Dictionary<string, string> secrets = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(16)) ?? [];
-        Dictionary<string, string> certificates = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(17)) ?? [];
+        Dictionary<string, ProviderResourceBinding> secrets = DeserializeResources(reader.GetString(16));
+        Dictionary<string, ProviderResourceBinding> certificates = DeserializeResources(reader.GetString(17));
         long bindingRevision = reader.GetInt64(18);
+        long publicationRevision = reader.GetInt64(14);
         string checksum = reader.GetString(23).ToUpperInvariant();
         ConnectorBindingSet binding = new(reader.GetGuid(22), version.ConnectorId, version.Id, reader.GetGuid(21), endpoints, secrets, certificates, bindingRevision, checksum, Enum.Parse<ConnectorBindingState>(reader.GetString(24), true), reader.GetFieldValue<DateTimeOffset>(19), reader.GetString(20));
         string actual = ConnectorBindingDigests.Revision(version.Id, binding.EnvironmentId, endpoints, secrets, certificates);
         if (!string.Equals(actual, checksum, StringComparison.Ordinal)) throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-CORRUPT", 503);
-        return new(version, binding, new(version.Id, reader.GetInt64(14), bindingRevision, checksum));
+        await reader.DisposeAsync().ConfigureAwait(false);
+        await ValidateCurrentResourcesAsync(connection, null, [binding], false, cancellationToken).ConfigureAwait(false);
+        Dictionary<string, string> secretProviderReferences = await ResolveProviderReferencesAsync(connection, null, binding.SecretResources, cancellationToken).ConfigureAwait(false);
+        Dictionary<string, string> certificateProviderReferences = await ResolveProviderReferencesAsync(connection, null, binding.CertificateResources, cancellationToken).ConfigureAwait(false);
+        return new(version, binding, new(version.Id, publicationRevision, bindingRevision, checksum), secretProviderReferences, certificateProviderReferences);
     }
 
     private static async Task<IReadOnlyList<ConnectorBindingSet>> ReadLatestBindingsAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction, ConnectorVersionRecord version, bool forUpdate, CancellationToken cancellationToken)
@@ -362,8 +465,8 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
         {
             Dictionary<string, string> endpointStrings = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(2)) ?? [];
             Dictionary<string, Uri> endpoints = endpointStrings.ToDictionary(value => value.Key, value => new Uri(value.Value, UriKind.Absolute), StringComparer.Ordinal);
-            Dictionary<string, string> secrets = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(3)) ?? [];
-            Dictionary<string, string> certificates = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(4)) ?? [];
+            Dictionary<string, ProviderResourceBinding> secrets = DeserializeResources(reader.GetString(3));
+            Dictionary<string, ProviderResourceBinding> certificates = DeserializeResources(reader.GetString(4));
             string checksum = reader.GetString(6).ToUpperInvariant();
             string actual = ConnectorBindingDigests.Revision(version.Id, reader.GetGuid(1), endpoints, secrets, certificates);
             if (!string.Equals(actual, checksum, StringComparison.Ordinal)) throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-CORRUPT", 503);
@@ -407,6 +510,90 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
         return ReadVersion(reader);
     }
+
+    private const string ResourceColumns = "r.id,r.provider_id,r.provider_display_name,r.provider_type,r.resource_id,r.resource_type,r.display_name,r.environment_id,r.connector_scope,r.operation_scope,l.provider_reference,r.status,r.version,r.revision,r.public_metadata_revision,r.certificate_metadata_json::text,encode(r.checksum_sha256,'hex'),r.created_at";
+
+    private static async Task<ProviderResourceCatalogRecord> ReadCurrentResourceAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction, ProviderResourceReference reference, CancellationToken cancellationToken)
+    {
+        string sql = $"SELECT {ResourceColumns} FROM gateway.provider_resource_catalog_version r JOIN gateway.provider_resource_locator l ON l.provider_resource_catalog_id=r.id WHERE r.provider_id=$1 AND r.resource_id=$2 AND r.resource_type=$3 AND coalesce(r.version,'')=coalesce($4,'') ORDER BY r.revision DESC LIMIT 1";
+        await using NpgsqlCommand command = Command(connection, transaction, sql, reference.ProviderId, reference.ResourceId, ResourceType(reference.ResourceType), reference.Version);
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-PROVIDER-RESOURCE-NOT-FOUND", 400);
+        return ReadResource(reader);
+    }
+
+    private static ProviderResourceCatalogRecord ReadResource(NpgsqlDataReader reader)
+    {
+        CertificatePublicMetadata? metadata = reader.IsDBNull(15) ? null : JsonSerializer.Deserialize<CertificatePublicMetadata>(reader.GetString(15)) ?? throw new GatewayException("BGW-PROVIDER-CERTIFICATE-METADATA-INVALID", 503);
+        return new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), ParseResourceType(reader.GetString(5)), reader.GetString(6), reader.GetGuid(7), reader.GetString(8), reader.GetString(9), reader.GetString(10), Enum.Parse<ProviderResourceStatus>(reader.GetString(11), true), reader.IsDBNull(12) ? null : reader.GetString(12), reader.GetInt64(13), reader.IsDBNull(14) ? null : reader.GetInt64(14), metadata, reader.GetString(16).ToUpperInvariant(), reader.GetFieldValue<DateTimeOffset>(17));
+    }
+
+    private static async Task ValidateCurrentResourcesAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction, IEnumerable<ConnectorBindingSet> bindings, bool forUpdate, CancellationToken cancellationToken)
+    {
+        foreach (ProviderResourceBinding binding in bindings.SelectMany(value => value.SecretResources.Values.Concat(value.CertificateResources.Values)))
+        {
+            ProviderResourceReference reference = new(binding.ProviderId, binding.ResourceId, binding.ResourceType, binding.Version, binding.PublicMetadataRevision);
+            if (forUpdate)
+            {
+                if (transaction is null) throw new InvalidOperationException("A transaction is required to lock provider resources.");
+                await LockProviderResourceAsync(connection, transaction, reference, cancellationToken).ConfigureAwait(false);
+            }
+            ProviderResourceCatalogRecord current = await ReadCurrentResourceAsync(connection, transaction, reference, cancellationToken).ConfigureAwait(false);
+            if (current.Status != ProviderResourceStatus.Active || current.Revision != binding.CatalogRevision || !string.Equals(current.ChecksumSha256, binding.CatalogChecksumSha256, StringComparison.Ordinal))
+                throw new GatewayException("BGW-PROVIDER-RESOURCE-REVISION-STALE", 409);
+        }
+    }
+
+    private static async Task LockProviderResourceAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, ProviderResourceReference reference, CancellationToken cancellationToken)
+    {
+        byte[] keyMaterial = System.Text.Encoding.UTF8.GetBytes($"{reference.ProviderId}\n{reference.ResourceId}\n{ResourceType(reference.ResourceType)}\n{reference.Version ?? string.Empty}");
+        long lockKey = System.Buffers.Binary.BinaryPrimitives.ReadInt64BigEndian(SHA256.HashData(keyMaterial));
+        await using NpgsqlCommand command = Command(connection, transaction, "SELECT pg_advisory_xact_lock($1)", lockKey);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<Dictionary<string, string>> ResolveProviderReferencesAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction, IReadOnlyDictionary<string, ProviderResourceBinding> bindings, CancellationToken cancellationToken)
+    {
+        Dictionary<string, string> result = new(StringComparer.Ordinal);
+        foreach ((string logicalId, ProviderResourceBinding binding) in bindings)
+        {
+            ProviderResourceCatalogRecord current = await ReadCurrentResourceAsync(connection, transaction, new(binding.ProviderId, binding.ResourceId, binding.ResourceType, binding.Version, binding.PublicMetadataRevision), cancellationToken).ConfigureAwait(false);
+            if (current.Revision != binding.CatalogRevision || current.Status != ProviderResourceStatus.Active) throw new GatewayException("BGW-PROVIDER-RESOURCE-REVISION-STALE", 409);
+            result.Add(logicalId, current.ProviderReference);
+        }
+        return result;
+    }
+
+    private static Dictionary<string, ProviderResourceBinding> DeserializeResources(string json)
+    {
+        try { return JsonSerializer.Deserialize<Dictionary<string, ProviderResourceBinding>>(json) ?? []; }
+        catch (JsonException) { throw new GatewayException("BGW-PROVIDER-RESOURCE-LEGACY-REFERENCE", 409); }
+    }
+
+    private static void EnsureResourceScope(ProviderResourceCatalogRecord resource, ProviderResourceReference reference, Guid environmentId, string connectorId, IReadOnlyCollection<string> operationIds)
+    {
+        bool connectorAllowed = string.Equals(resource.ConnectorScope, "*", StringComparison.Ordinal) || string.Equals(resource.ConnectorScope, connectorId, StringComparison.Ordinal);
+        bool operationsAllowed = operationIds.All(operationId => string.Equals(resource.OperationScope, "*", StringComparison.Ordinal) || string.Equals(resource.OperationScope, operationId, StringComparison.Ordinal));
+        if (resource.Status != ProviderResourceStatus.Active || resource.EnvironmentId != environmentId || resource.ResourceType != reference.ResourceType || resource.PublicMetadataRevision != reference.PublicMetadataRevision || !connectorAllowed || !operationsAllowed)
+            throw new GatewayException("BGW-PROVIDER-RESOURCE-SCOPE", 403);
+    }
+
+    private static string ResourceChecksum(ProviderResourceCatalogRecord resource)
+    {
+        var canonical = new { resource.ProviderId, resource.ProviderDisplayName, resource.ProviderType, resource.ResourceId, resource.ResourceType, resource.DisplayName, resource.EnvironmentId, resource.ConnectorScope, resource.OperationScope, resource.Status, resource.Version, resource.Revision, resource.PublicMetadataRevision, resource.CertificateMetadata };
+        return Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(canonical)));
+    }
+
+    private static bool SameRegistration(ProviderResourceCatalogRecord current, ProviderResourceCatalogRecord candidate) =>
+        current.ProviderDisplayName == candidate.ProviderDisplayName && current.ProviderType == candidate.ProviderType && current.DisplayName == candidate.DisplayName &&
+        current.EnvironmentId == candidate.EnvironmentId && current.ConnectorScope == candidate.ConnectorScope && current.OperationScope == candidate.OperationScope &&
+        current.ProviderReference == candidate.ProviderReference && current.Status == candidate.Status && current.PublicMetadataRevision == candidate.PublicMetadataRevision && current.CertificateMetadata == candidate.CertificateMetadata;
+
+    private static string ResourceType(ProviderResourceType value) => value == ProviderResourceType.ClientCertificate ? "client_certificate" : "secret";
+    private static ProviderResourceType ParseResourceType(string value) => value == "client_certificate" ? ProviderResourceType.ClientCertificate : ProviderResourceType.Secret;
+
+    private static ConnectorApprovalRecord ReadApproval(NpgsqlDataReader reader) => new(
+        reader.GetGuid(0), reader.GetGuid(1), Convert.ToHexString(reader.GetFieldValue<byte[]>(2)), Convert.ToHexString(reader.GetFieldValue<byte[]>(3)), reader.GetGuid(4), reader.IsDBNull(5) ? null : reader.GetGuid(5), reader.IsDBNull(6) ? null : reader.GetGuid(6), Enum.Parse<ConnectorApprovalStatus>(reader.GetString(7), true), reader.GetFieldValue<DateTimeOffset>(8), reader.IsDBNull(9) ? null : reader.GetFieldValue<DateTimeOffset>(9), reader.IsDBNull(10) ? null : reader.GetFieldValue<DateTimeOffset>(10), reader.IsDBNull(11) ? null : reader.GetString(11), reader.IsDBNull(12) ? null : reader.GetFieldValue<DateTimeOffset>(12));
 
     private static ConnectorVersionRecord ReadVersion(NpgsqlDataReader reader) => new(
         reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), ParseState(reader.GetString(5)), reader.GetString(6), reader.GetFieldValue<byte[]>(7), reader.GetString(8), reader.GetFieldValue<DateTimeOffset>(9), reader.GetInt64(10),

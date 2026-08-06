@@ -41,6 +41,8 @@ services:
       M3_POSTGRES_ADMIN_CONNECTION: Host=postgres;Port=5432;Database=broker_gateway_m3;Username=postgres;Password=${M3_POSTGRES_ADMIN_PASSWORD:?required};SSL Mode=Disable;GSS Encryption Mode=Disable
       M3_POSTGRES_RUNTIME_PASSWORD: ${M3_POSTGRES_RUNTIME_PASSWORD:?required}
       M3_ACTIVATION_HMAC_BASE64: ${M3_ACTIVATION_HMAC_BASE64:?required}
+      M3_VENDOR_CLIENT_PFX_BASE64: ${M3_VENDOR_CLIENT_PFX_BASE64:?required}
+      M3_WRONG_VENDOR_CLIENT_PFX_BASE64: ${M3_WRONG_VENDOR_CLIENT_PFX_BASE64:?required}
       M3_PROVISIONING_OUTPUT: /evidence-raw/provisioning.json
     volumes:
       - ${M3_RAW_EVIDENCE_DIRECTORY:?required}:/evidence-raw

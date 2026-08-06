@@ -186,6 +186,81 @@ public enum ConnectorBindingState
     Retired
 }
 
+/// <summary>Kind of provider-owned material referenced by a Connector binding.</summary>
+public enum ProviderResourceType
+{
+    /// <summary>A secret value retrieved only by the Gateway runtime.</summary>
+    Secret,
+    /// <summary>A client certificate whose private key remains provider-owned.</summary>
+    ClientCertificate
+}
+
+/// <summary>Lifecycle of one server-owned provider resource catalog revision.</summary>
+public enum ProviderResourceStatus
+{
+    /// <summary>The catalog revision may be selected by a new binding.</summary>
+    Active,
+    /// <summary>The catalog revision is unavailable for new approvals and runtime resolution.</summary>
+    Disabled
+}
+
+/// <summary>Structured logical reference accepted at the Connector administration boundary.</summary>
+public sealed record ProviderResourceReference(
+    string ProviderId,
+    string ResourceId,
+    ProviderResourceType ResourceType,
+    string? Version = null,
+    long? PublicMetadataRevision = null);
+
+/// <summary>Public certificate metadata safe to show to an approver.</summary>
+public sealed record CertificatePublicMetadata(
+    string FingerprintSha256,
+    string Subject,
+    string Issuer,
+    DateTimeOffset NotBefore,
+    DateTimeOffset NotAfter,
+    string KeyAlgorithm,
+    int PublicKeySize,
+    string Version);
+
+/// <summary>Immutable server-owned provider catalog revision. ProviderReference is internal and never returned by Admin APIs.</summary>
+public sealed record ProviderResourceCatalogRecord(
+    Guid Id,
+    string ProviderId,
+    string ProviderDisplayName,
+    string ProviderType,
+    string ResourceId,
+    ProviderResourceType ResourceType,
+    string DisplayName,
+    Guid EnvironmentId,
+    string ConnectorScope,
+    string OperationScope,
+    string ProviderReference,
+    ProviderResourceStatus Status,
+    string? Version,
+    long Revision,
+    long? PublicMetadataRevision,
+    CertificatePublicMetadata? CertificateMetadata,
+    string ChecksumSha256,
+    DateTimeOffset CreatedAt);
+
+/// <summary>Non-secret immutable catalog snapshot stored in a Connector binding revision.</summary>
+public sealed record ProviderResourceBinding(
+    string ProviderId,
+    string ProviderDisplayName,
+    string ProviderType,
+    string ResourceId,
+    ProviderResourceType ResourceType,
+    string DisplayName,
+    Guid EnvironmentId,
+    string ConnectorScope,
+    string OperationScope,
+    string? Version,
+    long CatalogRevision,
+    long? PublicMetadataRevision,
+    CertificatePublicMetadata? CertificateMetadata,
+    string CatalogChecksumSha256);
+
 /// <summary>Server-owned immutable endpoint, secret and certificate binding revisions in one Environment.</summary>
 public sealed record ConnectorBindingSet(
     Guid Id,
@@ -193,8 +268,8 @@ public sealed record ConnectorBindingSet(
     Guid ConnectorVersionId,
     Guid EnvironmentId,
     IReadOnlyDictionary<string, Uri> Endpoints,
-    IReadOnlyDictionary<string, string> SecretReferences,
-    IReadOnlyDictionary<string, string> CertificateReferences,
+    IReadOnlyDictionary<string, ProviderResourceBinding> SecretResources,
+    IReadOnlyDictionary<string, ProviderResourceBinding> CertificateResources,
     long Revision,
     string ChecksumSha256,
     ConnectorBindingState State,
@@ -205,4 +280,9 @@ public sealed record ConnectorBindingSet(
 public sealed record PublishedConnectorStamp(Guid VersionId, long PublicationRevision, long BindingRevision, string BindingChecksumSha256);
 
 /// <summary>Published immutable definition and its server-side Environment bindings.</summary>
-public sealed record PublishedConnectorSnapshot(ConnectorVersionRecord Version, ConnectorBindingSet Bindings, PublishedConnectorStamp Stamp);
+public sealed record PublishedConnectorSnapshot(
+    ConnectorVersionRecord Version,
+    ConnectorBindingSet Bindings,
+    PublishedConnectorStamp Stamp,
+    IReadOnlyDictionary<string, string> SecretProviderReferences,
+    IReadOnlyDictionary<string, string> CertificateProviderReferences);

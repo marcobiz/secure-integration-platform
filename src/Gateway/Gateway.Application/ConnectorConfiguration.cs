@@ -42,13 +42,38 @@ public sealed record ConnectorRollbackRequest(string TargetVersion, long Expecte
 public sealed record ConnectorBindingRequest(
     Guid EnvironmentId,
     IReadOnlyDictionary<string, string> Endpoints,
-    IReadOnlyDictionary<string, string> SecretReferences,
+    IReadOnlyDictionary<string, ProviderResourceReference> SecretResources,
     long? ExpectedRevision = null,
-    IReadOnlyDictionary<string, string>? CertificateReferences = null,
+    IReadOnlyDictionary<string, ProviderResourceReference>? CertificateResources = null,
     string? ConnectorVersion = null);
 
 /// <summary>Non-destructive contract test of one Published operation and Environment binding.</summary>
 public sealed record ConnectorTestRequest(Guid EnvironmentId, string OperationId);
+
+/// <summary>Fail-closed syntax guard applied before the authoritative catalog lookup.</summary>
+public static class ProviderResourceReferenceValidator
+{
+    private const int MaximumIdentifierLength = 128;
+
+    /// <summary>Validates bounded logical identifiers. Catalog membership remains the primary security control.</summary>
+    public static void Validate(ProviderResourceReference reference)
+    {
+        ValidateIdentifier(reference.ProviderId);
+        ValidateIdentifier(reference.ResourceId);
+        if (reference.Version is not null) ValidateIdentifier(reference.Version);
+        if (reference.ResourceId.Contains("://", StringComparison.Ordinal) || reference.ResourceId.Contains("-----BEGIN", StringComparison.OrdinalIgnoreCase) ||
+            reference.ResourceId.Contains("base64", StringComparison.OrdinalIgnoreCase) || reference.ResourceId.Contains("password=", StringComparison.OrdinalIgnoreCase) ||
+            reference.ResourceId.Contains("user id=", StringComparison.OrdinalIgnoreCase) || reference.ResourceId.Contains("accountkey=", StringComparison.OrdinalIgnoreCase))
+            throw new GatewayException("BGW-PROVIDER-RESOURCE-REFERENCE-DENIED", 400);
+    }
+
+    private static void ValidateIdentifier(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length > MaximumIdentifierLength || value.Any(character =>
+                !(char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.')))
+            throw new GatewayException("BGW-PROVIDER-RESOURCE-REFERENCE-DENIED", 400);
+    }
+}
 
 /// <summary>Machine-readable Connector artefacts embedded from their authoritative repository files.</summary>
 public static class ConnectorDefinitionArtifacts
@@ -134,11 +159,11 @@ public static class ConnectorCanonicalJson
 public static class ConnectorBindingDigests
 {
     /// <summary>Checksums one redaction-safe logical binding component for approval comparison.</summary>
-    public static string Component(IReadOnlyDictionary<string, string> values) =>
+    public static string Component<T>(IReadOnlyDictionary<string, T> values) =>
         Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(values.OrderBy(value => value.Key, StringComparer.Ordinal).ToDictionary(value => value.Key, value => value.Value, StringComparer.Ordinal))));
 
     /// <summary>Checksums one exact Environment binding revision.</summary>
-    public static string Revision(Guid connectorVersionId, Guid environmentId, IReadOnlyDictionary<string, Uri> endpoints, IReadOnlyDictionary<string, string> secrets, IReadOnlyDictionary<string, string> certificates)
+    public static string Revision(Guid connectorVersionId, Guid environmentId, IReadOnlyDictionary<string, Uri> endpoints, IReadOnlyDictionary<string, ProviderResourceBinding> secrets, IReadOnlyDictionary<string, ProviderResourceBinding> certificates)
     {
         var canonical = new
         {
@@ -182,6 +207,7 @@ public sealed record ApprovalSecretReview(
     string ProviderId,
     string ResourceLogicalId,
     string ResourceType,
+    string? Version,
     string Environment,
     string ConnectorScope,
     string OperationScope,
@@ -195,10 +221,14 @@ public sealed record ApprovalCertificateReview(
     string ProviderType,
     string ProviderId,
     string CertificateLogicalId,
-    string? PublicFingerprintSha256,
-    string? PublicSubject,
-    string? PublicIssuer,
-    DateTimeOffset? ExpiresAt,
+    string PublicFingerprintSha256,
+    string PublicSubject,
+    string PublicIssuer,
+    DateTimeOffset NotBefore,
+    DateTimeOffset ExpiresAt,
+    string KeyAlgorithm,
+    int PublicKeySize,
+    string Version,
     string Environment,
     string ConnectorScope,
     string OperationScope,
@@ -280,19 +310,19 @@ public static class ConnectorApprovalArtifacts
         {
             if (!authentication.TryGetProperty(property, out JsonElement logicalElement)) continue;
             string logical = logicalElement.GetString()!;
-            if (!binding.SecretReferences.TryGetValue(logical, out string? reference)) throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING-MISSING", 503);
-            ProviderIdentity provider = Provider(reference);
-            secrets.Add(new(logical, binding.Revision, provider.DisplayName, provider.Type, provider.ProviderId, provider.ResourceId, property == "secretBinding" ? "secret" : property,
-                binding.EnvironmentId.ToString("D"), version.ConnectorSlug, operationId, Component(logical, reference)));
+            if (!binding.SecretResources.TryGetValue(logical, out ProviderResourceBinding? resource)) throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING-MISSING", 503);
+            secrets.Add(new(logical, binding.Revision, resource.ProviderDisplayName, resource.ProviderType, resource.ProviderId, resource.ResourceId, resource.ResourceType.ToString(), resource.Version,
+                binding.EnvironmentId.ToString("D"), resource.ConnectorScope, resource.OperationScope, Component(logical, resource)));
         }
         List<ApprovalCertificateReview> certificates = [];
         if (authentication.TryGetProperty("certificateBinding", out JsonElement certificateElement))
         {
             string logical = certificateElement.GetString()!;
-            if (!binding.CertificateReferences.TryGetValue(logical, out string? reference)) throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING-MISSING", 503);
-            ProviderIdentity provider = Provider(reference);
-            certificates.Add(new(logical, binding.Revision, provider.DisplayName, provider.Type, provider.ProviderId, provider.ResourceId, null, null, null, null,
-                binding.EnvironmentId.ToString("D"), version.ConnectorSlug, operationId, Component(logical, reference)));
+            if (!binding.CertificateResources.TryGetValue(logical, out ProviderResourceBinding? resource)) throw new GatewayException("BGW-CONNECTOR-CERTIFICATE-BINDING-MISSING", 503);
+            CertificatePublicMetadata metadata = resource.CertificateMetadata ?? throw new GatewayException("BGW-PROVIDER-CERTIFICATE-METADATA-REQUIRED", 409);
+            certificates.Add(new(logical, binding.Revision, resource.ProviderDisplayName, resource.ProviderType, resource.ProviderId, resource.ResourceId,
+                metadata.FingerprintSha256, metadata.Subject, metadata.Issuer, metadata.NotBefore, metadata.NotAfter, metadata.KeyAlgorithm, metadata.PublicKeySize, metadata.Version,
+                binding.EnvironmentId.ToString("D"), resource.ConnectorScope, resource.OperationScope, Component(logical, resource)));
         }
         return new(operationId, binding.EnvironmentId.ToString("D"), "gateway-server-side", effective.Scheme.ToUpperInvariant(), endpoint, secrets, certificates);
     }
@@ -303,9 +333,9 @@ public static class ConnectorApprovalArtifacts
         return ConnectorCanonicalJson.Canonicalize(document.RootElement);
     }
 
-    private static string Component(string logicalId, string value)
+    private static string Component<T>(string logicalId, T value)
     {
-        string json = JsonSerializer.Serialize(new SortedDictionary<string, string>(StringComparer.Ordinal) { ["logicalId"] = logicalId, ["value"] = value });
+        string json = JsonSerializer.Serialize(new { logicalId, value }, WebJson);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
     }
 
@@ -322,17 +352,6 @@ public static class ConnectorApprovalArtifacts
             return "publicInternet";
         }
         return endpoint.DnsSafeHost.EndsWith(".local", StringComparison.OrdinalIgnoreCase) || endpoint.DnsSafeHost.EndsWith(".internal", StringComparison.OrdinalIgnoreCase) ? "private" : "publicInternet";
-    }
-
-    private static ProviderIdentity Provider(string reference)
-    {
-        if (!Uri.TryCreate(reference, UriKind.Absolute, out Uri? uri)) return new("Logical provider", "opaque", "default", reference);
-        string type = uri.Scheme;
-        string providerId = string.IsNullOrWhiteSpace(uri.Host) ? type : uri.Host;
-        string resource = uri.AbsolutePath.Trim('/');
-        if (string.IsNullOrEmpty(resource)) resource = uri.OriginalString[(uri.Scheme.Length + 3)..].Trim('/');
-        string display = type switch { "keyvault" => "Azure Key Vault", "synthetic-vault" => "Synthetic vault", "synthetic" => "Synthetic provider", _ => type };
-        return new(display, type, providerId, resource);
     }
 
     private static List<ApprovalSemanticDiff> Diff(ApprovalReviewArtifact? previous, ApprovalReviewArtifact current)
@@ -392,7 +411,7 @@ public static class ConnectorApprovalArtifacts
         {
             foreach ((ApprovalCertificateReview certificate, int certificateIndex) in operation.CertificateBindings.Select((value, index) => (value, index)))
             {
-                if (certificate.ExpiresAt is not null && certificate.ExpiresAt <= DateTimeOffset.UtcNow.AddDays(30))
+                if (certificate.ExpiresAt <= DateTimeOffset.UtcNow.AddDays(30))
                     result.Add(new("CERTIFICATE_NEAR_EXPIRY", "high", $"/operations/{operationIndex}/certificates/{certificateIndex}/expiresAt"));
             }
         }
@@ -418,7 +437,6 @@ public static class ConnectorApprovalArtifacts
         return result;
     }
 
-    private sealed record ProviderIdentity(string DisplayName, string Type, string ProviderId, string ResourceId);
 }
 
 /// <summary>Draft 2020-12 and semantic validator for Connector Definition JSON v1.</summary>
@@ -633,22 +651,48 @@ public sealed class ConnectorAdministrationService(
                 throw new GatewayException("BGW-CONNECTOR-ENDPOINT-BINDING", 400);
             endpoints[name] = endpoint!;
         }
-        Dictionary<string, string> secretReferences = new(request.SecretReferences, StringComparer.Ordinal);
-        Dictionary<string, string> certificateReferences = request.CertificateReferences is null ? [] : new(request.CertificateReferences, StringComparer.Ordinal);
+        Dictionary<string, ProviderResourceReference> requestedSecrets = new(request.SecretResources, StringComparer.Ordinal);
+        Dictionary<string, ProviderResourceReference> requestedCertificates = request.CertificateResources is null ? [] : new(request.CertificateResources, StringComparer.Ordinal);
+        Dictionary<string, HashSet<string>> operationScopes = new(StringComparer.Ordinal);
         using (JsonDocument document = JsonDocument.Parse(reference.CanonicalJson))
         {
             HashSet<string> requiredEndpoints = document.RootElement.GetProperty("bindings").GetProperty("endpoints").EnumerateArray().Select(value => value.GetProperty("name").GetString()!).ToHashSet(StringComparer.Ordinal);
             Dictionary<string, string> requiredSecrets = document.RootElement.GetProperty("bindings").GetProperty("secrets").EnumerateArray().ToDictionary(value => value.GetProperty("name").GetString()!, value => value.GetProperty("kind").GetString()!, StringComparer.Ordinal);
-            foreach ((string name, string kind) in requiredSecrets.Where(value => value.Value == "clientCertificate").ToArray())
-                if (certificateReferences.Count == 0 && secretReferences.Remove(name, out string? legacyReference)) certificateReferences.Add(name, legacyReference);
             HashSet<string> ordinarySecrets = requiredSecrets.Where(value => value.Value != "clientCertificate").Select(value => value.Key).ToHashSet(StringComparer.Ordinal);
             HashSet<string> certificateSecrets = requiredSecrets.Where(value => value.Value == "clientCertificate").Select(value => value.Key).ToHashSet(StringComparer.Ordinal);
-            if (!requiredEndpoints.SetEquals(endpoints.Keys) || !ordinarySecrets.SetEquals(secretReferences.Keys) || !certificateSecrets.SetEquals(certificateReferences.Keys))
+            if (!requiredEndpoints.SetEquals(endpoints.Keys) || !ordinarySecrets.SetEquals(requestedSecrets.Keys) || !certificateSecrets.SetEquals(requestedCertificates.Keys))
                 throw new GatewayException("BGW-CONNECTOR-BINDING-SCOPE", 400);
+            foreach (JsonElement operation in document.RootElement.GetProperty("operations").EnumerateArray())
+            {
+                string operationId = operation.GetProperty("operationId").GetString()!;
+                JsonElement authentication = operation.GetProperty("authentication");
+                foreach (string property in new[] { "usernameBinding", "passwordBinding", "secretBinding", "certificateBinding" })
+                {
+                    if (!authentication.TryGetProperty(property, out JsonElement logicalElement)) continue;
+                    string logical = logicalElement.GetString()!;
+                    if (!operationScopes.TryGetValue(logical, out HashSet<string>? scopes)) operationScopes.Add(logical, scopes = new(StringComparer.Ordinal));
+                    scopes.Add(operationId);
+                }
+            }
         }
-        if (secretReferences.Concat(certificateReferences).Any(pair => string.IsNullOrWhiteSpace(pair.Key) || string.IsNullOrWhiteSpace(pair.Value))) throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING", 400);
-        string checksum = ConnectorBindingDigests.Revision(reference.Id, request.EnvironmentId, endpoints, secretReferences, certificateReferences);
-        ConnectorBindingSet saved = await store.PutBindingsAsync(new(Guid.NewGuid(), reference.ConnectorId, reference.Id, request.EnvironmentId, endpoints, secretReferences, certificateReferences, 0, checksum, ConnectorBindingState.Draft, clock.UtcNow, actor), request.ExpectedRevision, correlationId, cancellationToken).ConfigureAwait(false);
+        Dictionary<string, ProviderResourceBinding> secretResources = new(StringComparer.Ordinal);
+        foreach ((string logical, ProviderResourceReference requested) in requestedSecrets)
+        {
+            ProviderResourceReferenceValidator.Validate(requested);
+            ProviderResourceCatalogRecord resource = await store.ResolveProviderResourceAsync(requested, request.EnvironmentId, connectorId, operationScopes[logical].ToArray(), cancellationToken).ConfigureAwait(false);
+            if (resource.ResourceType != ProviderResourceType.Secret) throw new GatewayException("BGW-PROVIDER-RESOURCE-TYPE", 400);
+            secretResources.Add(logical, Binding(resource));
+        }
+        Dictionary<string, ProviderResourceBinding> certificateResources = new(StringComparer.Ordinal);
+        foreach ((string logical, ProviderResourceReference requested) in requestedCertificates)
+        {
+            ProviderResourceReferenceValidator.Validate(requested);
+            ProviderResourceCatalogRecord resource = await store.ResolveProviderResourceAsync(requested, request.EnvironmentId, connectorId, operationScopes[logical].ToArray(), cancellationToken).ConfigureAwait(false);
+            if (resource.ResourceType != ProviderResourceType.ClientCertificate || resource.CertificateMetadata is null) throw new GatewayException("BGW-PROVIDER-CERTIFICATE-METADATA-REQUIRED", 409);
+            certificateResources.Add(logical, Binding(resource));
+        }
+        string checksum = ConnectorBindingDigests.Revision(reference.Id, request.EnvironmentId, endpoints, secretResources, certificateResources);
+        ConnectorBindingSet saved = await store.PutBindingsAsync(new(Guid.NewGuid(), reference.ConnectorId, reference.Id, request.EnvironmentId, endpoints, secretResources, certificateResources, 0, checksum, ConnectorBindingState.Draft, clock.UtcNow, actor), request.ExpectedRevision, correlationId, cancellationToken).ConfigureAwait(false);
         runtimeCatalog.Invalidate(connectorId);
         return saved.Revision;
     }
@@ -674,6 +718,11 @@ public sealed class ConnectorAdministrationService(
 
     private GatewayAuditEvent Audit(string actor, string action, ConnectorVersionRecord version, Guid correlationId, string outcome, string reason) =>
         new(Guid.NewGuid(), clock.UtcNow, null, "administrator", actor, action, "connectorVersion", version.ConnectorSlug + "/" + version.Version, correlationId, outcome, reason, new Dictionary<string, string> { ["state"] = version.State.ToString(), ["checksum"] = Convert.ToHexString(version.ChecksumSha256) });
+
+    private static ProviderResourceBinding Binding(ProviderResourceCatalogRecord value) => new(
+        value.ProviderId, value.ProviderDisplayName, value.ProviderType, value.ResourceId, value.ResourceType, value.DisplayName,
+        value.EnvironmentId, value.ConnectorScope, value.OperationScope, value.Version, value.Revision, value.PublicMetadataRevision,
+        value.CertificateMetadata, value.ChecksumSha256);
 
     /// <summary>Projects internal persistence metadata to the redacted Admin API resource.</summary>
     public static ConnectorVersionResource Resource(ConnectorVersionRecord value) => new(value.ConnectorSlug, value.Version, value.SchemaVersion, value.State, Convert.ToHexString(value.ChecksumSha256), value.RowVersion, value.CreatedAt, value.PublishedAt);
@@ -730,7 +779,7 @@ public sealed class PublishedConnectorCatalog(
             Uri endpoint = new(baseUri, operation.GetProperty("path").GetString()!);
             JsonElement auth = operation.GetProperty("authentication");
             GatewayAuthenticationKind authKind = ParseAuthentication(auth.GetProperty("kind").GetString()!);
-            string? Resolve(string property) => auth.TryGetProperty(property, out JsonElement logical) && (property == "certificateBinding" ? snapshot.Bindings.CertificateReferences : snapshot.Bindings.SecretReferences).TryGetValue(logical.GetString()!, out string? reference)
+            string? Resolve(string property) => auth.TryGetProperty(property, out JsonElement logical) && (property == "certificateBinding" ? snapshot.CertificateProviderReferences : snapshot.SecretProviderReferences).TryGetValue(logical.GetString()!, out string? reference)
                 ? reference
                 : auth.TryGetProperty(property, out _) ? throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING-MISSING", 503) : null;
             JsonElement request = operation.GetProperty("request");

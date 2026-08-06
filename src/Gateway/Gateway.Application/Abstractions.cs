@@ -121,6 +121,14 @@ public interface IGatewayOperationCatalog
 /// <summary>Provider-neutral persistence boundary for Connector lifecycle and logical bindings.</summary>
 public interface IConnectorConfigurationStore
 {
+    /// <summary>Registers an immutable provider resource catalog revision from protected server configuration.</summary>
+    Task<ProviderResourceCatalogRecord> RegisterProviderResourceAsync(ProviderResourceCatalogRecord resource, CancellationToken cancellationToken);
+    /// <summary>Resolves and authorizes one structured logical resource reference against the server-owned catalog.</summary>
+    Task<ProviderResourceCatalogRecord> ResolveProviderResourceAsync(ProviderResourceReference reference, Guid environmentId, string connectorId, IReadOnlyCollection<string> operationIds, CancellationToken cancellationToken);
+    /// <summary>Lists only non-secret catalog metadata for administration selectors.</summary>
+    Task<AdminPage<ProviderResourceCatalogRecord>> ListProviderResourcesPageAsync(int offset, int limit, Guid? environmentId, ProviderResourceType? resourceType, CancellationToken cancellationToken);
+    /// <summary>Fails closed when a binding references a catalog revision that is no longer current and active.</summary>
+    Task ValidateBindingResourcesAsync(Guid connectorVersionId, CancellationToken cancellationToken);
     /// <summary>Creates a new Draft; Connector/version pairs are unique.</summary>
     Task<ConnectorVersionRecord> CreateDraftAsync(ConnectorVersionRecord draft, CancellationToken cancellationToken);
     /// <summary>Creates a Draft and its audit event in one persistence transaction.</summary>
@@ -164,6 +172,8 @@ public interface IConnectorConfigurationStore
     Task<AdminPage<ConnectorBindingSet>> ListBindingsPageAsync(Guid connectorVersionId, int offset, int limit, Guid? environmentId, CancellationToken cancellationToken);
     /// <summary>Computes the approval digest over the Connector checksum and all current immutable binding revisions.</summary>
     Task<byte[]> GetBindingBundleDigestAsync(Guid connectorVersionId, CancellationToken cancellationToken);
+    /// <summary>Locks approval, Connector, binding and catalog revisions and recalculates the canonical digest in the approval transaction.</summary>
+    Task<ConnectorApprovalRecord> ApproveCanonicalAsync(IAdminSecurityStore fallbackStore, Guid approvalRequestId, Guid connectorVersionId, string expectedDigestSha256, string createdBy, Guid approver, string? comment, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Returns the active stamp, or null when no version is Published.</summary>
     Task<PublishedConnectorStamp?> GetPublishedStampAsync(string connectorId, Guid environmentId, CancellationToken cancellationToken);
     /// <summary>Returns the Published definition with bindings, or null.</summary>

@@ -104,7 +104,7 @@ public sealed class ConnectorConfigurationTests
         foreach (string endpoint in new[] { "https://vendor.example.test/base?override=true", "https://127.0.0.1/", "http://vendor.example.test/" })
         {
             GatewayException rejected = await Assert.ThrowsAsync<GatewayException>(() => fixture.Admin.PutBindingsAsync(version.ConnectorId,
-                new(fixture.EnvironmentId, new Dictionary<string, string> { ["sample-vendor-endpoint"] = endpoint }, new Dictionary<string, string>()),
+                new(fixture.EnvironmentId, new Dictionary<string, string> { ["sample-vendor-endpoint"] = endpoint }, new Dictionary<string, ProviderResourceReference>()),
                 "tester", Guid.NewGuid(), TestContext.Current.CancellationToken));
             Assert.Equal("BGW-CONNECTOR-ENDPOINT-BINDING", rejected.Code);
         }
@@ -140,7 +140,7 @@ public sealed class ConnectorConfigurationTests
         version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
         long bindingRevision = await fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId,
             new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/base/" },
-            new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://api-key", ["sample-vendor-client-certificate"] = "synthetic://client-cert" }),
+            SecretReferences(), null, CertificateReferences()),
             "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
         Assert.Equal(1, bindingRevision);
         version = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
@@ -162,30 +162,19 @@ public sealed class ConnectorConfigurationTests
         Fixture fixture = new();
         ConnectorVersionResource version = await fixture.ImportAsync(Sample());
         version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
-        GatewayException missingEndpoint = await Assert.ThrowsAsync<GatewayException>(() => fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId, new Dictionary<string, string>(), new Dictionary<string, string>
-        {
-            ["sample-vendor-api-key"] = "synthetic://api-key",
-            ["sample-vendor-client-certificate"] = "synthetic://client-cert"
-        }), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken));
+        GatewayException missingEndpoint = await Assert.ThrowsAsync<GatewayException>(() => fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId, new Dictionary<string, string>(), SecretReferences(), null, CertificateReferences()), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken));
         Assert.Equal("BGW-CONNECTOR-BINDING-SCOPE", missingEndpoint.Code);
 
         GatewayException missingSecret = await Assert.ThrowsAsync<GatewayException>(() => fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId, new Dictionary<string, string>
         {
             ["sample-vendor-endpoint"] = "https://vendor.example.test/"
-        }, new Dictionary<string, string>
-        {
-            ["sample-vendor-api-key"] = "synthetic://api-key"
-        }), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken));
+        }, SecretReferences()), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken));
         Assert.Equal("BGW-CONNECTOR-BINDING-SCOPE", missingSecret.Code);
 
         await fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId, new Dictionary<string, string>
         {
             ["sample-vendor-endpoint"] = "https://vendor.example.test/"
-        }, new Dictionary<string, string>
-        {
-            ["sample-vendor-api-key"] = "synthetic://api-key",
-            ["sample-vendor-client-certificate"] = "synthetic://client-cert"
-        }), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        }, SecretReferences(), null, CertificateReferences()), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
         _ = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
         Assert.Equal("BGW-OPERATION-NOT-FOUND", (await Assert.ThrowsAsync<GatewayException>(() => fixture.Catalog.GetRequiredAsync(version.ConnectorId, "missing-operation", fixture.EnvironmentId, TestContext.Current.CancellationToken))).Code);
     }
@@ -222,11 +211,10 @@ public sealed class ConnectorConfigurationTests
         version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
         ConnectorBindingRequest arbitrary = BindingRequest(fixture.EnvironmentId, "https://controlled.example.test/") with
         {
-            SecretReferences = new Dictionary<string, string>
+            SecretResources = new Dictionary<string, ProviderResourceReference>
             {
-                ["sample-vendor-api-key"] = "synthetic://canary",
-                ["unapproved-operation-secret"] = "synthetic://should-never-resolve",
-                ["sample-vendor-client-certificate"] = "synthetic://certificate"
+                ["sample-vendor-api-key"] = SecretReference(),
+                ["unapproved-operation-secret"] = new("synthetic", "should-never-resolve", ProviderResourceType.Secret)
             }
         };
         GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => fixture.Admin.PutBindingsAsync(version.ConnectorId, arbitrary, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken));
@@ -242,7 +230,7 @@ public sealed class ConnectorConfigurationTests
         version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
         _ = await fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId,
             new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://controlled-public.example.test/base/" },
-            new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic-vault://vault.test/logical-api-key", ["sample-vendor-client-certificate"] = "synthetic-vault://vault.test/logical-client-certificate" }),
+            SecretReferences(), null, CertificateReferences()),
             "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
         ConnectorVersionRecord stored = Assert.Single(await fixture.Store.ListVersionsAsync(version.ConnectorId, TestContext.Current.CancellationToken));
         ConnectorBindingSet binding = Assert.Single((await fixture.Store.ListBindingsPageAsync(stored.Id, 0, 100, null, TestContext.Current.CancellationToken)).Items);
@@ -255,13 +243,55 @@ public sealed class ConnectorConfigurationTests
         Assert.Equal("/vendor/orders", operation.Endpoint.Path);
         Assert.Equal("POST", Assert.Single(operation.Endpoint.AllowedMethods));
         Assert.Equal("Synthetic vault", secret.ProviderDisplayName);
-        Assert.Equal("vault.test", secret.ProviderId);
-        Assert.Equal("logical-api-key", secret.ResourceLogicalId);
+        Assert.Equal("synthetic", secret.ProviderId);
+        Assert.Equal("api-key", secret.ResourceLogicalId);
+        ApprovalCertificateReview certificate = Assert.Single(operation.CertificateBindings);
+        Assert.Equal(new string('A', 64), certificate.PublicFingerprintSha256);
+        Assert.Equal("CN=synthetic-client", certificate.PublicSubject);
+        Assert.Equal("CN=synthetic-ca", certificate.PublicIssuer);
         Assert.Equal(Convert.ToHexString(await fixture.Store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken)), review.DigestSha256);
         Assert.Contains(review.RiskIndicators, value => value.Code == "PUBLIC_INTERNET_DESTINATION");
         Assert.DoesNotContain("VERY_SECRET_CANARY_VALUE", review.CanonicalJson, StringComparison.Ordinal);
         Assert.DoesNotContain("secretValue", review.CanonicalJson, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("privateKey", review.CanonicalJson, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task M5_UT_Actual_canary_and_opaque_credential_material_are_denied_by_catalog_before_binding()
+    {
+        Fixture fixture = new();
+        ConnectorVersionResource version = await fixture.ImportAsync(Sample());
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        string[] hostileIds = ["ACTUAL_API_KEY_CANARY", "-----BEGIN-PRIVATE-KEY-----", "base64-PFX-MIIK", "Server-db-Password-secret", "missing-resource"];
+        foreach (string hostileId in hostileIds)
+        {
+            ConnectorBindingRequest request = BindingRequest(fixture.EnvironmentId, "https://controlled.example.test/") with
+            {
+                SecretResources = new Dictionary<string, ProviderResourceReference> { ["sample-vendor-api-key"] = new("synthetic", hostileId, ProviderResourceType.Secret) }
+            };
+            GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => fixture.Admin.PutBindingsAsync(version.ConnectorId, request, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken));
+            Assert.True(denied.Code is "BGW-PROVIDER-RESOURCE-REFERENCE-DENIED" or "BGW-PROVIDER-RESOURCE-NOT-FOUND", denied.Code);
+        }
+        Assert.Empty((await fixture.Store.ListBindingsPageAsync((await fixture.Store.ListVersionsAsync(version.ConnectorId, TestContext.Current.CancellationToken)).Single().Id, 0, 100, null, TestContext.Current.CancellationToken)).Items);
+        Assert.DoesNotContain("ACTUAL_API_KEY_CANARY", JsonSerializer.Serialize(fixture.Registry.SnapshotAuditEvents()), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task M5_UT_Catalog_revision_change_invalidates_review_and_near_expiry_is_real()
+    {
+        Fixture fixture = new(certificateExpiryDays: 5);
+        ConnectorVersionResource version = await fixture.ImportAsync(Sample());
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PutBindingsAsync(version.ConnectorId, BindingRequest(fixture.EnvironmentId, "https://vendor.example.test/"), "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord stored = Assert.Single(await fixture.Store.ListVersionsAsync(version.ConnectorId, TestContext.Current.CancellationToken));
+        ConnectorBindingSet binding = Assert.Single((await fixture.Store.ListBindingsPageAsync(stored.Id, 0, 100, null, TestContext.Current.CancellationToken)).Items);
+        ApprovalReviewResult review = ConnectorApprovalArtifacts.Create(stored, [binding]);
+        Assert.Contains(review.RiskIndicators, value => value.Code == "CERTIFICATE_NEAR_EXPIRY");
+
+        ProviderResourceCatalogRecord current = await fixture.Store.ResolveProviderResourceAsync(CertificateReference(), fixture.EnvironmentId, version.ConnectorId, ["submit"], TestContext.Current.CancellationToken);
+        _ = await fixture.Store.RegisterProviderResourceAsync(current with { Id = Guid.NewGuid(), ProviderReference = "synthetic://rotated-client-cert", Revision = 0, ChecksumSha256 = string.Empty, CreatedAt = fixture.Clock.UtcNow.AddMinutes(1) }, TestContext.Current.CancellationToken);
+        GatewayException stale = await Assert.ThrowsAsync<GatewayException>(() => fixture.Store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-PROVIDER-RESOURCE-REVISION-STALE", stale.Code);
     }
 
     [Fact]
@@ -285,13 +315,20 @@ public sealed class ConnectorConfigurationTests
     private static ConnectorBindingRequest BindingRequest(Guid environmentId, string endpoint, long? expectedRevision = null) => new(
         environmentId,
         new Dictionary<string, string> { ["sample-vendor-endpoint"] = endpoint },
-        new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://api-key", ["sample-vendor-client-certificate"] = "synthetic://client-certificate" },
-        expectedRevision);
+        SecretReferences(), expectedRevision, CertificateReferences());
+
+    private static ProviderResourceReference SecretReference() => new("synthetic", "api-key", ProviderResourceType.Secret);
+    private static ProviderResourceReference CertificateReference() => new("synthetic", "client-certificate", ProviderResourceType.ClientCertificate, PublicMetadataRevision: 1);
+    private static Dictionary<string, ProviderResourceReference> SecretReferences() => new() { ["sample-vendor-api-key"] = SecretReference() };
+    private static Dictionary<string, ProviderResourceReference> CertificateReferences() => new() { ["sample-vendor-client-certificate"] = CertificateReference() };
 
     private sealed class Fixture
     {
-        public Fixture()
+        public Fixture(int certificateExpiryDays = 90)
         {
+            CertificatePublicMetadata metadata = new(new string('A', 64), "CN=synthetic-client", "CN=synthetic-ca", Clock.UtcNow.AddDays(-1), Clock.UtcNow.AddDays(certificateExpiryDays), "ECDSA", 256, "1");
+            _ = Store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic vault", "synthetic", "api-key", ProviderResourceType.Secret, "Vendor API key", EnvironmentId, "sample-secure-service", "submit", "synthetic://api-key", ProviderResourceStatus.Active, null, 0, null, null, string.Empty, Clock.UtcNow), TestContext.Current.CancellationToken).GetAwaiter().GetResult();
+            _ = Store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic vault", "synthetic", "client-certificate", ProviderResourceType.ClientCertificate, "Vendor client certificate", EnvironmentId, "sample-secure-service", "submit", "synthetic://client-cert", ProviderResourceStatus.Active, null, 0, 1, metadata, string.Empty, Clock.UtcNow), TestContext.Current.CancellationToken).GetAwaiter().GetResult();
             Catalog = new(Store, Validator, Clock, TimeSpan.FromMinutes(5));
             Admin = new(Store, Validator, Catalog, Registry, Clock, new DevelopmentConnectorApprovalPolicy());
         }
