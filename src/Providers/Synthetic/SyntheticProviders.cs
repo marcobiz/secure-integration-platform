@@ -9,7 +9,7 @@ namespace SecureIntegration.Providers.Synthetic;
 
 /// <summary>In-memory provider for Development and deterministic tests.</summary>
 public sealed class InMemoryProvider(IReadOnlyDictionary<string, string> values, IReadOnlyDictionary<string, byte[]>? certificates = null) :
-    ISecretValueProvider, IClientCertificateProvider, IProviderHealthCheck, IProviderCapabilitySource
+    ISecretValueProvider, IClientCertificateProvider, ICertificateMetadataProvider, IProviderHealthCheck, IProviderCapabilitySource
 {
     /// <inheritdoc />
     public ProviderCapabilities Capabilities { get; } = new(true, true, false, false);
@@ -31,6 +31,13 @@ public sealed class InMemoryProvider(IReadOnlyDictionary<string, string> values,
     }
 
     /// <inheritdoc />
+    public async Task<ProviderCertificatePublicMetadata> GetPublicMetadataAsync(string logicalReference, CancellationToken cancellationToken)
+    {
+        using X509Certificate2 certificate = await GetClientCertificateAsync(logicalReference, cancellationToken).ConfigureAwait(false);
+        return PublicMetadata(certificate);
+    }
+
+    /// <inheritdoc />
     public Task<bool> IsReadyAsync(CancellationToken cancellationToken) => Task.FromResult(!cancellationToken.IsCancellationRequested);
 
     internal static X509Certificate2 LoadCertificate(byte[] encoded)
@@ -38,10 +45,19 @@ public sealed class InMemoryProvider(IReadOnlyDictionary<string, string> values,
         try { return X509CertificateLoader.LoadPkcs12(encoded, null, X509KeyStorageFlags.EphemeralKeySet); }
         catch (CryptographicException exception) { throw new ProviderAccessException("BGW-PROVIDER-CERTIFICATE-INVALID", false, exception); }
     }
+
+    internal static ProviderCertificatePublicMetadata PublicMetadata(X509Certificate2 certificate)
+    {
+        using RSA? rsa = certificate.GetRSAPublicKey();
+        using ECDsa? ecdsa = certificate.GetECDsaPublicKey();
+        int keySize = rsa?.KeySize ?? ecdsa?.KeySize ?? certificate.PublicKey.EncodedKeyValue.RawData.Length * 8;
+        string algorithm = rsa is not null ? "RSA" : ecdsa is not null ? "ECDSA" : certificate.PublicKey.Oid.Value ?? "unknown";
+        return new(Convert.ToHexString(SHA256.HashData(certificate.RawData)), certificate.Subject, certificate.Issuer, certificate.NotBefore.ToUniversalTime(), certificate.NotAfter.ToUniversalTime(), algorithm, keySize, certificate.SerialNumber);
+    }
 }
 
 /// <summary>HTTPS-only deterministic provider used by local and CI environments.</summary>
-public sealed class SyntheticProvider : ISecretValueProvider, IClientCertificateProvider, IProviderHealthCheck, IProviderCapabilitySource, IDisposable
+public sealed class SyntheticProvider : ISecretValueProvider, IClientCertificateProvider, ICertificateMetadataProvider, IProviderHealthCheck, IProviderCapabilitySource, IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow };
     private readonly Uri origin;
@@ -81,6 +97,13 @@ public sealed class SyntheticProvider : ISecretValueProvider, IClientCertificate
         string encoded = await GetSecretAsync(logicalReference, cancellationToken).ConfigureAwait(false);
         try { return InMemoryProvider.LoadCertificate(Convert.FromBase64String(encoded)); }
         catch (FormatException exception) { throw new ProviderAccessException("BGW-PROVIDER-CERTIFICATE-INVALID", false, exception); }
+    }
+
+    /// <inheritdoc />
+    public async Task<ProviderCertificatePublicMetadata> GetPublicMetadataAsync(string logicalReference, CancellationToken cancellationToken)
+    {
+        using X509Certificate2 certificate = await GetClientCertificateAsync(logicalReference, cancellationToken).ConfigureAwait(false);
+        return InMemoryProvider.PublicMetadata(certificate);
     }
 
     /// <inheritdoc />

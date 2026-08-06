@@ -16,6 +16,16 @@ public interface IClientCertificateProvider
     Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken);
 }
 
+/// <summary>Reads only public certificate metadata for review and policy decisions.</summary>
+public interface ICertificateMetadataProvider
+{
+    /// <summary>Returns public metadata without exporting private key material.</summary>
+    Task<ProviderCertificatePublicMetadata> GetPublicMetadataAsync(string logicalReference, CancellationToken cancellationToken);
+}
+
+/// <summary>Provider-neutral public certificate metadata.</summary>
+public sealed record ProviderCertificatePublicMetadata(string FingerprintSha256, string Subject, string Issuer, DateTimeOffset NotBefore, DateTimeOffset NotAfter, string KeyAlgorithm, int PublicKeySize, string Version);
+
 /// <summary>Uses a provider-owned signing key without exporting private material.</summary>
 public interface ISigningKeyProvider
 {
@@ -57,7 +67,8 @@ public sealed record ProviderServices(
     IProviderHealthCheck Health,
     IProviderCapabilitySource CapabilitySource,
     ISigningKeyProvider? SigningKeys = null,
-    IMacProvider? Mac = null);
+    IMacProvider? Mac = null,
+    ICertificateMetadataProvider? CertificateMetadata = null);
 
 /// <summary>Composition seam implemented by deployment-specific packs.</summary>
 public interface IProviderPackFactory
