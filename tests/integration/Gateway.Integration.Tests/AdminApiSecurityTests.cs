@@ -1,5 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
@@ -11,6 +14,7 @@ using SecureIntegration.Gateway.Api;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
+using SecureIntegration.Providers.Abstractions;
 using Xunit;
 
 namespace SecureIntegration.Gateway.Integration.Tests;
@@ -18,6 +22,97 @@ namespace SecureIntegration.Gateway.Integration.Tests;
 public sealed class AdminApiSecurityTests
 {
     private static readonly JsonSerializerOptions WireJson = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
+
+    [Fact]
+    public async Task M5_E2E_Admin_approval_publish_runtime_provider_transport_prevents_credential_exfiltration()
+    {
+        await using AntiExfiltrationFactory factory = new();
+        using HttpClient editor = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        using HttpClient approver = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        string editorCsrf = await LoginAsync(editor, "security-admin", TestContext.Current.CancellationToken);
+        string canary = "m5-e2e-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+        string syntheticConnectionString = $"Host=db.invalid;Password={Convert.ToHexString(RandomNumberGenerator.GetBytes(24))}";
+        using RSA key = RSA.Create(2048);
+        CertificateRequest certificateRequest = new("CN=M5 near-expiry", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        certificateRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+        using X509Certificate2 created = certificateRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(5));
+        byte[] pfx = created.Export(X509ContentType.Pkcs12);
+        string privatePem = key.ExportPkcs8PrivateKeyPem();
+        string pfxBase64 = Convert.ToBase64String(pfx);
+        CertificatePublicMetadata publicMetadata = new(Convert.ToHexString(SHA256.HashData(created.RawData)), created.Subject, created.Issuer, created.NotBefore, created.NotAfter, "RSA", 2048, created.SerialNumber);
+
+        Guid environmentId = Guid.NewGuid(); Guid tenantId = Guid.NewGuid(); Guid applicationId = Guid.NewGuid(); Guid installationId = Guid.NewGuid();
+        InMemoryGatewayRegistry registry = factory.Services.GetRequiredService<InMemoryGatewayRegistry>();
+        await registry.AddEnvironmentAsync(new(environmentId, "m5-e2e", "M5 E2E", false), TestContext.Current.CancellationToken);
+        await registry.AddTenantAsync(new(tenantId, "m5-e2e", "M5 E2E", TenantStatus.Active, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+        await registry.AddApplicationAsync(new(applicationId, "m5-e2e", "M5 E2E", ApplicationStatus.Active, "3.0.0", null, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+        await registry.AddInstallationAsync(new(installationId, tenantId, applicationId, environmentId, InstallationStatus.Active, "3.0.0", DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+
+        ConnectorVersionResource version = await ImportAndValidateSampleAsync(editor, editorCsrf, TestContext.Current.CancellationToken);
+        await registry.AddGrantAsync(new(Guid.NewGuid(), installationId, tenantId, version.ConnectorId, "submit", true, DateTimeOffset.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
+        IConnectorConfigurationStore store = factory.Services.GetRequiredService<IConnectorConfigurationStore>();
+        ProviderResourceCatalogRecord secret = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "instrumented", "Instrumented provider", "synthetic", "api-key", ProviderResourceType.Secret, "Vendor API key", environmentId, version.ConnectorId, "submit", "instrumented://api-key", ProviderResourceStatus.Active, "api-v1", 0, null, null, string.Empty, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+        _ = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "instrumented", "Instrumented provider", "synthetic", "certificate", ProviderResourceType.ClientCertificate, "Vendor certificate", environmentId, version.ConnectorId, "submit", "instrumented://certificate", ProviderResourceStatus.Active, "cert-resource-v1", 0, 1, publicMetadata, string.Empty, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+        object binding = new
+        {
+            environmentId,
+            connectorVersion = version.Version,
+            endpoints = new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://approved.vendor.example/" },
+            secretResources = new Dictionary<string, object> { ["sample-vendor-api-key"] = new { providerId = "instrumented", resourceId = "api-key", resourceType = "Secret", version = "api-v1" } },
+            certificateResources = new Dictionary<string, object> { ["sample-vendor-client-certificate"] = new { providerId = "instrumented", resourceId = "certificate", resourceType = "ClientCertificate", version = "cert-resource-v1", publicMetadataRevision = 1 } }
+        };
+        using (HttpResponseMessage response = await PutBindingAsync(editor, version.ConnectorId, binding, editorCsrf, null)) response.EnsureSuccessStatusCode();
+
+        InstrumentedProvider provider = new(canary, pfx);
+        InstrumentedTransport transport = new(canary, publicMetadata.FingerprintSha256);
+        PublishedConnectorCatalog runtimeCatalog = new(store, new ConnectorDefinitionValidator(), new SystemGatewayClock(), TimeSpan.FromMinutes(5));
+        RestrictedEgressService runtime = new(registry, runtimeCatalog, provider, provider, new PublicTestResolver(), transport, new SystemGatewayClock());
+        RegisteredInstallationIdentity identity = new(installationId, tenantId, applicationId, environmentId, TenantStatus.Active, ApplicationStatus.Active, InstallationStatus.Active, Guid.NewGuid(), CredentialStatus.Active, created.RawData, DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1), "3.0.0", null);
+        GatewayInvokeRequest invocation = new("1.0", new("application/json", "utf8", "{\"synthetic\":true}"), Guid.NewGuid());
+
+        await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, invocation.CorrelationId), version.ConnectorId, "submit", invocation, TestContext.Current.CancellationToken));
+        Assert.Equal(0, provider.SecretInvocations); Assert.Equal(0, transport.Invocations);
+
+        using HttpRequestMessage requestApproval = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approval-requests");
+        requestApproval.Headers.Add("X-CSRF-TOKEN", editorCsrf);
+        using HttpResponseMessage requested = await editor.SendAsync(requestApproval, TestContext.Current.CancellationToken); requested.EnsureSuccessStatusCode();
+        JsonElement approvalRequest = await requested.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+        string approvalId = approvalRequest.GetProperty("id").GetString()!;
+        using HttpResponseMessage reviewResponse = await editor.GetAsync($"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approval-review", TestContext.Current.CancellationToken); reviewResponse.EnsureSuccessStatusCode();
+        string reviewJson = await reviewResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        using JsonDocument review = JsonDocument.Parse(reviewJson);
+        string digest = review.RootElement.GetProperty("digestSha256").GetString()!;
+        JsonElement certificateReview = review.RootElement.GetProperty("artifact").GetProperty("operations")[0].GetProperty("certificateBindings")[0];
+        Assert.Equal("cert-resource-v1", certificateReview.GetProperty("resourceVersion").GetString());
+        Assert.Equal(created.SerialNumber, certificateReview.GetProperty("certificateVersion").GetString());
+        Assert.Equal(1, certificateReview.GetProperty("publicMetadataRevision").GetInt64());
+        Assert.DoesNotContain(canary, reviewJson, StringComparison.Ordinal); Assert.DoesNotContain(privatePem, reviewJson, StringComparison.Ordinal); Assert.DoesNotContain(pfxBase64, reviewJson, StringComparison.Ordinal); Assert.DoesNotContain(syntheticConnectionString, reviewJson, StringComparison.Ordinal);
+
+        string approverCsrf = await LoginAsync(approver, "approver", TestContext.Current.CancellationToken);
+        using HttpRequestMessage approve = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approvals") { Content = JsonContent.Create(new { approvalRequestId = approvalId, expectedDigestSha256 = digest }) };
+        approve.Headers.Add("X-CSRF-TOKEN", approverCsrf);
+        using (HttpResponseMessage approved = await approver.SendAsync(approve, TestContext.Current.CancellationToken)) approved.EnsureSuccessStatusCode();
+        await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, invocation.CorrelationId), version.ConnectorId, "submit", invocation, TestContext.Current.CancellationToken));
+        Assert.Equal(0, provider.SecretInvocations); Assert.Equal(0, transport.Invocations);
+
+        using HttpRequestMessage publish = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}:publish") { Content = JsonContent.Create(new { expectedRowVersion = version.RowVersion, expectedPublicationRevision = 0 }) };
+        publish.Headers.Add("X-CSRF-TOKEN", approverCsrf); publish.Headers.TryAddWithoutValidation("If-Match", $"\"{version.RowVersion}\"");
+        using (HttpResponseMessage published = await approver.SendAsync(publish, TestContext.Current.CancellationToken))
+            Assert.True(published.IsSuccessStatusCode, $"{published.StatusCode}: {await published.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)}");
+        GatewayInvokeResponse result = await runtime.InvokeAsync(new(identity, invocation.CorrelationId), version.ConnectorId, "submit", invocation, TestContext.Current.CancellationToken);
+        Assert.Equal(1, provider.SecretInvocations); Assert.Equal(1, provider.CertificateInvocations); Assert.Equal(1, transport.Invocations);
+        Assert.Contains("accepted", Encoding.UTF8.GetString(Convert.FromBase64String(result.Result.Data)), StringComparison.Ordinal);
+        Assert.DoesNotContain(canary, JsonSerializer.Serialize(result), StringComparison.Ordinal);
+
+        int secretCount = provider.SecretInvocations; int transportCount = transport.Invocations;
+        GatewayException attacker = await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, Guid.NewGuid()), version.ConnectorId, "attacker-operation", invocation with { CorrelationId = Guid.NewGuid() }, TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-AUTHZ-OPERATION-DENIED", attacker.Code); Assert.Equal(secretCount, provider.SecretInvocations); Assert.Equal(transportCount, transport.Invocations); Assert.Equal(0, transport.AttackerInvocations);
+
+        _ = await store.RegisterProviderResourceAsync(secret with { Id = Guid.NewGuid(), ProviderReference = "instrumented://rotated", Revision = 0, ChecksumSha256 = string.Empty, CreatedAt = DateTimeOffset.UtcNow.AddSeconds(1) }, TestContext.Current.CancellationToken);
+        GatewayException stale = await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, Guid.NewGuid()), version.ConnectorId, "submit", invocation with { CorrelationId = Guid.NewGuid() }, TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-PROVIDER-RESOURCE-REVISION-STALE", stale.Code); Assert.Equal(secretCount, provider.SecretInvocations); Assert.Equal(transportCount, transport.Invocations);
+        Assert.DoesNotContain(canary, JsonSerializer.Serialize(registry.SnapshotAuditEvents()), StringComparison.Ordinal);
+    }
     [Fact]
     public async Task M5_IT_Anonymous_is_denied_and_security_headers_are_present()
     {
@@ -574,6 +669,52 @@ public sealed class AdminApiSecurityTests
         return json.RootElement.GetProperty("id").GetGuid();
     }
 
+    private sealed class InstrumentedProvider(string canary, byte[] pfx) : ISecretValueProvider, IClientCertificateProvider
+    {
+        public int SecretInvocations { get; private set; }
+        public int CertificateInvocations { get; private set; }
+
+        public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal("instrumented://api-key", logicalReference);
+            SecretInvocations++;
+            return Task.FromResult(canary);
+        }
+
+        public Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal("instrumented://certificate", logicalReference);
+            CertificateInvocations++;
+            return Task.FromResult(X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable));
+        }
+    }
+
+    private sealed class InstrumentedTransport(string expectedCanary, string expectedFingerprint) : IRestrictedTransport
+    {
+        public int Invocations { get; private set; }
+        public int AttackerInvocations { get; private set; }
+
+        public Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!string.Equals(request.RequestUri?.DnsSafeHost, "approved.vendor.example", StringComparison.Ordinal)) AttackerInvocations++;
+            Assert.Equal("approved.vendor.example", request.RequestUri?.DnsSafeHost);
+            Assert.Equal(expectedCanary, request.Headers.GetValues("X-Vendor-Api-Key").Single());
+            Assert.Equal(expectedFingerprint, Convert.ToHexString(SHA256.HashData(clientCertificate!.RawData)));
+            Assert.Single(approvedAddresses); Assert.Equal(IPAddress.Parse("203.0.113.10"), approvedAddresses[0]);
+            Invocations++;
+            return Task.FromResult(new ExternalResponse(200, "application/json", "{\"accepted\":true,\"credential\":\"[REDACTED]\"}"u8.ToArray()));
+        }
+    }
+
+    private sealed class PublicTestResolver : IHostResolver
+    {
+        public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) =>
+            Task.FromResult(new[] { IPAddress.Parse("203.0.113.10") });
+    }
+
     private static string RepositoryRoot()
     {
         DirectoryInfo? directory = new(AppContext.BaseDirectory);
@@ -582,12 +723,38 @@ public sealed class AdminApiSecurityTests
     }
 }
 
-public sealed class AdminDevelopmentFactory : WebApplicationFactory<Program>
+public class AdminDevelopmentFactory : WebApplicationFactory<Program>
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
         builder.UseSetting("Gateway:Admin:Mode", "DevelopmentAuth");
+    }
+}
+
+/// <summary>Deterministic four-eyes host used only for the cross-layer anti-exfiltration test.
+/// PostgreSQL tests separately prove the production atomic publication transaction.</summary>
+public sealed class AntiExfiltrationFactory : AdminDevelopmentFactory
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+        builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<IConnectorApprovalPolicy>();
+            services.AddSingleton<IConnectorApprovalPolicy, DeterministicFourEyesApprovalPolicy>();
+        });
+    }
+
+    private sealed class DeterministicFourEyesApprovalPolicy(IAdminSecurityStore approvals) : IConnectorApprovalPolicy
+    {
+        public async Task<ConnectorVersionRecord> PublishAsync(IConnectorConfigurationStore connectorStore, ConnectorVersionRecord version, long expectedRowVersion, long expectedPublicationRevision, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
+        {
+            byte[] digest = await connectorStore.GetBindingBundleDigestAsync(version.Id, cancellationToken).ConfigureAwait(false);
+            if (!await approvals.HasValidApprovalAsync(version.Id, version.ChecksumSha256, digest, actor, cancellationToken).ConfigureAwait(false))
+                throw new GatewayException("BGW-ADMIN-APPROVAL-REQUIRED", 409);
+            return await connectorStore.PublishAsync(version.Id, expectedRowVersion, expectedPublicationRevision, actor, now, cancellationToken).ConfigureAwait(false);
+        }
     }
 }
 
