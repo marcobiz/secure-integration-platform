@@ -26,17 +26,17 @@ public interface IGatewayRegistry
     /// <summary>Adds a Tenant and its administrative audit event atomically.</summary>
     Task AddTenantWithAuditAsync(TenantRecord tenant, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Updates Tenant metadata and audit atomically.</summary>
-    Task<TenantRecord> UpdateTenantWithAuditAsync(Guid tenantId, string displayName, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
+    Task<TenantRecord> UpdateTenantWithAuditAsync(Guid tenantId, string displayName, long expectedRowVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Disables a Tenant and appends its audit atomically.</summary>
-    Task<TenantRecord> DisableTenantWithAuditAsync(Guid tenantId, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
+    Task<TenantRecord> DisableTenantWithAuditAsync(Guid tenantId, long expectedRowVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Adds an Application.</summary>
     Task AddApplicationAsync(ApplicationRecord application, CancellationToken cancellationToken);
     /// <summary>Adds an Application and its administrative audit event atomically.</summary>
     Task AddApplicationWithAuditAsync(ApplicationRecord application, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Updates Application metadata and audit atomically.</summary>
-    Task<ApplicationRecord> UpdateApplicationWithAuditAsync(Guid applicationId, string displayName, string minimumBrokerVersion, string? maximumBrokerVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
+    Task<ApplicationRecord> UpdateApplicationWithAuditAsync(Guid applicationId, string displayName, string minimumBrokerVersion, string? maximumBrokerVersion, long expectedRowVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Disables an Application and appends its audit atomically.</summary>
-    Task<ApplicationRecord> DisableApplicationWithAuditAsync(Guid applicationId, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
+    Task<ApplicationRecord> DisableApplicationWithAuditAsync(Guid applicationId, long expectedRowVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Adds an Environment.</summary>
     Task AddEnvironmentAsync(GatewayEnvironmentRecord environment, CancellationToken cancellationToken);
     /// <summary>Adds a tenant-bound Installation.</summary>

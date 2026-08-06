@@ -250,7 +250,7 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
             ConnectorVersionRecord version = Required(connectorVersionId);
             ConnectorBindingSet[] bindings = LatestBindings(connectorVersionId);
             if (bindings.Length == 0) throw new GatewayException("BGW-CONNECTOR-BINDING-MISSING", 409);
-            return Task.FromResult(ConnectorBindingDigests.Bundle(version.ChecksumSha256, bindings));
+            return Task.FromResult(ConnectorBindingDigests.Bundle(version, bindings));
         }
     }
 

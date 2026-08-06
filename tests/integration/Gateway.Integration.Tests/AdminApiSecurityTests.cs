@@ -84,12 +84,14 @@ public sealed class AdminApiSecurityTests
         using (HttpRequestMessage updateTenant = new(HttpMethod.Put, $"/admin/api/v1/tenants/{tenantId:D}") { Content = JsonContent.Create(new { displayName = "Tenant M5 updated" }) })
         {
             updateTenant.Headers.Add("X-CSRF-TOKEN", csrf);
+            updateTenant.Headers.TryAddWithoutValidation("If-Match", "\"1\"");
             using HttpResponseMessage updated = await client.SendAsync(updateTenant, TestContext.Current.CancellationToken);
             updated.EnsureSuccessStatusCode();
         }
         using (HttpRequestMessage disableApplication = new(HttpMethod.Post, $"/admin/api/v1/applications/{applicationId:D}:disable"))
         {
             disableApplication.Headers.Add("X-CSRF-TOKEN", csrf);
+            disableApplication.Headers.TryAddWithoutValidation("If-Match", "\"1\"");
             using HttpResponseMessage disabled = await client.SendAsync(disableApplication, TestContext.Current.CancellationToken);
             disabled.EnsureSuccessStatusCode();
         }
@@ -111,6 +113,33 @@ public sealed class AdminApiSecurityTests
         string listBody = await listed.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
         Assert.DoesNotContain("activationCode", listBody, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task M5_IT_Tenant_and_application_require_current_IfMatch_without_lost_updates()
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        string csrf = await LoginAsync(client, "security-admin", TestContext.Current.CancellationToken);
+        Guid tenantId = await CreateAndGetIdAsync(client, "/admin/api/v1/tenants", new { code = "etag-tenant", displayName = "Original tenant" }, csrf);
+        Guid applicationId = await CreateAndGetIdAsync(client, "/admin/api/v1/applications", new { code = "etag-app", displayName = "Original app", minimumBrokerVersion = "3.0.0", maximumBrokerVersion = (string?)null }, csrf);
+
+        using HttpResponseMessage tenantGet = await client.GetAsync($"/admin/api/v1/tenants/{tenantId:D}", TestContext.Current.CancellationToken);
+        Assert.Equal("\"1\"", tenantGet.Headers.ETag?.Tag);
+        using HttpRequestMessage missing = new(HttpMethod.Put, $"/admin/api/v1/tenants/{tenantId:D}") { Content = JsonContent.Create(new { displayName = "Missing precondition" }) };
+        missing.Headers.Add("X-CSRF-TOKEN", csrf); using HttpResponseMessage missingResponse = await client.SendAsync(missing, TestContext.Current.CancellationToken); Assert.Equal((HttpStatusCode)428, missingResponse.StatusCode);
+        using HttpRequestMessage tenantA = new(HttpMethod.Put, $"/admin/api/v1/tenants/{tenantId:D}") { Content = JsonContent.Create(new { displayName = "Admin A" }) };
+        tenantA.Headers.Add("X-CSRF-TOKEN", csrf); tenantA.Headers.TryAddWithoutValidation("If-Match", "\"1\""); using HttpResponseMessage tenantAResponse = await client.SendAsync(tenantA, TestContext.Current.CancellationToken); tenantAResponse.EnsureSuccessStatusCode();
+        using HttpRequestMessage tenantB = new(HttpMethod.Put, $"/admin/api/v1/tenants/{tenantId:D}") { Content = JsonContent.Create(new { displayName = "Admin B" }) };
+        tenantB.Headers.Add("X-CSRF-TOKEN", csrf); tenantB.Headers.TryAddWithoutValidation("If-Match", "\"1\""); using HttpResponseMessage tenantBResponse = await client.SendAsync(tenantB, TestContext.Current.CancellationToken); Assert.Equal(HttpStatusCode.Conflict, tenantBResponse.StatusCode);
+        JsonElement currentTenant = await tenantAResponse.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken); Assert.Equal("Admin A", currentTenant.GetProperty("displayName").GetString()); Assert.Equal(2, currentTenant.GetProperty("rowVersion").GetInt64());
+
+        using HttpResponseMessage applicationGet = await client.GetAsync($"/admin/api/v1/applications/{applicationId:D}", TestContext.Current.CancellationToken); Assert.Equal("\"1\"", applicationGet.Headers.ETag?.Tag);
+        using HttpRequestMessage applicationA = new(HttpMethod.Put, $"/admin/api/v1/applications/{applicationId:D}") { Content = JsonContent.Create(new { displayName = "Admin A", minimumBrokerVersion = "3.1.0", maximumBrokerVersion = (string?)null }) };
+        applicationA.Headers.Add("X-CSRF-TOKEN", csrf); applicationA.Headers.TryAddWithoutValidation("If-Match", "\"1\""); using HttpResponseMessage applicationAResponse = await client.SendAsync(applicationA, TestContext.Current.CancellationToken); applicationAResponse.EnsureSuccessStatusCode();
+        using HttpRequestMessage applicationB = new(HttpMethod.Post, $"/admin/api/v1/applications/{applicationId:D}:disable");
+        applicationB.Headers.Add("X-CSRF-TOKEN", csrf); applicationB.Headers.TryAddWithoutValidation("If-Match", "\"1\""); using HttpResponseMessage applicationBResponse = await client.SendAsync(applicationB, TestContext.Current.CancellationToken); Assert.Equal(HttpStatusCode.Conflict, applicationBResponse.StatusCode);
+        Assert.Equal(2, factory.Services.GetRequiredService<InMemoryGatewayRegistry>().SnapshotAuditEvents().Count(value => value.Action is "tenant.update" or "application.update"));
     }
 
     [Fact]
@@ -323,11 +352,18 @@ public sealed class AdminApiSecurityTests
         using HttpResponseMessage requested = await client.SendAsync(approvalRequest, TestContext.Current.CancellationToken);
         requested.EnsureSuccessStatusCode();
         using JsonDocument requestedBody = JsonDocument.Parse(await requested.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-        using HttpRequestMessage staleApprove = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approvals") { Content = JsonContent.Create(new { bindingDigestSha256 = new string('A', 64) }) };
+        using HttpResponseMessage reviewResponse = await client.GetAsync($"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approval-review", TestContext.Current.CancellationToken);
+        reviewResponse.EnsureSuccessStatusCode(); string reviewJson = await reviewResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        using JsonDocument review = JsonDocument.Parse(reviewJson);
+        Assert.Equal("vendor.example.test", review.RootElement.GetProperty("artifact").GetProperty("operations")[0].GetProperty("endpoint").GetProperty("hostname").GetString());
+        Assert.Equal(requestedBody.RootElement.GetProperty("bindingDigestSha256").GetString(), review.RootElement.GetProperty("digestSha256").GetString());
+        Assert.Contains("api-key", reviewJson, StringComparison.Ordinal); Assert.DoesNotContain("secretValue", reviewJson, StringComparison.OrdinalIgnoreCase);
+        Guid approvalRequestId = requestedBody.RootElement.GetProperty("id").GetGuid();
+        using HttpRequestMessage staleApprove = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approvals") { Content = JsonContent.Create(new { approvalRequestId, expectedDigestSha256 = new string('A', 64) }) };
         staleApprove.Headers.Add("X-CSRF-TOKEN", csrf);
         using HttpResponseMessage staleApproval = await client.SendAsync(staleApprove, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Conflict, staleApproval.StatusCode);
-        using HttpRequestMessage approve = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approvals") { Content = JsonContent.Create(new { bindingDigestSha256 = requestedBody.RootElement.GetProperty("bindingDigestSha256").GetString() }) };
+        using HttpRequestMessage approve = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approvals") { Content = JsonContent.Create(new { approvalRequestId, expectedDigestSha256 = requestedBody.RootElement.GetProperty("bindingDigestSha256").GetString() }) };
         approve.Headers.Add("X-CSRF-TOKEN", csrf);
         using HttpResponseMessage selfApproval = await client.SendAsync(approve, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Forbidden, selfApproval.StatusCode);

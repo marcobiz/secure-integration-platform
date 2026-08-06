@@ -235,6 +235,36 @@ public sealed class ConnectorConfigurationTests
     }
 
     [Fact]
+    public async Task M5_UT_Approval_review_is_semantic_canonical_and_contains_no_credential_value()
+    {
+        Fixture fixture = new();
+        ConnectorVersionResource version = await fixture.ImportAsync(Sample());
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PutBindingsAsync(version.ConnectorId, new(fixture.EnvironmentId,
+            new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://controlled-public.example.test/base/" },
+            new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic-vault://vault.test/logical-api-key", ["sample-vendor-client-certificate"] = "synthetic-vault://vault.test/logical-client-certificate" }),
+            "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord stored = Assert.Single(await fixture.Store.ListVersionsAsync(version.ConnectorId, TestContext.Current.CancellationToken));
+        ConnectorBindingSet binding = Assert.Single((await fixture.Store.ListBindingsPageAsync(stored.Id, 0, 100, null, TestContext.Current.CancellationToken)).Items);
+
+        ApprovalReviewResult review = ConnectorApprovalArtifacts.Create(stored, [binding]);
+        ApprovalOperationReview operation = Assert.Single(review.Artifact.Operations);
+        ApprovalSecretReview secret = Assert.Single(operation.SecretBindings);
+        Assert.Equal("controlled-public.example.test", operation.Endpoint.Hostname);
+        Assert.Equal(443, operation.Endpoint.Port);
+        Assert.Equal("/vendor/orders", operation.Endpoint.Path);
+        Assert.Equal("POST", Assert.Single(operation.Endpoint.AllowedMethods));
+        Assert.Equal("Synthetic vault", secret.ProviderDisplayName);
+        Assert.Equal("vault.test", secret.ProviderId);
+        Assert.Equal("logical-api-key", secret.ResourceLogicalId);
+        Assert.Equal(Convert.ToHexString(await fixture.Store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken)), review.DigestSha256);
+        Assert.Contains(review.RiskIndicators, value => value.Code == "PUBLIC_INTERNET_DESTINATION");
+        Assert.DoesNotContain("VERY_SECRET_CANARY_VALUE", review.CanonicalJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("secretValue", review.CanonicalJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("privateKey", review.CanonicalJson, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void M4_UT_Corrupted_configuration_is_rejected_fail_closed()
     {
         ConnectorDefinitionValidator validator = new();

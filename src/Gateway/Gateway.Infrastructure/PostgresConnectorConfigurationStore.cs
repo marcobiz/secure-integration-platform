@@ -171,7 +171,7 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
 
         IReadOnlyList<ConnectorBindingSet> bindings = await ReadLatestBindingsAsync(connection, transaction, target, forUpdate: true, cancellationToken).ConfigureAwait(false);
         if (bindings.Count == 0) throw new GatewayException("BGW-CONNECTOR-BINDING-MISSING", 409);
-        byte[] bindingDigest = ConnectorBindingDigests.Bundle(target.ChecksumSha256, bindings);
+        byte[] bindingDigest = ConnectorBindingDigests.Bundle(target, bindings);
         if (!CryptographicOperations.FixedTimeEquals(bindingDigest, expectedBindingDigestSha256)) throw new GatewayException("BGW-ADMIN-APPROVAL-STALE", 409);
         const string approvalSql = "SELECT a.approved_by,a.requested_by FROM gateway.connector_approval a WHERE a.connector_version_id=$1 AND a.checksum_sha256=$2 AND a.binding_digest_sha256=$3 AND a.status='approved' FOR UPDATE";
         Guid approvedBy;
@@ -314,7 +314,7 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
         ConnectorVersionRecord version = await GetByIdAsync(connection, null, connectorVersionId, false, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<ConnectorBindingSet> bindings = await ReadLatestBindingsAsync(connection, null, version, forUpdate: false, cancellationToken).ConfigureAwait(false);
         if (bindings.Count == 0) throw new GatewayException("BGW-CONNECTOR-BINDING-MISSING", 409);
-        return ConnectorBindingDigests.Bundle(version.ChecksumSha256, bindings);
+        return ConnectorBindingDigests.Bundle(version, bindings);
     }
 
     /// <inheritdoc />

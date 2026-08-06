@@ -19,7 +19,8 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
     {
         if (auditEvent.TenantId != tenant.Id) throw new ArgumentException("Tenant audit scope is inconsistent.", nameof(auditEvent));
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+        await SetTenantAsync(connection, transaction, tenant.Id, cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, transaction, "INSERT INTO gateway.tenant(id,code,display_name,status,created_at) VALUES($1,$2,$3,$4,$5)", cancellationToken, tenant.Id, tenant.Code, tenant.DisplayName, Db(tenant.Status), tenant.CreatedAt).ConfigureAwait(false);
         faultInjector?.Check("tenant.create.after-state");
         await InsertAuditAsync(connection, transaction, auditEvent, cancellationToken).ConfigureAwait(false);
@@ -27,12 +28,12 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
     }
 
     /// <inheritdoc />
-    public Task<TenantRecord> UpdateTenantWithAuditAsync(Guid tenantId, string displayName, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) =>
-        MutateTenantWithAuditAsync(tenantId, "display_name=$2", displayName, "tenant.update.after-state", auditEvent, cancellationToken);
+    public Task<TenantRecord> UpdateTenantWithAuditAsync(Guid tenantId, string displayName, long expectedRowVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) =>
+        MutateTenantWithAuditAsync(tenantId, expectedRowVersion, "display_name=$2", displayName, "tenant.update.after-state", auditEvent, cancellationToken);
 
     /// <inheritdoc />
-    public Task<TenantRecord> DisableTenantWithAuditAsync(Guid tenantId, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) =>
-        MutateTenantWithAuditAsync(tenantId, "status=$2", Db(TenantStatus.Suspended), "tenant.disable.after-state", auditEvent, cancellationToken);
+    public Task<TenantRecord> DisableTenantWithAuditAsync(Guid tenantId, long expectedRowVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) =>
+        MutateTenantWithAuditAsync(tenantId, expectedRowVersion, "status=$2", Db(TenantStatus.Suspended), "tenant.disable.after-state", auditEvent, cancellationToken);
 
     /// <inheritdoc />
     public async Task AddApplicationAsync(ApplicationRecord application, CancellationToken cancellationToken) => await ExecuteAsync(
@@ -43,7 +44,7 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
     public async Task AddApplicationWithAuditAsync(ApplicationRecord application, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
     {
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, transaction, "INSERT INTO gateway.application(id,code,display_name,status,minimum_broker_version,maximum_broker_version,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)", cancellationToken, application.Id, application.Code, application.DisplayName, Db(application.Status), application.MinimumBrokerVersion, application.MaximumBrokerVersion, application.CreatedAt).ConfigureAwait(false);
         faultInjector?.Check("application.create.after-state");
         await InsertAuditAsync(connection, transaction, auditEvent, cancellationToken).ConfigureAwait(false);
@@ -51,11 +52,12 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
     }
 
     /// <inheritdoc />
-    public async Task<ApplicationRecord> UpdateApplicationWithAuditAsync(Guid applicationId, string displayName, string minimumBrokerVersion, string? maximumBrokerVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    public async Task<ApplicationRecord> UpdateApplicationWithAuditAsync(Guid applicationId, string displayName, string minimumBrokerVersion, string? maximumBrokerVersion, long expectedRowVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
     {
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
-        await using NpgsqlCommand command = new("UPDATE gateway.application SET display_name=$2,minimum_broker_version=$3,maximum_broker_version=$4 WHERE id=$1 RETURNING id,code,display_name,status,minimum_broker_version,maximum_broker_version,created_at", connection, transaction);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+        await LockApplicationAsync(connection, transaction, applicationId, expectedRowVersion, cancellationToken).ConfigureAwait(false);
+        await using NpgsqlCommand command = new("UPDATE gateway.application SET display_name=$2,minimum_broker_version=$3,maximum_broker_version=$4,row_version=row_version+1 WHERE id=$1 RETURNING id,code,display_name,status,minimum_broker_version,maximum_broker_version,created_at,row_version", connection, transaction);
         command.Parameters.AddWithValue(applicationId); command.Parameters.AddWithValue(displayName); command.Parameters.AddWithValue(minimumBrokerVersion); command.Parameters.AddWithValue((object?)maximumBrokerVersion ?? DBNull.Value);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-APPLICATION-NOT-FOUND", 404);
@@ -67,11 +69,12 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
     }
 
     /// <inheritdoc />
-    public async Task<ApplicationRecord> DisableApplicationWithAuditAsync(Guid applicationId, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    public async Task<ApplicationRecord> DisableApplicationWithAuditAsync(Guid applicationId, long expectedRowVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
     {
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
-        await using NpgsqlCommand command = new("UPDATE gateway.application SET status='suspended' WHERE id=$1 RETURNING id,code,display_name,status,minimum_broker_version,maximum_broker_version,created_at", connection, transaction);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+        await LockApplicationAsync(connection, transaction, applicationId, expectedRowVersion, cancellationToken).ConfigureAwait(false);
+        await using NpgsqlCommand command = new("UPDATE gateway.application SET status='suspended',row_version=row_version+1 WHERE id=$1 RETURNING id,code,display_name,status,minimum_broker_version,maximum_broker_version,created_at,row_version", connection, transaction);
         command.Parameters.AddWithValue(applicationId);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-APPLICATION-NOT-FOUND", 404);
@@ -82,16 +85,24 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
         return result;
     }
 
-    private async Task<TenantRecord> MutateTenantWithAuditAsync(Guid tenantId, string assignment, object value, string faultBoundary, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    private async Task<TenantRecord> MutateTenantWithAuditAsync(Guid tenantId, long expectedRowVersion, string assignment, object value, string faultBoundary, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
     {
         if (auditEvent.TenantId != tenantId) throw new ArgumentException("Tenant audit scope is inconsistent.", nameof(auditEvent));
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
-        await using NpgsqlCommand command = new($"UPDATE gateway.tenant SET {assignment} WHERE id=$1 RETURNING id,code,display_name,status,created_at", connection, transaction);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
+        await SetTenantAsync(connection, transaction, tenantId, cancellationToken).ConfigureAwait(false);
+        await using (NpgsqlCommand select = new("SELECT row_version FROM gateway.tenant WHERE id=$1 FOR UPDATE", connection, transaction))
+        {
+            select.Parameters.AddWithValue(tenantId);
+            object? current = await select.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            if (current is null) throw new GatewayException("BGW-TENANT-NOT-FOUND", 404);
+            if (Convert.ToInt64(current, System.Globalization.CultureInfo.InvariantCulture) != expectedRowVersion) throw new GatewayException("BGW-CONCURRENCY-CONFLICT", 409);
+        }
+        await using NpgsqlCommand command = new($"UPDATE gateway.tenant SET {assignment},row_version=row_version+1 WHERE id=$1 RETURNING id,code,display_name,status,created_at,row_version", connection, transaction);
         command.Parameters.AddWithValue(tenantId); command.Parameters.AddWithValue(value);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-TENANT-NOT-FOUND", 404);
-        TenantRecord result = new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Enum.Parse<TenantStatus>(reader.GetString(3), true), reader.GetFieldValue<DateTimeOffset>(4));
+        TenantRecord result = new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Enum.Parse<TenantStatus>(reader.GetString(3), true), reader.GetFieldValue<DateTimeOffset>(4), reader.GetInt64(5));
         await reader.CloseAsync().ConfigureAwait(false);
         faultInjector?.Check(faultBoundary);
         await InsertAuditAsync(connection, transaction, auditEvent, cancellationToken).ConfigureAwait(false);
@@ -99,7 +110,16 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
         return result;
     }
 
-    private static ApplicationRecord ReadApplication(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Enum.Parse<ApplicationStatus>(reader.GetString(3), true), reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetFieldValue<DateTimeOffset>(6));
+    private static ApplicationRecord ReadApplication(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Enum.Parse<ApplicationStatus>(reader.GetString(3), true), reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetFieldValue<DateTimeOffset>(6), reader.GetInt64(7));
+
+    private static async Task LockApplicationAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, Guid applicationId, long expectedRowVersion, CancellationToken cancellationToken)
+    {
+        await using NpgsqlCommand select = new("SELECT row_version FROM gateway.application WHERE id=$1 FOR UPDATE", connection, transaction);
+        select.Parameters.AddWithValue(applicationId);
+        object? current = await select.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        if (current is null) throw new GatewayException("BGW-APPLICATION-NOT-FOUND", 404);
+        if (Convert.ToInt64(current, System.Globalization.CultureInfo.InvariantCulture) != expectedRowVersion) throw new GatewayException("BGW-CONCURRENCY-CONFLICT", 409);
+    }
 
     /// <inheritdoc />
     public async Task AddEnvironmentAsync(GatewayEnvironmentRecord environment, CancellationToken cancellationToken) => await ExecuteAsync(

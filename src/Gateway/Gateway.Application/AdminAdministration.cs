@@ -64,8 +64,12 @@ public interface IAdminDirectoryStore
 {
     /// <summary>Lists tenants in a bounded page.</summary>
     Task<AdminPage<TenantRecord>> ListTenantsAsync(int offset, int limit, CancellationToken cancellationToken);
+    /// <summary>Gets one Tenant including its concurrency token.</summary>
+    Task<TenantRecord?> GetTenantAsync(Guid tenantId, CancellationToken cancellationToken);
     /// <summary>Lists applications in a bounded page.</summary>
     Task<AdminPage<ApplicationRecord>> ListApplicationsAsync(int offset, int limit, CancellationToken cancellationToken);
+    /// <summary>Gets one Application including its concurrency token.</summary>
+    Task<ApplicationRecord?> GetApplicationAsync(Guid applicationId, CancellationToken cancellationToken);
     /// <summary>Lists deployment environments in a bounded page.</summary>
     Task<AdminPage<GatewayEnvironmentRecord>> ListEnvironmentsAsync(int offset, int limit, CancellationToken cancellationToken);
     /// <summary>Lists installations inside one authorized tenant.</summary>
@@ -117,8 +121,8 @@ public sealed record ConnectorApprovalRecord(
 
 /// <summary>Redacted approval decision input.</summary>
 public sealed record ConnectorApprovalDecisionRequest(string? Comment);
-/// <summary>Approval acceptance bound to the exact digest displayed to the approver.</summary>
-public sealed record ConnectorApprovalAcceptanceRequest(string BindingDigestSha256);
+/// <summary>Approval acceptance bound to one exact request and the digest displayed to the approver.</summary>
+public sealed record ConnectorApprovalAcceptanceRequest(Guid ApprovalRequestId, string ExpectedDigestSha256, string? Comment = null);
 
 /// <summary>Minimal persistence contract for identities, roles and four-eyes records.</summary>
 public interface IAdminSecurityStore
@@ -138,7 +142,7 @@ public interface IAdminSecurityStore
     /// <summary>Creates or replaces a request for the exact version checksum.</summary>
     Task<ConnectorApprovalRecord> RequestApprovalAsync(ConnectorVersionRecord version, byte[] bindingDigestSha256, Guid requester, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Approves the current request when approver and editor identities are distinct.</summary>
-    Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid approver, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
+    Task<ConnectorApprovalRecord> ApproveAsync(Guid approvalRequestId, Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid approver, string? comment, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Rejects the current exact-checksum request as a distinct approver.</summary>
     Task<ConnectorApprovalRecord> RejectAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid rejector, string? comment, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Checks for a current approval by a distinct principal.</summary>
@@ -206,6 +210,22 @@ public sealed class AdminAccessService(IAdminSecurityStore store, IAdminSessionS
 /// <summary>Four-eyes request and approval application service.</summary>
 public sealed class ConnectorApprovalService(IAdminSecurityStore store, IConnectorConfigurationStore connectors, IGatewayClock clock)
 {
+    /// <summary>Returns the exact semantic artefact that approval and publication digest.</summary>
+    public async Task<ApprovalReviewResult> ReviewAsync(string connectorId, string version, AdminAccessContext actor, CancellationToken cancellationToken)
+    {
+        AdminAccessService.Require(actor, null, AdminRole.Viewer, AdminRole.ConnectorEditor, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
+        ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
+        ConnectorBindingSet[] currentBindings = Latest((await connectors.ListBindingsPageAsync(current.Id, 0, 100, null, cancellationToken).ConfigureAwait(false)).Items);
+        ApprovalReviewArtifact? previous = null;
+        ConnectorVersionRecord? published = (await connectors.ListVersionsAsync(connectorId, cancellationToken).ConfigureAwait(false)).FirstOrDefault(value => value.State == ConnectorVersionState.Published && value.Id != current.Id);
+        if (published is not null)
+        {
+            ConnectorBindingSet[] publishedBindings = Latest((await connectors.ListBindingsPageAsync(published.Id, 0, 100, null, cancellationToken).ConfigureAwait(false)).Items);
+            if (publishedBindings.Length > 0) previous = ConnectorApprovalArtifacts.Create(published, publishedBindings).Artifact;
+        }
+        return ConnectorApprovalArtifacts.Create(current, currentBindings, previous);
+    }
+
     /// <summary>Requests approval for the current Validated checksum.</summary>
     public async Task<ConnectorApprovalRecord> RequestAsync(string connectorId, string version, AdminAccessContext actor, Guid correlationId, CancellationToken cancellationToken)
     {
@@ -217,16 +237,18 @@ public sealed class ConnectorApprovalService(IAdminSecurityStore store, IConnect
     }
 
     /// <summary>Approves only as a distinct ConnectorApprover or SecurityAdministrator.</summary>
-    public async Task<ConnectorApprovalRecord> ApproveAsync(string connectorId, string version, string expectedBindingDigestSha256, AdminAccessContext actor, Guid correlationId, CancellationToken cancellationToken)
+    public async Task<ConnectorApprovalRecord> ApproveAsync(string connectorId, string version, ConnectorApprovalAcceptanceRequest request, AdminAccessContext actor, Guid correlationId, CancellationToken cancellationToken)
     {
         AdminAccessService.Require(actor, null, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
         ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
         byte[] bindingDigest = await connectors.GetBindingBundleDigestAsync(current.Id, cancellationToken).ConfigureAwait(false);
         byte[] expected;
-        try { expected = Convert.FromHexString(expectedBindingDigestSha256); }
+        try { expected = Convert.FromHexString(request.ExpectedDigestSha256); }
         catch (FormatException) { throw new GatewayException("BGW-ADMIN-APPROVAL-DIGEST", 400); }
         if (expected.Length != 32 || !CryptographicOperations.FixedTimeEquals(expected, bindingDigest)) throw new GatewayException("BGW-ADMIN-APPROVAL-STALE", 409);
-        return await store.ApproveAsync(current.Id, current.ChecksumSha256, bindingDigest, current.CreatedBy, actor.Principal.Id, correlationId, clock.UtcNow, cancellationToken).ConfigureAwait(false);
+        string? comment = string.IsNullOrWhiteSpace(request.Comment) ? null : request.Comment.Trim();
+        if (comment?.Length > 500) throw new GatewayException("BGW-ADMIN-APPROVAL-COMMENT", 400);
+        return await store.ApproveAsync(request.ApprovalRequestId, current.Id, current.ChecksumSha256, bindingDigest, current.CreatedBy, actor.Principal.Id, comment, correlationId, clock.UtcNow, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Rejects only as a distinct ConnectorApprover or SecurityAdministrator.</summary>
@@ -252,4 +274,10 @@ public sealed class ConnectorApprovalService(IAdminSecurityStore store, IConnect
         ConnectorVersionRecord current = await connectors.GetVersionAsync(connectorId, version, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
         return await store.ListApprovalsAsync(current.Id, cancellationToken).ConfigureAwait(false);
     }
+
+    private static ConnectorBindingSet[] Latest(IEnumerable<ConnectorBindingSet> values) => values
+        .GroupBy(value => value.EnvironmentId)
+        .Select(group => group.OrderByDescending(value => value.Revision).First())
+        .OrderBy(value => value.EnvironmentId)
+        .ToArray();
 }

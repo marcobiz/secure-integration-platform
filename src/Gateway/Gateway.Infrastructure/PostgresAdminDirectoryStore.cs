@@ -12,13 +12,21 @@ public sealed class PostgresAdminDirectoryStore(AdminPostgresDataSource adminDat
     private readonly NpgsqlDataSource dataSource = adminDataSource.Value;
     /// <inheritdoc />
     public Task<AdminPage<TenantRecord>> ListTenantsAsync(int offset, int limit, CancellationToken cancellationToken) => QueryAsync<TenantRecord>(
-        "SELECT id,code,display_name,status,created_at FROM gateway.tenant ORDER BY code,id OFFSET $1 LIMIT $2", "SELECT count(*) FROM gateway.tenant",
-        reader => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Enum.Parse<TenantStatus>(reader.GetString(3), true), reader.GetFieldValue<DateTimeOffset>(4)), offset, limit, cancellationToken);
+        "SELECT id,code,display_name,status,created_at,row_version FROM gateway.tenant ORDER BY code,id OFFSET $1 LIMIT $2", "SELECT count(*) FROM gateway.tenant",
+        ReadTenant, offset, limit, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<TenantRecord?> GetTenantAsync(Guid tenantId, CancellationToken cancellationToken) => GetAsync(
+        "SELECT id,code,display_name,status,created_at,row_version FROM gateway.tenant WHERE id=$1", tenantId, ReadTenant, cancellationToken);
 
     /// <inheritdoc />
     public Task<AdminPage<ApplicationRecord>> ListApplicationsAsync(int offset, int limit, CancellationToken cancellationToken) => QueryAsync<ApplicationRecord>(
-        "SELECT id,code,display_name,status,minimum_broker_version,maximum_broker_version,created_at FROM gateway.application ORDER BY code,id OFFSET $1 LIMIT $2", "SELECT count(*) FROM gateway.application",
-        reader => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Enum.Parse<ApplicationStatus>(reader.GetString(3), true), reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetFieldValue<DateTimeOffset>(6)), offset, limit, cancellationToken);
+        "SELECT id,code,display_name,status,minimum_broker_version,maximum_broker_version,created_at,row_version FROM gateway.application ORDER BY code,id OFFSET $1 LIMIT $2", "SELECT count(*) FROM gateway.application",
+        ReadApplication, offset, limit, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<ApplicationRecord?> GetApplicationAsync(Guid applicationId, CancellationToken cancellationToken) => GetAsync(
+        "SELECT id,code,display_name,status,minimum_broker_version,maximum_broker_version,created_at,row_version FROM gateway.application WHERE id=$1", applicationId, ReadApplication, cancellationToken);
 
     /// <inheritdoc />
     public Task<AdminPage<GatewayEnvironmentRecord>> ListEnvironmentsAsync(int offset, int limit, CancellationToken cancellationToken) => QueryAsync<GatewayEnvironmentRecord>(
@@ -66,6 +74,15 @@ public sealed class PostgresAdminDirectoryStore(AdminPostgresDataSource adminDat
         return new(values, offset, limit, total);
     }
 
+    private async Task<T?> GetAsync<T>(string sql, Guid id, Func<NpgsqlDataReader, T> read, CancellationToken cancellationToken)
+    {
+        await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using NpgsqlCommand command = new(sql, connection);
+        command.Parameters.AddWithValue(id);
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? read(reader) : default;
+    }
+
     private async Task<AdminPage<T>> QueryTenantAsync<T>(Guid tenantId, string sql, string countSql, Func<NpgsqlDataReader, T> read, int offset, int limit, CancellationToken cancellationToken)
     {
         ValidatePage(offset, limit);
@@ -94,5 +111,7 @@ public sealed class PostgresAdminDirectoryStore(AdminPostgresDataSource adminDat
     }
 
     private static InstallationRecord ReadInstallation(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetGuid(3), Enum.Parse<InstallationStatus>(reader.GetString(4), true), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetFieldValue<DateTimeOffset>(6), reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7), reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8), reader.IsDBNull(9) ? null : reader.GetString(9));
+    private static TenantRecord ReadTenant(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Enum.Parse<TenantStatus>(reader.GetString(3), true), reader.GetFieldValue<DateTimeOffset>(4), reader.GetInt64(5));
+    private static ApplicationRecord ReadApplication(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Enum.Parse<ApplicationStatus>(reader.GetString(3), true), reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetFieldValue<DateTimeOffset>(6), reader.GetInt64(7));
     private static void ValidatePage(int offset, int limit) { if (offset < 0 || limit is < 1 or > 100) throw new GatewayException("BGW-ADMIN-PAGINATION", 400); }
 }

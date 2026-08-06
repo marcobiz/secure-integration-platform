@@ -133,8 +133,8 @@ async Task PublishConnectorAsync(string connectorId, string version, bool securi
     _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, environmentId, endpoints, secrets, certificates, 0, primaryChecksum, ConnectorBindingState.Draft, clock.UtcNow, editor), null, Guid.NewGuid(), CancellationToken.None).ConfigureAwait(false);
     _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, securityEnvironmentId, endpoints, secrets, certificates, 0, securityChecksum, ConnectorBindingState.Draft, clock.UtcNow, editor), null, Guid.NewGuid(), CancellationToken.None).ConfigureAwait(false);
     byte[] bindingDigest = await connectorStore.GetBindingBundleDigestAsync(draft.Id, CancellationToken.None).ConfigureAwait(false);
-    _ = await adminSecurity.RequestApprovalAsync(draft, bindingDigest, provisionerEditor.Id, Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
-    _ = await adminSecurity.ApproveAsync(draft.Id, draft.ChecksumSha256, bindingDigest, draft.CreatedBy, provisionerApprover.Id, Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
+    ConnectorApprovalRecord approvalRequest = await adminSecurity.RequestApprovalAsync(draft, bindingDigest, provisionerEditor.Id, Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
+    _ = await adminSecurity.ApproveAsync(approvalRequest.Id, draft.Id, draft.ChecksumSha256, bindingDigest, draft.CreatedBy, provisionerApprover.Id, null, Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
     _ = await connectorStore.PublishApprovedAsync(draft.Id, bindingDigest, validatedRecord.RowVersion, 0, provisionerApprover.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
 }
 

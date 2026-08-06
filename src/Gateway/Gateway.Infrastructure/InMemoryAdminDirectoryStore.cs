@@ -11,8 +11,22 @@ public sealed class InMemoryAdminDirectoryStore(InMemoryGatewayRegistry registry
         Page(registry.SnapshotDirectory().Tenants.OrderBy(value => value.Code), offset, limit, cancellationToken);
 
     /// <inheritdoc />
+    public Task<TenantRecord?> GetTenantAsync(Guid tenantId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(registry.SnapshotDirectory().Tenants.SingleOrDefault(value => value.Id == tenantId));
+    }
+
+    /// <inheritdoc />
     public Task<AdminPage<ApplicationRecord>> ListApplicationsAsync(int offset, int limit, CancellationToken cancellationToken) =>
         Page(registry.SnapshotDirectory().Applications.OrderBy(value => value.Code), offset, limit, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<ApplicationRecord?> GetApplicationAsync(Guid applicationId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(registry.SnapshotDirectory().Applications.SingleOrDefault(value => value.Id == applicationId));
+    }
 
     /// <inheritdoc />
     public Task<AdminPage<GatewayEnvironmentRecord>> ListEnvironmentsAsync(int offset, int limit, CancellationToken cancellationToken) =>

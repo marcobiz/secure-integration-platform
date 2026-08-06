@@ -131,12 +131,18 @@ test('FULLSTACK-01 production Admin build persists and governs the connector lif
   expect(binding.status).toBe(200);
   expect(binding.body.revision).toBe(1);
 
-  const requested = await api<{ status: string; bindingDigestSha256: string }>(editor, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approval-requests', 'POST');
+  const requested = await api<{ id: string; status: string; bindingDigestSha256: string }>(editor, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approval-requests', 'POST');
   expect(requested.status).toBe(200);
-  const selfApproval = await api<{ code: string }>(editor, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approvals', 'POST', { bindingDigestSha256: requested.body.bindingDigestSha256 });
+  const review = await api<{ digestSha256: string; canonicalJson: string; artifact: { operations: Array<{ endpoint: { hostname: string; port: number; path: string; allowedMethods: string[] }; secretBindings: Array<{ providerId: string; resourceLogicalId: string }> }> } }>(approver, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approval-review');
+  expect(review.status).toBe(200);
+  expect(review.body.digestSha256).toBe(requested.body.bindingDigestSha256);
+  expect(review.body.artifact.operations[0]).toMatchObject({ endpoint: { hostname: 'vendor.m3.test', port: 8443, path: '/vendor/orders', allowedMethods: ['POST'] }, secretBindings: [{ providerId: 'vault.m3.test', resourceLogicalId: 'vendor-api-key' }] });
+  expect(review.body.canonicalJson).not.toMatch(/secretValue|privateKey|clientSecret|passwordValue|connectionString|SYNTHETIC-CANARY/i);
+  const approvalBody = { approvalRequestId: requested.body.id, expectedDigestSha256: review.body.digestSha256 };
+  const selfApproval = await api<{ code: string }>(editor, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approvals', 'POST', approvalBody);
   expect(selfApproval.status).toBe(403);
   expect(selfApproval.body.code).toMatch(/^BGW-/);
-  const approved = await api<{ status: string }>(approver, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approvals', 'POST', { bindingDigestSha256: requested.body.bindingDigestSha256 });
+  const approved = await api<{ status: string }>(approver, '/admin/api/v1/connectors/sample-secure-service/versions/2.0.0/approvals', 'POST', approvalBody);
   expect(approved.status).toBe(200);
 
   const connectors = await api<{ items: Array<{ connectorId: string; publicationRevision: number }> }>(approver, '/admin/api/v1/connectors?offset=0&limit=50');

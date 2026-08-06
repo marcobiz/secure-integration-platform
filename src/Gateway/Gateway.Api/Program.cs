@@ -481,6 +481,15 @@ adminApi.MapGet("/tenants", async (int? offset, int? limit, HttpContext context,
     return Results.Ok(await directory.ListTenantsAsync(offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
 });
 
+adminApi.MapGet("/tenants/{tenantId:guid}", async (Guid tenantId, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, tenantId, AdminRole.Viewer, AdminRole.SecurityAdministrator);
+    TenantRecord tenant = await directory.GetTenantAsync(tenantId, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-TENANT-NOT-FOUND", 404);
+    context.Response.Headers.ETag = ETag(tenant.RowVersion);
+    return Results.Ok(tenant);
+});
+
 adminApi.MapPost("/tenants", async (CreateTenantRequest request, HttpContext context, AdminAccessService access, IAdminGatewayRegistry registry, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
@@ -488,6 +497,7 @@ adminApi.MapPost("/tenants", async (CreateTenantRequest request, HttpContext con
     ValidateAdminCode(request.Code, 64); ValidateAdminName(request.DisplayName);
     TenantRecord tenant = new(Guid.NewGuid(), request.Code, request.DisplayName, TenantStatus.Active, DateTimeOffset.UtcNow);
     await registry.AddTenantWithAuditAsync(tenant, AdminAudit(context, admin, tenant.Id, "tenant.create", "tenant", tenant.Id.ToString("D"), "success", "BGW-TENANT-CREATED"), cancellationToken).ConfigureAwait(false);
+    context.Response.Headers.ETag = ETag(tenant.RowVersion);
     return Results.Created($"/admin/api/v1/tenants/{tenant.Id:D}", tenant);
 });
 
@@ -496,14 +506,18 @@ adminApi.MapPut("/tenants/{tenantId:guid}", async (Guid tenantId, UpdateTenantRe
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
     AdminAccessService.Require(admin, tenantId, AdminRole.SecurityAdministrator);
     ValidateAdminName(request.DisplayName);
-    return Results.Ok(await registry.UpdateTenantWithAuditAsync(tenantId, request.DisplayName, AdminAudit(context, admin, tenantId, "tenant.update", "tenant", tenantId.ToString("D"), "success", "BGW-TENANT-UPDATED"), cancellationToken).ConfigureAwait(false));
+    TenantRecord result = await registry.UpdateTenantWithAuditAsync(tenantId, request.DisplayName, RequiredIfMatch(context), AdminAudit(context, admin, tenantId, "tenant.update", "tenant", tenantId.ToString("D"), "success", "BGW-TENANT-UPDATED"), cancellationToken).ConfigureAwait(false);
+    context.Response.Headers.ETag = ETag(result.RowVersion);
+    return Results.Ok(result);
 });
 
 adminApi.MapPost("/tenants/{tenantId:guid}:disable", async (Guid tenantId, HttpContext context, AdminAccessService access, IAdminGatewayRegistry registry, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
     AdminAccessService.Require(admin, tenantId, AdminRole.SecurityAdministrator);
-    return Results.Ok(await registry.DisableTenantWithAuditAsync(tenantId, AdminAudit(context, admin, tenantId, "tenant.disable", "tenant", tenantId.ToString("D"), "success", "BGW-TENANT-DISABLED"), cancellationToken).ConfigureAwait(false));
+    TenantRecord result = await registry.DisableTenantWithAuditAsync(tenantId, RequiredIfMatch(context), AdminAudit(context, admin, tenantId, "tenant.disable", "tenant", tenantId.ToString("D"), "success", "BGW-TENANT-DISABLED"), cancellationToken).ConfigureAwait(false);
+    context.Response.Headers.ETag = ETag(result.RowVersion);
+    return Results.Ok(result);
 });
 
 adminApi.MapGet("/applications", async (int? offset, int? limit, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, CancellationToken cancellationToken) =>
@@ -511,6 +525,15 @@ adminApi.MapGet("/applications", async (int? offset, int? limit, HttpContext con
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
     AdminAccessService.Require(admin, null, AdminRole.Viewer, AdminRole.SecurityAdministrator);
     return Results.Ok(await directory.ListApplicationsAsync(offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
+});
+
+adminApi.MapGet("/applications/{applicationId:guid}", async (Guid applicationId, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.Viewer, AdminRole.SecurityAdministrator);
+    ApplicationRecord application = await directory.GetApplicationAsync(applicationId, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-APPLICATION-NOT-FOUND", 404);
+    context.Response.Headers.ETag = ETag(application.RowVersion);
+    return Results.Ok(application);
 });
 
 adminApi.MapPost("/applications", async (CreateApplicationRequest request, HttpContext context, AdminAccessService access, IAdminGatewayRegistry registry, CancellationToken cancellationToken) =>
@@ -521,6 +544,7 @@ adminApi.MapPost("/applications", async (CreateApplicationRequest request, HttpC
     if (!Version.TryParse(request.MinimumBrokerVersion, out _) || (request.MaximumBrokerVersion is not null && !Version.TryParse(request.MaximumBrokerVersion, out _))) throw new GatewayException("BGW-ADMIN-BROKER-VERSION", 400);
     ApplicationRecord application = new(Guid.NewGuid(), request.Code, request.DisplayName, ApplicationStatus.Active, request.MinimumBrokerVersion, request.MaximumBrokerVersion, DateTimeOffset.UtcNow);
     await registry.AddApplicationWithAuditAsync(application, AdminAudit(context, admin, null, "application.create", "application", application.Id.ToString("D"), "success", "BGW-APPLICATION-CREATED"), cancellationToken).ConfigureAwait(false);
+    context.Response.Headers.ETag = ETag(application.RowVersion);
     return Results.Created($"/admin/api/v1/applications/{application.Id:D}", application);
 });
 
@@ -530,14 +554,18 @@ adminApi.MapPut("/applications/{applicationId:guid}", async (Guid applicationId,
     AdminAccessService.Require(admin, null, AdminRole.SecurityAdministrator);
     ValidateAdminName(request.DisplayName);
     if (!Version.TryParse(request.MinimumBrokerVersion, out _) || (request.MaximumBrokerVersion is not null && !Version.TryParse(request.MaximumBrokerVersion, out _))) throw new GatewayException("BGW-ADMIN-BROKER-VERSION", 400);
-    return Results.Ok(await registry.UpdateApplicationWithAuditAsync(applicationId, request.DisplayName, request.MinimumBrokerVersion, request.MaximumBrokerVersion, AdminAudit(context, admin, null, "application.update", "application", applicationId.ToString("D"), "success", "BGW-APPLICATION-UPDATED"), cancellationToken).ConfigureAwait(false));
+    ApplicationRecord result = await registry.UpdateApplicationWithAuditAsync(applicationId, request.DisplayName, request.MinimumBrokerVersion, request.MaximumBrokerVersion, RequiredIfMatch(context), AdminAudit(context, admin, null, "application.update", "application", applicationId.ToString("D"), "success", "BGW-APPLICATION-UPDATED"), cancellationToken).ConfigureAwait(false);
+    context.Response.Headers.ETag = ETag(result.RowVersion);
+    return Results.Ok(result);
 });
 
 adminApi.MapPost("/applications/{applicationId:guid}:disable", async (Guid applicationId, HttpContext context, AdminAccessService access, IAdminGatewayRegistry registry, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
     AdminAccessService.Require(admin, null, AdminRole.SecurityAdministrator);
-    return Results.Ok(await registry.DisableApplicationWithAuditAsync(applicationId, AdminAudit(context, admin, null, "application.disable", "application", applicationId.ToString("D"), "success", "BGW-APPLICATION-DISABLED"), cancellationToken).ConfigureAwait(false));
+    ApplicationRecord result = await registry.DisableApplicationWithAuditAsync(applicationId, RequiredIfMatch(context), AdminAudit(context, admin, null, "application.disable", "application", applicationId.ToString("D"), "success", "BGW-APPLICATION-DISABLED"), cancellationToken).ConfigureAwait(false);
+    context.Response.Headers.ETag = ETag(result.RowVersion);
+    return Results.Ok(result);
 });
 
 adminApi.MapGet("/environments", async (int? offset, int? limit, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, CancellationToken cancellationToken) =>
@@ -695,10 +723,16 @@ adminApi.MapPost("/connectors/{connectorId}/versions/{version}/approval-requests
     return Results.Ok(ApprovalResource(result));
 });
 
+adminApi.MapGet("/connectors/{connectorId}/versions/{version}/approval-review", async (string connectorId, string version, HttpContext context, AdminAccessService access, ConnectorApprovalService approvals, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    return Results.Ok(await approvals.ReviewAsync(connectorId, version, admin, cancellationToken).ConfigureAwait(false));
+});
+
 adminApi.MapPost("/connectors/{connectorId}/versions/{version}/approvals", async (string connectorId, string version, ConnectorApprovalAcceptanceRequest request, HttpContext context, AdminAccessService access, ConnectorApprovalService approvals, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
-    ConnectorApprovalRecord result = await approvals.ApproveAsync(connectorId, version, request.BindingDigestSha256, admin, Correlation(context), cancellationToken).ConfigureAwait(false);
+    ConnectorApprovalRecord result = await approvals.ApproveAsync(connectorId, version, request, admin, Correlation(context), cancellationToken).ConfigureAwait(false);
     return Results.Ok(ApprovalResource(result));
 });
 
@@ -937,9 +971,10 @@ static string ETag(long rowVersion) => FormattableString.Invariant($"\"{rowVersi
 
 static long RequiredIfMatch(HttpContext context)
 {
+    if (!context.Request.Headers.ContainsKey("If-Match")) throw new GatewayException("BGW-CONCURRENCY-PRECONDITION", 428);
     string value = context.Request.Headers.IfMatch.ToString();
     if (value.Length < 3 || value[0] != '"' || value[^1] != '"' || !long.TryParse(value.AsSpan(1, value.Length - 2), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out long rowVersion) || rowVersion < 1)
-        throw new GatewayException("BGW-CONCURRENCY-PRECONDITION", 428);
+        throw new GatewayException("BGW-CONCURRENCY-ETAG", 400);
     return rowVersion;
 }
 

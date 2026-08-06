@@ -13,6 +13,66 @@ namespace SecureIntegration.Gateway.Integration.Tests;
 public sealed class PostgresIsolationTests
 {
     [Fact]
+    public async Task M5_IT_DAT_Tenant_mutations_are_FORCE_RLS_correct_atomic_and_concurrent_when_configured()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        await ApplyMigrationAsync();
+        await using AdminPostgresDataSource pool = new(connectionString);
+        PostgresGatewayRegistry registry = new(pool.Value);
+        DateTimeOffset now = DateTimeOffset.UtcNow; Guid tenantId = Guid.NewGuid();
+
+        await registry.AddTenantWithAuditAsync(new(tenantId, "rls-" + tenantId.ToString("N"), "Created", TenantStatus.Active, now), Audit(tenantId, Guid.NewGuid(), "tenant.create", tenantId.ToString("D"), now), TestContext.Current.CancellationToken);
+        TenantRecord updated = await registry.UpdateTenantWithAuditAsync(tenantId, "Updated", 1, Audit(tenantId, Guid.NewGuid(), "tenant.update", tenantId.ToString("D"), now), TestContext.Current.CancellationToken);
+        TenantRecord disabled = await registry.DisableTenantWithAuditAsync(tenantId, updated.RowVersion, Audit(tenantId, Guid.NewGuid(), "tenant.disable", tenantId.ToString("D"), now), TestContext.Current.CancellationToken);
+        Assert.Equal(3, disabled.RowVersion); Assert.Equal(TenantStatus.Suspended, disabled.Status);
+        PostgresAdminDirectoryStore directory = new(pool);
+        Assert.Equal(3, (await directory.ListAuditAsync(tenantId, 0, 100, TestContext.Current.CancellationToken)).Total);
+
+        await using (NpgsqlConnection connection = await pool.Value.OpenConnectionAsync(TestContext.Current.CancellationToken))
+        {
+            await using NpgsqlCommand role = new("SELECT r.rolsuper,r.rolbypassrls,c.relforcerowsecurity FROM pg_roles r CROSS JOIN pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE r.rolname=current_user AND n.nspname='gateway' AND c.relname='audit_event'", connection);
+            await using NpgsqlDataReader reader = await role.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+            Assert.True(await reader.ReadAsync(TestContext.Current.CancellationToken)); Assert.False(reader.GetBoolean(0)); Assert.False(reader.GetBoolean(1)); Assert.True(reader.GetBoolean(2));
+        }
+        await using (NpgsqlConnection connection = await pool.Value.OpenConnectionAsync(TestContext.Current.CancellationToken))
+        await using (NpgsqlCommand context = new("SELECT current_setting('app.tenant_id',true)", connection))
+            Assert.True(string.IsNullOrEmpty(await context.ExecuteScalarAsync(TestContext.Current.CancellationToken) as string));
+
+        long expected = disabled.RowVersion;
+        TaskCompletionSource barrier = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<TenantRecord> Race(string name)
+        {
+            await barrier.Task.WaitAsync(TestContext.Current.CancellationToken);
+            return await registry.UpdateTenantWithAuditAsync(tenantId, name, expected, Audit(tenantId, Guid.NewGuid(), "tenant.update", tenantId.ToString("D"), now), TestContext.Current.CancellationToken);
+        }
+        Task<TenantRecord> first = Race("Concurrent A"); Task<TenantRecord> second = Race("Concurrent B"); barrier.SetResult();
+        Exception? firstError = await Record.ExceptionAsync(() => first); Exception? secondError = await Record.ExceptionAsync(() => second);
+        Assert.True((firstError is null) ^ (secondError is null));
+        GatewayException conflict = Assert.IsType<GatewayException>(firstError ?? secondError); Assert.Equal("BGW-CONCURRENCY-CONFLICT", conflict.Code);
+        Assert.Equal(4, (await directory.ListAuditAsync(tenantId, 0, 100, TestContext.Current.CancellationToken)).Total);
+
+        Guid applicationId = Guid.NewGuid();
+        await registry.AddApplicationWithAuditAsync(new(applicationId, "rls-app-" + applicationId.ToString("N"), "Created", ApplicationStatus.Active, "3.0.0", null, now),
+            new(Guid.NewGuid(), now, null, "administrator", "test", "application.create", "application", applicationId.ToString("D"), Guid.NewGuid(), "success", "BGW-TEST", new Dictionary<string, string>()), TestContext.Current.CancellationToken);
+        ApplicationRecord application = await registry.UpdateApplicationWithAuditAsync(applicationId, "Updated", "3.1.0", null, 1,
+            new(Guid.NewGuid(), now, null, "administrator", "test", "application.update", "application", applicationId.ToString("D"), Guid.NewGuid(), "success", "BGW-TEST", new Dictionary<string, string>()), TestContext.Current.CancellationToken);
+        application = await registry.DisableApplicationWithAuditAsync(applicationId, application.RowVersion,
+            new(Guid.NewGuid(), now, null, "administrator", "test", "application.disable", "application", applicationId.ToString("D"), Guid.NewGuid(), "success", "BGW-TEST", new Dictionary<string, string>()), TestContext.Current.CancellationToken);
+        long applicationExpected = application.RowVersion; TaskCompletionSource applicationBarrier = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<ApplicationRecord> RaceApplication(string name)
+        {
+            await applicationBarrier.Task.WaitAsync(TestContext.Current.CancellationToken);
+            return await registry.UpdateApplicationWithAuditAsync(applicationId, name, "3.2.0", null, applicationExpected,
+                new(Guid.NewGuid(), now, null, "administrator", "test", "application.update", "application", applicationId.ToString("D"), Guid.NewGuid(), "success", "BGW-TEST", new Dictionary<string, string>()), TestContext.Current.CancellationToken);
+        }
+        Task<ApplicationRecord> appFirst = RaceApplication("Concurrent A"); Task<ApplicationRecord> appSecond = RaceApplication("Concurrent B"); applicationBarrier.SetResult();
+        Exception? appFirstError = await Record.ExceptionAsync(() => appFirst); Exception? appSecondError = await Record.ExceptionAsync(() => appSecond);
+        Assert.True((appFirstError is null) ^ (appSecondError is null)); Assert.Equal("BGW-CONCURRENCY-CONFLICT", Assert.IsType<GatewayException>(appFirstError ?? appSecondError).Code);
+        Assert.Equal(4L, await ScalarAsync(pool.Value, "SELECT count(*) FROM gateway.audit_event WHERE target_id=$1 AND action LIKE 'application.%'", applicationId.ToString("D")));
+    }
+
+    [Fact]
     public async Task IT_DAT_PostgreSQL18_migration_and_RLS_isolate_tenants_when_configured()
     {
         string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION") ?? Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
@@ -212,8 +272,8 @@ public sealed class PostgresIsolationTests
                 ConnectorVersion: version), editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
             ConnectorVersionRecord stored = await store.GetVersionAsync(connectorId, version, TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("Imported version missing.");
             byte[] digest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
-            _ = await security.RequestApprovalAsync(stored, digest, editor.Id, Guid.NewGuid(), clock.UtcNow, TestContext.Current.CancellationToken);
-            _ = await security.ApproveAsync(stored.Id, stored.ChecksumSha256, digest, stored.CreatedBy, approver.Id, Guid.NewGuid(), clock.UtcNow.AddMilliseconds(1), TestContext.Current.CancellationToken);
+            ConnectorApprovalRecord request = await security.RequestApprovalAsync(stored, digest, editor.Id, Guid.NewGuid(), clock.UtcNow, TestContext.Current.CancellationToken);
+            _ = await security.ApproveAsync(request.Id, stored.Id, stored.ChecksumSha256, digest, stored.CreatedBy, approver.Id, null, Guid.NewGuid(), clock.UtcNow.AddMilliseconds(1), TestContext.Current.CancellationToken);
             return await admin.PublishAsync(connectorId, version, validated.RowVersion, revision, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
         }
 
@@ -261,8 +321,8 @@ public sealed class PostgresIsolationTests
             new Dictionary<string, string> { ["sample-vendor-api-key"] = "synthetic://canary", ["sample-vendor-client-certificate"] = "synthetic://certificate" }), editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
         ConnectorVersionRecord stored = (await store.GetVersionAsync(connectorId, imported.Version, TestContext.Current.CancellationToken))!;
         byte[] approvedDigest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
-        _ = await security.RequestApprovalAsync(stored, approvedDigest, editor.Id, Guid.NewGuid(), clock.UtcNow, TestContext.Current.CancellationToken);
-        _ = await security.ApproveAsync(stored.Id, stored.ChecksumSha256, approvedDigest, stored.CreatedBy, approver.Id, Guid.NewGuid(), clock.UtcNow.AddSeconds(1), TestContext.Current.CancellationToken);
+        ConnectorApprovalRecord approvalRequest = await security.RequestApprovalAsync(stored, approvedDigest, editor.Id, Guid.NewGuid(), clock.UtcNow, TestContext.Current.CancellationToken);
+        _ = await security.ApproveAsync(approvalRequest.Id, stored.Id, stored.ChecksumSha256, approvedDigest, stored.CreatedBy, approver.Id, null, Guid.NewGuid(), clock.UtcNow.AddSeconds(1), TestContext.Current.CancellationToken);
 
         await using NpgsqlConnection blocker = await adminPool.Value.OpenConnectionAsync(TestContext.Current.CancellationToken);
         await using NpgsqlTransaction blockerTransaction = await blocker.BeginTransactionAsync(TestContext.Current.CancellationToken);
@@ -300,8 +360,8 @@ public sealed class PostgresIsolationTests
             Assert.Equal(ConnectorVersionState.Validated, after.State);
             Assert.Equal(0L, await audit.ExecuteScalarAsync(TestContext.Current.CancellationToken));
             byte[] currentDigest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
-            _ = await security.RequestApprovalAsync(after, currentDigest, editor.Id, Guid.NewGuid(), clock.UtcNow.AddSeconds(3), TestContext.Current.CancellationToken);
-            _ = await security.ApproveAsync(after.Id, after.ChecksumSha256, currentDigest, after.CreatedBy, approver.Id, Guid.NewGuid(), clock.UtcNow.AddSeconds(4), TestContext.Current.CancellationToken);
+            ConnectorApprovalRecord currentRequest = await security.RequestApprovalAsync(after, currentDigest, editor.Id, Guid.NewGuid(), clock.UtcNow.AddSeconds(3), TestContext.Current.CancellationToken);
+            _ = await security.ApproveAsync(currentRequest.Id, after.Id, after.ChecksumSha256, currentDigest, after.CreatedBy, approver.Id, null, Guid.NewGuid(), clock.UtcNow.AddSeconds(4), TestContext.Current.CancellationToken);
             published = await store.PublishApprovedAsync(after.Id, currentDigest, after.RowVersion, 0, approver.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow.AddSeconds(5), TestContext.Current.CancellationToken);
             expectedEndpoint = "https://controlled-attacker.example.test/";
         }
@@ -377,8 +437,8 @@ public sealed class PostgresIsolationTests
         {
             Guid correlation = Guid.NewGuid(); PostgresGatewayRegistry faulted = new(storePool.Value, new ThrowingFaultInjector(point));
             Task mutation = point.Contains("update", StringComparison.Ordinal)
-                ? faulted.UpdateTenantWithAuditAsync(tenantId, "Tampered tenant", Audit(tenantId, correlation, "tenant.update", tenantId.ToString("D"), now), TestContext.Current.CancellationToken)
-                : faulted.DisableTenantWithAuditAsync(tenantId, Audit(tenantId, correlation, "tenant.disable", tenantId.ToString("D"), now), TestContext.Current.CancellationToken);
+                ? faulted.UpdateTenantWithAuditAsync(tenantId, "Tampered tenant", 1, Audit(tenantId, correlation, "tenant.update", tenantId.ToString("D"), now), TestContext.Current.CancellationToken)
+                : faulted.DisableTenantWithAuditAsync(tenantId, 1, Audit(tenantId, correlation, "tenant.disable", tenantId.ToString("D"), now), TestContext.Current.CancellationToken);
             await Assert.ThrowsAsync<InjectedFailureException>(() => mutation);
             Assert.Equal("Fault tenant", await TextScalarAsync(adminPool.Value, "SELECT display_name FROM gateway.tenant WHERE id=$1", tenantId));
             Assert.Equal("active", await TextScalarAsync(adminPool.Value, "SELECT status FROM gateway.tenant WHERE id=$1", tenantId));
@@ -390,8 +450,8 @@ public sealed class PostgresIsolationTests
             Guid correlation = Guid.NewGuid(); PostgresGatewayRegistry faulted = new(storePool.Value, new ThrowingFaultInjector(point));
             GatewayAuditEvent eventValue = new(Guid.NewGuid(), now, null, "administrator", "fault-test", point.Replace(".after-state", "", StringComparison.Ordinal), "application", applicationId.ToString("D"), correlation, "success", "BGW-FAULT-TEST", new Dictionary<string, string>());
             Task mutation = point.Contains("update", StringComparison.Ordinal)
-                ? faulted.UpdateApplicationWithAuditAsync(applicationId, "Tampered app", "9.0.0", null, eventValue, TestContext.Current.CancellationToken)
-                : faulted.DisableApplicationWithAuditAsync(applicationId, eventValue, TestContext.Current.CancellationToken);
+                ? faulted.UpdateApplicationWithAuditAsync(applicationId, "Tampered app", "9.0.0", null, 1, eventValue, TestContext.Current.CancellationToken)
+                : faulted.DisableApplicationWithAuditAsync(applicationId, 1, eventValue, TestContext.Current.CancellationToken);
             await Assert.ThrowsAsync<InjectedFailureException>(() => mutation);
             Assert.Equal("Fault app", await TextScalarAsync(adminPool.Value, "SELECT display_name FROM gateway.application WHERE id=$1", applicationId));
             Assert.Equal("active", await TextScalarAsync(adminPool.Value, "SELECT status FROM gateway.application WHERE id=$1", applicationId));
@@ -401,7 +461,7 @@ public sealed class PostgresIsolationTests
         using (CancellationTokenSource cancelled = new())
         {
             cancelled.Cancel(); Guid cancellationCorrelation = Guid.NewGuid();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => setupRegistry.UpdateTenantWithAuditAsync(tenantId, "Cancelled tenant", Audit(tenantId, cancellationCorrelation, "tenant.update", tenantId.ToString("D"), now), cancelled.Token));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => setupRegistry.UpdateTenantWithAuditAsync(tenantId, "Cancelled tenant", 1, Audit(tenantId, cancellationCorrelation, "tenant.update", tenantId.ToString("D"), now), cancelled.Token));
             Assert.Equal("Fault tenant", await TextScalarAsync(adminPool.Value, "SELECT display_name FROM gateway.tenant WHERE id=$1", tenantId));
             Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", cancellationCorrelation));
         }
@@ -496,20 +556,20 @@ public sealed class PostgresIsolationTests
 
         ConnectorBindingSet storedBinding = await connectorStore.PutBindingsAsync(binding with { Id = Guid.NewGuid() }, null, Guid.NewGuid(), TestContext.Current.CancellationToken);
         byte[] digest = await connectorStore.GetBindingBundleDigestAsync(validated.Id, TestContext.Current.CancellationToken);
-        _ = await security.RequestApprovalAsync(validated, digest, editor.Id, Guid.NewGuid(), now, TestContext.Current.CancellationToken);
+        ConnectorApprovalRecord firstApprovalRequest = await security.RequestApprovalAsync(validated, digest, editor.Id, Guid.NewGuid(), now, TestContext.Current.CancellationToken);
         Guid approveCorrelation = Guid.NewGuid();
         PostgresAdminSecurityStore faultedApprove = new(storePool, new ThrowingFaultInjector("connector.approval.approve.after-state"));
-        await Assert.ThrowsAsync<InjectedFailureException>(() => faultedApprove.ApproveAsync(validated.Id, validated.ChecksumSha256, digest, validated.CreatedBy, approver.Id, approveCorrelation, now.AddSeconds(1), TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<InjectedFailureException>(() => faultedApprove.ApproveAsync(firstApprovalRequest.Id, validated.Id, validated.ChecksumSha256, digest, validated.CreatedBy, approver.Id, null, approveCorrelation, now.AddSeconds(1), TestContext.Current.CancellationToken));
         Assert.Equal("requested", await TextScalarAsync(adminPool.Value, "SELECT status FROM gateway.connector_approval WHERE connector_version_id=$1 ORDER BY requested_at DESC LIMIT 1", validated.Id));
         Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", approveCorrelation));
-        _ = await security.ApproveAsync(validated.Id, validated.ChecksumSha256, digest, validated.CreatedBy, approver.Id, Guid.NewGuid(), now.AddSeconds(2), TestContext.Current.CancellationToken);
-        _ = await security.RequestApprovalAsync(validated, digest, editor.Id, Guid.NewGuid(), now.AddSeconds(3), TestContext.Current.CancellationToken);
+        _ = await security.ApproveAsync(firstApprovalRequest.Id, validated.Id, validated.ChecksumSha256, digest, validated.CreatedBy, approver.Id, null, Guid.NewGuid(), now.AddSeconds(2), TestContext.Current.CancellationToken);
+        ConnectorApprovalRecord secondApprovalRequest = await security.RequestApprovalAsync(validated, digest, editor.Id, Guid.NewGuid(), now.AddSeconds(3), TestContext.Current.CancellationToken);
         Guid rejectCorrelation = Guid.NewGuid();
         PostgresAdminSecurityStore faultedReject = new(storePool, new ThrowingFaultInjector("connector.approval.reject.after-state"));
         await Assert.ThrowsAsync<InjectedFailureException>(() => faultedReject.RejectAsync(validated.Id, validated.ChecksumSha256, digest, validated.CreatedBy, approver.Id, "fault", rejectCorrelation, now.AddSeconds(4), TestContext.Current.CancellationToken));
         Assert.Equal("requested", await TextScalarAsync(adminPool.Value, "SELECT status FROM gateway.connector_approval WHERE connector_version_id=$1 ORDER BY requested_at DESC LIMIT 1", validated.Id));
         Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", rejectCorrelation));
-        _ = await security.ApproveAsync(validated.Id, validated.ChecksumSha256, digest, validated.CreatedBy, approver.Id, Guid.NewGuid(), now.AddSeconds(5), TestContext.Current.CancellationToken);
+        _ = await security.ApproveAsync(secondApprovalRequest.Id, validated.Id, validated.ChecksumSha256, digest, validated.CreatedBy, approver.Id, null, Guid.NewGuid(), now.AddSeconds(5), TestContext.Current.CancellationToken);
 
         Guid retireCorrelation = Guid.NewGuid();
         PostgresConnectorConfigurationStore faultedRetire = new(storePool.Value, new ThrowingFaultInjector("connector.retire.after-state"));
@@ -531,8 +591,8 @@ public sealed class PostgresIsolationTests
         string bindingV2Checksum = ConnectorBindingDigests.Revision(validatedV2.Id, environmentId, endpoints, secrets, certificates);
         _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), validatedV2.ConnectorId, validatedV2.Id, environmentId, endpoints, secrets, certificates, 0, bindingV2Checksum, ConnectorBindingState.Draft, now.AddSeconds(11), editor.Id.ToString("D")), null, Guid.NewGuid(), TestContext.Current.CancellationToken);
         byte[] digestV2 = await connectorStore.GetBindingBundleDigestAsync(validatedV2.Id, TestContext.Current.CancellationToken);
-        _ = await security.RequestApprovalAsync(validatedV2, digestV2, editor.Id, Guid.NewGuid(), now.AddSeconds(12), TestContext.Current.CancellationToken);
-        _ = await security.ApproveAsync(validatedV2.Id, validatedV2.ChecksumSha256, digestV2, validatedV2.CreatedBy, approver.Id, Guid.NewGuid(), now.AddSeconds(13), TestContext.Current.CancellationToken);
+        ConnectorApprovalRecord approvalRequestV2 = await security.RequestApprovalAsync(validatedV2, digestV2, editor.Id, Guid.NewGuid(), now.AddSeconds(12), TestContext.Current.CancellationToken);
+        _ = await security.ApproveAsync(approvalRequestV2.Id, validatedV2.Id, validatedV2.ChecksumSha256, digestV2, validatedV2.CreatedBy, approver.Id, null, Guid.NewGuid(), now.AddSeconds(13), TestContext.Current.CancellationToken);
         ConnectorVersionRecord publishedV2 = await connectorStore.PublishApprovedAsync(validatedV2.Id, digestV2, validatedV2.RowVersion, 1, approver.Id.ToString("D"), Guid.NewGuid(), now.AddSeconds(14), TestContext.Current.CancellationToken);
         Guid rollbackCorrelation = Guid.NewGuid();
         PostgresConnectorConfigurationStore faultedRollback = new(storePool.Value, new ThrowingFaultInjector("connector.rollback.after-state"));

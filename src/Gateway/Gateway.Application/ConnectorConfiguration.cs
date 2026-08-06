@@ -151,19 +151,274 @@ public static class ConnectorBindingDigests
         return Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(canonical)));
     }
 
-    /// <summary>Checksums a Connector checksum plus all exact Environment binding revisions.</summary>
-    public static byte[] Bundle(byte[] connectorChecksum, IEnumerable<ConnectorBindingSet> bindings)
+    /// <summary>Checksums the same semantic, non-secret artefact shown to the approver.</summary>
+    public static byte[] Bundle(ConnectorVersionRecord version, IEnumerable<ConnectorBindingSet> bindings) =>
+        Convert.FromHexString(ConnectorApprovalArtifacts.Create(version, bindings).DigestSha256);
+}
+
+/// <summary>Connector identity included in an approval review.</summary>
+public sealed record ApprovalConnectorReview(string ConnectorId, string Version, string DisplayName, string SchemaVersion, string CanonicalDefinitionChecksumSha256);
+
+/// <summary>Exact non-secret destination used by one operation in one Environment.</summary>
+public sealed record ApprovalEndpointReview(
+    string LogicalBindingId,
+    long Revision,
+    string Scheme,
+    string Hostname,
+    int Port,
+    string Path,
+    IReadOnlyList<string> AllowedMethods,
+    string RedirectPolicy,
+    string TlsPolicy,
+    string EndpointChecksumSha256,
+    string DestinationClassification);
+
+/// <summary>Logical secret-provider binding; credential material is absent by construction.</summary>
+public sealed record ApprovalSecretReview(
+    string LogicalBindingId,
+    long Revision,
+    string ProviderDisplayName,
+    string ProviderType,
+    string ProviderId,
+    string ResourceLogicalId,
+    string ResourceType,
+    string Environment,
+    string ConnectorScope,
+    string OperationScope,
+    string SecretBindingChecksumSha256);
+
+/// <summary>Logical certificate-provider binding and optional public certificate metadata.</summary>
+public sealed record ApprovalCertificateReview(
+    string LogicalBindingId,
+    long Revision,
+    string ProviderDisplayName,
+    string ProviderType,
+    string ProviderId,
+    string CertificateLogicalId,
+    string? PublicFingerprintSha256,
+    string? PublicSubject,
+    string? PublicIssuer,
+    DateTimeOffset? ExpiresAt,
+    string Environment,
+    string ConnectorScope,
+    string OperationScope,
+    string CertificateBindingChecksumSha256);
+
+/// <summary>One exact runtime operation projection reviewed before publication.</summary>
+public sealed record ApprovalOperationReview(
+    string OperationId,
+    string Environment,
+    string ExecutionStrategy,
+    string Protocol,
+    ApprovalEndpointReview Endpoint,
+    IReadOnlyList<ApprovalSecretReview> SecretBindings,
+    IReadOnlyList<ApprovalCertificateReview> CertificateBindings);
+
+/// <summary>Canonical, server-built approval artefact containing every non-secret runtime decision.</summary>
+public sealed record ApprovalReviewArtifact(ApprovalConnectorReview Connector, IReadOnlyList<ApprovalOperationReview> Operations);
+
+/// <summary>One immutable binding revision participating in the approval.</summary>
+public sealed record ApprovalRevisionReview(Guid BindingId, Guid EnvironmentId, long Revision, string ChecksumSha256);
+
+/// <summary>Server-computed semantic change visible to an approver.</summary>
+public sealed record ApprovalSemanticDiff(string Change, string Path, string? PreviousValue, string? CurrentValue);
+
+/// <summary>Server-computed, non-colour-only approval warning.</summary>
+public sealed record ApprovalRiskIndicator(string Code, string Severity, string Path);
+
+/// <summary>Complete review response. Canonical JSON and digest always describe <see cref="Artifact"/>.</summary>
+public sealed record ApprovalReviewResult(
+    ApprovalReviewArtifact Artifact,
+    string CanonicalJson,
+    string DigestSha256,
+    IReadOnlyList<ApprovalRevisionReview> Revisions,
+    IReadOnlyList<ApprovalSemanticDiff> Diff,
+    IReadOnlyList<ApprovalRiskIndicator> RiskIndicators);
+
+/// <summary>Builds the exact semantic artefact shared by approval, publication and Admin UI.</summary>
+public static class ConnectorApprovalArtifacts
+{
+    private static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web);
+
+    /// <summary>Creates the canonical artefact and digest without resolving credential values.</summary>
+    public static ApprovalReviewResult Create(ConnectorVersionRecord version, IEnumerable<ConnectorBindingSet> values, ApprovalReviewArtifact? previous = null)
     {
-        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData(connectorChecksum);
-        foreach (ConnectorBindingSet binding in bindings.OrderBy(value => value.EnvironmentId).ThenBy(value => value.Revision))
+        ConnectorBindingSet[] bindings = values.OrderBy(value => value.EnvironmentId).ThenBy(value => value.Revision).ToArray();
+        if (bindings.Length == 0) throw new GatewayException("BGW-CONNECTOR-BINDING-MISSING", 409);
+        using JsonDocument definition = JsonDocument.Parse(version.CanonicalJson);
+        JsonElement root = definition.RootElement;
+        string displayName = root.GetProperty("displayName").GetString() ?? version.ConnectorSlug;
+        List<ApprovalOperationReview> operations = [];
+        foreach (ConnectorBindingSet binding in bindings)
         {
-            hash.AppendData(binding.EnvironmentId.ToByteArray());
-            hash.AppendData(BitConverter.GetBytes(binding.Revision));
-            hash.AppendData(Convert.FromHexString(binding.ChecksumSha256));
+            foreach (JsonElement operation in root.GetProperty("operations").EnumerateArray().OrderBy(value => value.GetProperty("operationId").GetString(), StringComparer.Ordinal))
+                operations.Add(Operation(version, binding, operation));
         }
-        return hash.GetHashAndReset();
+        ApprovalReviewArtifact artifact = new(new(version.ConnectorSlug, version.Version, displayName, version.SchemaVersion, Convert.ToHexString(version.ChecksumSha256)), operations);
+        string canonical = Canonical(artifact);
+        string digest = ConnectorCanonicalJson.Checksum(canonical);
+        IReadOnlyList<ApprovalSemanticDiff> diff = Diff(previous, artifact);
+        return new(artifact, canonical, digest,
+            bindings.Select(value => new ApprovalRevisionReview(value.Id, value.EnvironmentId, value.Revision, value.ChecksumSha256)).ToArray(),
+            diff, Risks(previous, artifact, diff));
     }
+
+    private static ApprovalOperationReview Operation(ConnectorVersionRecord version, ConnectorBindingSet binding, JsonElement operation)
+    {
+        string operationId = operation.GetProperty("operationId").GetString()!;
+        string endpointName = operation.GetProperty("endpointBinding").GetString()!;
+        if (!binding.Endpoints.TryGetValue(endpointName, out Uri? baseUri)) throw new GatewayException("BGW-CONNECTOR-ENDPOINT-BINDING-MISSING", 503);
+        string path = operation.GetProperty("path").GetString()!;
+        Uri effective = new(baseUri, path);
+        string method = operation.GetProperty("method").GetString()!;
+        string redirect = operation.TryGetProperty("redirectPolicy", out JsonElement redirectElement) ? redirectElement.GetString() ?? "deny" : "deny";
+        ApprovalEndpointReview endpoint = new(endpointName, binding.Revision, effective.Scheme, effective.DnsSafeHost, effective.IsDefaultPort ? DefaultPort(effective.Scheme) : effective.Port,
+            effective.AbsolutePath, [method], redirect, "validate-system-trust-and-hostname", Component(endpointName, effective.AbsoluteUri), Classify(effective));
+        JsonElement authentication = operation.GetProperty("authentication");
+        List<ApprovalSecretReview> secrets = [];
+        foreach (string property in new[] { "usernameBinding", "passwordBinding", "secretBinding" })
+        {
+            if (!authentication.TryGetProperty(property, out JsonElement logicalElement)) continue;
+            string logical = logicalElement.GetString()!;
+            if (!binding.SecretReferences.TryGetValue(logical, out string? reference)) throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING-MISSING", 503);
+            ProviderIdentity provider = Provider(reference);
+            secrets.Add(new(logical, binding.Revision, provider.DisplayName, provider.Type, provider.ProviderId, provider.ResourceId, property == "secretBinding" ? "secret" : property,
+                binding.EnvironmentId.ToString("D"), version.ConnectorSlug, operationId, Component(logical, reference)));
+        }
+        List<ApprovalCertificateReview> certificates = [];
+        if (authentication.TryGetProperty("certificateBinding", out JsonElement certificateElement))
+        {
+            string logical = certificateElement.GetString()!;
+            if (!binding.CertificateReferences.TryGetValue(logical, out string? reference)) throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING-MISSING", 503);
+            ProviderIdentity provider = Provider(reference);
+            certificates.Add(new(logical, binding.Revision, provider.DisplayName, provider.Type, provider.ProviderId, provider.ResourceId, null, null, null, null,
+                binding.EnvironmentId.ToString("D"), version.ConnectorSlug, operationId, Component(logical, reference)));
+        }
+        return new(operationId, binding.EnvironmentId.ToString("D"), "gateway-server-side", effective.Scheme.ToUpperInvariant(), endpoint, secrets, certificates);
+    }
+
+    private static string Canonical(ApprovalReviewArtifact artifact)
+    {
+        using JsonDocument document = JsonDocument.Parse(JsonSerializer.Serialize(artifact, WebJson));
+        return ConnectorCanonicalJson.Canonicalize(document.RootElement);
+    }
+
+    private static string Component(string logicalId, string value)
+    {
+        string json = JsonSerializer.Serialize(new SortedDictionary<string, string>(StringComparer.Ordinal) { ["logicalId"] = logicalId, ["value"] = value });
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
+    }
+
+    private static int DefaultPort(string scheme) => string.Equals(scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ? 443 : 80;
+
+    private static string Classify(Uri endpoint)
+    {
+        if (string.Equals(endpoint.DnsSafeHost, "localhost", StringComparison.OrdinalIgnoreCase)) return "loopback";
+        if (IPAddress.TryParse(endpoint.DnsSafeHost, out IPAddress? address))
+        {
+            if (IPAddress.IsLoopback(address)) return "loopback";
+            byte[] bytes = address.GetAddressBytes();
+            if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork && (bytes[0] == 10 || bytes[0] == 127 || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31) || (bytes[0] == 192 && bytes[1] == 168))) return "private";
+            return "publicInternet";
+        }
+        return endpoint.DnsSafeHost.EndsWith(".local", StringComparison.OrdinalIgnoreCase) || endpoint.DnsSafeHost.EndsWith(".internal", StringComparison.OrdinalIgnoreCase) ? "private" : "publicInternet";
+    }
+
+    private static ProviderIdentity Provider(string reference)
+    {
+        if (!Uri.TryCreate(reference, UriKind.Absolute, out Uri? uri)) return new("Logical provider", "opaque", "default", reference);
+        string type = uri.Scheme;
+        string providerId = string.IsNullOrWhiteSpace(uri.Host) ? type : uri.Host;
+        string resource = uri.AbsolutePath.Trim('/');
+        if (string.IsNullOrEmpty(resource)) resource = uri.OriginalString[(uri.Scheme.Length + 3)..].Trim('/');
+        string display = type switch { "keyvault" => "Azure Key Vault", "synthetic-vault" => "Synthetic vault", "synthetic" => "Synthetic provider", _ => type };
+        return new(display, type, providerId, resource);
+    }
+
+    private static List<ApprovalSemanticDiff> Diff(ApprovalReviewArtifact? previous, ApprovalReviewArtifact current)
+    {
+        if (previous is null) return [new("added", "/", null, "approvalArtifact")];
+        using JsonDocument before = JsonDocument.Parse(Canonical(previous));
+        using JsonDocument after = JsonDocument.Parse(Canonical(current));
+        List<ApprovalSemanticDiff> result = [];
+        Compare(before.RootElement, after.RootElement, string.Empty, result);
+        return result;
+    }
+
+    private static void Compare(JsonElement before, JsonElement after, string path, List<ApprovalSemanticDiff> result)
+    {
+        if (before.ValueKind == JsonValueKind.Object && after.ValueKind == JsonValueKind.Object)
+        {
+            Dictionary<string, JsonElement> left = before.EnumerateObject().ToDictionary(value => value.Name, value => value.Value, StringComparer.Ordinal);
+            Dictionary<string, JsonElement> right = after.EnumerateObject().ToDictionary(value => value.Name, value => value.Value, StringComparer.Ordinal);
+            foreach (string name in left.Keys.Union(right.Keys, StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal))
+            {
+                string child = path + "/" + name;
+                if (!left.TryGetValue(name, out JsonElement oldValue)) result.Add(new("added", child, null, right[name].GetRawText()));
+                else if (!right.TryGetValue(name, out JsonElement newValue)) result.Add(new("removed", child, oldValue.GetRawText(), null));
+                else Compare(oldValue, newValue, child, result);
+            }
+            return;
+        }
+        if (before.ValueKind == JsonValueKind.Array && after.ValueKind == JsonValueKind.Array)
+        {
+            JsonElement[] left = before.EnumerateArray().ToArray(); JsonElement[] right = after.EnumerateArray().ToArray();
+            for (int index = 0; index < Math.Max(left.Length, right.Length); index++)
+            {
+                string child = path + "/" + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                if (index >= left.Length) result.Add(new("added", child, null, right[index].GetRawText()));
+                else if (index >= right.Length) result.Add(new("removed", child, left[index].GetRawText(), null));
+                else Compare(left[index], right[index], child, result);
+            }
+            return;
+        }
+        if (!JsonElement.DeepEquals(before, after)) result.Add(new("changed", string.IsNullOrEmpty(path) ? "/" : path, before.GetRawText(), after.GetRawText()));
+    }
+
+    private static List<ApprovalRiskIndicator> Risks(ApprovalReviewArtifact? previous, ApprovalReviewArtifact current, IReadOnlyList<ApprovalSemanticDiff> diff)
+    {
+        List<ApprovalRiskIndicator> result = [];
+        if (current.Operations.Any(value => value.Endpoint.DestinationClassification == "publicInternet")) result.Add(new("PUBLIC_INTERNET_DESTINATION", "high", "/operations"));
+        if (previous is null)
+        {
+            foreach (int index in Enumerable.Range(0, current.Operations.Count))
+            {
+                result.Add(new("BINDING_PREVIOUSLY_UNUSED", "warning", $"/operations/{index}"));
+                result.Add(new("NEW_HOSTNAME", "warning", $"/operations/{index}/endpoint/hostname"));
+                result.Add(new("NEW_PORT", "warning", $"/operations/{index}/endpoint/port"));
+            }
+        }
+        foreach ((ApprovalOperationReview operation, int operationIndex) in current.Operations.Select((value, index) => (value, index)))
+        {
+            foreach ((ApprovalCertificateReview certificate, int certificateIndex) in operation.CertificateBindings.Select((value, index) => (value, index)))
+            {
+                if (certificate.ExpiresAt is not null && certificate.ExpiresAt <= DateTimeOffset.UtcNow.AddDays(30))
+                    result.Add(new("CERTIFICATE_NEAR_EXPIRY", "high", $"/operations/{operationIndex}/certificates/{certificateIndex}/expiresAt"));
+            }
+        }
+        foreach (ApprovalSemanticDiff change in diff)
+        {
+            string code = change.Path switch
+            {
+                string value when value.EndsWith("/hostname", StringComparison.Ordinal) => previous is null ? "NEW_HOSTNAME" : "HOSTNAME_CHANGED",
+                string value when value.EndsWith("/port", StringComparison.Ordinal) => previous is null ? "NEW_PORT" : "PORT_CHANGED",
+                string value when value.EndsWith("/path", StringComparison.Ordinal) => "PATH_CHANGED",
+                string value when value.Contains("/allowedMethods/", StringComparison.Ordinal) => "HTTP_METHOD_CHANGED",
+                string value when value.EndsWith("/redirectPolicy", StringComparison.Ordinal) => "REDIRECT_POLICY_CHANGED",
+                string value when value.EndsWith("/tlsPolicy", StringComparison.Ordinal) => "TLS_POLICY_CHANGED",
+                string value when value.EndsWith("/providerId", StringComparison.Ordinal) || value.EndsWith("/providerType", StringComparison.Ordinal) => "PROVIDER_CHANGED",
+                string value when value.EndsWith("/resourceLogicalId", StringComparison.Ordinal) => "SECRET_RESOURCE_CHANGED",
+                string value when value.EndsWith("/certificateLogicalId", StringComparison.Ordinal) || value.EndsWith("/publicFingerprintSha256", StringComparison.Ordinal) => "CERTIFICATE_CHANGED",
+                string value when value.EndsWith("/environment", StringComparison.Ordinal) => "ENVIRONMENT_CHANGED",
+                string value when value.EndsWith("/connectorScope", StringComparison.Ordinal) || value.EndsWith("/operationScope", StringComparison.Ordinal) => "SCOPE_CHANGED",
+                _ => string.Empty
+            };
+            if (!string.IsNullOrEmpty(code) && !result.Any(value => value.Code == code && value.Path == change.Path)) result.Add(new(code, code is "HOSTNAME_CHANGED" or "PROVIDER_CHANGED" or "SECRET_RESOURCE_CHANGED" or "CERTIFICATE_CHANGED" or "SCOPE_CHANGED" ? "high" : "warning", change.Path));
+        }
+        return result;
+    }
+
+    private sealed record ProviderIdentity(string DisplayName, string Type, string ProviderId, string ResourceId);
 }
 
 /// <summary>Draft 2020-12 and semantic validator for Connector Definition JSON v1.</summary>

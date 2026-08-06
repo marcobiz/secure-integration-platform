@@ -116,16 +116,16 @@ public sealed class InMemoryAdminSecurityStore(IGatewayRegistry? auditRegistry =
     }
 
     /// <inheritdoc />
-    public Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid approver, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<ConnectorApprovalRecord> ApproveAsync(Guid approvalRequestId, Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid approver, string? comment, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (sync)
         {
-            int index = approvals.FindIndex(value => value.ConnectorVersionId == connectorVersionId && value.Status == ConnectorApprovalStatus.Requested && FixedChecksum(value.ChecksumSha256, checksumSha256) && FixedChecksum(value.BindingDigestSha256, bindingDigestSha256));
+            int index = approvals.FindIndex(value => value.Id == approvalRequestId && value.ConnectorVersionId == connectorVersionId && value.Status == ConnectorApprovalStatus.Requested && FixedChecksum(value.ChecksumSha256, checksumSha256) && FixedChecksum(value.BindingDigestSha256, bindingDigestSha256));
             if (index < 0) throw new GatewayException("BGW-ADMIN-APPROVAL-NOT-FOUND", 409);
             ConnectorApprovalRecord current = approvals[index];
             if (current.RequestedBy == approver || (Guid.TryParse(createdBy, out Guid creator) && creator == approver)) throw new GatewayException("BGW-ADMIN-FOUR-EYES", 403);
-            ConnectorApprovalRecord approved = current with { ApprovedBy = approver, Status = ConnectorApprovalStatus.Approved, ApprovedAt = now };
+            ConnectorApprovalRecord approved = current with { ApprovedBy = approver, Status = ConnectorApprovalStatus.Approved, ApprovedAt = now, DecisionComment = comment };
             approvals[index] = approved;
             return Task.FromResult(approved);
         }

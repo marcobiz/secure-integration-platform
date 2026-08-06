@@ -53,10 +53,10 @@ public enum CredentialStatus
 }
 
 /// <summary>A customer security boundary.</summary>
-public sealed record TenantRecord(Guid Id, string Code, string DisplayName, TenantStatus Status, DateTimeOffset CreatedAt);
+public sealed record TenantRecord(Guid Id, string Code, string DisplayName, TenantStatus Status, DateTimeOffset CreatedAt, long RowVersion = 1);
 
 /// <summary>A product authorized to own Installations.</summary>
-public sealed record ApplicationRecord(Guid Id, string Code, string DisplayName, ApplicationStatus Status, string MinimumBrokerVersion, string? MaximumBrokerVersion, DateTimeOffset CreatedAt);
+public sealed record ApplicationRecord(Guid Id, string Code, string DisplayName, ApplicationStatus Status, string MinimumBrokerVersion, string? MaximumBrokerVersion, DateTimeOffset CreatedAt, long RowVersion = 1);
 
 /// <summary>An isolated deployment environment.</summary>
 public sealed record GatewayEnvironmentRecord(Guid Id, string Code, string DisplayName, bool ProductionControls);

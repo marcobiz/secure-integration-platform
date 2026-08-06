@@ -148,13 +148,13 @@ public sealed class PostgresAdminSecurityStore(AdminPostgresDataSource adminData
     }
 
     /// <inheritdoc />
-    public async Task<ConnectorApprovalRecord> ApproveAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid approver, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
+    public async Task<ConnectorApprovalRecord> ApproveAsync(Guid approvalRequestId, Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string createdBy, Guid approver, string? comment, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
-        const string sql = "UPDATE gateway.connector_approval a SET status='approved',approved_by=$4,approved_at=$5 FROM gateway.connector_version v WHERE a.connector_version_id=$1 AND a.connector_version_id=v.id AND a.checksum_sha256=$2 AND a.binding_digest_sha256=$3 AND a.status='requested' AND a.requested_by<>$4 AND v.created_by<>$4::text AND NOT EXISTS(SELECT 1 FROM gateway.connector_binding_bundle_version b WHERE b.connector_version_id=v.id AND b.created_by=$4::text) RETURNING a.id,a.connector_version_id,a.checksum_sha256,a.binding_digest_sha256,a.requested_by,a.approved_by,a.rejected_by,a.status,a.requested_at,a.approved_at,a.rejected_at,a.decision_comment,a.invalidated_at";
+        const string sql = "UPDATE gateway.connector_approval a SET status='approved',approved_by=$5,approved_at=$6,decision_comment=$7 FROM gateway.connector_version v WHERE a.id=$1 AND a.connector_version_id=$2 AND a.connector_version_id=v.id AND a.checksum_sha256=$3 AND a.binding_digest_sha256=$4 AND a.status='requested' AND a.requested_by<>$5 AND v.created_by<>$5::text AND NOT EXISTS(SELECT 1 FROM gateway.connector_binding_bundle_version b WHERE b.connector_version_id=v.id AND b.created_by=$5::text) RETURNING a.id,a.connector_version_id,a.checksum_sha256,a.binding_digest_sha256,a.requested_by,a.approved_by,a.rejected_by,a.status,a.requested_at,a.approved_at,a.rejected_at,a.decision_comment,a.invalidated_at";
         await using NpgsqlCommand command = new(sql, connection, transaction);
-        Add(command, connectorVersionId, checksumSha256, bindingDigestSha256, approver, now);
+        Add(command, approvalRequestId, connectorVersionId, checksumSha256, bindingDigestSha256, approver, now, comment);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-ADMIN-FOUR-EYES", 403);
         ConnectorApprovalRecord result = ReadApproval(reader); await reader.DisposeAsync().ConfigureAwait(false);

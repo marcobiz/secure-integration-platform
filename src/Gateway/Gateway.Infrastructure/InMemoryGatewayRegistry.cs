@@ -59,12 +59,12 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null, IAdminT
     }
 
     /// <inheritdoc />
-    public Task<TenantRecord> UpdateTenantWithAuditAsync(Guid tenantId, string displayName, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) =>
-        MutateTenantWithAuditAsync(tenantId, value => value with { DisplayName = displayName }, "tenant.update.after-state", auditEvent, cancellationToken);
+    public Task<TenantRecord> UpdateTenantWithAuditAsync(Guid tenantId, string displayName, long expectedRowVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) =>
+        MutateTenantWithAuditAsync(tenantId, expectedRowVersion, value => value with { DisplayName = displayName, RowVersion = value.RowVersion + 1 }, "tenant.update.after-state", auditEvent, cancellationToken);
 
     /// <inheritdoc />
-    public Task<TenantRecord> DisableTenantWithAuditAsync(Guid tenantId, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) =>
-        MutateTenantWithAuditAsync(tenantId, value => value with { Status = TenantStatus.Suspended }, "tenant.disable.after-state", auditEvent, cancellationToken);
+    public Task<TenantRecord> DisableTenantWithAuditAsync(Guid tenantId, long expectedRowVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) =>
+        MutateTenantWithAuditAsync(tenantId, expectedRowVersion, value => value with { Status = TenantStatus.Suspended, RowVersion = value.RowVersion + 1 }, "tenant.disable.after-state", auditEvent, cancellationToken);
 
     /// <inheritdoc />
     public Task AddApplicationAsync(ApplicationRecord application, CancellationToken cancellationToken)
@@ -91,13 +91,14 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null, IAdminT
     }
 
     /// <inheritdoc />
-    public Task<ApplicationRecord> UpdateApplicationWithAuditAsync(Guid applicationId, string displayName, string minimumBrokerVersion, string? maximumBrokerVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    public Task<ApplicationRecord> UpdateApplicationWithAuditAsync(Guid applicationId, string displayName, string minimumBrokerVersion, string? maximumBrokerVersion, long expectedRowVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (gate)
         {
             if (!applications.TryGetValue(applicationId, out ApplicationRecord? current)) throw new GatewayException("BGW-APPLICATION-NOT-FOUND", 404);
-            ApplicationRecord updated = current with { DisplayName = displayName, MinimumBrokerVersion = minimumBrokerVersion, MaximumBrokerVersion = maximumBrokerVersion };
+            if (current.RowVersion != expectedRowVersion) throw new GatewayException("BGW-CONCURRENCY-CONFLICT", 409);
+            ApplicationRecord updated = current with { DisplayName = displayName, MinimumBrokerVersion = minimumBrokerVersion, MaximumBrokerVersion = maximumBrokerVersion, RowVersion = current.RowVersion + 1 };
             applications[applicationId] = updated;
             try { faultInjector?.Check("application.update.after-state"); auditEvents.Add(auditEvent); }
             catch { applications[applicationId] = current; throw; }
@@ -106,13 +107,14 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null, IAdminT
     }
 
     /// <inheritdoc />
-    public Task<ApplicationRecord> DisableApplicationWithAuditAsync(Guid applicationId, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    public Task<ApplicationRecord> DisableApplicationWithAuditAsync(Guid applicationId, long expectedRowVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (gate)
         {
             if (!applications.TryGetValue(applicationId, out ApplicationRecord? current)) throw new GatewayException("BGW-APPLICATION-NOT-FOUND", 404);
-            ApplicationRecord updated = current with { Status = ApplicationStatus.Suspended };
+            if (current.RowVersion != expectedRowVersion) throw new GatewayException("BGW-CONCURRENCY-CONFLICT", 409);
+            ApplicationRecord updated = current with { Status = ApplicationStatus.Suspended, RowVersion = current.RowVersion + 1 };
             applications[applicationId] = updated;
             try { faultInjector?.Check("application.disable.after-state"); auditEvents.Add(auditEvent); }
             catch { applications[applicationId] = current; throw; }
@@ -120,13 +122,14 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null, IAdminT
         }
     }
 
-    private Task<TenantRecord> MutateTenantWithAuditAsync(Guid tenantId, Func<TenantRecord, TenantRecord> mutation, string faultBoundary, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    private Task<TenantRecord> MutateTenantWithAuditAsync(Guid tenantId, long expectedRowVersion, Func<TenantRecord, TenantRecord> mutation, string faultBoundary, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (gate)
         {
             if (auditEvent.TenantId != tenantId) throw new ArgumentException("Tenant audit scope is inconsistent.", nameof(auditEvent));
             if (!tenants.TryGetValue(tenantId, out TenantRecord? current)) throw new GatewayException("BGW-TENANT-NOT-FOUND", 404);
+            if (current.RowVersion != expectedRowVersion) throw new GatewayException("BGW-CONCURRENCY-CONFLICT", 409);
             TenantRecord updated = mutation(current);
             tenants[tenantId] = updated;
             try { faultInjector?.Check(faultBoundary); auditEvents.Add(auditEvent); }

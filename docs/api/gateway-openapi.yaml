@@ -247,20 +247,26 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateTenant' } } } }
       responses: { '201': { description: Tenant created, content: { application/json: { schema: { $ref: '#/components/schemas/Tenant' } } } }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/tenants/{tenantId}:
+    get:
+      tags: [Administration]
+      operationId: getTenant
+      security: [{ AdminSession: [] }]
+      parameters: [{ name: tenantId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Tenant with ETag, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Tenant' } } } }, default: { $ref: '#/components/responses/Problem' } }
     put:
       tags: [Administration]
       operationId: updateTenant
       security: [{ AdminSession: [] }]
-      parameters: [{ name: tenantId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/Csrf' }]
+      parameters: [{ name: tenantId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/Csrf' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateTenant' } } } }
-      responses: { '200': { description: Tenant and audit updated atomically, content: { application/json: { schema: { $ref: '#/components/schemas/Tenant' } } } }, default: { $ref: '#/components/responses/Problem' } }
+      responses: { '200': { description: Tenant and audit updated atomically, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Tenant' } } } }, '409': { $ref: '#/components/responses/Problem' }, '428': { $ref: '#/components/responses/Problem' }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/tenants/{tenantId}:disable:
     post:
       tags: [Administration]
       operationId: disableTenant
       security: [{ AdminSession: [] }]
-      parameters: [{ name: tenantId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/Csrf' }]
-      responses: { '200': { description: Tenant disabled and audited atomically, content: { application/json: { schema: { $ref: '#/components/schemas/Tenant' } } } }, default: { $ref: '#/components/responses/Problem' } }
+      parameters: [{ name: tenantId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/Csrf' }]
+      responses: { '200': { description: Tenant disabled and audited atomically, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Tenant' } } } }, '409': { $ref: '#/components/responses/Problem' }, '428': { $ref: '#/components/responses/Problem' }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/applications:
     get:
       tags: [Administration]
@@ -276,20 +282,26 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateApplication' } } } }
       responses: { '201': { description: Application created }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/applications/{applicationId}:
+    get:
+      tags: [Administration]
+      operationId: getApplication
+      security: [{ AdminSession: [] }]
+      parameters: [{ name: applicationId, in: path, required: true, schema: { type: string, format: uuid } }]
+      responses: { '200': { description: Application with ETag, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Application' } } } }, default: { $ref: '#/components/responses/Problem' } }
     put:
       tags: [Administration]
       operationId: updateApplication
       security: [{ AdminSession: [] }]
-      parameters: [{ name: applicationId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/Csrf' }]
+      parameters: [{ name: applicationId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/Csrf' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UpdateApplication' } } } }
-      responses: { '200': { description: Application and audit updated atomically, content: { application/json: { schema: { $ref: '#/components/schemas/Application' } } } }, default: { $ref: '#/components/responses/Problem' } }
+      responses: { '200': { description: Application and audit updated atomically, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Application' } } } }, '409': { $ref: '#/components/responses/Problem' }, '428': { $ref: '#/components/responses/Problem' }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/applications/{applicationId}:disable:
     post:
       tags: [Administration]
       operationId: disableApplication
       security: [{ AdminSession: [] }]
-      parameters: [{ name: applicationId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/Csrf' }]
-      responses: { '200': { description: Application disabled and audited atomically, content: { application/json: { schema: { $ref: '#/components/schemas/Application' } } } }, default: { $ref: '#/components/responses/Problem' } }
+      parameters: [{ name: applicationId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/IfMatch' }, { $ref: '#/components/parameters/Csrf' }]
+      responses: { '200': { description: Application disabled and audited atomically, headers: { ETag: { schema: { type: string } } }, content: { application/json: { schema: { $ref: '#/components/schemas/Application' } } } }, '409': { $ref: '#/components/responses/Problem' }, '428': { $ref: '#/components/responses/Problem' }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/environments:
     get:
       tags: [Administration]
@@ -475,6 +487,13 @@ paths:
       security: [{ AdminSession: [] }]
       parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }, { $ref: '#/components/parameters/Csrf' }]
       responses: { '200': { description: Checksum-specific approval requested. }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/connectors/{connectorId}/versions/{version}/approval-review:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: getAdminConnectorApprovalReview
+      security: [{ AdminSession: [] }]
+      parameters: [{ $ref: '#/components/parameters/ConnectorId' }, { $ref: '#/components/parameters/Version' }]
+      responses: { '200': { description: Exact server-built non-secret runtime configuration reviewed for approval, content: { application/json: { schema: { $ref: '#/components/schemas/ApprovalReviewResult' } } } }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/connectors/{connectorId}/versions/{version}/approvals:
     get:
       tags: [ConnectorsAdmin]
@@ -588,13 +607,14 @@ components:
         total: { type: integer }
     Tenant:
       type: object
-      required: [id, code, displayName, status, createdAt]
+      required: [id, code, displayName, status, createdAt, rowVersion]
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
         displayName: { type: string }
         status: { type: string }
         createdAt: { type: string, format: date-time }
+        rowVersion: { type: integer, minimum: 1 }
     TenantPage:
       allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Tenant' } } } }]
     CreateTenant:
@@ -609,7 +629,7 @@ components:
       properties: { displayName: { type: string, maxLength: 256 } }
     Application:
       type: object
-      required: [id, code, displayName, status, minimumBrokerVersion, createdAt]
+      required: [id, code, displayName, status, minimumBrokerVersion, createdAt, rowVersion]
       properties:
         id: { type: string, format: uuid }
         code: { type: string }
@@ -618,6 +638,7 @@ components:
         minimumBrokerVersion: { type: string }
         maximumBrokerVersion: { type: [string, 'null'] }
         createdAt: { type: string, format: date-time }
+        rowVersion: { type: integer, minimum: 1 }
     ApplicationPage:
       allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Application' } } } }]
     CreateApplication:
@@ -712,8 +733,63 @@ components:
     ApprovalAcceptanceRequest:
       type: object
       additionalProperties: false
-      required: [bindingDigestSha256]
-      properties: { bindingDigestSha256: { type: string, pattern: '^[A-F0-9]{64}$' } }
+      required: [approvalRequestId, expectedDigestSha256]
+      properties: { approvalRequestId: { type: string, format: uuid }, expectedDigestSha256: { type: string, pattern: '^[A-F0-9]{64}$' }, comment: { type: [string, 'null'], maxLength: 500 } }
+    ApprovalReviewResult:
+      type: object
+      required: [artifact, canonicalJson, digestSha256, revisions, diff, riskIndicators]
+      properties:
+        artifact: { $ref: '#/components/schemas/ApprovalReviewArtifact' }
+        canonicalJson: { type: string, description: Canonical JSON of artifact; never contains credential values. }
+        digestSha256: { type: string, pattern: '^[A-F0-9]{64}$' }
+        revisions: { type: array, items: { $ref: '#/components/schemas/ApprovalRevisionReview' } }
+        diff: { type: array, items: { $ref: '#/components/schemas/ApprovalSemanticDiff' } }
+        riskIndicators: { type: array, items: { $ref: '#/components/schemas/ApprovalRiskIndicator' } }
+    ApprovalReviewArtifact:
+      type: object
+      required: [connector, operations]
+      properties:
+        connector: { $ref: '#/components/schemas/ApprovalConnectorReview' }
+        operations: { type: array, items: { $ref: '#/components/schemas/ApprovalOperationReview' } }
+    ApprovalConnectorReview:
+      type: object
+      required: [connectorId, version, displayName, schemaVersion, canonicalDefinitionChecksumSha256]
+      properties: { connectorId: { type: string }, version: { type: string }, displayName: { type: string }, schemaVersion: { type: string }, canonicalDefinitionChecksumSha256: { type: string, pattern: '^[A-F0-9]{64}$' } }
+    ApprovalOperationReview:
+      type: object
+      required: [operationId, environment, executionStrategy, protocol, endpoint, secretBindings, certificateBindings]
+      properties:
+        operationId: { type: string }
+        environment: { type: string }
+        executionStrategy: { type: string }
+        protocol: { type: string }
+        endpoint: { $ref: '#/components/schemas/ApprovalEndpointReview' }
+        secretBindings: { type: array, items: { $ref: '#/components/schemas/ApprovalSecretReview' } }
+        certificateBindings: { type: array, items: { $ref: '#/components/schemas/ApprovalCertificateReview' } }
+    ApprovalEndpointReview:
+      type: object
+      required: [logicalBindingId, revision, scheme, hostname, port, path, allowedMethods, redirectPolicy, tlsPolicy, endpointChecksumSha256, destinationClassification]
+      properties: { logicalBindingId: { type: string }, revision: { type: integer }, scheme: { type: string }, hostname: { type: string }, port: { type: integer }, path: { type: string }, allowedMethods: { type: array, items: { type: string } }, redirectPolicy: { type: string }, tlsPolicy: { type: string }, endpointChecksumSha256: { type: string }, destinationClassification: { type: string, enum: [loopback, private, publicInternet, other] } }
+    ApprovalSecretReview:
+      type: object
+      required: [logicalBindingId, revision, providerDisplayName, providerType, providerId, resourceLogicalId, resourceType, environment, connectorScope, operationScope, secretBindingChecksumSha256]
+      properties: { logicalBindingId: { type: string }, revision: { type: integer }, providerDisplayName: { type: string }, providerType: { type: string }, providerId: { type: string }, resourceLogicalId: { type: string }, resourceType: { type: string }, environment: { type: string }, connectorScope: { type: string }, operationScope: { type: string }, secretBindingChecksumSha256: { type: string } }
+    ApprovalCertificateReview:
+      type: object
+      required: [logicalBindingId, revision, providerDisplayName, providerType, providerId, certificateLogicalId, environment, connectorScope, operationScope, certificateBindingChecksumSha256]
+      properties: { logicalBindingId: { type: string }, revision: { type: integer }, providerDisplayName: { type: string }, providerType: { type: string }, providerId: { type: string }, certificateLogicalId: { type: string }, publicFingerprintSha256: { type: [string, 'null'] }, publicSubject: { type: [string, 'null'] }, publicIssuer: { type: [string, 'null'] }, expiresAt: { type: [string, 'null'], format: date-time }, environment: { type: string }, connectorScope: { type: string }, operationScope: { type: string }, certificateBindingChecksumSha256: { type: string } }
+    ApprovalRevisionReview:
+      type: object
+      required: [bindingId, environmentId, revision, checksumSha256]
+      properties: { bindingId: { type: string, format: uuid }, environmentId: { type: string, format: uuid }, revision: { type: integer }, checksumSha256: { type: string } }
+    ApprovalSemanticDiff:
+      type: object
+      required: [change, path]
+      properties: { change: { type: string, enum: [added, removed, changed] }, path: { type: string }, previousValue: { type: [string, 'null'] }, currentValue: { type: [string, 'null'] } }
+    ApprovalRiskIndicator:
+      type: object
+      required: [code, severity, path]
+      properties: { code: { type: string }, severity: { type: string, enum: [warning, high] }, path: { type: string } }
     ApprovalPage:
       allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Approval' } } } }]
     RoleAssignment:
