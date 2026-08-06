@@ -395,7 +395,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["getTenant"];
         put: operations["updateTenant"];
         post?: never;
         delete?: never;
@@ -443,7 +443,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: operations["getApplication"];
         put: operations["updateApplication"];
         post?: never;
         delete?: never;
@@ -836,6 +836,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/api/v1/connectors/{connectorId}/versions/{version}/approval-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getAdminConnectorApprovalReview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/api/v1/connectors/{connectorId}/versions/{version}/approvals": {
         parameters: {
             query?: never;
@@ -991,6 +1007,7 @@ export interface components {
             status: string;
             /** Format: date-time */
             createdAt: string;
+            rowVersion: number;
         };
         TenantPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Tenant"][];
@@ -1012,6 +1029,7 @@ export interface components {
             maximumBrokerVersion?: string | null;
             /** Format: date-time */
             createdAt: string;
+            rowVersion: number;
         };
         ApplicationPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Application"][];
@@ -1222,7 +1240,104 @@ export interface components {
             requestedAt: string;
         };
         ApprovalAcceptanceRequest: {
-            bindingDigestSha256: string;
+            /** Format: uuid */
+            approvalRequestId: string;
+            expectedDigestSha256: string;
+            comment?: string | null;
+        };
+        ApprovalReviewResult: {
+            artifact: components["schemas"]["ApprovalReviewArtifact"];
+            /** @description Canonical JSON of artifact; never contains credential values. */
+            canonicalJson: string;
+            digestSha256: string;
+            revisions: components["schemas"]["ApprovalRevisionReview"][];
+            diff: components["schemas"]["ApprovalSemanticDiff"][];
+            riskIndicators: components["schemas"]["ApprovalRiskIndicator"][];
+        };
+        ApprovalReviewArtifact: {
+            connector: components["schemas"]["ApprovalConnectorReview"];
+            operations: components["schemas"]["ApprovalOperationReview"][];
+        };
+        ApprovalConnectorReview: {
+            connectorId: string;
+            version: string;
+            displayName: string;
+            schemaVersion: string;
+            canonicalDefinitionChecksumSha256: string;
+        };
+        ApprovalOperationReview: {
+            operationId: string;
+            environment: string;
+            executionStrategy: string;
+            protocol: string;
+            endpoint: components["schemas"]["ApprovalEndpointReview"];
+            secretBindings: components["schemas"]["ApprovalSecretReview"][];
+            certificateBindings: components["schemas"]["ApprovalCertificateReview"][];
+        };
+        ApprovalEndpointReview: {
+            logicalBindingId: string;
+            revision: number;
+            scheme: string;
+            hostname: string;
+            port: number;
+            path: string;
+            allowedMethods: string[];
+            redirectPolicy: string;
+            tlsPolicy: string;
+            endpointChecksumSha256: string;
+            /** @enum {string} */
+            destinationClassification: "loopback" | "private" | "publicInternet" | "other";
+        };
+        ApprovalSecretReview: {
+            logicalBindingId: string;
+            revision: number;
+            providerDisplayName: string;
+            providerType: string;
+            providerId: string;
+            resourceLogicalId: string;
+            resourceType: string;
+            environment: string;
+            connectorScope: string;
+            operationScope: string;
+            secretBindingChecksumSha256: string;
+        };
+        ApprovalCertificateReview: {
+            logicalBindingId: string;
+            revision: number;
+            providerDisplayName: string;
+            providerType: string;
+            providerId: string;
+            certificateLogicalId: string;
+            publicFingerprintSha256?: string | null;
+            publicSubject?: string | null;
+            publicIssuer?: string | null;
+            /** Format: date-time */
+            expiresAt?: string | null;
+            environment: string;
+            connectorScope: string;
+            operationScope: string;
+            certificateBindingChecksumSha256: string;
+        };
+        ApprovalRevisionReview: {
+            /** Format: uuid */
+            bindingId: string;
+            /** Format: uuid */
+            environmentId: string;
+            revision: number;
+            checksumSha256: string;
+        };
+        ApprovalSemanticDiff: {
+            /** @enum {string} */
+            change: "added" | "removed" | "changed";
+            path: string;
+            previousValue?: string | null;
+            currentValue?: string | null;
+        };
+        ApprovalRiskIndicator: {
+            code: string;
+            /** @enum {string} */
+            severity: "warning" | "high";
+            path: string;
         };
         ApprovalPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Approval"][];
@@ -1884,10 +1999,35 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    getTenant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tenant with ETag */
+            200: {
+                headers: {
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Tenant"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
     updateTenant: {
         parameters: {
             query?: never;
             header: {
+                "If-Match": components["parameters"]["IfMatch"];
                 /** @description Opaque token obtained from /admin/auth/csrf. */
                 "X-CSRF-TOKEN": components["parameters"]["Csrf"];
             };
@@ -1905,12 +2045,15 @@ export interface operations {
             /** @description Tenant and audit updated atomically */
             200: {
                 headers: {
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["Tenant"];
                 };
             };
+            409: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
             default: components["responses"]["Problem"];
         };
     };
@@ -1918,6 +2061,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                "If-Match": components["parameters"]["IfMatch"];
                 /** @description Opaque token obtained from /admin/auth/csrf. */
                 "X-CSRF-TOKEN": components["parameters"]["Csrf"];
             };
@@ -1931,12 +2075,15 @@ export interface operations {
             /** @description Tenant disabled and audited atomically */
             200: {
                 headers: {
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["Tenant"];
                 };
             };
+            409: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
             default: components["responses"]["Problem"];
         };
     };
@@ -1990,10 +2137,35 @@ export interface operations {
             default: components["responses"]["Problem"];
         };
     };
+    getApplication: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                applicationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Application with ETag */
+            200: {
+                headers: {
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Application"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
     updateApplication: {
         parameters: {
             query?: never;
             header: {
+                "If-Match": components["parameters"]["IfMatch"];
                 /** @description Opaque token obtained from /admin/auth/csrf. */
                 "X-CSRF-TOKEN": components["parameters"]["Csrf"];
             };
@@ -2011,12 +2183,15 @@ export interface operations {
             /** @description Application and audit updated atomically */
             200: {
                 headers: {
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["Application"];
                 };
             };
+            409: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
             default: components["responses"]["Problem"];
         };
     };
@@ -2024,6 +2199,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                "If-Match": components["parameters"]["IfMatch"];
                 /** @description Opaque token obtained from /admin/auth/csrf. */
                 "X-CSRF-TOKEN": components["parameters"]["Csrf"];
             };
@@ -2037,12 +2213,15 @@ export interface operations {
             /** @description Application disabled and audited atomically */
             200: {
                 headers: {
+                    ETag?: string;
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["Application"];
                 };
             };
+            409: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
             default: components["responses"]["Problem"];
         };
     };
@@ -2708,6 +2887,30 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getAdminConnectorApprovalReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connectorId: components["parameters"]["ConnectorId"];
+                version: components["parameters"]["Version"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Exact server-built non-secret runtime configuration reviewed for approval */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalReviewResult"];
+                };
             };
             default: components["responses"]["Problem"];
         };

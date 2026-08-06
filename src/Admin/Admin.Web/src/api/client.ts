@@ -17,6 +17,7 @@ export type Environment = components['schemas']['Environment'];
 export type ProvisionedActivation = components['schemas']['ProvisionedActivation'];
 export type ConnectorVersion = components['schemas']['ConnectorVersion'];
 export type Approval = components['schemas']['Approval'];
+export type ApprovalReview = components['schemas']['ApprovalReviewResult'];
 export type ConnectorBinding = components['schemas']['ConnectorBinding'];
 export type ConnectorBindingRequest = components['schemas']['ConnectorBindingRequest'];
 export type RoleAssignment = components['schemas']['RoleAssignment'];
@@ -91,14 +92,20 @@ export const adminApi = {
   session: () => openApi<AdminSession, '/admin/auth/me'>('/admin/auth/me', 'get'),
   dashboard: () => openApi<Dashboard, '/admin/api/v1/dashboard'>('/admin/api/v1/dashboard', 'get'),
   tenants: (offset = 0, limit = 50) => openApi<TenantPage, '/admin/api/v1/tenants'>('/admin/api/v1/tenants', 'get', { query: { offset, limit } }),
+  tenant: (id: string) => openApi<Tenant, '/admin/api/v1/tenants/{tenantId}'>('/admin/api/v1/tenants/{tenantId}', 'get', { path: { tenantId: id } }),
   applications: (offset = 0, limit = 50) => openApi<ApplicationPage, '/admin/api/v1/applications'>('/admin/api/v1/applications', 'get', { query: { offset, limit } }),
+  application: (id: string) => openApi<Application, '/admin/api/v1/applications/{applicationId}'>('/admin/api/v1/applications/{applicationId}', 'get', { path: { applicationId: id } }),
   environments: (offset = 0, limit = 50) => openApi<EnvironmentPage, '/admin/api/v1/environments'>('/admin/api/v1/environments', 'get', { query: { offset, limit } }),
   installations: (tenantId: string, offset = 0, limit = 50) => openApi<InstallationPage, '/admin/api/v1/installations'>('/admin/api/v1/installations', 'get', { query: { tenantId, offset, limit } }),
   grants: (tenantId: string, offset = 0, limit = 50) => openApi<GrantPage, '/admin/api/v1/grants'>('/admin/api/v1/grants', 'get', { query: { tenantId, offset, limit } }),
   audit: (tenantId: string, offset = 0, limit = 50) => openApi<AuditPage, '/admin/api/v1/audit'>('/admin/api/v1/audit', 'get', { query: { tenantId, offset, limit } }),
   connectors: (offset = 0, limit = 50, filter = '') => openApi<Page<ConnectorSummary>, '/admin/api/v1/connectors'>('/admin/api/v1/connectors', 'get', { query: { offset, limit, filter } }),
   createTenant: (value: components['schemas']['CreateTenant']) => openApi<Tenant, '/admin/api/v1/tenants'>('/admin/api/v1/tenants', 'post', { body: value }),
+  updateTenant: (id: string, value: components['schemas']['UpdateTenant'], rowVersion: number) => openApi<Tenant, '/admin/api/v1/tenants/{tenantId}'>('/admin/api/v1/tenants/{tenantId}', 'put', { path: { tenantId: id }, headers: { 'If-Match': `"${rowVersion}"` }, body: value }),
+  disableTenant: (id: string, rowVersion: number) => openApi<Tenant, '/admin/api/v1/tenants/{tenantId}:disable'>('/admin/api/v1/tenants/{tenantId}:disable', 'post', { path: { tenantId: id }, headers: { 'If-Match': `"${rowVersion}"` } }),
   createApplication: (value: components['schemas']['CreateApplication']) => openApi<Application, '/admin/api/v1/applications'>('/admin/api/v1/applications', 'post', { body: value }),
+  updateApplication: (id: string, value: components['schemas']['UpdateApplication'], rowVersion: number) => openApi<Application, '/admin/api/v1/applications/{applicationId}'>('/admin/api/v1/applications/{applicationId}', 'put', { path: { applicationId: id }, headers: { 'If-Match': `"${rowVersion}"` }, body: value }),
+  disableApplication: (id: string, rowVersion: number) => openApi<Application, '/admin/api/v1/applications/{applicationId}:disable'>('/admin/api/v1/applications/{applicationId}:disable', 'post', { path: { applicationId: id }, headers: { 'If-Match': `"${rowVersion}"` } }),
   createInstallation: (value: components['schemas']['CreateInstallation']) => openApi<ProvisionedActivation, '/admin/api/v1/installations'>('/admin/api/v1/installations', 'post', { body: value }),
   revokeInstallation: (tenantId: string, installationId: string, reason: string) => openApi<{ status: string }, '/admin/api/v1/installations/{installationId}:revoke'>('/admin/api/v1/installations/{installationId}:revoke', 'post', { path: { installationId }, query: { tenantId }, body: { reason } }),
   createGrant: (value: components['schemas']['CreateGrant']) => openApi<Record<string, unknown>, '/admin/api/v1/grants'>('/admin/api/v1/grants', 'post', { body: value }),
@@ -108,13 +115,14 @@ export const adminApi = {
   importConnector: (definition: object, expectedChecksumSha256: string) => openApi<Record<string, unknown>, '/admin/api/v1/connectors:import'>('/admin/api/v1/connectors:import', 'post', { body: { definition, expectedChecksumSha256 } }),
   connectorVersions: (id: string, offset = 0, limit = 50, filter = '') => openApi<Page<ConnectorVersion>, '/admin/api/v1/connectors/{connectorId}/versions'>('/admin/api/v1/connectors/{connectorId}/versions', 'get', { path: { connectorId: id }, query: { offset, limit, filter } }),
   approvals: (id: string, version: string, offset = 0, limit = 50) => openApi<Page<Approval>, '/admin/api/v1/connectors/{connectorId}/versions/{version}/approvals'>('/admin/api/v1/connectors/{connectorId}/versions/{version}/approvals', 'get', { path: { connectorId: id, version }, query: { offset, limit } }),
+  approvalReview: (id: string, version: string) => openApi<ApprovalReview, '/admin/api/v1/connectors/{connectorId}/versions/{version}/approval-review'>('/admin/api/v1/connectors/{connectorId}/versions/{version}/approval-review', 'get', { path: { connectorId: id, version } }),
   bindings: (id: string, version: string, environmentId = '', offset = 0, limit = 50) => openApi<Page<ConnectorBinding>, '/admin/api/v1/connectors/{connectorId}/versions/{version}/bindings'>('/admin/api/v1/connectors/{connectorId}/versions/{version}/bindings', 'get', { path: { connectorId: id, version }, query: { offset, limit, environmentId } }),
   putBindings: (id: string, value: ConnectorBindingRequest, revision?: number) => openApi<{ revision: number }, '/admin/api/v1/connectors/{connectorId}/bindings'>('/admin/api/v1/connectors/{connectorId}/bindings', 'put', { path: { connectorId: id }, headers: revision === undefined ? undefined : { 'If-Match': `"${revision}"` }, body: value }),
   roleAssignments: (offset = 0, limit = 50, principalId = '', tenantId = '') => openApi<Page<RoleAssignment>, '/admin/api/v1/role-assignments'>('/admin/api/v1/role-assignments', 'get', { query: { offset, limit, principalId, tenantId } }),
   connectorDefinition: (id: string, version: string) => openApi<Record<string, unknown>, '/admin/api/v1/connectors/{connectorId}/versions/{version}/definition'>('/admin/api/v1/connectors/{connectorId}/versions/{version}/definition', 'get', { path: { connectorId: id, version } }),
   validateStored: (id: string, version: ConnectorVersion) => openApi<ConnectorVersion, '/admin/api/v1/connectors/{connectorId}/versions/{version}:validate'>('/admin/api/v1/connectors/{connectorId}/versions/{version}:validate', 'post', { path: { connectorId: id, version: version.version }, headers: { 'If-Match': `"${version.rowVersion}"` } }),
   requestApproval: (id: string, version: string) => openApi<Approval, '/admin/api/v1/connectors/{connectorId}/versions/{version}/approval-requests'>('/admin/api/v1/connectors/{connectorId}/versions/{version}/approval-requests', 'post', { path: { connectorId: id, version } }),
-  approve: (id: string, version: string, bindingDigestSha256: string) => openApi<Approval, '/admin/api/v1/connectors/{connectorId}/versions/{version}/approvals'>('/admin/api/v1/connectors/{connectorId}/versions/{version}/approvals', 'post', { path: { connectorId: id, version }, body: { bindingDigestSha256 } }),
+  approve: (id: string, version: string, approvalRequestId: string, expectedDigestSha256: string, comment?: string) => openApi<Approval, '/admin/api/v1/connectors/{connectorId}/versions/{version}/approvals'>('/admin/api/v1/connectors/{connectorId}/versions/{version}/approvals', 'post', { path: { connectorId: id, version }, body: { approvalRequestId, expectedDigestSha256, comment: comment || null } }),
   reject: (id: string, version: string, comment?: string) => openApi<Approval, '/admin/api/v1/connectors/{connectorId}/versions/{version}/rejections'>('/admin/api/v1/connectors/{connectorId}/versions/{version}/rejections', 'post', { path: { connectorId: id, version }, body: { comment: comment || null } }),
   assignRole: (value: components['schemas']['RoleAssignmentRequest']) => openApi<Record<string, unknown>, '/admin/api/v1/role-assignments'>('/admin/api/v1/role-assignments', 'post', { body: value }),
   revokeRole: (assignmentId: string) => openApi<void, '/admin/api/v1/role-assignments/{assignmentId}'>('/admin/api/v1/role-assignments/{assignmentId}', 'delete', { path: { assignmentId } }),
