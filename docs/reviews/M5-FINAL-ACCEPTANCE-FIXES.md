@@ -2,7 +2,7 @@
 
 **Initial reviewed HEAD:** `835db2c5607f66c8a9888981f54f0dbde0f956f1`
 
-**Product candidate:** `7e961ab98d259418a5e0a98eeffe6a70ecd7c6a2`
+**Product candidate:** `668e2266613ffa256a6759d5910520a5200e7cc1`
 
 **Branch:** `m5/admin-ui-mvp`
 
@@ -31,12 +31,13 @@
 ## Local gate on the product candidate
 
 - Release build: PASS, zero warnings and errors.
-- Ordinary .NET: 158 PASS; nine PostgreSQL-configured tests explicitly skipped in this run and executed separately.
+- Ordinary .NET: 159 PASS; nine PostgreSQL-configured tests explicitly skipped in this run and executed separately.
 - PostgreSQL 18: 10/10 PASS; empty apply, second apply no-op, non-superuser roles, FORCE RLS and locator least privilege PASS.
 - Migration `0009` SHA-256: `92D2A5826CF348C676EB619C8A75F5F267C0C15E074617DDD700B885324A80F1`.
 - Frontend: OpenAPI/runtime-contract drift PASS, lint PASS, 28 Vitest PASS, production build PASS and accessibility PASS.
 - Browser: 360/360 repeated browser-mock executions PASS with retries 0; isolated determinism repetitions also PASS.
 - Full stack: `FULLSTACK-01` PASS through production Admin build, PostgreSQL 18, synthetic Vault and BGW1+mTLS vendor mock; redaction and Docker cleanup PASS.
+- M4 regression: quickstart connector test PASS with a distinct generated database credential and a non-superuser Admin pool; the runtime role remains unable to enumerate provider locators.
 - Supply chain: conservative scanner negative/clean controls, Gitleaks history scan, NuGet/npm vulnerability, npm audit, frontend license, SPDX SBOM and documentation validation PASS.
 
 Exact-head GitHub CI and the external redacted bundle are completion evidence for this remediation, not authorization to merge. Their identifiers are reported with the final handoff after verification. No acceptance criterion in this document declares M5 Done.
