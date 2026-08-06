@@ -6,6 +6,7 @@ import { ErrorState, LoadingState } from '../../components/AsyncState';
 import { DataTable } from '../../components/DataTable';
 import { PageTitle } from '../../components/PageTitle';
 import { PaginationControls } from '../../components/PaginationControls';
+import { runtimeLabel } from '../../i18n/runtimeValues';
 import { PagedSelector } from '../../components/PagedSelector';
 
 export function TenantDataPage({ kind }: { kind: 'grants' | 'audit' }) {
@@ -26,7 +27,7 @@ export function TenantDataPage({ kind }: { kind: 'grants' | 'audit' }) {
   const rows = query.data?.items ?? [];
   const columns = kind === 'grants'
     ? [{ key: 'installation', label: t('installation'), render: (row: Record<string, unknown>) => String(row.installationId) }, { key: 'connector', label: t('connectors'), render: (row: Record<string, unknown>) => String(row.connectorId) }, { key: 'operation', label: t('operation'), render: (row: Record<string, unknown>) => String(row.operationId) }, { key: 'from', label: t('validFrom'), render: (row: Record<string, unknown>) => new Intl.DateTimeFormat(i18n.language).format(new Date(String(row.validFrom))) }]
-    : [{ key: 'action', label: t('action'), render: (row: Record<string, unknown>) => String(row.action) }, { key: 'target', label: t('target'), render: (row: Record<string, unknown>) => `${String(row.targetType)} · ${String(row.targetId)}` }, { key: 'outcome', label: t('outcome'), render: (row: Record<string, unknown>) => String(row.outcome) }, { key: 'reason', label: t('reason'), render: (row: Record<string, unknown>) => String(row.reasonCode) }];
+    : [{ key: 'action', label: t('action'), render: (row: Record<string, unknown>) => runtimeLabel(t, 'auditAction', row.action) }, { key: 'target', label: t('target'), render: (row: Record<string, unknown>) => `${String(row.targetType)} · ${String(row.targetId)}` }, { key: 'outcome', label: t('outcome'), render: (row: Record<string, unknown>) => runtimeLabel(t, 'auditOutcome', row.outcome) }, { key: 'reason', label: t('reason'), render: (row: Record<string, unknown>) => runtimeLabel(t, 'reason', row.reasonCode) }];
   return <>
     <PageTitle title={t(kind)} />
     <PagedSelector id={`${kind}-tenant`} label={t('selectTenant')} value={tenant} page={tenants.data!} onChange={value => { setTenant(value); setOffset(0); }} onOffset={setTenantOffset} itemLabel={value => value.displayName} />

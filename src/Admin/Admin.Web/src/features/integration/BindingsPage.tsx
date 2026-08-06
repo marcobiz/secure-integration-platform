@@ -9,6 +9,7 @@ import { DataTable } from '../../components/DataTable';
 import { PageTitle } from '../../components/PageTitle';
 import { PaginationControls } from '../../components/PaginationControls';
 import { useFormDirty } from '../../navigation/DirtyStateContext';
+import { runtimeLabel } from '../../i18n/runtimeValues';
 
 export interface BindingForm { connectorId: string; connectorVersion: string; environmentId: string; endpointsJson: string; secretReferencesJson: string; certificateReferencesJson: string }
 const defaults: BindingForm = { connectorId: '', connectorVersion: '', environmentId: '', endpointsJson: '{}', secretReferencesJson: '{}', certificateReferencesJson: '{}' };
@@ -83,7 +84,7 @@ export function BindingsPage() {
     </Stack></form>
     {(Object.keys(form.formState.errors).length > 0 || save.error) && <Alert ref={summary} tabIndex={-1} severity="error" role="alert" aria-live="assertive" sx={{ mt: 2 }}>{t('bindingSaveFailed')}{save.error && <ErrorState error={save.error} />}</Alert>}
     {save.isSuccess && <Typography role="status" color="success.main" sx={{ mt: 2 }}>{t('saved')}</Typography>}</CardContent></Card>
-    {history.data && <Card sx={{ mt: 3 }}><CardContent><DataTable rows={history.data.items} label={t('bindings')} columns={[{ key: 'revision', label: t('revision'), render: (value: ConnectorBinding) => value.revision }, { key: 'state', label: t('status'), render: value => value.state }, { key: 'checksum', label: t('checksum'), render: value => value.checksumSha256.slice(0, 12) }]} /><PaginationControls page={history.data} onOffset={setOffset} /></CardContent></Card>}
+    {history.data && <Card sx={{ mt: 3 }}><CardContent><DataTable rows={history.data.items} label={t('bindings')} columns={[{ key: 'revision', label: t('revision'), render: (value: ConnectorBinding) => value.revision }, { key: 'state', label: t('status'), render: value => runtimeLabel(t, 'status', value.state) }, { key: 'checksum', label: t('checksum'), render: value => value.checksumSha256.slice(0, 12) }]} /><PaginationControls page={history.data} onOffset={setOffset} /></CardContent></Card>}
     {history.error && <ErrorState error={history.error} />}
     {resources.error && <ErrorState error={resources.error} />}
   </>;

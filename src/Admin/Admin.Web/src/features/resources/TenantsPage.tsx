@@ -10,6 +10,7 @@ import { ErrorState, LoadingState } from '../../components/AsyncState';
 import { PageTitle } from '../../components/PageTitle';
 import { PaginationControls } from '../../components/PaginationControls';
 import { useFormDirty } from '../../navigation/DirtyStateContext';
+import { runtimeLabel } from '../../i18n/runtimeValues';
 
 type TenantForm = { code: string; displayName: string };
 
@@ -28,7 +29,7 @@ export function TenantsPage() {
   const beginEdit = (row: Tenant) => { setSelected(row); setCurrent(undefined); form.reset({ code: row.code, displayName: row.displayName }); setMode('edit'); };
   const columns = [
     { key: 'code', label: t('code'), render: (row: Tenant) => row.code }, { key: 'name', label: t('name'), render: (row: Tenant) => row.displayName },
-    { key: 'status', label: t('status'), render: (row: Tenant) => row.status }, { key: 'created', label: t('created'), render: (row: Tenant) => new Intl.DateTimeFormat(i18n.language).format(new Date(row.createdAt)) },
+    { key: 'status', label: t('status'), render: (row: Tenant) => runtimeLabel(t, 'status', row.status) }, { key: 'created', label: t('created'), render: (row: Tenant) => new Intl.DateTimeFormat(i18n.language).format(new Date(row.createdAt)) },
     ...(hasRole(session, 'SecurityAdministrator') ? [{ key: 'actions', label: t('action'), render: (row: Tenant) => <Stack direction="row"><Button onClick={() => beginEdit(row)}>{t('edit')}</Button><Button color="error" disabled={row.status !== 'Active'} onClick={() => disable.mutate(row)}>{t('disable')}</Button></Stack> }] : [])
   ];
   return <><PageTitle title={t('tenants')} action={hasRole(session, 'SecurityAdministrator') ? <Button variant="contained" onClick={beginCreate}>{t('addTenant')}</Button> : undefined} />

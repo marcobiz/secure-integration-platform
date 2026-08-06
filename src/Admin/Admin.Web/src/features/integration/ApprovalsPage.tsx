@@ -8,6 +8,7 @@ import { ErrorState } from '../../components/AsyncState';
 import { DataTable } from '../../components/DataTable';
 import { PageTitle } from '../../components/PageTitle';
 import { PaginationControls } from '../../components/PaginationControls';
+import { runtimeLabel } from '../../i18n/runtimeValues';
 
 export function ApprovalsPage() {
   const { t } = useTranslation();
@@ -90,7 +91,7 @@ export function ApprovalsPage() {
           {review.data.diff.map((change, index) => <TableRow key={`${change.change}-${change.path}-${index}`}><TableCell>{t(change.change)}</TableCell><TableCell><code>{change.path}</code></TableCell><TableCell><code>{change.previousValue ?? '—'}</code></TableCell><TableCell><code>{change.currentValue ?? '—'}</code></TableCell></TableRow>)}
         </TableBody></Table>
       </section>}
-      {query.data && <><DataTable rows={query.data.items} label={t('approvals')} columns={[{ key: 'status', label: t('status'), render: (value: Approval) => value.status }, { key: 'checksum', label: t('checksum'), render: value => value.checksumSha256.slice(0, 12) }, { key: 'requested', label: t('requestedBy'), render: value => value.requestedBy }]} /><PaginationControls page={query.data} onOffset={setOffset} /></>}
+      {query.data && <><DataTable rows={query.data.items} label={t('approvals')} columns={[{ key: 'status', label: t('status'), render: (value: Approval) => runtimeLabel(t, 'approval', value.status) }, { key: 'checksum', label: t('checksum'), render: value => value.checksumSha256.slice(0, 12) }, { key: 'requested', label: t('requestedBy'), render: value => value.requestedBy }]} /><PaginationControls page={query.data} onOffset={setOffset} /></>}
       {error && <ErrorState error={error} />}
     </CardContent></Card>
   </>;

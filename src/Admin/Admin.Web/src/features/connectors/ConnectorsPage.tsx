@@ -13,6 +13,7 @@ import { PagedSelector } from '../../components/PagedSelector';
 import { validateConnectorDefinition, type ConnectorValidationIssue } from './connectorDefinitionValidation';
 import { diffCanonicalJson } from './canonicalJsonDiff';
 import { useFormDirty } from '../../navigation/DirtyStateContext';
+import { runtimeLabel } from '../../i18n/runtimeValues';
 
 const CodeMirror = lazy(() => import('@uiw/react-codemirror'));
 
@@ -125,7 +126,7 @@ export function ConnectorsPage() {
       {versions.isPending ? <LoadingState /> : versions.error ? <ErrorState error={versions.error} /> : <>
         <DataTable rows={versions.data?.items ?? []} label={t('versionTimeline')} columns={[
           { key: 'version', label: t('version'), render: value => value.version },
-          { key: 'state', label: t('status'), render: value => <Chip label={value.state} size="small" /> },
+          { key: 'state', label: t('status'), render: value => <Chip label={runtimeLabel(t, 'status', value.state)} size="small" /> },
           { key: 'checksum', label: t('checksum'), render: value => value.checksumSha256.slice(0, 12) },
           { key: 'row', label: t('revision'), render: value => value.rowVersion },
           { key: 'actions', label: t('action'), render: value => <Stack direction="row" spacing={1}>
