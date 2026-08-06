@@ -333,27 +333,28 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
     }
 
     /// <inheritdoc />
-    public Task<PublishedConnectorStamp?> GetPublishedStampAsync(string connectorId, Guid environmentId, CancellationToken cancellationToken)
+    public Task<PublishedConnectorStamp?> GetPublishedStampAsync(string connectorId, Guid environmentId, PublishedConnectorAccessContext? accessContext, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (gate)
         {
             if (!connectorIds.TryGetValue(connectorId, out Guid id) || !activeVersions.TryGetValue(id, out Guid active)) return Task.FromResult<PublishedConnectorStamp?>(null);
-            if (!bindingSets.TryGetValue(BindingKey(active, environmentId), out List<ConnectorBindingSet>? revisions) || revisions.Count == 0 || revisions[^1].State != ConnectorBindingState.Active) return Task.FromResult<PublishedConnectorStamp?>(new(active, publicationRevisions[id], 0, string.Empty));
+            if (!bindingSets.TryGetValue(BindingKey(active, environmentId), out List<ConnectorBindingSet>? revisions) || revisions.Count == 0 || revisions[^1].State != ConnectorBindingState.Active) return Task.FromResult<PublishedConnectorStamp?>(new(active, publicationRevisions[id], 0, string.Empty, string.Empty));
             ConnectorBindingSet binding = revisions[^1];
-            return Task.FromResult<PublishedConnectorStamp?>(new(active, publicationRevisions[id], binding.Revision, binding.ChecksumSha256));
+            ValidateCurrentResources(binding);
+            return Task.FromResult<PublishedConnectorStamp?>(new(active, publicationRevisions[id], binding.Revision, binding.ChecksumSha256, ResourceStamp(binding)));
         }
     }
 
     /// <inheritdoc />
-    public Task<PublishedConnectorSnapshot?> GetPublishedSnapshotAsync(string connectorId, Guid environmentId, CancellationToken cancellationToken)
+    public Task<PublishedConnectorSnapshot?> GetPublishedSnapshotAsync(string connectorId, Guid environmentId, PublishedConnectorAccessContext? accessContext, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (gate)
         {
             if (!connectorIds.TryGetValue(connectorId, out Guid id) || !activeVersions.TryGetValue(id, out Guid active) || !bindingSets.TryGetValue(BindingKey(active, environmentId), out List<ConnectorBindingSet>? revisions) || revisions.Count == 0 || revisions[^1].State != ConnectorBindingState.Active) return Task.FromResult<PublishedConnectorSnapshot?>(null);
             ConnectorBindingSet binding = revisions[^1];
-            PublishedConnectorStamp stamp = new(active, publicationRevisions[id], binding.Revision, binding.ChecksumSha256);
+            PublishedConnectorStamp stamp = new(active, publicationRevisions[id], binding.Revision, binding.ChecksumSha256, ResourceStamp(binding));
             ValidateCurrentResources(binding);
             Dictionary<string, string> secrets = binding.SecretResources.ToDictionary(value => value.Key, value => RequiredResource(value.Value).ProviderReference, StringComparer.Ordinal);
             Dictionary<string, string> certificates = binding.CertificateResources.ToDictionary(value => value.Key, value => RequiredResource(value.Value).ProviderReference, StringComparer.Ordinal);
@@ -386,6 +387,13 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
         if (current.Status != ProviderResourceStatus.Active || current.Revision != binding.CatalogRevision || !string.Equals(current.ChecksumSha256, binding.CatalogChecksumSha256, StringComparison.Ordinal))
             throw new GatewayException("BGW-PROVIDER-RESOURCE-REVISION-STALE", 409);
         return current;
+    }
+
+    private string ResourceStamp(ConnectorBindingSet binding)
+    {
+        var values = binding.SecretResources.Concat(binding.CertificateResources).OrderBy(value => value.Key, StringComparer.Ordinal)
+            .Select(value => new { value.Key, Current = RequiredResource(value.Value).ChecksumSha256 }).ToArray();
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(values)));
     }
 
     private static void EnsureResourceScope(ProviderResourceCatalogRecord resource, ProviderResourceReference reference, Guid environmentId, string connectorId, IReadOnlyCollection<string> operationIds)

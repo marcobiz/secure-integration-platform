@@ -130,6 +130,7 @@ jobs:
           grep -F 'Applied 0006_admin_role_revocation_m5.sql' <<<"$first"
           grep -F 'Applied 0007_binding_bundle_immutability_m5.sql' <<<"$first"
           grep -F 'Applied 0008_provider_resource_catalog_m5.sql' <<<"$first"
+          grep -F 'Applied 0009_runtime_locator_resolution_m5.sql' <<<"$first"
           second="$(dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release --no-build -- apply)"
           ! grep -Fq 'Applied ' <<<"$second"
       - name: Exercise real M5 PostgreSQL stores and fault boundaries
@@ -148,6 +149,9 @@ jobs:
           docker exec "$POSTGRES_SERVICE_ID" psql -v ON_ERROR_STOP=1 -U postgres -d broker_gateway_m5 -Atc "SELECT bool_and(NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole) FROM pg_roles WHERE rolname IN ('gateway_runtime','gateway_admin');" | grep -Fx t
           docker exec "$POSTGRES_SERVICE_ID" psql -v ON_ERROR_STOP=1 -U postgres -d broker_gateway_m5 -Atc "SELECT NOT has_table_privilege('gateway_admin','gateway.provider_resource_catalog_version','UPDATE');" | grep -Fx t
           docker exec "$POSTGRES_SERVICE_ID" psql -v ON_ERROR_STOP=1 -U postgres -d broker_gateway_m5 -Atc "SELECT NOT has_table_privilege('gateway_readonly','gateway.provider_resource_locator','SELECT');" | grep -Fx t
+          docker exec "$POSTGRES_SERVICE_ID" psql -v ON_ERROR_STOP=1 -U postgres -d broker_gateway_m5 -Atc "SELECT NOT has_table_privilege('gateway_runtime','gateway.provider_resource_locator','SELECT');" | grep -Fx t
+          docker exec "$POSTGRES_SERVICE_ID" psql -v ON_ERROR_STOP=1 -U postgres -d broker_gateway_m5 -Atc "SELECT has_function_privilege('gateway_runtime','gateway.resolve_published_provider_locator(uuid,text,text,uuid,uuid,bigint,bytea,uuid,uuid,uuid)','EXECUTE');" | grep -Fx t
+          docker exec "$POSTGRES_SERVICE_ID" psql -v ON_ERROR_STOP=1 -U postgres -d broker_gateway_m5 -Atc "SELECT NOT has_schema_privilege('gateway_locator_owner','gateway','CREATE');" | grep -Fx t
           docker exec "$POSTGRES_SERVICE_ID" psql -v ON_ERROR_STOP=1 -U postgres -d broker_gateway_m5 -Atc "SELECT count(*)=0 FROM information_schema.columns WHERE table_schema='gateway' AND table_name='provider_resource_catalog_version' AND (column_name LIKE '%secret%' OR column_name='provider_reference');" | grep -Fx t
       - name: Clean M5 PostgreSQL schema
         if: always()

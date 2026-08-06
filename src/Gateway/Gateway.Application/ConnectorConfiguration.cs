@@ -333,8 +333,11 @@ public static class ConnectorApprovalArtifacts
             if (!binding.CertificateResources.TryGetValue(logical, out ProviderResourceBinding? resource)) throw new GatewayException("BGW-CONNECTOR-CERTIFICATE-BINDING-MISSING", 503);
             CertificatePublicMetadata metadata = resource.CertificateMetadata ?? throw new GatewayException("BGW-PROVIDER-CERTIFICATE-METADATA-REQUIRED", 409);
             certificates.Add(new(logical, binding.Revision, resource.ProviderDisplayName, resource.ProviderType, resource.ProviderId, resource.ResourceId,
+                resource.ResourceType.ToString(), resource.Version, resource.CatalogRevision,
+                resource.PublicMetadataRevision ?? throw new GatewayException("BGW-PROVIDER-CERTIFICATE-METADATA-REQUIRED", 409),
                 metadata.FingerprintSha256, metadata.Subject, metadata.Issuer, metadata.NotBefore, metadata.NotAfter, metadata.KeyAlgorithm, metadata.PublicKeySize, metadata.Version,
-                binding.EnvironmentId.ToString("D"), resource.ConnectorScope, resource.OperationScope, Component(logical, resource)));
+                binding.EnvironmentId.ToString("D"), resource.ConnectorScope, resource.OperationScope, resource.CatalogChecksumSha256,
+                Component(logical, resource), binding.ChecksumSha256));
         }
         return new(operationId, binding.EnvironmentId.ToString("D"), "gateway-server-side", effective.Scheme.ToUpperInvariant(), endpoint, secrets, certificates);
     }
@@ -750,18 +753,27 @@ public sealed class PublishedConnectorCatalog(
     private readonly ConcurrentDictionary<string, CacheEntry> cache = new(StringComparer.Ordinal);
 
     /// <inheritdoc />
-    public async Task<GatewayOperationDefinition> GetRequiredAsync(string connectorId, string operationId, Guid environmentId, CancellationToken cancellationToken)
+    public Task<GatewayOperationDefinition> GetRequiredAsync(string connectorId, string operationId, Guid environmentId, CancellationToken cancellationToken) =>
+        GetRequiredCoreAsync(connectorId, operationId, environmentId, null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<GatewayOperationDefinition> GetRequiredAsync(string connectorId, string operationId, Guid environmentId, PublishedConnectorAccessContext accessContext, CancellationToken cancellationToken) =>
+        GetRequiredCoreAsync(connectorId, operationId, environmentId, accessContext, cancellationToken);
+
+    private async Task<GatewayOperationDefinition> GetRequiredCoreAsync(string connectorId, string operationId, Guid environmentId, PublishedConnectorAccessContext? accessContext, CancellationToken cancellationToken)
     {
-        string key = connectorId + "\n" + environmentId.ToString("D");
+        if (accessContext is not null && !string.Equals(accessContext.OperationId, operationId, StringComparison.Ordinal))
+            throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403);
+        string key = connectorId + "\n" + environmentId.ToString("D") + "\n" + (accessContext?.InstallationId.ToString("D") ?? "admin");
         PublishedConnectorStamp? stamp;
-        try { stamp = await store.GetPublishedStampAsync(connectorId, environmentId, cancellationToken).ConfigureAwait(false); }
+        try { stamp = await store.GetPublishedStampAsync(connectorId, environmentId, accessContext, cancellationToken).ConfigureAwait(false); }
         catch (GatewayException) { throw; }
         catch (Exception) { throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-UNAVAILABLE", 503, true); }
         if (stamp is null) { cache.TryRemove(key, out _); throw new GatewayException("BGW-CONNECTOR-NOT-PUBLISHED", 404); }
         if (!cache.TryGetValue(key, out CacheEntry? entry) || entry.ExpiresAt <= clock.UtcNow || entry.Stamp != stamp)
         {
             PublishedConnectorSnapshot snapshot;
-            try { snapshot = await store.GetPublishedSnapshotAsync(connectorId, environmentId, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-BINDING-MISSING", 503); }
+            try { snapshot = await store.GetPublishedSnapshotAsync(connectorId, environmentId, accessContext, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-BINDING-MISSING", 503); }
             catch (GatewayException) { throw; }
             catch (Exception) { throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-UNAVAILABLE", 503, true); }
             if (snapshot.Stamp != stamp || snapshot.Version.State != ConnectorVersionState.Published) throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-STALE", 503, true);

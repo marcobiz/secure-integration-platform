@@ -114,6 +114,9 @@ public interface IGatewayOperationCatalog
 {
     /// <summary>Gets one Published, Environment-bound operation or rejects it.</summary>
     Task<GatewayOperationDefinition> GetRequiredAsync(string connectorId, string operationId, Guid environmentId, CancellationToken cancellationToken);
+    /// <summary>Gets a Published operation while binding protected locator resolution to the authenticated Installation grant.</summary>
+    Task<GatewayOperationDefinition> GetRequiredAsync(string connectorId, string operationId, Guid environmentId, PublishedConnectorAccessContext accessContext, CancellationToken cancellationToken) =>
+        GetRequiredAsync(connectorId, operationId, environmentId, cancellationToken);
     /// <summary>Invalidates local cache entries after an administrative lifecycle change.</summary>
     void Invalidate(string connectorId);
 }
@@ -175,9 +178,9 @@ public interface IConnectorConfigurationStore
     /// <summary>Locks approval, Connector, binding and catalog revisions and recalculates the canonical digest in the approval transaction.</summary>
     Task<ConnectorApprovalRecord> ApproveCanonicalAsync(IAdminSecurityStore fallbackStore, Guid approvalRequestId, Guid connectorVersionId, string expectedDigestSha256, string createdBy, Guid approver, string? comment, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Returns the active stamp, or null when no version is Published.</summary>
-    Task<PublishedConnectorStamp?> GetPublishedStampAsync(string connectorId, Guid environmentId, CancellationToken cancellationToken);
+    Task<PublishedConnectorStamp?> GetPublishedStampAsync(string connectorId, Guid environmentId, PublishedConnectorAccessContext? accessContext, CancellationToken cancellationToken);
     /// <summary>Returns the Published definition with bindings, or null.</summary>
-    Task<PublishedConnectorSnapshot?> GetPublishedSnapshotAsync(string connectorId, Guid environmentId, CancellationToken cancellationToken);
+    Task<PublishedConnectorSnapshot?> GetPublishedSnapshotAsync(string connectorId, Guid environmentId, PublishedConnectorAccessContext? accessContext, CancellationToken cancellationToken);
 }
 
 /// <summary>Immutable enrollment challenge.</summary>

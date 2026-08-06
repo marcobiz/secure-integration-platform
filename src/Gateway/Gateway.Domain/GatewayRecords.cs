@@ -276,8 +276,16 @@ public sealed record ConnectorBindingSet(
     DateTimeOffset UpdatedAt,
     string UpdatedBy);
 
+/// <summary>Authenticated scope required to resolve protected provider locators at runtime.</summary>
+public sealed record PublishedConnectorAccessContext(Guid InstallationId, Guid TenantId, Guid ApplicationId, string OperationId);
+
 /// <summary>Small stamp checked before a cached runtime definition may be reused.</summary>
-public sealed record PublishedConnectorStamp(Guid VersionId, long PublicationRevision, long BindingRevision, string BindingChecksumSha256);
+public sealed record PublishedConnectorStamp(
+    Guid VersionId,
+    long PublicationRevision,
+    long BindingRevision,
+    string BindingChecksumSha256,
+    string ResourceStampSha256);
 
 /// <summary>Published immutable definition and its server-side Environment bindings.</summary>
 public sealed record PublishedConnectorSnapshot(

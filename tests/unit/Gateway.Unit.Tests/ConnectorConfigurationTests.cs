@@ -344,6 +344,32 @@ public sealed class ConnectorConfigurationTests
     }
 
     [Fact]
+    public async Task M5_UT_Approval_digest_covers_every_catalog_and_certificate_revision_dimension()
+    {
+        Fixture fixture = new();
+        ConnectorVersionResource version = await fixture.ImportAsync(Sample());
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PutBindingsAsync(version.ConnectorId, BindingRequest(fixture.EnvironmentId, "https://vendor.example.test/"), "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord stored = Assert.Single(await fixture.Store.ListVersionsAsync(version.ConnectorId, TestContext.Current.CancellationToken));
+        ConnectorBindingSet binding = Assert.Single((await fixture.Store.ListBindingsPageAsync(stored.Id, 0, 100, null, TestContext.Current.CancellationToken)).Items);
+        string baseline = ConnectorApprovalArtifacts.Create(stored, [binding]).DigestSha256;
+        ProviderResourceBinding secret = binding.SecretResources["sample-vendor-api-key"];
+        ProviderResourceBinding certificate = binding.CertificateResources["sample-vendor-client-certificate"];
+        CertificatePublicMetadata metadata = certificate.CertificateMetadata!;
+
+        ConnectorBindingSet[] changed =
+        [
+            binding with { SecretResources = new Dictionary<string, ProviderResourceBinding>(binding.SecretResources) { ["sample-vendor-api-key"] = secret with { CatalogRevision = secret.CatalogRevision + 1 } } },
+            binding with { SecretResources = new Dictionary<string, ProviderResourceBinding>(binding.SecretResources) { ["sample-vendor-api-key"] = secret with { PublicMetadataRevision = 2 } } },
+            binding with { CertificateResources = new Dictionary<string, ProviderResourceBinding>(binding.CertificateResources) { ["sample-vendor-client-certificate"] = certificate with { Version = "catalog-v2" } } },
+            binding with { CertificateResources = new Dictionary<string, ProviderResourceBinding>(binding.CertificateResources) { ["sample-vendor-client-certificate"] = certificate with { ResourceType = ProviderResourceType.Secret } } },
+            binding with { CertificateResources = new Dictionary<string, ProviderResourceBinding>(binding.CertificateResources) { ["sample-vendor-client-certificate"] = certificate with { PublicMetadataRevision = 2 } } },
+            binding with { CertificateResources = new Dictionary<string, ProviderResourceBinding>(binding.CertificateResources) { ["sample-vendor-client-certificate"] = certificate with { CertificateMetadata = metadata with { Subject = "CN=changed", Version = "2" } } } }
+        ];
+        Assert.All(changed, candidate => Assert.NotEqual(baseline, ConnectorApprovalArtifacts.Create(stored, [candidate]).DigestSha256));
+    }
+
+    [Fact]
     public void M4_UT_Corrupted_configuration_is_rejected_fail_closed()
     {
         ConnectorDefinitionValidator validator = new();

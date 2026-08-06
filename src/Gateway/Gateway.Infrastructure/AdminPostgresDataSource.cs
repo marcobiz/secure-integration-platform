@@ -70,7 +70,9 @@ public sealed class RoutingConnectorConfigurationStore : IConnectorConfiguration
     /// <inheritdoc />
     public Task<ConnectorApprovalRecord> ApproveCanonicalAsync(IAdminSecurityStore fallbackStore, Guid approvalRequestId, Guid connectorVersionId, string expectedDigestSha256, string createdBy, Guid approver, string? comment, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken) => admin.ApproveCanonicalAsync(fallbackStore, approvalRequestId, connectorVersionId, expectedDigestSha256, createdBy, approver, comment, correlationId, now, cancellationToken);
     /// <inheritdoc />
-    public Task<PublishedConnectorStamp?> GetPublishedStampAsync(string connectorId, Guid environmentId, CancellationToken cancellationToken) => runtime.GetPublishedStampAsync(connectorId, environmentId, cancellationToken);
+    public Task<PublishedConnectorStamp?> GetPublishedStampAsync(string connectorId, Guid environmentId, PublishedConnectorAccessContext? accessContext, CancellationToken cancellationToken) =>
+        (accessContext is null ? admin : runtime).GetPublishedStampAsync(connectorId, environmentId, accessContext, cancellationToken);
     /// <inheritdoc />
-    public Task<PublishedConnectorSnapshot?> GetPublishedSnapshotAsync(string connectorId, Guid environmentId, CancellationToken cancellationToken) => runtime.GetPublishedSnapshotAsync(connectorId, environmentId, cancellationToken);
+    public Task<PublishedConnectorSnapshot?> GetPublishedSnapshotAsync(string connectorId, Guid environmentId, PublishedConnectorAccessContext? accessContext, CancellationToken cancellationToken) =>
+        (accessContext is null ? admin : runtime).GetPublishedSnapshotAsync(connectorId, environmentId, accessContext, cancellationToken);
 }

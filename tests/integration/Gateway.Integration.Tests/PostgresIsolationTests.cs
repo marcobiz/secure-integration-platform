@@ -113,16 +113,17 @@ public sealed class PostgresIsolationTests
         await using NpgsqlDataSource adminDataSource = NpgsqlDataSource.Create(connectionString);
         string migrationConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION") ?? connectionString;
         string runtimeRole = "gateway_test_" + Guid.NewGuid().ToString("N");
+        string runtimePassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
         await using (NpgsqlConnection migrationConnection = new(migrationConnectionString))
         {
             await migrationConnection.OpenAsync(TestContext.Current.CancellationToken);
             Assert.StartsWith("18.", migrationConnection.PostgreSqlVersion.ToString(), StringComparison.Ordinal);
             await ApplyMigrationAsync(migrationConnection);
-            await using NpgsqlCommand createRole = new($"CREATE ROLE {runtimeRole} LOGIN; GRANT gateway_runtime TO {runtimeRole}", migrationConnection);
+            await using NpgsqlCommand createRole = new($"CREATE ROLE {runtimeRole} LOGIN PASSWORD '{runtimePassword}'; GRANT gateway_runtime TO {runtimeRole}", migrationConnection);
             await createRole.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
         }
 
-        NpgsqlConnectionStringBuilder runtimeConnection = new(connectionString) { Username = runtimeRole, Password = null };
+        NpgsqlConnectionStringBuilder runtimeConnection = new(connectionString) { Username = runtimeRole, Password = runtimePassword };
         await using NpgsqlDataSource runtimeDataSource = NpgsqlDataSource.Create(runtimeConnection.ConnectionString);
         PostgresGatewayRegistry adminRegistry = new(adminDataSource);
         PostgresGatewayRegistry registry = new(runtimeDataSource);
@@ -202,6 +203,90 @@ public sealed class PostgresIsolationTests
         Assert.Contains("connector binding revisions are immutable", bindingImmutabilitySql, StringComparison.Ordinal);
         Assert.Contains("binding activation requires a current four-eyes approval", bindingImmutabilitySql, StringComparison.Ordinal);
         Assert.DoesNotContain("GRANT UPDATE ON gateway.connector_binding_bundle_version", bindingImmutabilitySql, StringComparison.Ordinal);
+        string locatorSql = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0009_runtime_locator_resolution_m5.sql"));
+        Assert.Contains("SECURITY DEFINER", locatorSql, StringComparison.Ordinal);
+        Assert.Contains("SET search_path = pg_catalog, gateway", locatorSql, StringComparison.Ordinal);
+        Assert.Contains("OWNER TO gateway_locator_owner", locatorSql, StringComparison.Ordinal);
+        Assert.Contains("REVOKE CREATE ON SCHEMA gateway FROM gateway_locator_owner", locatorSql, StringComparison.Ordinal);
+        Assert.Contains("REVOKE ALL ON gateway.provider_resource_locator FROM PUBLIC, gateway_runtime", locatorSql, StringComparison.Ordinal);
+        Assert.DoesNotContain("dynamic SQL", locatorSql, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task M5_IT_DAT_PostgreSQL18_runtime_locator_is_exactly_granted_and_not_enumerable_when_configured()
+    {
+        string? migrationConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
+        if (string.IsNullOrWhiteSpace(migrationConnection)) Assert.Skip("PostgreSQL migration connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        await using NpgsqlConnection owner = new(migrationConnection);
+        await owner.OpenAsync(TestContext.Current.CancellationToken);
+        await ApplyMigrationAsync(owner);
+
+        Guid tenantId = Guid.NewGuid(); Guid applicationId = Guid.NewGuid(); Guid environmentId = Guid.NewGuid();
+        Guid installationId = Guid.NewGuid(); Guid connectorId = Guid.NewGuid(); Guid versionId = Guid.NewGuid();
+        Guid bindingId = Guid.NewGuid(); Guid catalogId = Guid.NewGuid();
+        string suffix = Guid.NewGuid().ToString("N"); string slug = "locator-" + suffix;
+        string resourceLogicalId = "api-key-" + suffix;
+        byte[] catalogChecksum = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("catalog-" + suffix));
+        byte[] bindingChecksum = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("binding-" + suffix));
+        byte[] definitionChecksum = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("definition-" + suffix));
+        Guid requesterId = Guid.NewGuid(); Guid approverId = Guid.NewGuid();
+        ProviderResourceBinding resource = new("synthetic", "Synthetic", "synthetic", resourceLogicalId, ProviderResourceType.Secret, "API key", environmentId, slug, "submit", null, 1, null, null, Convert.ToHexString(catalogChecksum));
+        string secretJson = JsonSerializer.Serialize(new Dictionary<string, ProviderResourceBinding> { ["sample-vendor-api-key"] = resource });
+
+        await using (NpgsqlTransaction setup = await owner.BeginTransactionAsync(TestContext.Current.CancellationToken))
+        {
+            await ExecuteAsync(owner, setup, "INSERT INTO gateway.tenant(id,code,display_name,status,created_at) VALUES($1,$2,$3,'active',now())", tenantId, "t-" + suffix, "Locator tenant");
+            await ExecuteAsync(owner, setup, "INSERT INTO gateway.application(id,code,display_name,status,minimum_broker_version,created_at) VALUES($1,$2,$3,'active','3.0.0',now())", applicationId, "a-" + suffix, "Locator app");
+            await ExecuteAsync(owner, setup, "INSERT INTO gateway.environment(id,code,display_name,production_controls) VALUES($1,$2,$3,false)", environmentId, "e-" + suffix[..20], "Locator env");
+            await ExecuteAsync(owner, setup, "INSERT INTO gateway.connector_definition(id,slug,display_name,status,created_at,created_by) VALUES($1,$2,$3,'active',now(),'test')", connectorId, slug, "Locator connector");
+            await ExecuteAsync(owner, setup, "INSERT INTO gateway.connector_version(id,connector_id,version,schema_version,state,configuration_json,checksum_sha256,created_by,created_at,published_at) VALUES($1,$2,'1.0.0','1.0','published',$3::jsonb,$4,'test',now(),now())", versionId, connectorId, "{\"operations\":[{\"operationId\":\"submit\"}]}", definitionChecksum);
+            await ExecuteAsync(owner, setup, "UPDATE gateway.connector_definition SET active_version_id=$2 WHERE id=$1", connectorId, versionId);
+            await ExecuteAsync(owner, setup, "INSERT INTO gateway.provider_resource_catalog_version(id,provider_id,provider_display_name,provider_type,resource_id,resource_type,display_name,environment_id,connector_scope,operation_scope,status,revision,checksum_sha256,created_at) VALUES($1,'synthetic','Synthetic','synthetic',$2,'secret','API key',$3,$4,'submit','active',1,$5,now())", catalogId, resourceLogicalId, environmentId, slug, catalogChecksum);
+            await ExecuteAsync(owner, setup, "INSERT INTO gateway.provider_resource_locator(provider_resource_catalog_id,provider_reference) VALUES($1,$2)", catalogId, "synthetic://controlled-" + suffix);
+            await ExecuteAsync(owner, setup, "INSERT INTO gateway.connector_binding_bundle_version(id,connector_id,connector_version_id,environment_id,revision,state,endpoints_json,secret_references_json,certificate_references_json,checksum_sha256,created_at,created_by) VALUES($1,$2,$3,$4,1,'draft','{}'::jsonb,$5::jsonb,'{}'::jsonb,$6,now(),'test')", bindingId, connectorId, versionId, environmentId, secretJson, bindingChecksum);
+            await ExecuteAsync(owner, setup, "INSERT INTO gateway.admin_principal(id,issuer,subject,display_name,created_at,last_login_at) VALUES($1,'https://locator.invalid',$2,'Requester',now(),now()),($3,'https://locator.invalid',$4,'Approver',now(),now())", requesterId, "requester-" + suffix, approverId, "approver-" + suffix);
+            await ExecuteAsync(owner, setup, "INSERT INTO gateway.connector_approval(id,connector_version_id,checksum_sha256,binding_digest_sha256,requested_by,approved_by,status,requested_at,approved_at) VALUES($1,$2,$3,$4,$5,$6,'approved',now(),now())", Guid.NewGuid(), versionId, definitionChecksum, bindingChecksum, requesterId, approverId);
+            await ExecuteAsync(owner, setup, "UPDATE gateway.connector_binding_bundle_version SET state='active' WHERE id=$1", bindingId);
+            await ExecuteAsync(owner, setup, "INSERT INTO gateway.installation(id,tenant_id,application_id,environment_id,status,broker_version,created_at) VALUES($1,$2,$3,$4,'active','3.0.0',now())", installationId, tenantId, applicationId, environmentId);
+            await ExecuteAsync(owner, setup, "INSERT INTO gateway.installation_connector_grant(id,installation_id,tenant_id,connector_id,operation_id,enabled,valid_from) VALUES($1,$2,$3,$4,'submit',true,now()-interval '1 minute')", Guid.NewGuid(), installationId, tenantId, connectorId);
+            await setup.CommitAsync(TestContext.Current.CancellationToken);
+        }
+
+        await using (NpgsqlTransaction denied = await owner.BeginTransactionAsync(TestContext.Current.CancellationToken))
+        {
+            await ExecuteAsync(owner, denied, "SET LOCAL ROLE gateway_runtime");
+            PostgresException direct = await Assert.ThrowsAsync<PostgresException>(() => ExecuteAsync(owner, denied, "SELECT provider_reference FROM gateway.provider_resource_locator"));
+            Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, direct.SqlState);
+            await denied.RollbackAsync(TestContext.Current.CancellationToken);
+        }
+
+        async Task<string?> ResolveAsync(string operation, Guid environment, Guid resourceId)
+        {
+            await using NpgsqlTransaction runtime = await owner.BeginTransactionAsync(TestContext.Current.CancellationToken);
+            await ExecuteAsync(owner, runtime, "SET LOCAL ROLE gateway_runtime");
+            await using NpgsqlCommand command = new("SELECT gateway.resolve_published_provider_locator($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)", owner, runtime);
+            foreach (object value in new object[] { resourceId, slug, operation, environment, bindingId, 1L, bindingChecksum, installationId, tenantId, applicationId }) command.Parameters.AddWithValue(value);
+            object? result = await command.ExecuteScalarAsync(TestContext.Current.CancellationToken);
+            await runtime.RollbackAsync(TestContext.Current.CancellationToken);
+            return result is DBNull or null ? null : (string)result;
+        }
+
+        Assert.Equal("synthetic://controlled-" + suffix, await ResolveAsync("submit", environmentId, catalogId));
+        Assert.Null(await ResolveAsync("other-operation", environmentId, catalogId));
+        Assert.Null(await ResolveAsync("submit", Guid.NewGuid(), catalogId));
+        Assert.Null(await ResolveAsync("submit", environmentId, Guid.NewGuid()));
+
+        await using (NpgsqlCommand disable = new("UPDATE gateway.provider_resource_catalog_version SET status='disabled' WHERE id=$1", owner))
+        {
+            disable.Parameters.AddWithValue(catalogId); _ = await disable.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        }
+        Assert.Null(await ResolveAsync("submit", environmentId, catalogId));
+        await ApplyMigrationAsync(owner);
+        await using NpgsqlTransaction replay = await owner.BeginTransactionAsync(TestContext.Current.CancellationToken);
+        await ExecuteAsync(owner, replay, "SET LOCAL ROLE gateway_runtime");
+        Assert.Equal(false, await new NpgsqlCommand("SELECT has_table_privilege('gateway_runtime','gateway.provider_resource_locator','SELECT')", owner, replay).ExecuteScalarAsync(TestContext.Current.CancellationToken));
+        await replay.RollbackAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(false, await new NpgsqlCommand("SELECT has_schema_privilege('gateway_locator_owner','gateway','CREATE')", owner).ExecuteScalarAsync(TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -413,7 +498,7 @@ public sealed class PostgresIsolationTests
         await AssertBindingTamperDeniedAsync("revision", activeBinding.Revision + 1);
         await AssertBindingTamperDeniedAsync("state", "draft");
 
-        PublishedConnectorSnapshot unchanged = await store.GetPublishedSnapshotAsync(connectorId, environmentId, TestContext.Current.CancellationToken)
+        PublishedConnectorSnapshot unchanged = await store.GetPublishedSnapshotAsync(connectorId, environmentId, null, TestContext.Current.CancellationToken)
             ?? throw new InvalidOperationException("Published snapshot disappeared after a rejected tamper attempt.");
         Assert.Equal(expectedEndpoint, unchanged.Bindings.Endpoints["sample-vendor-endpoint"].AbsoluteUri);
         Assert.Equal(activeBinding.Revision, unchanged.Bindings.Revision);

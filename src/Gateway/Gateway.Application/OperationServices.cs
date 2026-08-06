@@ -85,9 +85,10 @@ public sealed class RestrictedEgressService(
         RegisteredInstallationIdentity identity = authenticated.Identity;
         if (identity.TenantStatus != TenantStatus.Active || identity.ApplicationStatus != ApplicationStatus.Active || identity.InstallationStatus != InstallationStatus.Active)
             throw new GatewayException("BGW-INSTALLATION-REVOKED", 403);
-        GatewayOperationDefinition operation = await catalog.GetRequiredAsync(connectorId, operationId, identity.EnvironmentId, cancellationToken).ConfigureAwait(false);
         if (!await registry.IsGrantedAsync(identity.InstallationId, identity.TenantId, connectorId, operationId, clock.UtcNow, cancellationToken).ConfigureAwait(false))
             throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403);
+        GatewayOperationDefinition operation = await catalog.GetRequiredAsync(connectorId, operationId, identity.EnvironmentId,
+            new(identity.InstallationId, identity.TenantId, identity.ApplicationId, operationId), cancellationToken).ConfigureAwait(false);
 
         if (request.Metadata?.Count > 32 || request.Extensions?.Count > 16 || request.Metadata?.Values.Any(value => value.ValueKind is JsonValueKind.Array or JsonValueKind.Object) == true)
             throw new GatewayException("BGW-PROTOCOL-METADATA", 400);
