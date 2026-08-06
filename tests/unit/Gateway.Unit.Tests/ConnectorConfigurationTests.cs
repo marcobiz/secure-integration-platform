@@ -157,6 +157,38 @@ public sealed class ConnectorConfigurationTests
     }
 
     [Fact]
+    public async Task M5_UT_Runtime_cache_revalidates_catalog_revision_and_disable_on_every_invocation()
+    {
+        Fixture fixture = new();
+        ConnectorVersionResource version = await fixture.ImportAsync(Sample());
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PutBindingsAsync(version.ConnectorId, BindingRequest(fixture.EnvironmentId, "https://vendor.example.test/"), "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        version = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "approver", Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        PublishedConnectorCatalog replicaA = new(fixture.Store, fixture.Validator, fixture.Clock, TimeSpan.FromMinutes(5));
+        _ = await replicaA.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken);
+        ProviderResourceCatalogRecord current = await fixture.Store.ResolveProviderResourceAsync(SecretReference(), fixture.EnvironmentId, version.ConnectorId, ["submit"], TestContext.Current.CancellationToken);
+
+        _ = await fixture.Store.RegisterProviderResourceAsync(current with
+        {
+            Id = Guid.NewGuid(), ProviderReference = "synthetic://rotated-api-key", Revision = 0, ChecksumSha256 = string.Empty,
+            CreatedAt = fixture.Clock.UtcNow.AddSeconds(1)
+        }, TestContext.Current.CancellationToken);
+
+        GatewayException rotated = await Assert.ThrowsAsync<GatewayException>(() => replicaA.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-PROVIDER-RESOURCE-REVISION-STALE", rotated.Code);
+
+        ProviderResourceCatalogRecord rotatedResource = await fixture.Store.ResolveProviderResourceAsync(SecretReference(), fixture.EnvironmentId, version.ConnectorId, ["submit"], TestContext.Current.CancellationToken);
+        _ = await fixture.Store.RegisterProviderResourceAsync(rotatedResource with
+        {
+            Id = Guid.NewGuid(), Status = ProviderResourceStatus.Disabled, Revision = 0, ChecksumSha256 = string.Empty,
+            CreatedAt = fixture.Clock.UtcNow.AddSeconds(2)
+        }, TestContext.Current.CancellationToken);
+        GatewayException disabled = await Assert.ThrowsAsync<GatewayException>(() => replicaA.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-PROVIDER-RESOURCE-REVISION-STALE", disabled.Code);
+    }
+
+    [Fact]
     public async Task M4_UT_Runtime_denies_missing_endpoint_secret_and_operation()
     {
         Fixture fixture = new();
@@ -245,10 +277,27 @@ public sealed class ConnectorConfigurationTests
         Assert.Equal("Synthetic vault", secret.ProviderDisplayName);
         Assert.Equal("synthetic", secret.ProviderId);
         Assert.Equal("api-key", secret.ResourceLogicalId);
+        Assert.Equal(ProviderResourceType.Secret.ToString(), secret.ResourceType);
+        Assert.Null(secret.ResourceVersion);
+        Assert.Equal(1, secret.CatalogRevision);
+        Assert.Null(secret.PublicMetadataRevision);
+        Assert.Equal(binding.Revision, secret.BindingRevision);
+        Assert.Equal(binding.ChecksumSha256, secret.BindingChecksumSha256);
+        Assert.Equal(binding.SecretResources["sample-vendor-api-key"].CatalogChecksumSha256, secret.CatalogChecksumSha256);
         ApprovalCertificateReview certificate = Assert.Single(operation.CertificateBindings);
         Assert.Equal(new string('A', 64), certificate.PublicFingerprintSha256);
         Assert.Equal("CN=synthetic-client", certificate.PublicSubject);
         Assert.Equal("CN=synthetic-ca", certificate.PublicIssuer);
+        Assert.Equal(ProviderResourceType.ClientCertificate.ToString(), certificate.ResourceType);
+        Assert.Null(certificate.ResourceVersion);
+        Assert.Equal(1, certificate.CatalogRevision);
+        Assert.Equal(1, certificate.PublicMetadataRevision);
+        Assert.Equal("1", certificate.CertificateVersion);
+        Assert.Equal(binding.Revision, certificate.BindingRevision);
+        Assert.Equal(binding.ChecksumSha256, certificate.BindingChecksumSha256);
+        Assert.Equal(binding.CertificateResources["sample-vendor-client-certificate"].CatalogChecksumSha256, certificate.CatalogChecksumSha256);
+        Assert.Equal(binding.Revision, operation.Endpoint.BindingRevision);
+        Assert.Equal(binding.ChecksumSha256, operation.Endpoint.BindingChecksumSha256);
         Assert.Equal(Convert.ToHexString(await fixture.Store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken)), review.DigestSha256);
         Assert.Contains(review.RiskIndicators, value => value.Code == "PUBLIC_INTERNET_DESTINATION");
         Assert.DoesNotContain("VERY_SECRET_CANARY_VALUE", review.CanonicalJson, StringComparison.Ordinal);

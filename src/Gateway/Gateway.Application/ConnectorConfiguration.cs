@@ -187,7 +187,7 @@ public sealed record ApprovalConnectorReview(string ConnectorId, string Version,
 /// <summary>Exact non-secret destination used by one operation in one Environment.</summary>
 public sealed record ApprovalEndpointReview(
     string LogicalBindingId,
-    long Revision,
+    long BindingRevision,
     string Scheme,
     string Hostname,
     int Port,
@@ -196,31 +196,40 @@ public sealed record ApprovalEndpointReview(
     string RedirectPolicy,
     string TlsPolicy,
     string EndpointChecksumSha256,
+    string BindingChecksumSha256,
     string DestinationClassification);
 
 /// <summary>Logical secret-provider binding; credential material is absent by construction.</summary>
 public sealed record ApprovalSecretReview(
     string LogicalBindingId,
-    long Revision,
+    long BindingRevision,
     string ProviderDisplayName,
     string ProviderType,
     string ProviderId,
     string ResourceLogicalId,
     string ResourceType,
-    string? Version,
+    string? ResourceVersion,
+    long CatalogRevision,
+    long? PublicMetadataRevision,
     string Environment,
     string ConnectorScope,
     string OperationScope,
-    string SecretBindingChecksumSha256);
+    string CatalogChecksumSha256,
+    string ResourceBindingChecksumSha256,
+    string BindingChecksumSha256);
 
 /// <summary>Logical certificate-provider binding and optional public certificate metadata.</summary>
 public sealed record ApprovalCertificateReview(
     string LogicalBindingId,
-    long Revision,
+    long BindingRevision,
     string ProviderDisplayName,
     string ProviderType,
     string ProviderId,
     string CertificateLogicalId,
+    string ResourceType,
+    string? ResourceVersion,
+    long CatalogRevision,
+    long PublicMetadataRevision,
     string PublicFingerprintSha256,
     string PublicSubject,
     string PublicIssuer,
@@ -228,11 +237,13 @@ public sealed record ApprovalCertificateReview(
     DateTimeOffset ExpiresAt,
     string KeyAlgorithm,
     int PublicKeySize,
-    string Version,
+    string CertificateVersion,
     string Environment,
     string ConnectorScope,
     string OperationScope,
-    string CertificateBindingChecksumSha256);
+    string CatalogChecksumSha256,
+    string ResourceBindingChecksumSha256,
+    string BindingChecksumSha256);
 
 /// <summary>One exact runtime operation projection reviewed before publication.</summary>
 public sealed record ApprovalOperationReview(
@@ -303,7 +314,7 @@ public static class ConnectorApprovalArtifacts
         string method = operation.GetProperty("method").GetString()!;
         string redirect = operation.TryGetProperty("redirectPolicy", out JsonElement redirectElement) ? redirectElement.GetString() ?? "deny" : "deny";
         ApprovalEndpointReview endpoint = new(endpointName, binding.Revision, effective.Scheme, effective.DnsSafeHost, effective.IsDefaultPort ? DefaultPort(effective.Scheme) : effective.Port,
-            effective.AbsolutePath, [method], redirect, "validate-system-trust-and-hostname", Component(endpointName, effective.AbsoluteUri), Classify(effective));
+            effective.AbsolutePath, [method], redirect, "validate-system-trust-and-hostname", Component(endpointName, effective.AbsoluteUri), binding.ChecksumSha256, Classify(effective));
         JsonElement authentication = operation.GetProperty("authentication");
         List<ApprovalSecretReview> secrets = [];
         foreach (string property in new[] { "usernameBinding", "passwordBinding", "secretBinding" })
@@ -312,7 +323,8 @@ public static class ConnectorApprovalArtifacts
             string logical = logicalElement.GetString()!;
             if (!binding.SecretResources.TryGetValue(logical, out ProviderResourceBinding? resource)) throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING-MISSING", 503);
             secrets.Add(new(logical, binding.Revision, resource.ProviderDisplayName, resource.ProviderType, resource.ProviderId, resource.ResourceId, resource.ResourceType.ToString(), resource.Version,
-                binding.EnvironmentId.ToString("D"), resource.ConnectorScope, resource.OperationScope, Component(logical, resource)));
+                resource.CatalogRevision, resource.PublicMetadataRevision, binding.EnvironmentId.ToString("D"), resource.ConnectorScope, resource.OperationScope,
+                resource.CatalogChecksumSha256, Component(logical, resource), binding.ChecksumSha256));
         }
         List<ApprovalCertificateReview> certificates = [];
         if (authentication.TryGetProperty("certificateBinding", out JsonElement certificateElement))
