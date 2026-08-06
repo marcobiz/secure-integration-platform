@@ -2,10 +2,10 @@
 
 **Baseline M4:** `m4-connector-configuration-baseline-20260805` (`49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b`)  
 **Branch:** `m5/admin-ui-mvp`  
-**Implementation candidate:** `7ac956fe9d3fa641d420004c2f944c7a2f5a8210`
-**Stato:** **TECHNICAL FINAL REMEDIATION PASS — exact-commit CI PASS; final read-only technical review pending. M5 is not declared Done; PR #5 remains open and unmerged.**
+**Implementation candidate:** `7e961ab98d259418a5e0a98eeffe6a70ecd7c6a2`
+**Stato:** **SEVEN-FINDING ACCEPTANCE REMEDIATION LOCAL PASS — exact-head CI and one final read-only acceptance review pending. M5 is not declared Done; PR #5 remains open and unmerged.**
 
-> Historical evidence and counts below remain provenance only. The authoritative final-cycle status is recorded in `M5-MULTI-AGENT-REMEDIATION.md`; the external evidence bundle binds the final documentation HEAD and is verified before read-only delta review.
+> Historical evidence and counts below remain provenance only. The authoritative current delta is `M5-FINAL-ACCEPTANCE-FIXES.md`; the external evidence bundle binds the final documentation HEAD and is verified before the one read-only acceptance review.
 
 ## Remediation delta
 
