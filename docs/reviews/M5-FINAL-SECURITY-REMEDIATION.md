@@ -1,8 +1,11 @@
 # M5 final security remediation
 
-**Initial reviewed HEAD:** `644e45986086d92d3fba055b0aebf5ace52007da`  
-**Product candidate:** `fc342b62d8e1165e643cbead898dec4f34188969`  
-**Branch:** `m5/admin-ui-mvp`  
+**Initial reviewed HEAD:** `644e45986086d92d3fba055b0aebf5ace52007da`
+
+**Product candidate:** `fc342b62d8e1165e643cbead898dec4f34188969`
+
+**Branch:** `m5/admin-ui-mvp`
+
 **Decision:** **GO for a concluding read-only review limited to the three residual technical findings.** M5 is not declared Done, PR #5 remains open and unmerged, `main` is unchanged and M6 has not started.
 
 ## Findings remediated
