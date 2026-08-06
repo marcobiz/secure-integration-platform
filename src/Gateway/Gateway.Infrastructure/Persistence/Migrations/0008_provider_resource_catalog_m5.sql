@@ -41,6 +41,10 @@ COMMENT ON COLUMN gateway.provider_resource_locator.provider_reference IS
 COMMENT ON COLUMN gateway.provider_resource_catalog_version.certificate_metadata_json IS
   'Public certificate metadata only: fingerprint, subject, issuer, validity and public-key characteristics.';
 
+-- Re-establish exact privileges even when a qualification database reapplies older
+-- idempotent migrations whose historical all-table grant can see these newer tables.
+REVOKE ALL ON gateway.provider_resource_catalog_version, gateway.provider_resource_locator
+  FROM PUBLIC, gateway_runtime, gateway_admin, gateway_readonly;
 GRANT SELECT ON gateway.provider_resource_catalog_version TO gateway_runtime, gateway_readonly;
 GRANT SELECT, INSERT ON gateway.provider_resource_catalog_version TO gateway_admin;
 GRANT SELECT ON gateway.provider_resource_locator TO gateway_runtime;
