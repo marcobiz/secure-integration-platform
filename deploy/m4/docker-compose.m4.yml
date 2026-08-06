@@ -1,7 +1,12 @@
 services:
+  provisioner:
+    environment:
+      M5_POSTGRES_ADMIN_API_PASSWORD: ${M4_QUICKSTART_DB_ADMIN_PASSWORD:?required}
+
   gateway:
     environment:
       ASPNETCORE_ENVIRONMENT: M4Testing
       Gateway__Admin__Mode: DevelopmentApiKey
       Gateway__Admin__ApiKeyEnvironmentVariable: M4_QUICKSTART_ADMIN_KEY
       M4_QUICKSTART_ADMIN_KEY: ${M4_QUICKSTART_ADMIN_KEY:?required}
+      ConnectionStrings__GatewayAdminDatabase: Host=postgres;Port=5432;Database=broker_gateway_m3;Username=m5_gateway_admin;Password=${M4_QUICKSTART_DB_ADMIN_PASSWORD:?required};SSL Mode=Disable;GSS Encryption Mode=Disable

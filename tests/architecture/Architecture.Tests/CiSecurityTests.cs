@@ -18,6 +18,21 @@ public sealed class CiSecurityTests
         Assert.DoesNotContain("GATEWAY_POSTGRES_ADMIN_CONNECTION: Host=127.0.0.1;Port=5432;Database=broker_gateway_test;Username=postgres", workflow, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void M4_quickstart_uses_a_distinct_non_superuser_admin_pool()
+    {
+        string compose = File.ReadAllText(Path.Combine(Root, "deploy", "m4", "docker-compose.m4.yml"));
+        string runner = File.ReadAllText(Path.Combine(Root, "tools", "m4", "Invoke-M4Quickstart.ps1"));
+        string provisioner = File.ReadAllText(Path.Combine(Root, "tools", "m3", "Provisioner", "Program.cs"));
+
+        Assert.Contains("M4_QUICKSTART_DB_ADMIN_PASSWORD", compose, StringComparison.Ordinal);
+        Assert.Contains("ConnectionStrings__GatewayAdminDatabase:", compose, StringComparison.Ordinal);
+        Assert.Contains("Username=m5_gateway_admin", compose, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConnectionStrings__GatewayAdminDatabase: Host=postgres;Port=5432;Database=broker_gateway_m3;Username=m3_gateway_runtime", compose, StringComparison.Ordinal);
+        Assert.Contains("M4_QUICKSTART_DB_ADMIN_PASSWORD", runner, StringComparison.Ordinal);
+        Assert.Contains("ALTER ROLE m5_gateway_admin NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION", provisioner, StringComparison.Ordinal);
+    }
+
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? current = new(AppContext.BaseDirectory);

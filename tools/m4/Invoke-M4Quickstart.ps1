@@ -54,6 +54,12 @@ try { $random.GetBytes($adminKeyBytes) } finally { $random.Dispose() }
 $adminKey = [Convert]::ToBase64String($adminKeyBytes)
 [Array]::Clear($adminKeyBytes, 0, $adminKeyBytes.Length)
 [IO.File]::AppendAllText($envFile, "M4_QUICKSTART_ADMIN_KEY=$adminKey`n", [Text.UTF8Encoding]::new($false))
+$databaseAdminPasswordBytes = New-Object byte[] 32
+$random = [Security.Cryptography.RandomNumberGenerator]::Create()
+try { $random.GetBytes($databaseAdminPasswordBytes) } finally { $random.Dispose() }
+$databaseAdminPassword = [Convert]::ToBase64String($databaseAdminPasswordBytes)
+[Array]::Clear($databaseAdminPasswordBytes, 0, $databaseAdminPasswordBytes.Length)
+[IO.File]::AppendAllText($envFile, "M4_QUICKSTART_DB_ADMIN_PASSWORD=$databaseAdminPassword`n", [Text.UTF8Encoding]::new($false))
 Invoke-Checked 'docker' (ComposeArguments @('config', '--quiet'))
 Invoke-Checked 'docker' (ComposeArguments @('up', '--build', '--detach'))
 
@@ -85,6 +91,7 @@ finally {
     $env:GATEWAY_ADMIN_API_KEY = $previousKey
     $env:CONNECTOR_GATEWAY_CA_FILE = $previousCa
     $adminKey = $null
+    $databaseAdminPassword = $null
 }
 Write-Host 'M4_QUICKSTART_START_PASS'
 Write-Host 'Stop with: powershell -NoProfile -File tools/m4/Invoke-M4Quickstart.ps1 -Phase Stop'
