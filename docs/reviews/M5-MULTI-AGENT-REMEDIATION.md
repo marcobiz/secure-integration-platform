@@ -24,6 +24,10 @@ Initial delta-review HEAD: `8d269509201bf320c98a65f6c7495c1b8cc16cce`. Implement
 
 The local gate records 145 ordinary .NET PASS plus seven explicit PG SKIP, eight dedicated PostgreSQL 18 PASS, 22 Vitest PASS, 32 browser-mock PASS and one production-build full-stack PASS. Migration `0007` SHA-256 is `EC3B4E9A85FB050A1FDFC16E4E7B89042A7A6D93972CA46DF2BCEA2AE51FEE4A`. Exact-candidate CI is PASS: general run `31049726466` (6/6), M5 push run `31049725534` (15/15) and M5 PR run `31049726550` (15/15). This section does not declare M5 Done.
 
+## Final technical remediation addendum — 2026-08-06
+
+The four residual technical findings are closed on candidate `7ac956fe9d3fa641d420004c2f944c7a2f5a8210`: backend canonical semantic approval, transaction-local Tenant FORCE RLS, ETag/If-Match concurrency for Tenant/Application, and complete independent IT/EN resources. The updated gate records 149 ordinary .NET PASS, nine PostgreSQL 18 PASS, 25 Vitest PASS, 35 browser-mock PASS and FULLSTACK-01 PASS. Exact-candidate CI is green: general `31088473433` (6/6), M5 PR `31088472335` (15/15), M5 push `31088472535` (15/15). See `M5-TECHNICAL-FINAL-REMEDIATION.md` for the requirement-to-evidence delta. M5 remains not Done and PR #5 remains open/unmerged.
+
 | Finding | Stato | Causa | Remediation applicata | Test regressivo / evidenza | Commit | Esito |
 |---|---|---|---|---|---|---|
 | A1 — FE-01 / PROD-01 | RESOLVED | The browser used a reduced hand-written schema and a non-canonical initial document. | The UI now consumes the repository-owned Draft 2020-12 schema and sample; AJV is preliminary and server validation remains authoritative. | `connectorSchema.test.ts`; Admin import API tests; `FULLSTACK-01` persists the canonical Draft in PostgreSQL. | `7f1126e` | PASS |
