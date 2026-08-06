@@ -492,6 +492,14 @@ adminApi.MapGet("/dashboard", async (HttpContext context, AdminAccessService acc
     return Results.Ok(new { tenants = tenants.Total, applications = applications.Total, database = databaseReady ? "healthy" : "unhealthy", provider = providerReady ? "healthy" : "unhealthy", generatedAtUtc = DateTimeOffset.UtcNow });
 });
 
+adminApi.MapGet("/runtime-wire-codes", async (HttpContext context, AdminAccessService access, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.Viewer, AdminRole.ConnectorEditor, AdminRole.ConnectorApprover, AdminRole.Operator, AdminRole.SecurityAdministrator);
+    context.Response.Headers.CacheControl = "public, max-age=3600";
+    return Results.Ok(RuntimeWireCodeCatalog.Current);
+});
+
 adminApi.MapGet("/tenants", async (int? offset, int? limit, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);

@@ -232,6 +232,16 @@ paths:
       responses:
         '200': { description: Provider-neutral status summary, content: { application/json: { schema: { $ref: '#/components/schemas/Dashboard' } } } }
         default: { $ref: '#/components/responses/Problem' }
+  /admin/api/v1/runtime-wire-codes:
+    get:
+      tags: [Administration]
+      operationId: getRuntimeWireCodes
+      security: [{ AdminSession: [] }]
+      responses:
+        '200':
+          description: Versioned catalog of stable backend wire codes handled by the Admin UI.
+          content: { application/json: { schema: { $ref: '#/components/schemas/RuntimeWireCodeCatalog' } } }
+        default: { $ref: '#/components/responses/Problem' }
   /admin/api/v1/tenants:
     get:
       tags: [Administration]
@@ -604,6 +614,19 @@ components:
         database: { type: string, enum: [healthy, unhealthy] }
         provider: { type: string, enum: [healthy, unhealthy] }
         generatedAtUtc: { type: string, format: date-time }
+    RuntimeWireCodeCatalog:
+      type: object
+      additionalProperties: false
+      required: [status, health, approval, role, scope, auditAction, auditOutcome, reason]
+      properties:
+        status: { type: array, items: { type: string } }
+        health: { type: array, items: { type: string } }
+        approval: { type: array, items: { type: string } }
+        role: { type: array, items: { type: string } }
+        scope: { type: array, items: { type: string } }
+        auditAction: { type: array, items: { type: string } }
+        auditOutcome: { type: array, items: { type: string } }
+        reason: { type: array, items: { type: string } }
     Page:
       type: object
       required: [items, offset, limit, total]
@@ -800,16 +823,16 @@ components:
         certificateBindings: { type: array, items: { $ref: '#/components/schemas/ApprovalCertificateReview' } }
     ApprovalEndpointReview:
       type: object
-      required: [logicalBindingId, revision, scheme, hostname, port, path, allowedMethods, redirectPolicy, tlsPolicy, endpointChecksumSha256, destinationClassification]
-      properties: { logicalBindingId: { type: string }, revision: { type: integer }, scheme: { type: string }, hostname: { type: string }, port: { type: integer }, path: { type: string }, allowedMethods: { type: array, items: { type: string } }, redirectPolicy: { type: string }, tlsPolicy: { type: string }, endpointChecksumSha256: { type: string }, destinationClassification: { type: string, enum: [loopback, private, publicInternet, other] } }
+      required: [logicalBindingId, bindingRevision, scheme, hostname, port, path, allowedMethods, redirectPolicy, tlsPolicy, endpointChecksumSha256, bindingChecksumSha256, destinationClassification]
+      properties: { logicalBindingId: { type: string }, bindingRevision: { type: integer, format: int64 }, scheme: { type: string }, hostname: { type: string }, port: { type: integer }, path: { type: string }, allowedMethods: { type: array, items: { type: string } }, redirectPolicy: { type: string }, tlsPolicy: { type: string }, endpointChecksumSha256: { type: string }, bindingChecksumSha256: { type: string }, destinationClassification: { type: string, enum: [loopback, private, publicInternet, other] } }
     ApprovalSecretReview:
       type: object
-      required: [logicalBindingId, revision, providerDisplayName, providerType, providerId, resourceLogicalId, resourceType, environment, connectorScope, operationScope, secretBindingChecksumSha256]
-      properties: { logicalBindingId: { type: string }, revision: { type: integer }, providerDisplayName: { type: string }, providerType: { type: string }, providerId: { type: string }, resourceLogicalId: { type: string }, resourceType: { type: string }, version: { type: [string, 'null'] }, environment: { type: string }, connectorScope: { type: string }, operationScope: { type: string }, secretBindingChecksumSha256: { type: string } }
+      required: [logicalBindingId, bindingRevision, providerDisplayName, providerType, providerId, resourceLogicalId, resourceType, catalogRevision, environment, connectorScope, operationScope, catalogChecksumSha256, resourceBindingChecksumSha256, bindingChecksumSha256]
+      properties: { logicalBindingId: { type: string }, bindingRevision: { type: integer, format: int64 }, providerDisplayName: { type: string }, providerType: { type: string }, providerId: { type: string }, resourceLogicalId: { type: string }, resourceType: { type: string }, resourceVersion: { type: [string, 'null'] }, catalogRevision: { type: integer, format: int64 }, publicMetadataRevision: { type: [integer, 'null'], format: int64 }, environment: { type: string }, connectorScope: { type: string }, operationScope: { type: string }, catalogChecksumSha256: { type: string }, resourceBindingChecksumSha256: { type: string }, bindingChecksumSha256: { type: string } }
     ApprovalCertificateReview:
       type: object
-      required: [logicalBindingId, revision, providerDisplayName, providerType, providerId, certificateLogicalId, publicFingerprintSha256, publicSubject, publicIssuer, notBefore, expiresAt, keyAlgorithm, publicKeySize, version, environment, connectorScope, operationScope, certificateBindingChecksumSha256]
-      properties: { logicalBindingId: { type: string }, revision: { type: integer }, providerDisplayName: { type: string }, providerType: { type: string }, providerId: { type: string }, certificateLogicalId: { type: string }, publicFingerprintSha256: { type: string }, publicSubject: { type: string }, publicIssuer: { type: string }, notBefore: { type: string, format: date-time }, expiresAt: { type: string, format: date-time }, keyAlgorithm: { type: string }, publicKeySize: { type: integer }, version: { type: string }, environment: { type: string }, connectorScope: { type: string }, operationScope: { type: string }, certificateBindingChecksumSha256: { type: string } }
+      required: [logicalBindingId, bindingRevision, providerDisplayName, providerType, providerId, certificateLogicalId, resourceType, catalogRevision, publicMetadataRevision, publicFingerprintSha256, publicSubject, publicIssuer, notBefore, expiresAt, keyAlgorithm, publicKeySize, certificateVersion, environment, connectorScope, operationScope, catalogChecksumSha256, resourceBindingChecksumSha256, bindingChecksumSha256]
+      properties: { logicalBindingId: { type: string }, bindingRevision: { type: integer, format: int64 }, providerDisplayName: { type: string }, providerType: { type: string }, providerId: { type: string }, certificateLogicalId: { type: string }, resourceType: { type: string }, resourceVersion: { type: [string, 'null'] }, catalogRevision: { type: integer, format: int64 }, publicMetadataRevision: { type: integer, format: int64 }, publicFingerprintSha256: { type: string }, publicSubject: { type: string }, publicIssuer: { type: string }, notBefore: { type: string, format: date-time }, expiresAt: { type: string, format: date-time }, keyAlgorithm: { type: string }, publicKeySize: { type: integer }, certificateVersion: { type: string }, environment: { type: string }, connectorScope: { type: string }, operationScope: { type: string }, catalogChecksumSha256: { type: string }, resourceBindingChecksumSha256: { type: string }, bindingChecksumSha256: { type: string } }
     ApprovalRevisionReview:
       type: object
       required: [bindingId, environmentId, revision, checksumSha256]

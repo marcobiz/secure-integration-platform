@@ -372,6 +372,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/api/v1/runtime-wire-codes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getRuntimeWireCodes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/api/v1/tenants": {
         parameters: {
             query?: never;
@@ -1009,6 +1025,16 @@ export interface components {
             /** Format: date-time */
             generatedAtUtc: string;
         };
+        RuntimeWireCodeCatalog: {
+            status: string[];
+            health: string[];
+            approval: string[];
+            role: string[];
+            scope: string[];
+            auditAction: string[];
+            auditOutcome: string[];
+            reason: string[];
+        };
         Page: {
             items: unknown[];
             offset: number;
@@ -1346,7 +1372,8 @@ export interface components {
         };
         ApprovalEndpointReview: {
             logicalBindingId: string;
-            revision: number;
+            /** Format: int64 */
+            bindingRevision: number;
             scheme: string;
             hostname: string;
             port: number;
@@ -1355,30 +1382,45 @@ export interface components {
             redirectPolicy: string;
             tlsPolicy: string;
             endpointChecksumSha256: string;
+            bindingChecksumSha256: string;
             /** @enum {string} */
             destinationClassification: "loopback" | "private" | "publicInternet" | "other";
         };
         ApprovalSecretReview: {
             logicalBindingId: string;
-            revision: number;
+            /** Format: int64 */
+            bindingRevision: number;
             providerDisplayName: string;
             providerType: string;
             providerId: string;
             resourceLogicalId: string;
             resourceType: string;
-            version?: string | null;
+            resourceVersion?: string | null;
+            /** Format: int64 */
+            catalogRevision: number;
+            /** Format: int64 */
+            publicMetadataRevision?: number | null;
             environment: string;
             connectorScope: string;
             operationScope: string;
-            secretBindingChecksumSha256: string;
+            catalogChecksumSha256: string;
+            resourceBindingChecksumSha256: string;
+            bindingChecksumSha256: string;
         };
         ApprovalCertificateReview: {
             logicalBindingId: string;
-            revision: number;
+            /** Format: int64 */
+            bindingRevision: number;
             providerDisplayName: string;
             providerType: string;
             providerId: string;
             certificateLogicalId: string;
+            resourceType: string;
+            resourceVersion?: string | null;
+            /** Format: int64 */
+            catalogRevision: number;
+            /** Format: int64 */
+            publicMetadataRevision: number;
             publicFingerprintSha256: string;
             publicSubject: string;
             publicIssuer: string;
@@ -1388,11 +1430,13 @@ export interface components {
             expiresAt: string;
             keyAlgorithm: string;
             publicKeySize: number;
-            version: string;
+            certificateVersion: string;
             environment: string;
             connectorScope: string;
             operationScope: string;
-            certificateBindingChecksumSha256: string;
+            catalogChecksumSha256: string;
+            resourceBindingChecksumSha256: string;
+            bindingChecksumSha256: string;
         };
         ApprovalRevisionReview: {
             /** Format: uuid */
@@ -2018,6 +2062,27 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Dashboard"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getRuntimeWireCodes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Versioned catalog of stable backend wire codes handled by the Admin UI. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeWireCodeCatalog"];
                 };
             };
             default: components["responses"]["Problem"];

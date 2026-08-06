@@ -71,18 +71,28 @@ export function ApprovalsPage() {
               {operation.secretBindings.map(secret => <Stack key={secret.logicalBindingId} sx={{ mt: 1 }}>
                 <Typography><strong>{t('logicalCredential')}:</strong> {secret.logicalBindingId}</Typography>
                 <Typography><strong>{t('provider')}:</strong> {secret.providerDisplayName} ({secret.providerType}:{secret.providerId})</Typography>
-                <Typography><strong>{t('logicalResource')}:</strong> {secret.resourceLogicalId}</Typography>
+                <Typography><strong>{t('logicalResource')}:</strong> {secret.resourceLogicalId} ({secret.resourceType})</Typography>
+                <Typography><strong>{t('resourceVersion')}:</strong> {secret.resourceVersion ?? '—'}; <strong>{t('catalogRevision')}:</strong> {secret.catalogRevision}; <strong>{t('publicMetadataRevision')}:</strong> {secret.publicMetadataRevision ?? '—'}</Typography>
+                <Typography><strong>{t('bindingRevision')}:</strong> {secret.bindingRevision}; <strong>{t('environment')}:</strong> {secret.environment}</Typography>
                 <Typography><strong>{t('scope')}:</strong> {secret.connectorScope}/{secret.operationScope}</Typography>
-                <Typography><strong>{t('checksum')}:</strong> <code>{secret.secretBindingChecksumSha256}</code></Typography>
+                <Typography><strong>{t('catalogChecksum')}:</strong> <code>{secret.catalogChecksumSha256}</code></Typography>
+                <Typography><strong>{t('resourceBindingChecksum')}:</strong> <code>{secret.resourceBindingChecksumSha256}</code></Typography>
+                <Typography><strong>{t('bindingChecksum')}:</strong> <code>{secret.bindingChecksumSha256}</code></Typography>
               </Stack>)}
               {operation.certificateBindings.map(certificate => <Stack key={certificate.logicalBindingId} sx={{ mt: 1 }}>
-                <Typography><strong>{t('certificate')}:</strong> {certificate.certificateLogicalId}</Typography>
+                <Typography><strong>{t('certificate')}:</strong> {certificate.certificateLogicalId} ({certificate.resourceType})</Typography>
                 <Typography><strong>{t('provider')}:</strong> {certificate.providerDisplayName} ({certificate.providerType}:{certificate.providerId})</Typography>
-                {certificate.publicFingerprintSha256 && <Typography><strong>{t('fingerprint')}:</strong> <code>{certificate.publicFingerprintSha256}</code></Typography>}
-                <Typography><strong>{t('checksum')}:</strong> <code>{certificate.certificateBindingChecksumSha256}</code></Typography>
+                <Typography><strong>{t('resourceVersion')}:</strong> {certificate.resourceVersion ?? '—'}; <strong>{t('certificateVersion')}:</strong> {certificate.certificateVersion}</Typography>
+                <Typography><strong>{t('catalogRevision')}:</strong> {certificate.catalogRevision}; <strong>{t('publicMetadataRevision')}:</strong> {certificate.publicMetadataRevision}; <strong>{t('bindingRevision')}:</strong> {certificate.bindingRevision}</Typography>
+                <Typography><strong>{t('fingerprint')}:</strong> <code>{certificate.publicFingerprintSha256}</code></Typography>
+                <Typography><strong>{t('certificateSubject')}:</strong> {certificate.publicSubject}; <strong>{t('certificateIssuer')}:</strong> {certificate.publicIssuer}</Typography>
+                <Typography><strong>{t('certificateValidity')}:</strong> {certificate.notBefore} – {certificate.expiresAt}; <strong>{t('publicKey')}:</strong> {certificate.keyAlgorithm} {certificate.publicKeySize}</Typography>
+                <Typography><strong>{t('catalogChecksum')}:</strong> <code>{certificate.catalogChecksumSha256}</code></Typography>
+                <Typography><strong>{t('resourceBindingChecksum')}:</strong> <code>{certificate.resourceBindingChecksumSha256}</code></Typography>
+                <Typography><strong>{t('bindingChecksum')}:</strong> <code>{certificate.bindingChecksumSha256}</code></Typography>
               </Stack>)}
               <Divider sx={{ my: 1 }} />
-              <Typography><strong>{t('revision')}:</strong> {operation.endpoint.revision}; <strong>{t('checksum')}:</strong> <code>{operation.endpoint.endpointChecksumSha256}</code></Typography>
+              <Typography><strong>{t('bindingRevision')}:</strong> {operation.endpoint.bindingRevision}; <strong>{t('endpointChecksum')}:</strong> <code>{operation.endpoint.endpointChecksumSha256}</code>; <strong>{t('bindingChecksum')}:</strong> <code>{operation.endpoint.bindingChecksumSha256}</code></Typography>
             </CardContent></Card>;
           })}
         </Stack>

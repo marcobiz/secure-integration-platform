@@ -19,6 +19,14 @@ public sealed class ProvisionerSecurityTests
         Assert.Contains("m3-approver", source, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void M5_ARCH_Selective_container_builds_include_the_runtime_wire_contract()
+    {
+        string dockerfile = File.ReadAllText(Path.Combine(Root, "tools", "m3", "Provisioner", "Dockerfile"));
+
+        Assert.Contains("COPY docs/api/runtime-wire-codes.json docs/api/runtime-wire-codes.json", dockerfile, StringComparison.Ordinal);
+    }
+
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? directory = new(AppContext.BaseDirectory);

@@ -1,0 +1,118 @@
+// Generated from docs/api/runtime-wire-codes.json. Do not edit.
+export const runtimeWireCodes = {
+  "status": [
+    "Active",
+    "Disabled",
+    "Suspended",
+    "Retired",
+    "Pending",
+    "Revoked",
+    "Overlap",
+    "Expired",
+    "Draft",
+    "Validated",
+    "Published",
+    "Superseded"
+  ],
+  "health": [
+    "healthy",
+    "Healthy",
+    "degraded",
+    "Degraded",
+    "unhealthy",
+    "Unhealthy",
+    "unknown",
+    "Unknown"
+  ],
+  "approval": [
+    "Pending",
+    "Requested",
+    "Approved",
+    "Rejected",
+    "Obsolete",
+    "Invalidated"
+  ],
+  "role": [
+    "Viewer",
+    "ConnectorEditor",
+    "ConnectorApprover",
+    "Operator",
+    "SecurityAdministrator"
+  ],
+  "scope": [
+    "global",
+    "tenant"
+  ],
+  "auditAction": [
+    "admin.bootstrap",
+    "admin.request.denied",
+    "admin.role.assign",
+    "admin.role.revoke",
+    "application.create",
+    "application.disable",
+    "application.update",
+    "connector.approval.approve",
+    "connector.approval.reject",
+    "connector.approval.request",
+    "connector.bindings.update",
+    "connector.import",
+    "connector.publish",
+    "connector.retire",
+    "connector.rollback",
+    "connector.test",
+    "connector.validate",
+    "grant.create",
+    "grant.revoke",
+    "installation.create",
+    "installation.revoke",
+    "operation.invoke",
+    "runtime.authenticate",
+    "tenant.create",
+    "tenant.disable",
+    "tenant.update"
+  ],
+  "auditOutcome": [
+    "success",
+    "denied",
+    "failure",
+    "conflict"
+  ],
+  "reason": [
+    "BGW-ADMIN-ACTION",
+    "BGW-ADMIN-APPROVAL-APPROVED",
+    "BGW-ADMIN-APPROVAL-REJECTED",
+    "BGW-ADMIN-APPROVAL-REQUESTED",
+    "BGW-ADMIN-APPROVAL-STALE",
+    "BGW-ADMIN-AUTHENTICATION",
+    "BGW-ADMIN-AUTHORIZATION",
+    "BGW-ADMIN-BOOTSTRAP-COMPLETE",
+    "BGW-ADMIN-CSRF",
+    "BGW-ADMIN-ROLE-ASSIGNED",
+    "BGW-ADMIN-ROLE-REVOKED",
+    "BGW-APPLICATION-CREATED",
+    "BGW-APPLICATION-DISABLED",
+    "BGW-APPLICATION-UPDATED",
+    "BGW-AUTHN-OK",
+    "BGW-CONCURRENCY-CONFLICT",
+    "BGW-CONCURRENCY-PRECONDITION",
+    "BGW-CONNECTOR-BINDINGS-UPDATED",
+    "BGW-CONNECTOR-IMPORTED",
+    "BGW-CONNECTOR-PUBLISHED",
+    "BGW-CONNECTOR-RETIRED",
+    "BGW-CONNECTOR-ROLLED-BACK",
+    "BGW-CONNECTOR-VALIDATED",
+    "BGW-GRANT-CREATED",
+    "BGW-GRANT-REVOKED",
+    "BGW-INSTALLATION-CREATED",
+    "BGW-INSTALLATION-REVOKED",
+    "BGW-OPERATION-OK",
+    "BGW-PROVIDER-RESOURCE-NOT-FOUND",
+    "BGW-PROVIDER-RESOURCE-REVISION-STALE",
+    "BGW-PROVIDER-RESOURCE-SCOPE",
+    "BGW-TENANT-CREATED",
+    "BGW-TENANT-DISABLED",
+    "BGW-TENANT-UPDATED"
+  ]
+} as const;
+
+export type RuntimeValueKind = keyof typeof runtimeWireCodes;

@@ -10,5 +10,6 @@
     <PackageReference Include="JsonSchema.Net" />
     <EmbeddedResource Include="..\..\..\docs\connectors\connector-definition.schema.json" Link="Connectors\connector-definition.schema.json" />
     <EmbeddedResource Include="..\..\..\docs\connectors\examples\sample-secure-service.connector.json" Link="Connectors\sample-secure-service.connector.json" />
+    <EmbeddedResource Include="..\..\..\docs\api\runtime-wire-codes.json" Link="Admin\runtime-wire-codes.json" />
   </ItemGroup>
 </Project>

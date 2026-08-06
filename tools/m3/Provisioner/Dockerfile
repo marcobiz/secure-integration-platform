@@ -14,6 +14,7 @@ COPY ["tools/m3/Provisioner/packages.lock.json", "tools/m3/Provisioner/"]
 RUN dotnet restore tools/m3/Provisioner/Provisioner.csproj --locked-mode
 COPY src/Gateway/ src/Gateway/
 COPY src/Providers/Abstractions/ src/Providers/Abstractions/
+COPY docs/api/runtime-wire-codes.json docs/api/runtime-wire-codes.json
 COPY docs/connectors/connector-definition.schema.json docs/connectors/connector-definition.schema.json
 COPY docs/connectors/examples/sample-secure-service.connector.json docs/connectors/examples/sample-secure-service.connector.json
 COPY tools/m3/Provisioner/ tools/m3/Provisioner/

@@ -9,6 +9,24 @@ namespace SecureIntegration.Gateway.Unit.Tests;
 
 public sealed class AdminSecurityTests
 {
+    [Fact]
+    public void M5_UT_Runtime_wire_contract_exports_all_stable_admin_audit_values()
+    {
+        RuntimeWireCodeCatalog catalog = RuntimeWireCodeCatalog.Current;
+        Assert.Equal(Enum.GetNames<AdminRole>().Order(), catalog.Role.Order());
+        Assert.Contains("installation.create", catalog.AuditAction);
+        Assert.Contains("installation.revoke", catalog.AuditAction);
+        Assert.Contains("grant.create", catalog.AuditAction);
+        Assert.Contains("grant.revoke", catalog.AuditAction);
+        Assert.Contains("runtime.authenticate", catalog.AuditAction);
+        Assert.Contains("operation.invoke", catalog.AuditAction);
+        Assert.Contains("admin.request.denied", catalog.AuditAction);
+        Assert.Contains("BGW-INSTALLATION-CREATED", catalog.Reason);
+        Assert.Contains("BGW-OPERATION-OK", catalog.Reason);
+        Assert.Contains("BGW-ADMIN-ACTION", catalog.Reason);
+        Assert.All(catalog.AuditAction.Concat(catalog.Reason), value => Assert.DoesNotContain('<', value));
+    }
+
     private static readonly DateTimeOffset Now = new(2026, 8, 5, 12, 0, 0, TimeSpan.Zero);
     private static readonly byte[] BindingDigest = SHA256.HashData("binding-bundle"u8);
 
