@@ -56,4 +56,4 @@ Named tests:
 
 The stable external failure is an existing redacted Gateway code; token, code, state, callback, authorization header, secret and provider reference are absent from exception, audit and synthetic-server logs. Existing Gateway middleware converts the same `GatewayException` to allowlisted RFC 9457 fields only.
 
-This is a local candidate only until full repository gates, CI and one independent review pass. It is not evidence for a production healthcare connector.
+Full PR CI is PASS (21/21 jobs on product commit `29c99cf`, runs `31194292494` and `31194293388`). One independent review remains required. This is not evidence for a production healthcare connector.

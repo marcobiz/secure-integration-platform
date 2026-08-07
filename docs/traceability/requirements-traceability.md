@@ -119,7 +119,7 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | AP-04 token/cache/bearer/refresh | real HTTPS lifecycle plus `M6_IT_OAuth_cache_is_bounded_and_refresh_is_single_flight`; rotation/resource-stamp mismatch invalidates with no stale fallback | PASS local |
 | Restricted egress | `M6_IT_OAuth_SSRF_endpoint_manipulation_and_disabled_secret_never_reach_transport`; malicious redirect case in `M6_IT_OAuth_invalid_token_responses_and_redirect_fail_sanitized` | PASS local |
 | Redaction | code/state/token absent from metadata-only audit and sanitized `GatewayException`; synthetic server logging disabled | PASS local |
-| TM-046/TM-047 | All named M6 unit/integration tests above | PASS local; CI/review pending |
+| TM-046/TM-047 | All named M6 unit/integration tests above | PASS local + PR #9 CI 21/21; independent review pending |
 
 PKCE, `client_credentials` grant, production profiles, SOAP/session and certificate/signing primitives are not claimed by this branch.
 
