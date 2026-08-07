@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="urn:example:soap-envelope" xmlns:hc="urn:example:healthcare:sogei-basic-session:v1">
+  <soap:Header>
+    <hc:CorrelationReference>urn:example:correlation:sogei-login-001</hc:CorrelationReference>
+  </soap:Header>
+  <soap:Body>
+    <hc:LoginAccepted>
+      <hc:Status>accepted-for-out-of-band-delivery</hc:Status>
+    </hc:LoginAccepted>
+  </soap:Body>
+</soap:Envelope>

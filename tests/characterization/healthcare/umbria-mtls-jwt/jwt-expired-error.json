@@ -1,0 +1,9 @@
+{
+  "schema": "urn:example:healthcare:umbria-mtls-jwt:error:v1",
+  "error": "invalid_token",
+  "error_description": "Synthetic JWT claim set has expired.",
+  "error_reference": "urn:example:error:umbria-jwt-expired",
+  "jwt_claims_reference": "urn:example:jwt-claims:umbria-expired",
+  "retryable": true,
+  "next_action": "issue-new-claim-set"
+}

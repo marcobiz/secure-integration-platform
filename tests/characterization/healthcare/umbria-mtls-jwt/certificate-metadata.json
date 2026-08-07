@@ -1,0 +1,30 @@
+{
+  "schema": "urn:example:healthcare:umbria-mtls-jwt:certificate-metadata:v1",
+  "connector": "umbria-mtls-jwt",
+  "certificates": [
+    {
+      "purpose": "mtls-client-authentication",
+      "certificate_reference": "urn:example:certificate:umbria-mtls-auth",
+      "subject": "CN=mtls-client.example.invalid",
+      "issuer": "CN=issuer.example.invalid",
+      "serial_reference": "urn:example:certificate-serial:umbria-mtls-auth",
+      "thumbprint_reference": "urn:example:certificate-thumbprint:umbria-mtls-auth",
+      "not_before": "2029-01-01T00:00:00Z",
+      "not_after": "2030-06-01T00:00:00Z",
+      "intended_usage": "client-authentication-only",
+      "material_included": false
+    },
+    {
+      "purpose": "jwt-signing",
+      "certificate_reference": "urn:example:certificate:umbria-jwt-signing",
+      "subject": "CN=jwt-signer.example.invalid",
+      "issuer": "CN=issuer.example.invalid",
+      "serial_reference": "urn:example:certificate-serial:umbria-jwt-signing",
+      "thumbprint_reference": "urn:example:certificate-thumbprint:umbria-jwt-signing",
+      "not_before": "2029-01-01T00:00:00Z",
+      "not_after": "2030-06-01T00:00:00Z",
+      "intended_usage": "digital-signature-only",
+      "material_included": false
+    }
+  ]
+}

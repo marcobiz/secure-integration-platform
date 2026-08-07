@@ -1,0 +1,14 @@
+{
+  "schema": "urn:example:healthcare:umbria-mtls-jwt:access-token-claims:v1",
+  "profile": "synthetic-access-token",
+  "iss": "urn:example:installation:healthcare-001",
+  "aud": "https://example.invalid/healthcare/umbria",
+  "sub": "urn:example:operator:synthetic-001",
+  "jti": "urn:example:jwt-id:umbria-access-001",
+  "iat": 1893456000,
+  "nbf": 1893456000,
+  "exp": 1893456300,
+  "organization_reference": "urn:example:organization:synthetic-001",
+  "signing_certificate_reference": "urn:example:certificate:umbria-jwt-signing",
+  "purpose_of_use": "urn:example:purpose:healthcare-characterization"
+}

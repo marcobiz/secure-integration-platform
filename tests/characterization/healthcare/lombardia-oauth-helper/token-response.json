@@ -1,0 +1,10 @@
+{
+  "schema": "urn:example:healthcare:lombardia-oauth-helper:token-response:v1",
+  "token_type": "Bearer",
+  "access_token": "urn:example:access-token:lombardia-non-operational",
+  "refresh_token": "urn:example:refresh-token:lombardia-non-operational",
+  "expires_in": 1800,
+  "scope": "urn:example:scope:healthcare-read urn:example:scope:healthcare-write",
+  "helper_session_reference": "urn:example:helper-session:lombardia-001",
+  "issued_at": "2030-01-01T00:00:00Z"
+}

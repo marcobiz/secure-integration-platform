@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="urn:example:soap-envelope" xmlns:hc="urn:example:healthcare:sogei-basic-session:v1">
+  <soap:Body>
+    <soap:Fault>
+      <soap:Code>
+        <soap:Value>soap:Sender</soap:Value>
+        <soap:Subcode>
+          <soap:Value>hc:SessionExpired</soap:Value>
+        </soap:Subcode>
+      </soap:Code>
+      <soap:Reason>
+        <soap:Text xml:lang="en">Synthetic session reference has expired.</soap:Text>
+      </soap:Reason>
+      <soap:Detail>
+        <hc:SessionError>
+          <hc:ErrorReference>urn:example:error:sogei-session-expired</hc:ErrorReference>
+          <hc:SessionReference>urn:example:session:sogei-expired-001</hc:SessionReference>
+          <hc:Retryable>false</hc:Retryable>
+          <hc:NextAction>start-new-mfa-attempt</hc:NextAction>
+        </hc:SessionError>
+      </soap:Detail>
+    </soap:Fault>
+  </soap:Body>
+</soap:Envelope>

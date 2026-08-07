@@ -1,0 +1,9 @@
+{
+  "schema": "urn:example:healthcare:fvg-pkce-jwt:pkce:v1",
+  "code_verifier": "fixture-verifier-fvg-00000000000000000000001",
+  "code_challenge": "pzmePI0PzLZ3ZdhTrzhg1AeLUS2SHckMwV6zQIiTjKk",
+  "code_challenge_method": "S256",
+  "authorization_uri": "https://example.invalid/oauth2/authorize",
+  "redirect_uri": "https://example.invalid/oauth2/callback",
+  "state_reference": "urn:example:oauth-state:fvg-001"
+}

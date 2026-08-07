@@ -1,0 +1,15 @@
+{
+  "schema": "urn:example:healthcare:lombardia-oauth-helper:session:v1",
+  "connector": "lombardia-oauth-helper",
+  "execution_location": "hybrid",
+  "authorization_uri": "https://example.invalid/oauth2/authorize",
+  "redirect_uri": "https://example.invalid/oauth2/callback",
+  "helper_session_reference": "urn:example:helper-session:lombardia-001",
+  "state_reference": "urn:example:oauth-state:lombardia-001",
+  "nonce_reference": "urn:example:oauth-nonce:lombardia-001",
+  "requested_scopes": [
+    "urn:example:scope:healthcare-read",
+    "urn:example:scope:healthcare-write"
+  ],
+  "expires_at": "2030-01-01T00:05:00Z"
+}

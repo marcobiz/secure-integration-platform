@@ -1,0 +1,8 @@
+{
+  "schema": "urn:example:healthcare:fvg-pkce-jwt:error:v1",
+  "error": "invalid_grant",
+  "error_description": "Synthetic authorization grant is expired or already used.",
+  "error_reference": "urn:example:error:fvg-invalid-grant",
+  "retryable": false,
+  "next_action": "restart-authorization"
+}

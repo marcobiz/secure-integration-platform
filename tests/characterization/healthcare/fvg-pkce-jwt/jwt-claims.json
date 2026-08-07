@@ -1,0 +1,12 @@
+{
+  "schema": "urn:example:healthcare:fvg-pkce-jwt:claims:v1",
+  "iss": "https://example.invalid/oauth2",
+  "aud": "urn:example:client:fvg-healthcare",
+  "sub": "urn:example:operator:synthetic-001",
+  "jti": "urn:example:jwt-id:fvg-001",
+  "iat": 1893456000,
+  "nbf": 1893456000,
+  "exp": 1893456300,
+  "organization_reference": "urn:example:organization:synthetic-001",
+  "purpose_of_use": "urn:example:purpose:healthcare-characterization"
+}

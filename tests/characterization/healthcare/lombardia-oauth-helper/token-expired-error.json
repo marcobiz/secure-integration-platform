@@ -1,0 +1,9 @@
+{
+  "schema": "urn:example:healthcare:lombardia-oauth-helper:error:v1",
+  "error": "invalid_token",
+  "error_description": "Synthetic access reference has expired.",
+  "error_reference": "urn:example:error:lombardia-token-expired",
+  "access_token_reference": "urn:example:access-token:lombardia-expired",
+  "retryable": false,
+  "next_action": "reauthorize-or-refresh-per-confirmed-profile"
+}

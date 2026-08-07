@@ -1,0 +1,10 @@
+{
+  "schema": "urn:example:healthcare:fvg-pkce-jwt:token-response:v1",
+  "token_type": "Bearer",
+  "access_token": "urn:example:access-token:fvg-non-operational",
+  "id_token": "urn:example:id-token:fvg-non-operational",
+  "expires_in": 57600,
+  "scope": "urn:example:scope:healthcare-read",
+  "id_token_claims_reference": "urn:example:jwt-claims:fvg-001",
+  "issued_at": "2030-01-01T00:00:00Z"
+}

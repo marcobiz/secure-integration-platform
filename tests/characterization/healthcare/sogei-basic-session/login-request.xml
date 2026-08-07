@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:soap="urn:example:soap-envelope" xmlns:hc="urn:example:healthcare:sogei-basic-session:v1">
+  <soap:Header>
+    <hc:CorrelationReference>urn:example:correlation:sogei-login-001</hc:CorrelationReference>
+  </soap:Header>
+  <soap:Body>
+    <hc:LoginRequest>
+      <hc:SyntheticRequestPurpose>initiate-out-of-band-session</hc:SyntheticRequestPurpose>
+    </hc:LoginRequest>
+  </soap:Body>
+</soap:Envelope>
