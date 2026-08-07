@@ -91,8 +91,10 @@ if ($LASTEXITCODE -ne 0) { throw 'M5_ADMIN_DEV_HTTPS_CERTIFICATE_NOT_TRUSTED: ru
 
 New-Item -ItemType Directory -Force -Path $state | Out-Null
 $env:M5_ADMIN_DEV_POSTGRES_PORT = $postgresPort.ToString([Globalization.CultureInfo]::InvariantCulture)
+if (-not (Test-PortAvailable $gatewayUri.Port)) { throw "M5_ADMIN_DEV_GATEWAY_PORT_IN_USE: 127.0.0.1:$($gatewayUri.Port)" }
+if (-not (Test-PortAvailable 5173)) { throw 'M5_ADMIN_DEV_UI_PORT_IN_USE: 127.0.0.1:5173' }
 if ($Reset) {
-    if (Test-Path $passwordPath) { $env:M5_ADMIN_DEV_POSTGRES_PASSWORD = (Get-Content $passwordPath -Raw).Trim() }
+    $env:M5_ADMIN_DEV_POSTGRES_PASSWORD = if (Test-Path $passwordPath) { (Get-Content $passwordPath -Raw).Trim() } else { New-LocalSecret }
     $savedErrorPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     & docker compose -p $composeProject -f $compose down --volumes --remove-orphans 2>&1 | Out-Null
@@ -105,9 +107,6 @@ if (-not (Test-Path $passwordPath)) { [IO.File]::WriteAllText($passwordPath, (Ne
 $postgresPassword = (Get-Content $passwordPath -Raw).Trim()
 if ([string]::IsNullOrWhiteSpace($postgresPassword)) { throw 'M5_ADMIN_DEV_STATE_INVALID' }
 $env:M5_ADMIN_DEV_POSTGRES_PASSWORD = $postgresPassword
-
-if (-not (Test-PortAvailable $gatewayUri.Port)) { throw "M5_ADMIN_DEV_GATEWAY_PORT_IN_USE: 127.0.0.1:$($gatewayUri.Port)" }
-if (-not (Test-PortAvailable 5173)) { throw 'M5_ADMIN_DEV_UI_PORT_IN_USE: 127.0.0.1:5173' }
 
 $runtimePassword = New-LocalSecret
 $adminPassword = New-LocalSecret
