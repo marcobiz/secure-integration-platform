@@ -33,12 +33,22 @@ public sealed class HttpOAuthBoundaryTests
         Assert.DoesNotContain("Redis", source, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void M6_ARCH_Core_export_includes_every_project_added_to_the_Core_solution()
+    {
+        string allowlist = File.ReadAllText(Path.Combine(Root, "eng", "open-source-core.allowlist"));
+        string solution = File.ReadAllText(Path.Combine(Root, "BrokerGateway.Core.slnx"));
+        Assert.Contains("tools/m6/SyntheticOAuthServer/", allowlist, StringComparison.Ordinal);
+        Assert.Contains("tools/m6/SyntheticOAuthServer/SyntheticOAuthServer.csproj", solution, StringComparison.Ordinal);
+        Assert.Contains("src/", allowlist, StringComparison.Ordinal);
+    }
+
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? directory = new(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "BrokerGateway.slnx"))) return directory.FullName;
+            if (File.Exists(Path.Combine(directory.FullName, "BrokerGateway.slnx")) || File.Exists(Path.Combine(directory.FullName, "BrokerGateway.Core.slnx"))) return directory.FullName;
             directory = directory.Parent;
         }
         throw new DirectoryNotFoundException("Repository root not found.");
