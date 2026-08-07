@@ -1,20 +1,13 @@
 import { test, expect } from '@playwright/test';
 
-test('M5_LOCAL_DEV_01 authenticates through the Vite proxy and renders seeded PostgreSQL data', async ({ context, page }) => {
+test('M5_LOCAL_DEV_01 shows DevelopmentAuth then authenticates through the Vite proxy and renders seeded PostgreSQL data', async ({ page }) => {
   const baseUrl = process.env.M5_ADMIN_DEV_BASE_URL ?? 'https://localhost:5173/admin/';
-  const csrfResponse = await context.request.get(new URL('auth/csrf', baseUrl).toString());
-  expect(csrfResponse.status()).toBe(200);
-  const csrf = await csrfResponse.json() as { token: string };
-  const loginResponse = await context.request.post(new URL('auth/development/login', baseUrl).toString(), {
-    headers: { 'X-CSRF-TOKEN': csrf.token },
-    data: { userName: 'security-admin' }
-  });
-  expect(loginResponse.status()).toBe(200);
-
-  const session = await context.request.get(new URL('auth/me', baseUrl).toString());
-  expect(session.status()).toBe(200);
   await page.goto(baseUrl);
+  await expect(page.getByRole('heading', { name: 'Administrative access' })).toBeVisible();
+  await page.getByRole('button', { name: 'Security Administrator' }).click();
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
+  const sessionStatus = await page.evaluate(async () => (await fetch('/admin/auth/me', { credentials: 'same-origin' })).status);
+  expect(sessionStatus).toBe(200);
   await page.getByRole('link', { name: 'Tenants' }).click();
   await expect(page.getByText('Demo tenant')).toBeVisible();
   await page.getByRole('link', { name: 'Connectors' }).click();

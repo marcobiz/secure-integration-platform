@@ -36,10 +36,13 @@ let unauthorizedHandler: (() => void) | undefined;
 export function setUnauthorizedHandler(handler?: () => void): void { unauthorizedHandler = handler; }
 export function clearCsrf(): void { csrfToken = undefined; }
 
-async function parse<T>(response: Response): Promise<T> {
+async function parse<T>(response: Response, notifyUnauthorized = true): Promise<T> {
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { code?: string; correlationId?: string };
-    if (response.status === 401) { clearCsrf(); unauthorizedHandler?.(); }
+    if (response.status === 401) {
+      clearCsrf();
+      if (notifyUnauthorized) unauthorizedHandler?.();
+    }
     throw new ApiProblem(response.status, body.code ?? 'BGW-ADMIN-UNEXPECTED', body.correlationId);
   }
   return response.status === 204 ? undefined as T : await response.json() as T;
@@ -51,14 +54,14 @@ export async function csrf(): Promise<string> {
   return csrfToken;
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function api<T>(path: string, init: RequestInit = {}, notifyUnauthorized = true): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase();
   const mutation = !['GET', 'HEAD', 'OPTIONS'].includes(method);
   const headers = new Headers(init.headers);
   headers.set('Accept', 'application/json');
   if (init.body) headers.set('Content-Type', 'application/json');
   if (mutation) headers.set('X-CSRF-TOKEN', csrfToken ?? await csrf());
-  return parse<T>(await fetch(path, { ...init, headers, credentials: 'same-origin' }));
+  return parse<T>(await fetch(path, { ...init, headers, credentials: 'same-origin' }), notifyUnauthorized);
 }
 
 type HttpMethod = 'get' | 'post' | 'put' | 'delete' | 'patch';
@@ -73,6 +76,7 @@ interface ContractRequest {
   query?: Record<string, string | number | boolean | null | undefined>;
   headers?: HeadersInit;
   body?: unknown;
+  notifyUnauthorized?: boolean;
 }
 
 /** Executes only operations declared by the generated OpenAPI paths contract. */
@@ -87,11 +91,11 @@ export function openApi<T, Path extends keyof paths>(template: Path, method: Con
     method: method.toUpperCase(),
     headers: request.headers,
     body: request.body === undefined ? undefined : JSON.stringify(request.body)
-  });
+  }, request.notifyUnauthorized);
 }
 
 export const adminApi = {
-  session: () => openApi<AdminSession, '/admin/auth/me'>('/admin/auth/me', 'get'),
+  session: () => openApi<AdminSession, '/admin/auth/me'>('/admin/auth/me', 'get', { notifyUnauthorized: false }),
   dashboard: () => openApi<Dashboard, '/admin/api/v1/dashboard'>('/admin/api/v1/dashboard', 'get'),
   tenants: (offset = 0, limit = 50) => openApi<TenantPage, '/admin/api/v1/tenants'>('/admin/api/v1/tenants', 'get', { query: { offset, limit } }),
   tenant: (id: string) => openApi<Tenant, '/admin/api/v1/tenants/{tenantId}'>('/admin/api/v1/tenants/{tenantId}', 'get', { path: { tenantId: id } }),

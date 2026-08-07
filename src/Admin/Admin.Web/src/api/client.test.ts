@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, clearCsrf, csrf, setUnauthorizedHandler } from './client';
+import { adminApi, api, clearCsrf, csrf, setUnauthorizedHandler } from './client';
 
 describe('administrative API authentication failures', () => {
   afterEach(() => {
@@ -33,6 +33,15 @@ describe('administrative API authentication failures', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(json({ code: 'BGW-DEPENDENCY-UNAVAILABLE' }, 503));
 
     await expect(api('/admin/auth/me')).rejects.toEqual(expect.objectContaining({ status: 503, code: 'BGW-DEPENDENCY-UNAVAILABLE' }));
+    expect(unauthorized).not.toHaveBeenCalled();
+  });
+
+  it('returns the initial anonymous session response without clearing the pending session query', async () => {
+    const unauthorized = vi.fn();
+    setUnauthorizedHandler(unauthorized);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(json({ code: 'BGW-ADMIN-AUTHENTICATION' }, 401));
+
+    await expect(adminApi.session()).rejects.toEqual(expect.objectContaining({ status: 401, code: 'BGW-ADMIN-AUTHENTICATION' }));
     expect(unauthorized).not.toHaveBeenCalled();
   });
 });
