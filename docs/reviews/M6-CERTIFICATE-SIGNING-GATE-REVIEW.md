@@ -2,14 +2,14 @@
 
 ## Decision
 
-- **GO** to open the primitive implementation PR after the local final-head checks below.
+- **GO** for primitive implementation PR review after the local and CI gates below.
 - **NO-GO** to publish or claim production readiness for FVG, Umbria or another
   healthcare Connector.
 - **NO-GO** for OAuth/PKCE lifecycle, SOAP/session, inbound authentication changes,
   automatic Broker fallback or a universal KMS in this branch.
 
-This review covers synthetic AP-05/AP-06 capability only. A final merge decision requires
-green CI on the exact PR HEAD and independent review. The PR must not be auto-merged.
+This review covers synthetic AP-05/AP-06 capability only. The PR CI is green; a final
+merge decision still requires independent review. The PR must not be auto-merged.
 
 ## Lineage and scope
 
@@ -17,6 +17,8 @@ green CI on the exact PR HEAD and independent review. The PR must not be auto-me
 |---|---|
 | Frozen baseline | `f34275096b4960bb5f31840553444935defc3d2d` |
 | Branch | `m6/auth-cert-signing` |
+| Pull request | `#11` |
+| Product and local-gate commit | `8ab5a4d07f4858bd0a0548725282d4c4bcfb83f3` |
 | Worktree | `C:\Codice\broker-gateway-m6-cert` |
 | Migration change | None |
 | Admin Web/API change | None |
@@ -83,9 +85,19 @@ surface changed in this branch.
 
 ## CI and publication
 
-PR, exact commit and CI run are pending at the time of this local review. This section
-must be updated after push. The final review must distinguish local deterministic evidence
-from CI and must keep production healthcare readiness at NO-GO.
+PR `#11` is open without merge. CI ran on the product and local-gate commit
+`8ab5a4d07f4858bd0a0548725282d4c4bcfb83f3`:
+
+- workflow `ci`, run `31194728177`: PASS, including Windows build/test, Gitleaks,
+  PostgreSQL 18, Gateway container, M3 deterministic slice and M4 quick start;
+- workflow `m5-admin-ui`, run `31194729082`: PASS, including secret/license scans,
+  SBOM, open-source boundary export, PostgreSQL 18, UI/API tests, browser/full-stack,
+  UI container and clean-clone quick start.
+
+All 21 reported PR checks passed. This CI evidence is separate from the local
+deterministic evidence above and does not change production healthcare readiness from
+NO-GO. The documentation publication commit is required to pass the same PR workflows
+before hand-off.
 
 ## Residual risk
 
