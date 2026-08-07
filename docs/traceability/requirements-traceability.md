@@ -96,6 +96,20 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | Packaging/open-source boundary | production Gateway/full-stack, Core export build/test/license/secret gates; candidate export 295 files, manifest `59379E70...32AAE6C4` | PASS local + CI |
 | Secret scanner negative control | hidden/untracked synthetic `client_secret` fixture must fail; fixture removal followed by clean scan must pass | PASS local + CI |
 
+## M5.5 Direct Gateway Access
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| Principal unificato e Tenant/Application server-side | `M55_UT_Broker_and_Direct_principals_converge_on_the_same_runtime_pipeline`; `UT_GTW_Invoke_contract_has_no_client_controlled_endpoint_or_secret_reference` | PASS local |
+| Broker compatibility e Direct enrollment | `UT_GTW_Enrollment_PoP_derives_tenant_and_replay_is_rejected`; `M55_UT_Direct_installation_rejects_Broker_version_field_signature_replay_revocation_and_missing_grant`; PostgreSQL `IT_DAT_PostgreSQL18_registry_enrollment_grant_replay_and_revocation_when_configured` | PASS local + PG18 |
+| Shared grant/runtime/binding/egress | `M55_UT_Broker_and_Direct_principals_converge_on_the_same_runtime_pipeline`; M4/M5 publication, operation dependency, locator e anti-exfiltration regressions | PASS local |
+| Direct negative authentication | `M55_UT_Direct_installation_rejects_Broker_version_field_signature_replay_revocation_and_missing_grant`; `UT_GTW_Runtime_rejects_tampered_body_ambiguous_target_and_unknown_certificate`; `UT_GTW_Revocation_is_immediate_for_runtime_and_grants` | PASS local |
+| Client non puo falsificare authority o binding | `UT_GTW_Invoke_contract_has_no_client_controlled_endpoint_or_secret_reference`; `UT_EGR_Ungranted_operation_is_denied_before_DNS_vault_or_transport`; `M5_UT_Instrumented_actual_canary_provider_is_called_only_for_published_approved_destination` | PASS local |
+| Migration fresh/upgrade/no-op/RLS | migration runner fresh+no-op; M5 data upgrade backfill `broker:NULL:1.0.0`; `IT_DAT_PostgreSQL18_migration_and_RLS_isolate_tenants_when_configured`; static least-privilege assertions | PASS PostgreSQL 18 |
+| Admin API/UI public metadata only | `M5_IT_Installation_activation_is_returned_once_and_never_listed` con Broker/Direct; `M55-UI-MOCK Direct installation selection is authoritative and public metadata only` | PASS local |
+| OpenAPI e runtime wire contract | `M5_UT_Runtime_wire_contract_exports_all_stable_admin_audit_values`; `npm run check:api`; `npm run check:runtime` | PASS local; final gate pending |
+| M6 auth contract freeze | `docs/architecture/connector-runtime-auth-contract.md`; architecture tests | Documented; independent review pending |
+
 ## Security threats
 
 La fotografia conclusiva M0/M1, inclusi gli elementi non automatizzati, è in `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md`.

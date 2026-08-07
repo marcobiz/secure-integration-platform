@@ -93,7 +93,7 @@ alla qualificazione dell'Azure Deployment Pack e non blocca il Core o M4.
 
 ## M5 — Admin UI
 
-**Stato 2026-08-06:** final security remediation candidate `fc342b6` con gate locale e CI sul commit esatto PASS (`31098662098`, `31098659514`, `31098662290`). Il catalogo server-owned elimina le reference opache, l'approvazione ricalcola il digest in transazione, il conflict Application copre tutti i campi e i valori runtime sono localizzati IT/EN; Tenant FORCE RLS resta risolto e invariato. Resta richiesta la review read-only. M5 non è dichiarata Done, la PR non è unita, `main` resta sulla baseline M4 e M3B/M6+ non sono iniziati.
+**Stato 2026-08-07:** Done sulla baseline `8774c252b233456173c3ab31346fb21390fb8d7d`, tag `m5-admin-ui-baseline-20260807`.
 
 **Obiettivo:** amministrazione sicura senza accesso ai valori Vault.
 
@@ -106,6 +106,22 @@ alla qualificazione dell'Azure Deployment Pack e non blocca il Core o M4.
 **Completamento:** tutte le operazioni amministrative hanno policy e audit.
 
 **Artefatti:** Admin Web same-origin, Admin API v1, provider abstractions, export OSS verificabile e runbook amministrativo.
+
+## M5.5 — Direct Gateway Access
+
+**Stato 2026-08-07:** implementazione locale sul branch `m55/direct-gateway-access`; candidate prodotto `1b3a3b38fa7d01c8c5f96af0324d040e412ac0be`; CI e review indipendente pending.
+
+**Obiettivo:** consentire a Broker e applicazioni M2M dirette di convergere nello stesso principal e Connector Runtime, senza duplicare authorization, provider resolution, egress o audit.
+
+**Task:** audit coupling; `GatewayClientPrincipal`; `InstallationKind`; enrollment Direct su mTLS/PoP/BGW1; migration 0011; Admin API/UI minima; sample .NET; freeze del contratto inbound/outbound per M6.
+
+**Dipendenze:** baseline M5 congelata.
+
+**Test:** Broker/Direct comparativo sullo stesso Tenant/Application/operation; negativi firma, mTLS, timestamp, replay, revoca, grant e request manipulation; PostgreSQL 18 fresh/upgrade/no-op/RLS; OpenAPI/runtime contract; frontend e regressioni M1-M5.
+
+**Completamento:** entrambi i caller usano lo stesso runtime e il Direct client non riceve vendor secret o locator server-side. M6 non è iniziata.
+
+**Artefatti:** ADR-0020, documenti di architettura, migration additiva e `samples/DirectGatewayClient`.
 
 ## M6 — Adapter legacy
 

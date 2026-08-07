@@ -70,6 +70,8 @@
 | TM-041 | S/E | Un peer remoto falsifica Host o forwarded headers per usare DevelopmentAuth. | RemoteIpAddress deve essere loopback, il listener Compose e fissato a 127.0.0.1 e i forwarded headers sono elaborati solo da proxy allowlistati. | Una classificazione errata dell'ambiente Development resta deployment risk. |
 | TM-042 | T/R | Approval viene invalidata fra controllo e publish. | ConnectorVersion, binding revisions e approval sono bloccati e verificati con publish, supersede e audit nella stessa transazione PostgreSQL serializable. | Contention concorrente viene negata con conflitto stabile e richiede retry esplicito. |
 | TM-043 | I/E | Un valore segreto, PEM/PFX o connection string viene inserito come reference opaca e riflesso nell'artefatto di approval. | Request strutturata, identificatori logici bounded, risoluzione obbligatoria nel catalogo server-owned, metadata/locator separati, metadata certificato pubblico e nessun fallback da input a ResourceId; approval e publish rileggono revisioni correnti sotto lock transazionale. | Un amministratore catalogo e un approvatore collusi, oppure host/DBA privilegiati, restano nella TCB. |
+| TM-044 | S/E | Furto della chiave privata di una Direct Installation o uso da un client non autorizzato. | Chiave generata lato client, ClientAuth mTLS, PoP ECDSA P-256, binding certificato/SPKI, BGW1, nonce/timestamp, grant minimo, rotation e revoca immediata. | L'endpoint client e il suo key store sono nella TCB; una chiave valida rubata opera fino a detection/revoca. |
+| TM-045 | S/T/E | Un Direct client tenta di falsificare Tenant/Application o selezionare destinazione, provider o credential binding. | `GatewayClientPrincipal` derivato dal registry; request runtime chiusa; publication/binding server-owned; grant deny-by-default; stesso restricted egress del Broker. | Un amministratore autorizzato puo ancora configurare un binding errato; host/DBA privilegiati restano nella TCB. |
 
 ## Analisi degli scenari obbligatori
 
@@ -92,6 +94,14 @@ La firma prova provenienza, non innocuità. Un plugin approvato viene trattato c
 ### Insider amministrativo
 
 M5 applica OIDC provider-neutral, RBAC server-side, tenant scope, optimistic concurrency, four-eyes checksum-specific e audit redatto. Un amministratore autorizzato dei binding può comunque configurare una destinazione approvata errata e due account privilegiati possono colludere: review operativa e audit restano necessari.
+
+### Direct client endpoint
+
+M5.5 non trasferisce vendor credential al client. Una Direct Installation possiede pero
+la chiave privata della propria identita inbound: la protezione del key store client e
+responsabilita del deployment. Compromissione della chiave non consente di scegliere
+Tenant, Application, endpoint o secret binding, ma consente le operation gia concesse
+fino a revoca. Grant minimo, rotation e monitoraggio audit restano obbligatori.
 
 ## Criteri di revisione
 

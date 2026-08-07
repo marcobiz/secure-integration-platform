@@ -7,6 +7,7 @@ flowchart LR
   Operator([Operator]) --> Legacy[Legacy Application]
   Legacy -->|SDK / COM / C ABI / CLI| Broker[Local Broker]
   Broker -->|HTTPS + mTLS + signed envelope| Gateway[Gateway]
+  Direct([Modern Direct Application]) -->|HTTPS + mTLS + signed BGW1| Gateway
   Admin([Administrator]) -->|OIDC| UI[Admin UI]
   UI --> AdminAPI[Admin API]
   AdminAPI --> Gateway
@@ -21,7 +22,7 @@ flowchart LR
 |---|---|---|
 | TB-01 | Legacy → Local Broker | Pipe ACL, Windows identity, PID/process handle, path, publisher/hash, Application grants, nonce e limits. |
 | TB-02 | Broker → storage locale | Service SID, ACL ProgramData, DPAPI CurrentUser, CNG e AES-GCM. |
-| TB-03 | Broker → Gateway | TLS, certificato per Installation, SPKI registry, request signature, timestamp e nonce anti-replay. |
+| TB-03 | Broker/Direct client → Gateway | TLS, certificato per Installation, SPKI registry, request signature, timestamp e nonce anti-replay; Tenant/Application derivati server-side. |
 | TB-04 | Gateway → PostgreSQL | TLS, DB roles, composite foreign key, RLS e nessun secret value. |
 | TB-05 | Gateway → Vault | Managed Identity, least privilege, secret/version scope e audit Azure. |
 | TB-06 | Gateway → servizio esterno | Endpoint configurato, DNS/IP validation, TLS, method/path/header/content-type allowlist. |
@@ -32,7 +33,7 @@ flowchart LR
 
 1. Il Local Broker identifica l'Application senza affidarsi al solo nome processo.
 2. Verifica che Application, Windows identity e immagine siano ammesse per l'operazione.
-3. Il Gateway autentica il certificato mTLS e la firma applicativa.
+3. Il Gateway autentica il certificato mTLS e la firma applicativa BGW1 del Broker o Direct client e produce lo stesso `GatewayClientPrincipal`.
 4. Risolve Installation, Application, Tenant ed Environment dal registry.
 5. Verifica stato Installation, compatibilità versione e grant.
 6. Seleziona la ConnectorVersion pubblicata nel deployment attivo.
@@ -73,4 +74,3 @@ Un client non può cambiare execution strategy a runtime.
 ```
 
 La suddivisione è per confini di responsabilità, non per microservizi. Il Gateway produce un'unica immagine e usa un unico database.
-
