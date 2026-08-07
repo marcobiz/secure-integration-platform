@@ -107,6 +107,13 @@ public interface IRestrictedTransport
 {
     /// <summary>Sends a bounded request without redirects or ambient proxy use.</summary>
     Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Sends a bounded SOAP request while preserving a non-success response for hardened SOAP Fault parsing.
+    /// Redirects, proxy use and unbounded bodies remain prohibited.
+    /// </summary>
+    Task<ExternalResponse> SendSoapAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken) =>
+        SendAsync(request, approvedAddresses, null, timeout, maximumResponseBytes, cancellationToken);
 }
 
 /// <summary>Read-only catalogue of server-owned outbound operations.</summary>

@@ -140,9 +140,9 @@ public sealed class RestrictedEgressService(
             case GatewayAuthenticationKind.None:
                 return null;
             case GatewayAuthenticationKind.Basic:
-                string username = await secrets.GetSecretAsync(operation.UsernameSecretReference!, cancellationToken).ConfigureAwait(false);
-                string password = await secrets.GetSecretAsync(operation.PasswordSecretReference!, cancellationToken).ConfigureAwait(false);
-                request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(username + ":" + password)));
+                await new ServerBoundBasicAuthentication(secrets)
+                    .ApplyAsync(request, new ResolvedBasicCredentialBinding(operation.UsernameSecretReference!, operation.PasswordSecretReference!), cancellationToken)
+                    .ConfigureAwait(false);
                 return null;
             case GatewayAuthenticationKind.ApiKey:
                 string key = await secrets.GetSecretAsync(operation.ApiKeySecretReference!, cancellationToken).ConfigureAwait(false);
@@ -159,7 +159,8 @@ public sealed class RestrictedEgressService(
         }
     }
 
-    internal static bool IsForbiddenAddress(IPAddress address)
+    /// <summary>Returns true for loopback, link-local, metadata and non-public address ranges.</summary>
+    public static bool IsForbiddenAddress(IPAddress address)
     {
         if (IPAddress.IsLoopback(address) || address.IsIPv6LinkLocal || address.IsIPv6Multicast || address.IsIPv6SiteLocal || address.Equals(IPAddress.Any) || address.Equals(IPAddress.IPv6Any)) return true;
         if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 && (address.GetAddressBytes()[0] & 0xfe) == 0xfc) return true;

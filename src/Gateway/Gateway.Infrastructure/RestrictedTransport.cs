@@ -12,7 +12,14 @@ namespace SecureIntegration.Gateway.Infrastructure;
 public sealed class SystemRestrictedTransport(X509Certificate2Collection? customTrustRoots = null, string? pinnedServerCertificateSha256 = null) : IRestrictedTransport
 {
     /// <inheritdoc />
-    public async Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
+    public Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken) =>
+        SendCoreAsync(request, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, preserveSoapFault: false, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<ExternalResponse> SendSoapAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken) =>
+        SendCoreAsync(request, approvedAddresses, null, timeout, maximumResponseBytes, preserveSoapFault: true, cancellationToken);
+
+    private async Task<ExternalResponse> SendCoreAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, bool preserveSoapFault, CancellationToken cancellationToken)
     {
         string expectedHost = request.RequestUri?.DnsSafeHost ?? throw new GatewayException("BGW-EGRESS-DESTINATION-DENIED", 500);
         SslClientAuthenticationOptions sslOptions = new() { EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13 };
@@ -77,7 +84,7 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
         using HttpClient client = new(handler) { Timeout = timeout };
         using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         if ((int)response.StatusCode is >= 300 and < 400) throw new GatewayException("BGW-EGRESS-REDIRECT-DENIED", 502);
-        if ((int)response.StatusCode is < 200 or >= 300) throw new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502);
+        if (!preserveSoapFault && ((int)response.StatusCode is < 200 or >= 300)) throw new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502);
         if (response.Content.Headers.ContentLength > maximumResponseBytes) throw new GatewayException("BGW-EGRESS-RESPONSE-TOO-LARGE", 502);
         await using Stream input = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using MemoryStream output = new();
