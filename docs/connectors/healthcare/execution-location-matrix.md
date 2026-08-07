@@ -2,54 +2,63 @@
 
 ## Rules applied
 
-ADR-0015 is controlling:
+Execution location is evaluated across five independent dimensions:
 
-- `GATEWAY`: server-owned vendor/tenant credential, centrally usable certificate, token exchange or public-network service call;
-- `BROKER/LOCAL`: physical smart card, local-only non-exportable key, installation VPN or local hardware/network;
-- `HYBRID`: only a typed authorization-code, local-signature or local-MFA handoff crosses between Broker and Gateway;
-- `UNKNOWN`: available evidence cannot establish the required custody or network location.
+1. user interaction location;
+2. secret/certificate custody;
+3. token/session exchange location;
+4. healthcare API execution location;
+5. mandatory local capability or hardware.
 
-The client cannot choose or override the execution location, endpoint, credential, certificate or signing key.
+The resulting classes are:
+
+- `GATEWAY`: credentials/capabilities and the healthcare API call can be managed at Gateway. Browser, direct-application or other user interaction does not by itself require Broker;
+- `BROKER/LOCAL`: authentication or the API call necessarily uses installation-local hardware, a non-exportable local key, a local-only API, or an installation-only network/VPN;
+- `HYBRID`: a mandatory local capability and a Gateway capability are both required by the same flow;
+- `UNKNOWN`: the available evidence cannot establish a required custody, network or capability location.
+
+`GATEWAY, conditional` means the evidence shows no mandatory local capability, but production use still depends on approval or confirmation of central/provider-side key or certificate custody. The client cannot choose or override execution location, endpoint, credential, certificate or signing key.
 
 ## Primary matrix
 
-| ID | Service | Location | Technical rationale and condition |
-|---|---|---|---|
-| HC-01 | SOGEI human prescriptions | **HYBRID** | Gateway owns Basic credential and external SOAP binding; operator receives the MFA session out of band and Broker performs a typed local-MFA handoff. Raw credential or destination never comes from the client. |
-| HC-02 | SOGEI veterinary alternative | **GATEWAY** | Basic credential and SOAP destination can be bound server-side; no local hardware or browser flow is stated. |
-| HC-03 | Lombardia prescriptions | **HYBRID** | Browser/portal authentication and authorization code are local; helper/token exchange, client secret, token cache and service call belong at Gateway. Helper callback/polling topology is **NEEDS CHARACTERIZATION**. |
-| HC-04 | Lombardia FSE | **HYBRID** | Same authorization-code handoff as HC-03 with a distinct server-owned scope/token session. |
-| HC-05 | Veneto prescriptions | **HYBRID** | Central mTLS/SAML is possible, but operator OTP is out of band. The IAP certificate/encryption topology and whether any key is local-only are **NEEDS CHARACTERIZATION**. |
-| HC-06 | Veneto FSE | **HYBRID** | Same constraints as HC-05. |
-| HC-07 | Emilia-Romagna prescriptions | **HYBRID** | Operator obtains session through SPID/CIE/CNS portal; Gateway can own Basic credential and SOAP call after a typed local-MFA handoff. |
-| HC-08 | Emilia-Romagna FSE | **GATEWAY** | Basic credential, PIN header and REST destination can be server-owned; the PIN must be a scoped secret, not client input. |
-| HC-09 | Bolzano prescriptions | **GATEWAY** | OAuth client credentials and pharmacy mTLS certificate can be tenant-scoped Gateway resources if onboarding permits central custody. Otherwise location becomes **UNKNOWN** pending certificate policy. |
-| HC-10 | Bolzano FSE | **GATEWAY**, conditional | STS, Attribute Authority, SAML and mTLS are network/server operations. Central certificate/key custody and operator identity binding must be confirmed. |
-| HC-11 | Trento prescriptions | **HYBRID** | Shared Basic/HMAC material must be server-owned; emailed session is local MFA. Gateway computes HMAC and invokes SOAP after typed handoff. |
-| HC-12 | Trento FSE | **HYBRID** | Same constraints as HC-11. |
-| HC-13 | Liguria prescriptions via SOGEI | **HYBRID** | Reuses HC-01/HC-02 according to selected national operation. |
-| HC-14 | Liguria FSE | **GATEWAY** | Fixed bearer, mTLS certificate and regional public key are server-side resources; no local device is stated. |
-| HC-15 | Piemonte prescriptions via SOGEI | **HYBRID** | Reuses HC-01/HC-02 according to selected national operation. |
-| HC-16 | Piemonte FSE | **HYBRID** | Emailed session and possible citizen app approval are local/user interactions; Basic credential, PIN encryption and SOAP call can be central. |
-| HC-17 | Umbria prescriptions via SOGEI | **HYBRID** | Reuses HC-01/HC-02 according to selected national operation. |
-| HC-18 | Umbria FSE | **GATEWAY**, conditional | Two pharmacy-specific certificates support mTLS and signing without stated local hardware. GO requires confirmation that both keys may be held/used by an approved server-side provider. |
-| HC-19 | FVG prescriptions via SOGEI | **HYBRID** | Reuses HC-01/HC-02 according to selected national operation. |
-| HC-20 | FVG FSE | **HYBRID** | Browser/PKCE and authorization code are local; token exchange, token cache, software-house signing certificate and API call are central. |
-| HC-21 | Puglia prescriptions and FSE | **BROKER/LOCAL** | Service is VPN-only and XML-DSig uses a personal smart card/USB token. Neither the network dependency nor private key may be moved to Gateway. A future typed local-signature hybrid requires separate threat analysis if the network call is ever centralized. |
-| HC-22 | Direct VetInfo veterinary prescriptions | **HYBRID** | Browser/PKCE is local; client secret, token exchange/cache and REST call belong at Gateway. |
+| ID | Service | User interaction | Secret/certificate custody | Token/session exchange | Healthcare API execution | Mandatory local capability/hardware | Location |
+|---|---|---|---|---|---|---|---|
+| HC-01 | SOGEI human prescriptions | Out-of-band/direct MFA; acquisition mechanism **NEEDS CHARACTERIZATION** | Gateway Basic credential | Gateway session custody/application; completion mechanism **NEEDS CHARACTERIZATION** | Gateway SOAP | None demonstrated | **GATEWAY** |
+| HC-02 | SOGEI veterinary alternative | None stated | Gateway Basic credential | No session stated | Gateway SOAP | None demonstrated | **GATEWAY** |
+| HC-03 | Lombardia prescriptions | Local/direct browser | Gateway vendor credential | Gateway authorization/token exchange where permitted; helper/callback topology **NEEDS CHARACTERIZATION** | Gateway SOAP/API | None demonstrated | **GATEWAY** |
+| HC-04 | Lombardia FSE | Local/direct browser | Gateway vendor credential | As HC-03, with distinct scope/token session | Gateway REST | None demonstrated | **GATEWAY** |
+| HC-05 | Veneto prescriptions | Direct/out-of-band OTP | Certificate/key custody **UNKNOWN** | Gateway-capable SAML/session exchange, exact topology **UNKNOWN** | Gateway-capable SOAP | Whether any key is local-only is **UNKNOWN** | **UNKNOWN** |
+| HC-06 | Veneto FSE | As HC-05 | As HC-05 | As HC-05 | Gateway-capable SOAP | As HC-05 | **UNKNOWN** |
+| HC-07 | Emilia-Romagna prescriptions | Direct browser/identity portal | Gateway Basic credential | Gateway session custody/application; portal completion **NEEDS CHARACTERIZATION** | Gateway SOAP | None demonstrated | **GATEWAY** |
+| HC-08 | Emilia-Romagna FSE | None stated | Gateway Basic/PIN secret | No separate exchange stated | Gateway REST | None demonstrated | **GATEWAY** |
+| HC-09 | Bolzano prescriptions | None stated | Gateway client credential and mTLS certificate if central custody is approved | Gateway OAuth exchange | Gateway SOAP | None demonstrated | **GATEWAY, conditional** |
+| HC-10 | Bolzano FSE | Operator identity binding **NEEDS CHARACTERIZATION** | Central certificate/key custody **NEEDS CHARACTERIZATION** | Gateway-capable STS/Attribute Authority exchange | Gateway SOAP | No local hardware demonstrated | **GATEWAY, conditional** |
+| HC-11 | Trento prescriptions | Direct/out-of-band email session | Gateway Basic/HMAC secrets | Gateway session custody/application | Gateway SOAP | None demonstrated | **GATEWAY** |
+| HC-12 | Trento FSE | As HC-11 | As HC-11 | As HC-11 | Gateway SOAP | None demonstrated | **GATEWAY** |
+| HC-13 | Liguria prescriptions via SOGEI | As selected SOGEI operation | Gateway SOGEI credential | As HC-01/HC-02 | Gateway SOAP | None demonstrated | **GATEWAY** |
+| HC-14 | Liguria FSE | None stated | Gateway fixed bearer and mTLS certificate, subject to custody approval | No separate exchange stated | Gateway API | None demonstrated | **GATEWAY, conditional** |
+| HC-15 | Piemonte prescriptions via SOGEI | As selected SOGEI operation | Gateway SOGEI credential | As HC-01/HC-02 | Gateway SOAP | None demonstrated | **GATEWAY** |
+| HC-16 | Piemonte FSE | Direct email/app approval | Gateway Basic/PIN and encryption capability | Gateway session custody/application; approval flow **NEEDS CHARACTERIZATION** | Gateway SOAP | None demonstrated | **GATEWAY** |
+| HC-17 | Umbria prescriptions via SOGEI | As selected SOGEI operation | Gateway SOGEI credential | As HC-01/HC-02 | Gateway SOAP | None demonstrated | **GATEWAY** |
+| HC-18 | Umbria FSE | None stated | Gateway only if both pharmacy keys/certificates may be held and used centrally/provider-side | JWT preparation occurs before the call; lifecycle **NEEDS CHARACTERIZATION** | Gateway REST/mTLS | None demonstrated; local non-exportable key would change the design | **GATEWAY, conditional** |
+| HC-19 | FVG prescriptions via SOGEI | As selected SOGEI operation | Gateway SOGEI credential | As HC-01/HC-02 | Gateway SOAP | None demonstrated | **GATEWAY** |
+| HC-20 | FVG FSE | Local/direct browser | Gateway token custody and signing key only if central/provider-side custody is available | Gateway authorization-code/token exchange | Gateway REST | None demonstrated; local non-exportable signing key would require Hybrid | **GATEWAY, conditional** |
+| HC-21 | Puglia prescriptions and FSE | Local smart-card interaction | Personal key remains on local smart card/USB token | Local signing/session; exact split **NEEDS CHARACTERIZATION** | Installation VPN/local call | Smart card/USB token and installation-only VPN | **BROKER/LOCAL** |
+| HC-22 | Direct VetInfo veterinary prescriptions | Local/direct browser | Gateway client credential and token custody | Gateway authorization-code/token exchange | Gateway REST | None demonstrated | **GATEWAY** |
 
 ## Sanitized legacy-only candidates
 
-| Candidate | Location | Rationale |
-|---|---|---|
-| FSE 2.0 national mTLS/JWT family | **GATEWAY**, conditional | Shared reports identify centralizable mTLS and signing resources, but official profiles and key custody are absent. |
-| DPC/webDPC, Sistema TS/730, PagoPA, NSO and other named public services | **UNKNOWN** | Protocol and network/custody evidence is insufficient. |
-| MIR/OSM/Phronesis network | **UNKNOWN/HYBRID** | Local network behavior is known; topology and identity model are not. |
-| EReg, CBox, Gematik, smart-card readers, fiscal printers and robots | **BROKER/LOCAL** | Installation-local hardware or network dependency. |
+| Candidate | User interaction | Secret/certificate custody | Token/session exchange | Healthcare API execution | Mandatory local capability/hardware | Location |
+|---|---|---|---|---|---|---|
+| FSE 2.0 national mTLS/JWT family | **UNKNOWN** | Central custody is suggested but unconfirmed | Gateway-capable; official profile absent | Gateway-capable; official profile absent | None demonstrated | **GATEWAY, conditional** |
+| DPC/webDPC, Sistema TS/730, PagoPA, NSO and other named public services | **UNKNOWN** | **UNKNOWN** | **UNKNOWN** | **UNKNOWN** | **UNKNOWN** | **UNKNOWN** |
+| MIR/OSM/Phronesis network | **UNKNOWN** | **UNKNOWN** | Topology and identity model **UNKNOWN** | Local/network behavior known; exact execution split **UNKNOWN** | **UNKNOWN** | **UNKNOWN** |
+| EReg, CBox, Gematik, smart-card readers, fiscal printers and robots | Local/device interaction | Installation-local device capability | Local/device protocol | Local device/network operation | Installation-local hardware or network | **BROKER/LOCAL** |
 
 ## Enforcement implications
 
-- A `GATEWAY` connector accepts domain input only. It never accepts URI, tenant, scope, client ID, secret reference, certificate reference, issuer, audience or signing profile from the caller.
+- A `GATEWAY` connector accepts domain input and, where required, an opaque user-interaction reference only. It never accepts URI, tenant, scope, client ID, secret reference, certificate reference, issuer, audience or signing profile from the caller.
+- User interaction may be presented by a direct application, browser, Broker or another trusted UX adapter; that UX choice does not change connector execution location unless a mandatory local capability is proven.
 - A `BROKER/LOCAL` connector exposes a narrow operation bound to an allowed local resource; it is not a general proxy, signing oracle or VPN tunnel.
-- A `HYBRID` connector exchanges only an opaque, one-time typed handoff. Browser codes, MFA artifacts and resulting tokens are not returned as reusable values to the legacy application.
-- If certificate custody, VPN routing or browser callback ownership cannot be confirmed, publication fails closed and the location remains `UNKNOWN`.
+- A `HYBRID` connector requires evidence of both a mandatory local capability and a Gateway capability; an interactive flow alone is insufficient.
+- If mandatory certificate/key custody or installation-only routing cannot be established, publication fails closed and the location remains conditional or `UNKNOWN` as recorded above.

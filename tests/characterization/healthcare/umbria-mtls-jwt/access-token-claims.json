@@ -1,5 +1,7 @@
 {
   "schema": "urn:example:healthcare:umbria-mtls-jwt:access-token-claims:v1",
+  "policy_classification": "SYNTHETIC TEST POLICY",
+  "generation_policy": "one-pair-per-synthetic-dispatch",
   "profile": "synthetic-access-token",
   "iss": "urn:example:installation:healthcare-001",
   "aud": "https://example.invalid/healthcare/umbria",

@@ -111,13 +111,21 @@ Record connector/profile/operation, opaque attempt/session ID, derived tenant/in
 - Provided documentation: `SRC-PDF` §2.2-2.3, pages 6-7.
 - Observed legacy behavior: separate Lombardia application-token/CRS patterns in sanitized reports.
 - Synthetic vectors: `tests/characterization/healthcare/lombardia-oauth-helper`.
-- Architectural inference: ADR-0015 authorization-code handoff.
+- Architectural inference: server-owned token/resource processing; browser/helper presentation does not imply a Broker dependency.
 
 See [../../provenance.md](../provenance.md).
 
 ## Execution location
 
-**HYBRID.** Browser/user interaction is local. Helper state, confidential client credential, token exchange/cache and resource invocation are Gateway responsibilities. Only the one-time typed authorization result crosses the handoff.
+| Dimension | Characterization |
+|---|---|
+| User interaction | Local/direct browser interaction |
+| Secret/certificate custody | Gateway owns the confidential client credential and token session; no client certificate is stated |
+| Token/session exchange | Gateway performs authorization/token exchange where the confirmed flow permits it; helper/callback coordination is **NEEDS CHARACTERIZATION** |
+| Healthcare API execution | Gateway invokes the prescription/FSE API |
+| Mandatory local capability/hardware | None demonstrated |
+
+**GATEWAY.** Helper hosting, callback ownership and browser coordination remain production blockers, but they do not establish a Broker dependency.
 
 ## Security constraints
 

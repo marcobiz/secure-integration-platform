@@ -109,14 +109,22 @@ Record derived execution context, connector/version/operation, opaque attempt/se
 
 - Provided documentation: `SRC-PDF` §9.3, pages 19-20.
 - Synthetic vectors: `tests/characterization/healthcare/fvg-pkce-jwt`.
-- Execution inference: ADR-0015 authorization-code handoff; ADR-0019 separate signing capability.
+- Execution inference: server-owned token/API processing and ADR-0019 separate signing capability; browser presentation does not imply a Broker dependency.
 - No official OAuth metadata, JWKS, claim profile or packet capture was used.
 
 See [the provenance register](../provenance.md).
 
 ## Execution location
 
-**HYBRID.** Browser interaction is local. Gateway owns PKCE attempt state, token exchange/storage, signing key use, REST invocation and redaction. A one-time typed callback/code handoff is the only cross-location artifact.
+| Dimension | Characterization |
+|---|---|
+| User interaction | Local/direct browser interaction |
+| Secret/certificate custody | Gateway token custody; signing key at Gateway only if central/provider-side custody is permitted |
+| Token/session exchange | Gateway performs authorization-code/token exchange |
+| Healthcare API execution | Gateway invokes the REST API |
+| Mandatory local capability/hardware | None demonstrated |
+
+**GATEWAY, conditional** on central/provider-side signing-key custody. If authoritative evidence later requires a local non-exportable signing key, reclassify the connector as **HYBRID** and approve a separate local-signature design.
 
 ## Security constraints
 

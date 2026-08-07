@@ -21,6 +21,13 @@ JWT, certificate bytes, or private material.
 - `umbria-mtls-jwt`: metadata for distinct mTLS and signing certificate
   purposes, two decoded JWT profiles, and expired-JWT/mTLS errors.
 
+Execution-location metadata records SOGEI and Lombardia as `gateway` and
+FVG as `gateway-conditional` on central/provider-side signing-key custody.
+The five-minute Umbria claim lifetime and one-pair-per-synthetic-dispatch
+behavior are labeled **SYNTHETIC TEST POLICY**. They test expiry and profile
+separation only and do not claim provider lifetime, reuse, regeneration,
+replay, `jti`/nonce or clock-skew behavior.
+
 The XML namespace is deliberately an `urn:example` namespace. It preserves
 the envelope/fault shape needed by parsers without claiming a real provider
 contract.

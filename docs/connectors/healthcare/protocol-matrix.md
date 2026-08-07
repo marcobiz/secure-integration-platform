@@ -57,8 +57,8 @@ Reused by Veneto, Bolzano, Liguria, Umbria and other sanitized FSE evidence. Cer
 
 | Shortlisted connector | Primary primitive coverage | Reuse created |
 |---|---|---|
-| `sogei-basic-session` | SOAP/XML, Basic, local MFA session reference, SOAP fault mapping | Basis for ER/TN/Piemonte session profiles after separate characterization |
-| `lombardia-oauth-helper` | Authorization Code helper flow, server-owned client credential, token cache/refresh, bearer | OAuth HTTP writer and hybrid authorization-code handoff |
+| `sogei-basic-session` | SOAP/XML, Basic, opaque session reference, transport-neutral user-interaction completion, SOAP fault mapping | Basis for ER/TN/Piemonte session profiles after separate characterization |
+| `lombardia-oauth-helper` | Authorization Code helper flow, server-owned client credential, token cache/refresh, bearer | OAuth HTTP writer and transport-neutral authorization completion |
 | `fvg-pkce-jwt` | Authorization Code + PKCE, access/ID token, RS256 signing, multi-header injection | PKCE/handoff and signing primitives reusable by VetInfo and other FSE profiles |
 | `umbria-mtls-jwt` | mTLS plus two RS256 JWT profiles with distinct certificate purposes | Certificate-purpose separation, signing policy and mTLS transport |
 

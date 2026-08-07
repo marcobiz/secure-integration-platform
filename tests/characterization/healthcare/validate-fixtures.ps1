@@ -152,6 +152,17 @@ foreach ($file in $fixtureFiles) {
 
 $pkceFile = Get-Item -LiteralPath (Join-Path $PSScriptRoot 'fvg-pkce-jwt\pkce.json')
 $pkce = Read-JsonFixture -File $pkceFile
+if ([string]$pkce.execution_location -cne 'gateway-conditional') {
+    Throw-ValidationError 'FVG execution location must remain gateway-conditional.'
+}
+$sogeiSession = Read-JsonFixture -File (Get-Item -LiteralPath (Join-Path $PSScriptRoot 'sogei-basic-session\session-reference.json'))
+if ([string]$sogeiSession.execution_location -cne 'gateway') {
+    Throw-ValidationError 'SOGEI execution location must remain gateway.'
+}
+$lombardiaSession = Read-JsonFixture -File (Get-Item -LiteralPath (Join-Path $PSScriptRoot 'lombardia-oauth-helper\helper-session.json'))
+if ([string]$lombardiaSession.execution_location -cne 'gateway') {
+    Throw-ValidationError 'Lombardia execution location must remain gateway.'
+}
 $verifier = [string]$pkce.code_verifier
 if ($verifier.Length -lt 43 -or $verifier.Length -gt 128 -or $verifier -notmatch '^[A-Za-z0-9._~-]+$') {
     Throw-ValidationError 'PKCE verifier does not satisfy RFC 7636 length/character constraints.'
@@ -205,6 +216,9 @@ foreach ($claimPath in $claimFiles) {
     }
     if ([Int64]$claims.exp -le [Int64]$claims.nbf) {
         Throw-ValidationError "JWT exp must be after nbf in $(Get-RelativeFixturePath -Path $claimFile.FullName)."
+    }
+    if ($claimPath -like 'umbria-mtls-jwt\*' -and [string]$claims.policy_classification -cne 'SYNTHETIC TEST POLICY') {
+        Throw-ValidationError "Umbria JWT timing/generation values must be labeled SYNTHETIC TEST POLICY in $(Get-RelativeFixturePath -Path $claimFile.FullName)."
     }
 }
 

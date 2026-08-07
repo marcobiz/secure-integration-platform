@@ -1,7 +1,7 @@
 {
   "schema": "urn:example:healthcare:sogei-basic-session:session-reference:v1",
   "connector": "sogei-basic-session",
-  "execution_location": "hybrid",
+  "execution_location": "gateway",
   "session_reference": "urn:example:session:sogei-accepted-001",
   "credential_binding_reference": "urn:example:binding:sogei-basic-session",
   "created_at": "2030-01-01T00:00:00Z",

@@ -31,6 +31,7 @@ Input hashes identify the exact characterized material without adding those rest
 | Reverse-engineering characterization | A static/dynamic finding summarized without code or operational values. |
 | Inference | A product design conclusion, such as Gateway/Hybrid location, derived from known facts and ADRs. |
 | Unknown | Not present or contradicted in the available sources. |
+| Synthetic test policy | An independently chosen fixture/harness behavior used only to test a boundary; it is not attributed to an external service. |
 
 `KNOWN` elsewhere in this directory means known from one of these sources, not live-verified or officially certified.
 
@@ -43,7 +44,7 @@ Input hashes identify the exact characterized material without adding those rest
 | SOAP + XML, HTTP Basic and emailed `ID-SESSIONE` in `Authorization2F` | SRC-PDF §1.2, pages 4-5 | **Provided documentation / KNOWN** |
 | Session validity is 16 hours | SRC-PDF page 4 | **Provided documentation / KNOWN** |
 | No client certificate is stated | SRC-PDF page 4 | **Provided documentation / KNOWN** |
-| Gateway plus typed local-MFA handoff | SRC-ADR (ADR-0015) applied to SRC-PDF | **Inference** |
+| Gateway execution; user-interaction transport not fixed | Five-dimension location analysis applied to SRC-PDF facts | **Inference** |
 | SOAP version, WSDL operations, namespaces, fault model and invalidation | Not supplied | **UNKNOWN / NEEDS CHARACTERIZATION** |
 | Synthetic SOAP and expiry vectors | Independently authored under `tests/characterization/healthcare/sogei-basic-session` | **Synthetic characterization**, not captured traffic |
 
@@ -56,7 +57,7 @@ Input hashes identify the exact characterized material without adding those rest
 | Access token is typically 30 minutes; refresh windows differ: prescription up to 72 hours, FSE up to 8 hours | SRC-PDF pages 6-7 | **Provided documentation / KNOWN** |
 | Sanitized legacy evidence also identifies a separate application `client_credentials` layer and CRS session | SRC-WGF / SRC-HTML findings summarized in the corpus review | **Observed legacy behavior; apparent profile conflict** |
 | PKCE, redirect ownership, helper trust, refresh rotation and logout | Not established | **UNKNOWN / NEEDS CHARACTERIZATION** |
-| Browser local, code exchange/token cache/API central | SRC-ADR applied to provided behavior | **Inference** |
+| Gateway execution; browser interaction does not establish a mandatory local capability | Five-dimension location analysis applied to provided behavior | **Inference** |
 
 The apparent authorization-code versus application-client-credentials difference must be resolved as separate profiles. Writers must not select one by assumption or combine them into a permissive flow.
 
@@ -69,7 +70,7 @@ The apparent authorization-code versus application-client-credentials difference
 | Access and ID token validity is described as 16 hours | SRC-PDF page 19 | **Provided documentation / KNOWN** |
 | Client ID and signing certificate are software-house resources | SRC-PDF page 19 | **Provided documentation / KNOWN** |
 | PKCE method, state/callback rules, claims, JWT lifetime, key custody, refresh and logout | Not supplied | **UNKNOWN / NEEDS CHARACTERIZATION** |
-| Browser/code handoff local, token and signing operations central | SRC-ADR applied to provided behavior | **Inference** |
+| Gateway execution conditional on central/provider-side signing-key custody; browser interaction does not establish a mandatory local capability | Five-dimension location analysis applied to provided behavior | **Inference; conditional** |
 
 ### `umbria-mtls-jwt`
 
@@ -78,8 +79,10 @@ The apparent authorization-code versus application-client-credentials difference
 | REST + JSON GET protected by mTLS and two RS256 JWTs | SRC-PDF §8.3, page 18 | **Provided documentation / KNOWN** |
 | One JWT is bearer `Access Token`; the other is sent in `FSE-JWT-Signature` | SRC-PDF page 18 | **Provided documentation / KNOWN** |
 | Separate pharmacy certificates are used for mTLS and signing | SRC-PDF page 18 | **Provided documentation / KNOWN** |
+| Two JWTs are generated/used before the healthcare API call | SRC-PDF page 18 | **Provided documentation / KNOWN** |
 | Sanitized FSE evidence confirms recurring separation of authentication/signing certificate roles | SRC-HTML, SRC-DRC, SRC-INF and SRC-CORE corpus review | **Observed legacy behavior** |
-| Exact national-versus-regional profile, claims, body digest, `x5c`, audience, clock skew and renewal | Not supplied | **UNKNOWN / NEEDS CHARACTERIZATION** |
+| Exact national-versus-regional profile, claims, body digest, `x5c`, audience, lifetime, reuse, regeneration frequency, replay semantics, `jti`/nonce policy, clock skew and renewal | Not supplied | **UNKNOWN / NEEDS CHARACTERIZATION** |
+| Five-minute lifetime and one pair per synthetic dispatch in committed fixtures | Independently authored test configuration under `tests/characterization/healthcare/umbria-mtls-jwt` | **SYNTHETIC TEST POLICY**, not provider behavior |
 | Gateway execution | SRC-ADR applied conditionally to centrally usable certificates | **Inference; conditional** |
 
 This connector is an Umbria profile. It must not be represented as the national FSE 2.0/ModI profile without separate authoritative characterization.

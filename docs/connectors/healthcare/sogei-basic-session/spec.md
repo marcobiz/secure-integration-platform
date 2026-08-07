@@ -13,14 +13,14 @@ This profile does not cover the simpler veterinary SOGEI Basic-only service, reg
 | Operation | Purpose | Status |
 |---|---|---|
 | `begin-prescription-session` | Ask the fixed MFA SOAP service to initiate the out-of-band session process | **KNOWN** behavior; exact WSDL operation/SOAPAction **NEEDS CHARACTERIZATION** |
-| `complete-prescription-session` | Accept a bounded Broker-owned local-MFA handoff and store an opaque session reference | Product handoff **INFERRED** from ADR-0015; exact artifact validation **NEEDS CHARACTERIZATION** |
+| `complete-prescription-session` | Correlate a bounded user-interaction completion and store an opaque session reference | Completion transport **INFERRED** as a product requirement; acquisition and artifact validation **NEEDS CHARACTERIZATION** |
 | `view-dispensed-prescription` | First candidate business query, based on the supplied service reference | Business intent **KNOWN** at a high level; exact operation, request and response schema **UNKNOWN** |
 
 No business operation may be published until its official WSDL/schema, action, authorization and idempotency are recorded.
 
 ## Allowed inbound parameters
 
-- published connector ID and operation ID through the existing authenticated Broker/Gateway invocation;
+- published connector ID and operation ID through the authenticated runtime invocation;
 - domain fields explicitly admitted by the operation schema once characterized;
 - an opaque MFA attempt/session reference issued for the same tenant, installation, connector, environment and operator context;
 - correlation and deadline metadata already permitted by the runtime contract.
@@ -65,7 +65,8 @@ The legacy application never receives Basic material or a reusable session value
 ## Session/token lifecycle
 
 - **KNOWN:** the documented `ID-SESSIONE` is received out of band and valid for 16 hours.
-- **INFERRED:** the Broker performs a typed local-MFA handoff and the session is stored by the component that applies subsequent authentication.
+- **INFERRED:** a transport-neutral user-interaction completion can yield an opaque session reference stored by the component that applies subsequent authentication.
+- **UNKNOWN / NEEDS CHARACTERIZATION:** whether the MFA artifact is acquired by direct application input, browser, Broker or another trusted UX adapter.
 - **UNKNOWN:** issuance response semantics, activation delay, concurrent-session rules, early invalidation, renewal, clock skew and logout.
 - Expiry, publication/binding change, explicit invalidation or tenant/installation mismatch fail closed.
 
@@ -89,7 +90,7 @@ No automatic renewal or reuse beyond the documented absolute lifetime is allowed
 | Upstream condition | Connector category | Client-visible behavior |
 |---|---|---|
 | Basic credential rejected | `upstream_authentication_failed` | Sanitized failure; do not reveal username/provider detail |
-| Session missing/expired/rejected | `mfa_session_required` or `mfa_session_expired` | Prompt a new typed MFA attempt; never echo session |
+| Session missing/expired/rejected | `mfa_session_required` or `mfa_session_expired` | Request a new transport-neutral user interaction; never echo session |
 | SOAP Client/validation fault | `request_rejected` | Stable mapped code after official fault characterization |
 | SOAP Server/transient fault | `upstream_unavailable` | Stable mapped code; retry only if separately authorized |
 | Malformed/oversize/unsafe XML | `upstream_protocol_invalid` | Fail closed and record metadata-only security event |
@@ -118,7 +119,7 @@ Allow only connector/version/operation, environment ID, tenant/installation/appl
 ## Provenance
 
 - Provided documentation: `SRC-PDF` §1.2, pages 4-5.
-- Architectural inference: ADR-0015 local-MFA hybrid handoff and ADR-0010 server-owned binding.
+- Architectural inference: ADR-0010 server-owned binding; the interaction transport is intentionally not inferred from the healthcare source.
 - Synthetic vectors: `tests/characterization/healthcare/sogei-basic-session`.
 - No official WSDL or captured traffic was used.
 
@@ -126,7 +127,15 @@ See [../../provenance.md](../provenance.md) for the exact source register and an
 
 ## Execution location
 
-**HYBRID.** Gateway owns Basic credential, endpoint, SOAP transport and session application. Broker owns the trusted local interaction that accepts the out-of-band MFA artifact. Only a typed opaque handoff crosses the boundary.
+| Dimension | Characterization |
+|---|---|
+| User interaction | Local/direct out-of-band MFA is possible; acquisition mechanism is **NEEDS CHARACTERIZATION** |
+| Secret/certificate custody | Gateway owns the Basic credential; no client certificate is stated |
+| Token/session exchange | Gateway owns session custody and applies the session; completion transport is **NEEDS CHARACTERIZATION** |
+| Healthcare API execution | Gateway invokes the SOAP service |
+| Mandatory local capability/hardware | None demonstrated |
+
+**GATEWAY.** A direct application, browser, Broker or another trusted UX adapter may present the interaction in a future design, but Broker is not a connector requirement on current evidence.
 
 ## Security constraints
 

@@ -6,6 +6,33 @@ This is a requirements handoff for the future `auth-http` and `auth-soap` writer
 
 All APIs below are conceptual minimums. Concrete names and packaging may change during the authorized implementation milestone, but the security properties may not be weakened.
 
+## Delivery classification
+
+This classification follows the actual connector waves in [M6-IMPLEMENTATION-PLAN.md](M6-IMPLEMENTATION-PLAN.md). It authorizes only synthetic primitive work after a separate implementation authorization; it does not make a production connector ready.
+
+### REQUIRED NOW - Wave 1 synthetic contracts
+
+- AP-01 server-side HTTP Basic;
+- AP-02 opaque session reference plus transport-neutral interactive challenge/completion where the SOGEI profile requires user input;
+- AP-03 Authorization Code attempt/completion baseline for Lombardia, without assuming PKCE;
+- AP-04 bearer application, token cache, refresh or explicit reacquisition according to the confirmed profile;
+- AP-07 secure SOAP/XML boundary.
+
+### REQUIRED BY WAVE 2
+
+- AP-03 S256 PKCE extension for FVG;
+- AP-05 policy-bound RS256 JWT signing through a certificate/key-operation abstraction;
+- AP-06 purpose-bound mTLS client authentication;
+- explicit certificate/key purpose separation for FVG signing and Umbria signing versus mTLS.
+
+### DEFER
+
+- generic SAML and generic WS-Security frameworks;
+- universal HMAC, universal identity and generic XML-DSig frameworks;
+- smart-card and VPN integration frameworks.
+
+These deferred capabilities appear elsewhere in the inventory but are not required by the four selected connector profiles.
+
 ## Common execution context
 
 Every primitive receives an immutable server-derived context containing:
@@ -38,31 +65,31 @@ ApplyBasicAuthorization(context, request, credentialBinding) -> authenticatedReq
 | Failure | Missing/disabled/wrong-scope resource fails before DNS/transport; provider failure is not mapped to upstream credential denial |
 | Vectors | SOGEI synthetic request metadata and missing-credential negative; Lombardia token exchange vector after profile confirmation |
 
-## AP-02 - Typed local-MFA session handoff
+## AP-02 - Transport-neutral interactive challenge and opaque session
 
 **Used by:** `sogei-basic-session`.
 
 **Minimal API**
 
 ```text
-CreateMfaAttempt(context, profile) -> opaqueAttemptRef
-SubmitLocalMfaArtifact(context, opaqueAttemptRef, artifact) -> opaqueSessionRef
+RequestInteractiveChallenge(context, profile) -> { opaqueInteractionRef, opaqueChallenge, expiresAt }
+CompleteInteractiveChallenge(context, opaqueInteractionRef, userProvidedArtifact) -> opaqueSessionRef
 ResolveSessionForOutbound(context, opaqueSessionRef) -> in-memory session artifact
 InvalidateSession(context, opaqueSessionRef, reason) -> void
 ```
 
 | Aspect | Requirement |
 |---|---|
-| Input | One-time attempt reference plus bounded MFA artifact acquired through a Broker-owned trusted prompt; no generic token field in runtime invocation |
-| Output | Opaque session reference; raw session value is visible only to the component applying the outbound header |
+| Input | One-time opaque interaction reference plus only the bounded artifact the user must actually provide; no generic token/header field in runtime invocation |
+| Output | Opaque challenge/reference plus expiry for presentation, then an opaque session reference after completion; raw session value is visible only to the component applying the outbound header |
 | Capability | Session-secret storage scoped to tenant/installation/connector/profile; no `GetSecret` API exposed to legacy, Broker callers or Admin UI |
-| Caching | Absolute expiry from the profile (16 hours for the documented SOGEI vector); no use after expiry or publication/binding change |
-| Refresh | No silent refresh is assumed. A new explicit MFA attempt is required unless an authoritative profile states otherwise |
-| Redaction | Artifact and session value are always sensitive; only attempt/session IDs, state and timestamps may be audited |
-| Failure | Unknown, reused, cross-tenant, wrong-connector, expired or invalidated reference fails closed before outbound dispatch |
+| Caching | Interaction has a bounded profile-defined expiry and single completion; resulting session uses its profile expiry (16 hours for the documented SOGEI vector); no use after expiry or publication/binding change |
+| Refresh | No silent refresh is assumed. A new explicit interaction/reacquisition is required unless an authoritative profile states otherwise |
+| Redaction | Challenge, completion artifact and session value are always sensitive; only opaque interaction/session IDs, state and timestamps may be audited |
+| Failure | Unknown, replayed, cross-tenant, wrong-connector, expired, already-completed or invalidated reference fails closed before outbound dispatch |
 | Vectors | Accepted session metadata, expired session and SOAP session fault under `sogei-basic-session` |
 
-The artifact format is profile-specific and tightly bounded. This API must not become a generic caller-controlled header injector.
+The interaction reference correlates request, completion, expiry and single use. Replay semantics are enforced where the characterized upstream profile supports them. Presentation may be performed by a direct application, browser, Broker or another trusted UX adapter; AP-02 and the connector do not depend on any one frontend. The artifact format is profile-specific and tightly bounded, and the API must not become a generic caller-controlled header injector or a general interactive-auth framework.
 
 ## AP-03 - Browser authorization and one-time code handoff
 
@@ -187,9 +214,9 @@ InvokeSoap(context, soapProfile, operation, boundedEnvelope, authContext) -> bou
 
 SOAP version, action, namespace and schema are not selected until authoritative SOGEI material is available.
 
-## Explicitly not required for the first four
+## Deferred beyond the first four
 
-HMAC, SAML, WS-Security, XML-DSig, smart-card/CNS access, local certificate selection, VPN management, OAuth 1, HS256 JWT, WebSocket and device protocols are excluded. Their presence elsewhere in the inventory does not justify adding them to these contracts.
+Generic HMAC, SAML, WS-Security, XML-DSig, identity, smart-card/CNS access, local certificate selection and VPN management frameworks are deferred. OAuth 1, HS256 JWT, WebSocket and device protocols are also excluded. Their presence elsewhere in the inventory does not justify adding them to these contracts.
 
 ## Cross-primitive negative tests
 

@@ -25,7 +25,7 @@ No token/session parameter is expected. The caller cannot supply endpoint, pharm
 
 ## Server-owned parameters
 
-The Connector/Binding fixes resource endpoint, REST method/path/query mapping, two distinct certificate resources, two JWT profiles, claim derivation, issuer/audience/lifetime/skew, `jti` policy, outbound header names, TLS policy, timeout, limits, retry/idempotency, error mapping and redaction.
+The future Connector/Binding must fix resource endpoint, REST method/path/query mapping, two distinct certificate resources, two JWT profiles, claim derivation and all lifecycle/replay settings once characterized, outbound header names, TLS policy, timeout, limits, retry/idempotency, error mapping and redaction.
 
 ## Endpoint binding
 
@@ -44,8 +44,8 @@ Certificate metadata may be cataloged, but private key/PFX material remains in t
 ## Outbound authentication
 
 1. Derive tenant/pharmacy/operator context from authenticated server-side state and approved metadata.
-2. Build the first policy-bound JWT described as `Access Token`; sign RS256 with the signing capability.
-3. Build the second policy-bound JWT described as `FSE-JWT-Signature`; sign RS256 with the same approved signing capability only if official policy confirms this.
+2. Prepare the first policy-bound JWT described as `Access Token`; use RS256 with the signing capability as described by the source.
+3. Prepare the second policy-bound JWT described as `FSE-JWT-Signature`; use RS256 with the distinct approved signing resource described by the source.
 4. Open the restricted mTLS channel using the distinct authentication certificate.
 5. Apply the first JWT as bearer and the second in `FSE-JWT-Signature`, then invoke the fixed GET operation.
 
@@ -53,9 +53,10 @@ The term “Access Token” in the source describes a locally generated JWT, not
 
 ## Session/token lifecycle
 
-- No refresh/session service is described.
-- Each request receives freshly generated, short-lived JWTs under a fixed profile.
-- Required lifetime, clock skew, `jti` uniqueness/replay store and relation between the two JWTs are **UNKNOWN**.
+- **KNOWN:** two JWTs are generated/used before the healthcare API call as described by the supplied source.
+- **UNKNOWN / NEEDS CHARACTERIZATION:** lifetime, reuse, regeneration frequency, replay semantics, any `jti` or nonce policy, clock skew, and the lifecycle relation between the two JWTs.
+- No refresh/session service is described; absence from the source does not prove per-request generation or prohibit reuse.
+- The committed fixtures use a short lifetime and one pair per synthetic dispatch solely as **SYNTHETIC TEST POLICY**. Those values are not attributed to the real service.
 - Certificate revision, expiry/revocation, publication/binding change or identity mismatch invalidates channel/signing cache immediately.
 
 ## Request mapping
@@ -87,7 +88,7 @@ Exact upstream status/error payload mapping is **NEEDS CHARACTERIZATION**.
 ## Retry rules
 
 - Default retry count is zero.
-- A new JWT pair is produced only for a new approved dispatch attempt; it must not reuse a `jti` where uniqueness is required.
+- The synthetic harness may create one JWT pair for each synthetic dispatch as **SYNTHETIC TEST POLICY**. Production regeneration, reuse and `jti` behavior remain **NEEDS CHARACTERIZATION**.
 - Retry of GET is allowed only after official idempotency and replay behavior are confirmed and only for failures known to occur before or safely after dispatch.
 - Certificate/signing/provider failures are not transport-retried with another resource version.
 
@@ -114,7 +115,15 @@ See [the provenance register](../provenance.md).
 
 ## Execution location
 
-**GATEWAY, conditional.** No physical smart card, VPN or local-only network is stated. GO requires authority approval for server-side custody/use of both pharmacy keys. If either key must remain non-exportable on local hardware, location becomes **HYBRID** and requires a separately approved typed local-signature design.
+| Dimension | Characterization |
+|---|---|
+| User interaction | None stated |
+| Secret/certificate custody | Gateway only if central/provider-side custody and use of both pharmacy keys/certificates are permitted |
+| Token/session exchange | Two JWTs are prepared before the call; lifecycle and reuse are **NEEDS CHARACTERIZATION** |
+| Healthcare API execution | Gateway invokes the REST API over mTLS |
+| Mandatory local capability/hardware | None demonstrated |
+
+**GATEWAY, conditional.** GO requires authority approval for central/provider-side custody/use of both pharmacy keys. If either key must remain non-exportable on local hardware, location becomes **HYBRID** and requires a separately approved typed local-signature design.
 
 ## Security constraints
 
