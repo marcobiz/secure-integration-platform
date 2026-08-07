@@ -1,4 +1,4 @@
-// Generated from backend-emitted codes through docs/api/runtime-wire-codes.json. Do not edit.
+// Generated from BackendRuntimeWireCodes. Do not edit.
 export const runtimeWireCodes = {
   "status": [
     "Active",
@@ -62,7 +62,6 @@ export const runtimeWireCodes = {
     "connector.test",
     "connector.validate",
     "grant.create",
-    "grant.revoke",
     "installation.create",
     "installation.revoke",
     "operation.invoke",
@@ -178,7 +177,6 @@ export const runtimeWireCodes = {
     "BGW-EGRESS-RESPONSE-TOO-LARGE",
     "BGW-EGRESS-UPSTREAM-REJECTED",
     "BGW-GRANT-CREATED",
-    "BGW-GRANT-REVOKED",
     "BGW-IDEMPOTENCY-KEY",
     "BGW-INSTALLATION-BROKER-INCOMPATIBLE",
     "BGW-INSTALLATION-BROKER-VERSION",

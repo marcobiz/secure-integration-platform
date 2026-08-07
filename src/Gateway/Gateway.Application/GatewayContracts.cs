@@ -10,6 +10,8 @@ public sealed class GatewayException : Exception
     public GatewayException(string code, int statusCode, bool retryable = false)
         : base(code)
     {
+        if (!BackendRuntimeWireCodes.IsPublished(RuntimeWireCodeKind.Reason, code))
+            throw new InvalidOperationException($"Gateway reason code is not in the authoritative backend catalog: {code}");
         Code = code;
         StatusCode = statusCode;
         Retryable = retryable;

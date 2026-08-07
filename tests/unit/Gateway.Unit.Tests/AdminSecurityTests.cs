@@ -17,7 +17,6 @@ public sealed class AdminSecurityTests
         Assert.Contains("installation.create", catalog.AuditAction);
         Assert.Contains("installation.revoke", catalog.AuditAction);
         Assert.Contains("grant.create", catalog.AuditAction);
-        Assert.Contains("grant.revoke", catalog.AuditAction);
         Assert.Contains("runtime.authenticate", catalog.AuditAction);
         Assert.Contains("operation.invoke", catalog.AuditAction);
         Assert.Contains("admin.request.denied", catalog.AuditAction);
@@ -28,7 +27,12 @@ public sealed class AdminSecurityTests
         Assert.Contains("BGW-ADMIN-FOUR-EYES", catalog.Reason);
         Assert.Contains("BGW-ADMIN-BOOTSTRAP-DENIED", catalog.Reason);
         Assert.Contains("BGW-PROVIDER-LOCATOR-DENIED", catalog.Reason);
-        Assert.True(catalog.Reason.Count >= 100, $"Backend reason catalog unexpectedly contains only {catalog.Reason.Count} entries.");
+        Assert.Equal(139, catalog.Reason.Count);
+        Assert.DoesNotContain("grant.revoke", catalog.AuditAction);
+        Assert.DoesNotContain("BGW-GRANT-REVOKED", catalog.Reason);
+        Assert.Contains(BackendRuntimeWireCodes.Reserved, value => value == new RuntimeWireCode(RuntimeWireCodeKind.AuditAction, "grant.revoke"));
+        Assert.Contains(BackendRuntimeWireCodes.Reserved, value => value == new RuntimeWireCode(RuntimeWireCodeKind.Reason, "BGW-GRANT-REVOKED"));
+        Assert.Equal(BackendRuntimeWireCodes.Published.Count, catalog.Status.Count + catalog.Health.Count + catalog.Approval.Count + catalog.Role.Count + catalog.Scope.Count + catalog.AuditAction.Count + catalog.AuditOutcome.Count + catalog.Reason.Count);
         Assert.Equal(catalog.Reason.Count, catalog.Reason.Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(catalog.AuditAction.Count, catalog.AuditAction.Distinct(StringComparer.Ordinal).Count());
         Assert.All(catalog.AuditAction.Concat(catalog.Reason), value => Assert.DoesNotContain('<', value));

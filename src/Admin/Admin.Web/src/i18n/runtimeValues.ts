@@ -18,7 +18,7 @@ const explicitLabels: Readonly<Partial<Record<RuntimeValueKind, Readonly<Record<
     'connector.approval.request': 'runtime.actionApprovalRequest', 'connector.approval.approve': 'runtime.actionApprovalApprove', 'connector.approval.reject': 'runtime.actionApprovalReject',
     'connector.publish': 'runtime.actionConnectorPublish', 'connector.bindings.update': 'runtime.actionBindingUpdate', 'admin.request.denied': 'runtime.actionAccessDenied',
     'installation.create': 'runtime.actionInstallationCreate', 'installation.revoke': 'runtime.actionInstallationRevoke', 'grant.create': 'runtime.actionGrantCreate',
-    'grant.revoke': 'runtime.actionGrantRevoke', 'runtime.authenticate': 'runtime.actionRuntimeAuthenticate', 'operation.invoke': 'runtime.actionOperationInvoke'
+    'runtime.authenticate': 'runtime.actionRuntimeAuthenticate', 'operation.invoke': 'runtime.actionOperationInvoke'
   },
   auditOutcome: { success: 'runtime.outcomeSuccess', denied: 'runtime.outcomeDenied', failure: 'runtime.outcomeFailure', conflict: 'runtime.outcomeConflict' },
   reason: {

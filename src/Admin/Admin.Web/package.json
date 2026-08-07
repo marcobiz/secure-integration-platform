@@ -22,7 +22,8 @@
     "generate:api": "openapi-typescript ../../../docs/api/gateway-openapi.yaml -o src/api/schema.d.ts",
     "check:api": "npm run generate:api && git diff --exit-code -- src/api/schema.d.ts",
     "generate:runtime": "node scripts/generate-runtime-contract.mjs",
-    "check:runtime": "npm run generate:runtime && git diff --exit-code -- ../../../docs/api/runtime-wire-codes.json src/i18n/runtimeContract.generated.ts",
+    "check:runtime": "npm run generate:runtime && npm run test:runtime-negative && git diff --exit-code -- ../../../docs/api/runtime-wire-codes.json src/i18n/runtimeContract.generated.ts",
+    "test:runtime-negative": "node scripts/check-runtime-negative.mjs",
     "capture:screenshot": "node tests/capture-sanitized-screenshot.mjs"
   },
   "dependencies": {

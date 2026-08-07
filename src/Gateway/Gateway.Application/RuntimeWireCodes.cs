@@ -1,18 +1,256 @@
-using System.Reflection;
-using System.Text.Json;
-
 namespace SecureIntegration.Gateway.Application;
 
-/// <summary>Stable audit values reserved by the backend contract even when an optional mutation is not exposed by the current host.</summary>
-public static class RuntimeAuditActions
+/// <summary>Categories published by the backend runtime wire contract.</summary>
+public enum RuntimeWireCodeKind
 {
-    /// <summary>Revocation of an installation operation grant.</summary>
-    public const string GrantRevoke = "grant.revoke";
-    /// <summary>Stable successful grant-revocation reason.</summary>
-    public const string GrantRevoked = "BGW-GRANT-REVOKED";
+    /// <summary>Lifecycle status.</summary>
+    Status,
+    /// <summary>Health state.</summary>
+    Health,
+    /// <summary>Approval state.</summary>
+    Approval,
+    /// <summary>Administrative role.</summary>
+    Role,
+    /// <summary>Administrative scope.</summary>
+    Scope,
+    /// <summary>Audit action.</summary>
+    AuditAction,
+    /// <summary>Audit outcome.</summary>
+    AuditOutcome,
+    /// <summary>Stable reason code.</summary>
+    Reason
 }
 
-/// <summary>The embedded, versioned wire-value contract exported to Admin clients.</summary>
+/// <summary>One strongly categorized backend wire value.</summary>
+public readonly record struct RuntimeWireCode(RuntimeWireCodeKind Kind, string Value);
+
+/// <summary>Authoritative backend catalog. Generated JSON and frontend mappings are derived from this list.</summary>
+public static class BackendRuntimeWireCodes
+{
+    // <runtime-wire:published>
+    /// <summary>Values currently emitted and published to clients.</summary>
+    public static IReadOnlyList<RuntimeWireCode> Published { get; } =
+    [
+        new(RuntimeWireCodeKind.Status, "Active"),
+        new(RuntimeWireCodeKind.Status, "Disabled"),
+        new(RuntimeWireCodeKind.Status, "Suspended"),
+        new(RuntimeWireCodeKind.Status, "Retired"),
+        new(RuntimeWireCodeKind.Status, "Pending"),
+        new(RuntimeWireCodeKind.Status, "Revoked"),
+        new(RuntimeWireCodeKind.Status, "Overlap"),
+        new(RuntimeWireCodeKind.Status, "Expired"),
+        new(RuntimeWireCodeKind.Status, "Draft"),
+        new(RuntimeWireCodeKind.Status, "Validated"),
+        new(RuntimeWireCodeKind.Status, "Published"),
+        new(RuntimeWireCodeKind.Status, "Superseded"),
+        new(RuntimeWireCodeKind.Health, "healthy"),
+        new(RuntimeWireCodeKind.Health, "Healthy"),
+        new(RuntimeWireCodeKind.Health, "degraded"),
+        new(RuntimeWireCodeKind.Health, "Degraded"),
+        new(RuntimeWireCodeKind.Health, "unhealthy"),
+        new(RuntimeWireCodeKind.Health, "Unhealthy"),
+        new(RuntimeWireCodeKind.Health, "unknown"),
+        new(RuntimeWireCodeKind.Health, "Unknown"),
+        new(RuntimeWireCodeKind.Approval, "Pending"),
+        new(RuntimeWireCodeKind.Approval, "Requested"),
+        new(RuntimeWireCodeKind.Approval, "Approved"),
+        new(RuntimeWireCodeKind.Approval, "Rejected"),
+        new(RuntimeWireCodeKind.Approval, "Obsolete"),
+        new(RuntimeWireCodeKind.Approval, "Invalidated"),
+        new(RuntimeWireCodeKind.Role, "Viewer"),
+        new(RuntimeWireCodeKind.Role, "ConnectorEditor"),
+        new(RuntimeWireCodeKind.Role, "ConnectorApprover"),
+        new(RuntimeWireCodeKind.Role, "Operator"),
+        new(RuntimeWireCodeKind.Role, "SecurityAdministrator"),
+        new(RuntimeWireCodeKind.Scope, "global"),
+        new(RuntimeWireCodeKind.Scope, "tenant"),
+        new(RuntimeWireCodeKind.AuditAction, "admin.bootstrap"),
+        new(RuntimeWireCodeKind.AuditAction, "admin.request.denied"),
+        new(RuntimeWireCodeKind.AuditAction, "admin.role.assign"),
+        new(RuntimeWireCodeKind.AuditAction, "admin.role.revoke"),
+        new(RuntimeWireCodeKind.AuditAction, "application.create"),
+        new(RuntimeWireCodeKind.AuditAction, "application.disable"),
+        new(RuntimeWireCodeKind.AuditAction, "application.update"),
+        new(RuntimeWireCodeKind.AuditAction, "connector.approval.approve"),
+        new(RuntimeWireCodeKind.AuditAction, "connector.approval.reject"),
+        new(RuntimeWireCodeKind.AuditAction, "connector.approval.request"),
+        new(RuntimeWireCodeKind.AuditAction, "connector.bindings.update"),
+        new(RuntimeWireCodeKind.AuditAction, "connector.import"),
+        new(RuntimeWireCodeKind.AuditAction, "connector.publish"),
+        new(RuntimeWireCodeKind.AuditAction, "connector.retire"),
+        new(RuntimeWireCodeKind.AuditAction, "connector.rollback"),
+        new(RuntimeWireCodeKind.AuditAction, "connector.test"),
+        new(RuntimeWireCodeKind.AuditAction, "connector.validate"),
+        new(RuntimeWireCodeKind.AuditAction, "grant.create"),
+        new(RuntimeWireCodeKind.AuditAction, "installation.create"),
+        new(RuntimeWireCodeKind.AuditAction, "installation.revoke"),
+        new(RuntimeWireCodeKind.AuditAction, "operation.invoke"),
+        new(RuntimeWireCodeKind.AuditAction, "runtime.authenticate"),
+        new(RuntimeWireCodeKind.AuditAction, "tenant.create"),
+        new(RuntimeWireCodeKind.AuditAction, "tenant.disable"),
+        new(RuntimeWireCodeKind.AuditAction, "tenant.update"),
+        new(RuntimeWireCodeKind.AuditOutcome, "success"),
+        new(RuntimeWireCodeKind.AuditOutcome, "denied"),
+        new(RuntimeWireCodeKind.AuditOutcome, "failure"),
+        new(RuntimeWireCodeKind.AuditOutcome, "conflict"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-ACTION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-APPROVAL-APPROVED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-APPROVAL-COMMENT"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-APPROVAL-DIGEST"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-APPROVAL-NOT-FOUND"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-APPROVAL-REJECTED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-APPROVAL-REQUESTED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-APPROVAL-REQUIRED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-APPROVAL-STALE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-ATOMIC-PUBLISH-REQUIRES-POSTGRES"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-AUTHENTICATION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-AUTHENTICATION-DISABLED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-AUTHORIZATION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-BOOTSTRAP-COMPLETE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-BOOTSTRAP-DENIED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-BROKER-VERSION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-CODE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-CSRF"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-DEVELOPMENT-AUTH-DISABLED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-DEVELOPMENT-USER"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-DISPLAY-NAME"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-FOUR-EYES"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-IDENTITY"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-PAGINATION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-PRINCIPAL-DISABLED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-PRINCIPAL-NOT-FOUND"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-ROLE-ASSIGNED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-ROLE-ASSIGNMENT"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-ROLE-NOT-FOUND"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-ROLE-REVOKED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-SESSION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-APPLICATION-CREATED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-APPLICATION-DISABLED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-APPLICATION-NOT-FOUND"),
+        new(RuntimeWireCodeKind.Reason, "BGW-APPLICATION-UPDATED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-ACTIVATION-DUPLICATE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-CERTIFICATE-REQUIRED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-CHALLENGE-INVALID"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-CONTENT-DIGEST"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-CREDENTIAL-UNKNOWN"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-ENROLLMENT-CONFLICT"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-ENROLLMENT-DENIED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-HEADER-REQUIRED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-INVALID-CERTIFICATE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-INVALID-PROOF"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-INVALID-PUBLIC-KEY"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-KEY-MISMATCH"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-NONCE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-OK"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-REPLAY"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-SIGNATURE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-SIGNATURE-FORMAT"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHN-TIMESTAMP"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHZ-CROSS-TENANT-GRANT"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHZ-GRANT-DUPLICATE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-AUTHZ-OPERATION-DENIED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONCURRENCY-CONFLICT"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONCURRENCY-ETAG"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONCURRENCY-PRECONDITION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-BINDING-DUPLICATE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-BINDING-MISSING"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-BINDING-REQUIRES-VALIDATED-VERSION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-BINDING-SCOPE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-BINDINGS-UPDATED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-CERTIFICATE-BINDING-MISSING"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-CHECKSUM"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-CONFIGURATION-CORRUPT"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-CONFIGURATION-STALE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-CONFIGURATION-UNAVAILABLE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-ENDPOINT-BINDING"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-ENDPOINT-BINDING-MISSING"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-ENDPOINT-BINDING-UNKNOWN"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-HEADER-FORBIDDEN"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-IMPORTED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-JSON"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-NOT-FOUND"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-NOT-PUBLISHED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-NUMBER-UNSUPPORTED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-OPERATION-DUPLICATE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-PUBLISHED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-RETIRED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-RETRY-REQUIRES-IDEMPOTENCY"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-ROLLBACK-TARGET"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-ROLLED-BACK"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-SCHEMA-INVALID"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-SCHEMA-VERSION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-SCHEMA-VERSION-UNSUPPORTED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-SECRET-BINDING-MISSING"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-STATE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-STORE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-VALIDATED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-VALIDATION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-VERSION-DUPLICATE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-VERSION-NOT-FOUND"),
+        new(RuntimeWireCodeKind.Reason, "BGW-EGRESS-AUTHENTICATION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-EGRESS-DESTINATION-DENIED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-EGRESS-REDIRECT-DENIED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-EGRESS-RESPONSE-TOO-LARGE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-EGRESS-UPSTREAM-REJECTED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-GRANT-CREATED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-IDEMPOTENCY-KEY"),
+        new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-BROKER-INCOMPATIBLE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-BROKER-VERSION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-CREATED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-CREDENTIAL-EXPIRED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-NOT-FOUND"),
+        new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-NOT-PENDING"),
+        new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-RENEWAL-CONFLICT"),
+        new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-RENEWAL-NOT-ALLOWED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-REVOKED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-INTERNAL"),
+        new(RuntimeWireCodeKind.Reason, "BGW-OPERATION-NOT-FOUND"),
+        new(RuntimeWireCodeKind.Reason, "BGW-OPERATION-OK"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROTOCOL-JSON"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROTOCOL-METADATA"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROTOCOL-PAYLOAD"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROTOCOL-QUERY"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROTOCOL-REQUEST"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROTOCOL-TARGET"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROTOCOL-VERSION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-CERTIFICATE-METADATA-INVALID"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-CERTIFICATE-METADATA-REQUIRED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-LOCATOR-DENIED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-RESOURCE-LEGACY-REFERENCE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-RESOURCE-NOT-FOUND"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-RESOURCE-REFERENCE-DENIED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-RESOURCE-REVISION-STALE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-RESOURCE-SCOPE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-RESOURCE-TYPE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-TENANT-CREATED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-TENANT-DISABLED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-TENANT-NOT-FOUND"),
+        new(RuntimeWireCodeKind.Reason, "BGW-TENANT-UPDATED"),
+        new(RuntimeWireCodeKind.Reason, "BGW-VALIDATION-APPLICATION-DUPLICATE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-VALIDATION-ENVIRONMENT-DUPLICATE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-VALIDATION-INSTALLATION-DUPLICATE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-VALIDATION-REASON"),
+        new(RuntimeWireCodeKind.Reason, "BGW-VALIDATION-REGISTRY-REFERENCE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-VALIDATION-TENANT-DUPLICATE"),
+    ];
+    // </runtime-wire:published>
+
+    // Reserved values have no emitting product path and are intentionally excluded from the public contract.
+    // <runtime-wire:reserved>
+    /// <summary>Values reserved for a future emitting path and excluded from the public contract.</summary>
+    public static IReadOnlyList<RuntimeWireCode> Reserved { get; } =
+    [
+        new(RuntimeWireCodeKind.AuditAction, "grant.revoke"),
+        new(RuntimeWireCodeKind.Reason, "BGW-GRANT-REVOKED"),
+    ];
+    // </runtime-wire:reserved>
+
+    /// <summary>Returns whether a value belongs to the published backend catalog.</summary>
+    public static bool IsPublished(RuntimeWireCodeKind kind, string value) =>
+        Published.Any(candidate => candidate.Kind == kind && string.Equals(candidate.Value, value, StringComparison.Ordinal));
+}
+
+/// <summary>The versioned wire-value contract exported to Admin clients.</summary>
 public sealed record RuntimeWireCodeCatalog(
     IReadOnlyList<string> Status,
     IReadOnlyList<string> Health,
@@ -23,18 +261,26 @@ public sealed record RuntimeWireCodeCatalog(
     IReadOnlyList<string> AuditOutcome,
     IReadOnlyList<string> Reason)
 {
-    private const string ResourceName = "SecureIntegration.Gateway.Application.Admin.runtime-wire-codes.json";
-    private static readonly Lazy<RuntimeWireCodeCatalog> Contract = new(Load);
-    private static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web);
+    private static readonly Lazy<RuntimeWireCodeCatalog> Contract = new(Build);
 
     /// <summary>Gets the immutable catalog compiled into the backend.</summary>
     public static RuntimeWireCodeCatalog Current => Contract.Value;
 
-    private static RuntimeWireCodeCatalog Load()
+    private static RuntimeWireCodeCatalog Build()
     {
-        using Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(ResourceName)
-            ?? throw new InvalidOperationException("Runtime wire-code contract is not embedded.");
-        return JsonSerializer.Deserialize<RuntimeWireCodeCatalog>(stream, WebJson)
-            ?? throw new InvalidOperationException("Runtime wire-code contract is invalid.");
+        static IReadOnlyList<string> Values(RuntimeWireCodeKind kind) => BackendRuntimeWireCodes.Published
+            .Where(candidate => candidate.Kind == kind)
+            .Select(candidate => candidate.Value)
+            .ToArray();
+
+        return new(
+            Values(RuntimeWireCodeKind.Status),
+            Values(RuntimeWireCodeKind.Health),
+            Values(RuntimeWireCodeKind.Approval),
+            Values(RuntimeWireCodeKind.Role),
+            Values(RuntimeWireCodeKind.Scope),
+            Values(RuntimeWireCodeKind.AuditAction),
+            Values(RuntimeWireCodeKind.AuditOutcome),
+            Values(RuntimeWireCodeKind.Reason));
     }
 }
