@@ -2,18 +2,43 @@ using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using SecureIntegration.Gateway.Application;
 
 namespace SecureIntegration.Gateway.Infrastructure;
 
 /// <summary>Hardened one-request transport: no proxy, cookies, redirects or unbounded buffering.</summary>
-public sealed class SystemRestrictedTransport : IRestrictedTransport
+public sealed class SystemRestrictedTransport(X509Certificate2Collection? customTrustRoots = null, string? pinnedServerCertificateSha256 = null) : IRestrictedTransport
 {
     /// <inheritdoc />
     public async Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
     {
         string expectedHost = request.RequestUri?.DnsSafeHost ?? throw new GatewayException("BGW-EGRESS-DESTINATION-DENIED", 500);
+        SslClientAuthenticationOptions sslOptions = new() { EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13 };
+        if (customTrustRoots is { Count: > 0 })
+        {
+            X509Certificate2Collection trustedRoots = new(customTrustRoots);
+            sslOptions.RemoteCertificateValidationCallback = (_, certificate, _, errors) =>
+            {
+                if (certificate is null || (errors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0) return false;
+                using X509Certificate2 leaf = certificate as X509Certificate2 ?? new X509Certificate2(certificate);
+                if (pinnedServerCertificateSha256 is not null)
+                {
+                    byte[] expected;
+                    try { expected = Convert.FromHexString(pinnedServerCertificateSha256); }
+                    catch (FormatException) { return false; }
+                    return expected.Length == 32 && CryptographicOperations.FixedTimeEquals(expected, SHA256.HashData(leaf.RawData));
+                }
+                using X509Chain chain = new();
+                chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+                chain.ChainPolicy.CustomTrustStore.AddRange(trustedRoots);
+                chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+                chain.ChainPolicy.VerificationFlags = X509VerificationFlags.NoFlag;
+                chain.ChainPolicy.ApplicationPolicy.Add(new Oid("1.3.6.1.5.5.7.3.1"));
+                return chain.Build(leaf);
+            };
+        }
         using SocketsHttpHandler handler = new()
         {
             AllowAutoRedirect = false,
@@ -21,7 +46,7 @@ public sealed class SystemRestrictedTransport : IRestrictedTransport
             UseProxy = false,
             AutomaticDecompression = DecompressionMethods.None,
             ConnectTimeout = timeout,
-            SslOptions = new SslClientAuthenticationOptions { EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13 },
+            SslOptions = sslOptions,
             ConnectCallback = async (context, token) =>
             {
                 if (!string.Equals(context.DnsEndPoint.Host, expectedHost, StringComparison.OrdinalIgnoreCase)) throw new GatewayException("BGW-EGRESS-DESTINATION-DENIED", 403);
@@ -44,7 +69,11 @@ public sealed class SystemRestrictedTransport : IRestrictedTransport
                 throw new HttpRequestException("No approved destination address was reachable.", last);
             }
         };
-        if (clientCertificate is not null) handler.SslOptions.ClientCertificates = [clientCertificate];
+        if (clientCertificate is not null)
+        {
+            handler.SslOptions.ClientCertificates = [clientCertificate];
+            handler.SslOptions.LocalCertificateSelectionCallback = (_, _, _, _, _) => clientCertificate;
+        }
         using HttpClient client = new(handler) { Timeout = timeout };
         using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         if ((int)response.StatusCode is >= 300 and < 400) throw new GatewayException("BGW-EGRESS-REDIRECT-DENIED", 502);

@@ -114,6 +114,7 @@ public sealed class RestrictedEgressService(
         for (int attempt = 1; ; attempt++)
         {
             using HttpRequestMessage outbound = new(operation.Method, operation.Endpoint);
+            outbound.Headers.TryAddWithoutValidation("X-Correlation-ID", request.CorrelationId.ToString("D"));
             if (operation.Method != HttpMethod.Get)
                 outbound.Content = new ByteArrayContent(body) { Headers = { ContentType = MediaTypeHeaderValue.Parse(operation.RequestContentType) } };
             X509Certificate2? clientCertificate = null;

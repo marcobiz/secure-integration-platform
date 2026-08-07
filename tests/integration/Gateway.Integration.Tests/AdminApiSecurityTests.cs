@@ -1,13 +1,18 @@
 using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
 using System.Net.Http.Json;
+using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using SecureIntegration.Gateway.Api;
@@ -32,12 +37,10 @@ public sealed class AdminApiSecurityTests
         string editorCsrf = await LoginAsync(editor, "security-admin", TestContext.Current.CancellationToken);
         string canary = "m5-e2e-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
         string syntheticConnectionString = $"Host=db.invalid;Password={Convert.ToHexString(RandomNumberGenerator.GetBytes(24))}";
-        using RSA key = RSA.Create(2048);
-        CertificateRequest certificateRequest = new("CN=M5 near-expiry", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-        certificateRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
-        using X509Certificate2 created = certificateRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(5));
+        using CertificateSet certificates = CertificateSet.Create("approved.vendor.example", DateTimeOffset.UtcNow.AddDays(5));
+        X509Certificate2 created = certificates.ClientCertificate;
         byte[] pfx = created.Export(X509ContentType.Pkcs12);
-        string privatePem = key.ExportPkcs8PrivateKeyPem();
+        string privatePem = certificates.ClientPrivateKeyPem;
         string pfxBase64 = Convert.ToBase64String(pfx);
         CertificatePublicMetadata publicMetadata = new(Convert.ToHexString(SHA256.HashData(created.RawData)), created.Subject, created.Issuer, created.NotBefore, created.NotAfter, "RSA", 2048, created.SerialNumber);
 
@@ -53,25 +56,43 @@ public sealed class AdminApiSecurityTests
         IConnectorConfigurationStore store = factory.Services.GetRequiredService<IConnectorConfigurationStore>();
         ProviderResourceCatalogRecord secret = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "instrumented", "Instrumented provider", "synthetic", "api-key", ProviderResourceType.Secret, "Vendor API key", environmentId, version.ConnectorId, "submit", "instrumented://api-key", ProviderResourceStatus.Active, "api-v1", 0, null, null, string.Empty, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
         _ = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "instrumented", "Instrumented provider", "synthetic", "certificate", ProviderResourceType.ClientCertificate, "Vendor certificate", environmentId, version.ConnectorId, "submit", "instrumented://certificate", ProviderResourceStatus.Active, "cert-resource-v1", 0, 1, publicMetadata, string.Empty, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+        string syntheticPassword = "m5-password-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(18));
+        string[] hostileResourceIds = [canary, syntheticPassword, privatePem, pfxBase64, syntheticConnectionString, "https://attacker.example/credential", "missing-resource"];
+        foreach (string hostileResourceId in hostileResourceIds)
+        {
+            ProviderResourceReference hostileReference = new("instrumented", hostileResourceId, ProviderResourceType.Secret, "api-v1");
+            try
+            {
+                ProviderResourceReferenceValidator.Validate(hostileReference);
+                GatewayException absent = await Assert.ThrowsAsync<GatewayException>(() => store.ResolveProviderResourceAsync(hostileReference, environmentId, version.ConnectorId, ["submit"], TestContext.Current.CancellationToken));
+                Assert.Equal("BGW-PROVIDER-RESOURCE-NOT-FOUND", absent.Code);
+            }
+            catch (GatewayException denied)
+            {
+                Assert.Equal("BGW-PROVIDER-RESOURCE-REFERENCE-DENIED", denied.Code);
+            }
+        }
+
+        await using RealVendorMock vendor = await RealVendorMock.StartAsync(certificates, canary, publicMetadata.FingerprintSha256, TestContext.Current.CancellationToken);
         object binding = new
         {
             environmentId,
             connectorVersion = version.Version,
-            endpoints = new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://approved.vendor.example/" },
+            endpoints = new Dictionary<string, string> { ["sample-vendor-endpoint"] = $"https://approved.vendor.example:{vendor.Port}/" },
             secretResources = new Dictionary<string, object> { ["sample-vendor-api-key"] = new { providerId = "instrumented", resourceId = "api-key", resourceType = "Secret", version = "api-v1" } },
             certificateResources = new Dictionary<string, object> { ["sample-vendor-client-certificate"] = new { providerId = "instrumented", resourceId = "certificate", resourceType = "ClientCertificate", version = "cert-resource-v1", publicMetadataRevision = 1 } }
         };
         using (HttpResponseMessage response = await PutBindingAsync(editor, version.ConnectorId, binding, editorCsrf, null)) response.EnsureSuccessStatusCode();
 
         InstrumentedProvider provider = new(canary, pfx);
-        InstrumentedTransport transport = new(canary, publicMetadata.FingerprintSha256);
+        CountingRestrictedTransport transport = new(new SystemRestrictedTransport(new X509Certificate2Collection(certificates.RootCertificate), Convert.ToHexString(SHA256.HashData(certificates.ServerCertificate.RawData))));
         PublishedConnectorCatalog runtimeCatalog = new(store, new ConnectorDefinitionValidator(), new SystemGatewayClock(), TimeSpan.FromMinutes(5));
-        RestrictedEgressService runtime = new(registry, runtimeCatalog, provider, provider, new PublicTestResolver(), transport, new SystemGatewayClock());
+        RestrictedEgressService runtime = new(registry, runtimeCatalog, provider, provider, new LoopbackResolver(), transport, new SystemGatewayClock(), new ExactLoopbackAllowance("approved.vendor.example"));
         RegisteredInstallationIdentity identity = new(installationId, tenantId, applicationId, environmentId, TenantStatus.Active, ApplicationStatus.Active, InstallationStatus.Active, Guid.NewGuid(), CredentialStatus.Active, created.RawData, DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1), "3.0.0", null);
         GatewayInvokeRequest invocation = new("1.0", new("application/json", "utf8", "{\"synthetic\":true}"), Guid.NewGuid());
 
         await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, invocation.CorrelationId), version.ConnectorId, "submit", invocation, TestContext.Current.CancellationToken));
-        Assert.Equal(0, provider.SecretInvocations); Assert.Equal(0, transport.Invocations);
+        Assert.Equal(0, provider.SecretInvocations); Assert.Equal(0, transport.Invocations); Assert.Equal(0, vendor.Requests);
 
         using HttpRequestMessage requestApproval = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approval-requests");
         requestApproval.Headers.Add("X-CSRF-TOKEN", editorCsrf);
@@ -93,7 +114,7 @@ public sealed class AdminApiSecurityTests
         approve.Headers.Add("X-CSRF-TOKEN", approverCsrf);
         using (HttpResponseMessage approved = await approver.SendAsync(approve, TestContext.Current.CancellationToken)) approved.EnsureSuccessStatusCode();
         await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, invocation.CorrelationId), version.ConnectorId, "submit", invocation, TestContext.Current.CancellationToken));
-        Assert.Equal(0, provider.SecretInvocations); Assert.Equal(0, transport.Invocations);
+        Assert.Equal(0, provider.SecretInvocations); Assert.Equal(0, transport.Invocations); Assert.Equal(0, vendor.Requests);
 
         using HttpRequestMessage publish = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}:publish") { Content = JsonContent.Create(new { expectedRowVersion = version.RowVersion, expectedPublicationRevision = 0 }) };
         publish.Headers.Add("X-CSRF-TOKEN", approverCsrf); publish.Headers.TryAddWithoutValidation("If-Match", $"\"{version.RowVersion}\"");
@@ -101,17 +122,49 @@ public sealed class AdminApiSecurityTests
             Assert.True(published.IsSuccessStatusCode, $"{published.StatusCode}: {await published.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)}");
         GatewayInvokeResponse result = await runtime.InvokeAsync(new(identity, invocation.CorrelationId), version.ConnectorId, "submit", invocation, TestContext.Current.CancellationToken);
         Assert.Equal(1, provider.SecretInvocations); Assert.Equal(1, provider.CertificateInvocations); Assert.Equal(1, transport.Invocations);
+        Assert.Equal(1, vendor.Requests); Assert.True(vendor.ApiKeyMatched); Assert.True(vendor.ClientCertificateMatched); Assert.Equal(invocation.CorrelationId, vendor.CorrelationId);
         Assert.Contains("accepted", Encoding.UTF8.GetString(Convert.FromBase64String(result.Result.Data)), StringComparison.Ordinal);
         Assert.DoesNotContain(canary, JsonSerializer.Serialize(result), StringComparison.Ordinal);
 
         int secretCount = provider.SecretInvocations; int transportCount = transport.Invocations;
         GatewayException attacker = await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, Guid.NewGuid()), version.ConnectorId, "attacker-operation", invocation with { CorrelationId = Guid.NewGuid() }, TestContext.Current.CancellationToken));
-        Assert.Equal("BGW-AUTHZ-OPERATION-DENIED", attacker.Code); Assert.Equal(secretCount, provider.SecretInvocations); Assert.Equal(transportCount, transport.Invocations); Assert.Equal(0, transport.AttackerInvocations);
+        Assert.Equal("BGW-AUTHZ-OPERATION-DENIED", attacker.Code); Assert.Equal(secretCount, provider.SecretInvocations); Assert.Equal(transportCount, transport.Invocations); Assert.Equal(1, vendor.Requests);
 
-        _ = await store.RegisterProviderResourceAsync(secret with { Id = Guid.NewGuid(), ProviderReference = "instrumented://rotated", Revision = 0, ChecksumSha256 = string.Empty, CreatedAt = DateTimeOffset.UtcNow.AddSeconds(1) }, TestContext.Current.CancellationToken);
+        ProviderResourceCatalogRecord rotatedResource = await store.RegisterProviderResourceAsync(secret with { Id = Guid.NewGuid(), ProviderReference = "instrumented://rotated", Revision = 0, ChecksumSha256 = string.Empty, CreatedAt = DateTimeOffset.UtcNow.AddSeconds(1) }, TestContext.Current.CancellationToken);
         GatewayException stale = await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, Guid.NewGuid()), version.ConnectorId, "submit", invocation with { CorrelationId = Guid.NewGuid() }, TestContext.Current.CancellationToken));
         Assert.Equal("BGW-PROVIDER-RESOURCE-REVISION-STALE", stale.Code); Assert.Equal(secretCount, provider.SecretInvocations); Assert.Equal(transportCount, transport.Invocations);
+        Assert.Equal(1, vendor.Requests);
+
+        string rotatedCanary = "m5-e2e-rotated-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+        provider.Register("instrumented://rotated", rotatedCanary); vendor.ExpectedApiKey = rotatedCanary;
+        ConnectorVersionResource version2 = await ImportAndValidateSampleAsync(editor, editorCsrf, TestContext.Current.CancellationToken, "2.0.0");
+        object binding2 = new
+        {
+            environmentId, connectorVersion = version2.Version,
+            endpoints = new Dictionary<string, string> { ["sample-vendor-endpoint"] = $"https://approved.vendor.example:{vendor.Port}/" },
+            secretResources = new Dictionary<string, object> { ["sample-vendor-api-key"] = new { providerId = "instrumented", resourceId = "api-key", resourceType = "Secret", version = "api-v1" } },
+            certificateResources = new Dictionary<string, object> { ["sample-vendor-client-certificate"] = new { providerId = "instrumented", resourceId = "certificate", resourceType = "ClientCertificate", version = "cert-resource-v1", publicMetadataRevision = 1 } }
+        };
+        using (HttpResponseMessage response = await PutBindingAsync(editor, version2.ConnectorId, binding2, editorCsrf, null)) response.EnsureSuccessStatusCode();
+        using HttpRequestMessage requestApproval2 = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version2.ConnectorId}/versions/{version2.Version}/approval-requests"); requestApproval2.Headers.Add("X-CSRF-TOKEN", editorCsrf);
+        using HttpResponseMessage requested2 = await editor.SendAsync(requestApproval2, TestContext.Current.CancellationToken); requested2.EnsureSuccessStatusCode();
+        JsonElement approvalRequest2 = await requested2.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+        using HttpResponseMessage reviewResponse2 = await editor.GetAsync($"/admin/api/v1/connectors/{version2.ConnectorId}/versions/{version2.Version}/approval-review", TestContext.Current.CancellationToken); reviewResponse2.EnsureSuccessStatusCode();
+        JsonElement review2 = await reviewResponse2.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+        using HttpRequestMessage approve2 = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version2.ConnectorId}/versions/{version2.Version}/approvals") { Content = JsonContent.Create(new { approvalRequestId = approvalRequest2.GetProperty("id").GetString(), expectedDigestSha256 = review2.GetProperty("digestSha256").GetString() }) }; approve2.Headers.Add("X-CSRF-TOKEN", approverCsrf);
+        using (HttpResponseMessage approved2 = await approver.SendAsync(approve2, TestContext.Current.CancellationToken)) approved2.EnsureSuccessStatusCode();
+        using HttpRequestMessage publish2 = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version2.ConnectorId}/versions/{version2.Version}:publish") { Content = JsonContent.Create(new { expectedRowVersion = version2.RowVersion, expectedPublicationRevision = 1 }) }; publish2.Headers.Add("X-CSRF-TOKEN", approverCsrf); publish2.Headers.TryAddWithoutValidation("If-Match", $"\"{version2.RowVersion}\"");
+        using (HttpResponseMessage published2 = await approver.SendAsync(publish2, TestContext.Current.CancellationToken)) published2.EnsureSuccessStatusCode();
+        GatewayInvokeRequest rotatedInvocation = invocation with { CorrelationId = Guid.NewGuid() };
+        _ = await runtime.InvokeAsync(new(identity, rotatedInvocation.CorrelationId), version2.ConnectorId, "submit", rotatedInvocation, TestContext.Current.CancellationToken);
+        Assert.Equal(2, provider.SecretInvocations); Assert.Equal(2, transport.Invocations); Assert.Equal(2, vendor.Requests); Assert.Equal(rotatedInvocation.CorrelationId, vendor.CorrelationId);
+
+        _ = await store.RegisterProviderResourceAsync(rotatedResource with { Id = Guid.NewGuid(), Status = ProviderResourceStatus.Disabled, Revision = 0, ChecksumSha256 = string.Empty, CreatedAt = DateTimeOffset.UtcNow.AddSeconds(2) }, TestContext.Current.CancellationToken);
+        GatewayException disabled = await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, Guid.NewGuid()), version2.ConnectorId, "submit", invocation with { CorrelationId = Guid.NewGuid() }, TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-PROVIDER-RESOURCE-REVISION-STALE", disabled.Code); Assert.Equal(2, provider.SecretInvocations); Assert.Equal(2, transport.Invocations); Assert.Equal(2, vendor.Requests);
         Assert.DoesNotContain(canary, JsonSerializer.Serialize(registry.SnapshotAuditEvents()), StringComparison.Ordinal);
+        Assert.DoesNotContain(rotatedCanary, JsonSerializer.Serialize(registry.SnapshotAuditEvents()), StringComparison.Ordinal);
+        Assert.DoesNotContain(canary, reviewJson, StringComparison.Ordinal);
     }
     [Fact]
     public async Task M5_IT_Anonymous_is_denied_and_security_headers_are_present()
@@ -615,11 +668,12 @@ public sealed class AdminApiSecurityTests
         return (await GetCsrfAsync(client, cancellationToken), setCookie[..setCookie.IndexOf(';')]);
     }
 
-    private static async Task<ConnectorVersionResource> ImportAndValidateSampleAsync(HttpClient client, string csrf, CancellationToken cancellationToken)
+    private static async Task<ConnectorVersionResource> ImportAndValidateSampleAsync(HttpClient client, string csrf, CancellationToken cancellationToken, string? version = null)
     {
         using HttpResponseMessage sample = await client.GetAsync("/admin/api/v1/connectors/sample", cancellationToken);
         sample.EnsureSuccessStatusCode();
-        using System.Text.Json.JsonDocument definition = await System.Text.Json.JsonDocument.ParseAsync(await sample.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
+        using System.Text.Json.JsonDocument source = await System.Text.Json.JsonDocument.ParseAsync(await sample.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
+        using System.Text.Json.JsonDocument definition = version is null ? System.Text.Json.JsonDocument.Parse(source.RootElement.GetRawText()) : System.Text.Json.JsonDocument.Parse(source.RootElement.GetRawText().Replace("\"version\": \"1.0.0\"", $"\"version\": \"{version}\"", StringComparison.Ordinal));
         using HttpRequestMessage validate = new(HttpMethod.Post, "/admin/api/v1/connectors:validate") { Content = JsonContent.Create(new ConnectorImportRequest(definition.RootElement.Clone())) };
         validate.Headers.Add("X-CSRF-TOKEN", csrf);
         using HttpResponseMessage validationResponse = await client.SendAsync(validate, cancellationToken);
@@ -671,15 +725,17 @@ public sealed class AdminApiSecurityTests
 
     private sealed class InstrumentedProvider(string canary, byte[] pfx) : ISecretValueProvider, IClientCertificateProvider
     {
+        private readonly Dictionary<string, string> secrets = new(StringComparer.Ordinal) { ["instrumented://api-key"] = canary };
         public int SecretInvocations { get; private set; }
         public int CertificateInvocations { get; private set; }
+
+        public void Register(string logicalReference, string value) => secrets[logicalReference] = value;
 
         public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Assert.Equal("instrumented://api-key", logicalReference);
             SecretInvocations++;
-            return Task.FromResult(canary);
+            return Task.FromResult(secrets.TryGetValue(logicalReference, out string? value) ? value : throw new InvalidOperationException("Unknown synthetic secret reference."));
         }
 
         public Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken)
@@ -687,32 +743,177 @@ public sealed class AdminApiSecurityTests
             cancellationToken.ThrowIfCancellationRequested();
             Assert.Equal("instrumented://certificate", logicalReference);
             CertificateInvocations++;
-            return Task.FromResult(X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.EphemeralKeySet | X509KeyStorageFlags.Exportable));
+            return Task.FromResult(X509CertificateLoader.LoadPkcs12(pfx, null, X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable));
         }
     }
 
-    private sealed class InstrumentedTransport(string expectedCanary, string expectedFingerprint) : IRestrictedTransport
+    private sealed class CountingRestrictedTransport(IRestrictedTransport inner) : IRestrictedTransport
     {
         public int Invocations { get; private set; }
-        public int AttackerInvocations { get; private set; }
 
-        public Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
+        public async Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!string.Equals(request.RequestUri?.DnsSafeHost, "approved.vendor.example", StringComparison.Ordinal)) AttackerInvocations++;
-            Assert.Equal("approved.vendor.example", request.RequestUri?.DnsSafeHost);
-            Assert.Equal(expectedCanary, request.Headers.GetValues("X-Vendor-Api-Key").Single());
-            Assert.Equal(expectedFingerprint, Convert.ToHexString(SHA256.HashData(clientCertificate!.RawData)));
-            Assert.Single(approvedAddresses); Assert.Equal(IPAddress.Parse("203.0.113.10"), approvedAddresses[0]);
             Invocations++;
-            return Task.FromResult(new ExternalResponse(200, "application/json", "{\"accepted\":true,\"credential\":\"[REDACTED]\"}"u8.ToArray()));
+            return await inner.SendAsync(request, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, cancellationToken);
         }
     }
 
-    private sealed class PublicTestResolver : IHostResolver
+    private sealed class LoopbackResolver : IHostResolver
     {
         public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) =>
-            Task.FromResult(new[] { IPAddress.Parse("203.0.113.10") });
+            Task.FromResult(new[] { IPAddress.Loopback });
+    }
+
+    private sealed class ExactLoopbackAllowance(string host) : IPrivateDestinationAllowance
+    {
+        public bool IsAllowed(string candidateHost, IPAddress address) =>
+            string.Equals(candidateHost, host, StringComparison.OrdinalIgnoreCase) && IPAddress.IsLoopback(address);
+    }
+
+    private sealed class CertificateSet : IDisposable
+    {
+        private readonly RSA rootKey;
+        private readonly RSA serverKey;
+        private readonly RSA clientKey;
+
+        private CertificateSet(RSA rootKey, RSA serverKey, RSA clientKey, X509Certificate2 root, X509Certificate2 server, X509Certificate2 client)
+        {
+            this.rootKey = rootKey; this.serverKey = serverKey; this.clientKey = clientKey;
+            RootCertificate = root; ServerCertificate = server; ClientCertificate = client;
+        }
+
+        public X509Certificate2 RootCertificate { get; }
+        public X509Certificate2 ServerCertificate { get; }
+        public X509Certificate2 ClientCertificate { get; }
+        public string ClientPrivateKeyPem => clientKey.ExportPkcs8PrivateKeyPem();
+
+        public static CertificateSet Create(string serverHost, DateTimeOffset clientExpiry)
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            RSA rootKey = RSA.Create(2048); RSA serverKey = RSA.Create(2048); RSA clientKey = RSA.Create(2048);
+            CertificateRequest rootRequest = new("CN=M5 Synthetic Test Root", rootKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            rootRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+            rootRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
+            X509Certificate2 root = rootRequest.CreateSelfSigned(now.AddMinutes(-5), now.AddDays(10));
+
+            CertificateRequest serverRequest = new($"CN={serverHost}", serverKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            serverRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+            serverRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, true));
+            serverRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new("1.3.6.1.5.5.7.3.1") }, true));
+            SubjectAlternativeNameBuilder san = new(); san.AddDnsName(serverHost); serverRequest.CertificateExtensions.Add(san.Build());
+            using X509Certificate2 issuedServer = serverRequest.Create(root, now.AddMinutes(-2), now.AddDays(2), RandomNumberGenerator.GetBytes(16));
+            using X509Certificate2 serverWithKey = issuedServer.CopyWithPrivateKey(serverKey);
+            X509Certificate2 server = X509CertificateLoader.LoadPkcs12(serverWithKey.Export(X509ContentType.Pkcs12), null, X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);
+
+            CertificateRequest clientRequest = new("CN=M5 near-expiry client", clientKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            clientRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+            clientRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
+            clientRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new("1.3.6.1.5.5.7.3.2") }, true));
+            using X509Certificate2 issuedClient = clientRequest.Create(root, now.AddMinutes(-2), clientExpiry, RandomNumberGenerator.GetBytes(16));
+            using X509Certificate2 clientWithKey = issuedClient.CopyWithPrivateKey(clientKey);
+            X509Certificate2 client = X509CertificateLoader.LoadPkcs12(clientWithKey.Export(X509ContentType.Pkcs12), null, X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.Exportable);
+            return new(rootKey, serverKey, clientKey, root, server, client);
+        }
+
+        public void Dispose()
+        {
+            ClientCertificate.Dispose(); ServerCertificate.Dispose(); RootCertificate.Dispose();
+            clientKey.Dispose(); serverKey.Dispose(); rootKey.Dispose();
+        }
+    }
+
+    private sealed class RealVendorMock : IAsyncDisposable
+    {
+        private readonly TcpListener listener;
+        private readonly CancellationTokenSource cancellation = new();
+        private readonly X509Certificate2 serverCertificate;
+        private string expectedApiKey;
+        private readonly string expectedFingerprint;
+        private Task? serverTask;
+
+        private RealVendorMock(TcpListener listener, X509Certificate2 serverCertificate, string expectedApiKey, string expectedFingerprint)
+        {
+            this.listener = listener; this.serverCertificate = serverCertificate; this.expectedApiKey = expectedApiKey; this.expectedFingerprint = expectedFingerprint;
+            Port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        }
+
+        public int Port { get; }
+        public int Requests { get; private set; }
+        public bool ApiKeyMatched { get; private set; }
+        public bool ClientCertificateMatched { get; private set; }
+        public Guid? CorrelationId { get; private set; }
+        public string ExpectedApiKey { get => expectedApiKey; set => expectedApiKey = value; }
+
+        public static Task<RealVendorMock> StartAsync(CertificateSet certificates, string expectedApiKey, string expectedFingerprint, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            TcpListener listener = new(IPAddress.Loopback, 0); listener.Start();
+            RealVendorMock mock = new(listener, certificates.ServerCertificate, expectedApiKey, expectedFingerprint);
+            mock.serverTask = mock.RunAsync();
+            return Task.FromResult(mock);
+        }
+
+        private async Task RunAsync()
+        {
+            try
+            {
+                while (!cancellation.IsCancellationRequested)
+                {
+                    using TcpClient client = await listener.AcceptTcpClientAsync(cancellation.Token);
+                    await HandleAsync(client);
+                }
+            }
+            catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+            catch (SocketException) when (cancellation.IsCancellationRequested) { }
+        }
+
+        private async Task HandleAsync(TcpClient client)
+        {
+                using SslStream tls = new(client.GetStream(), false, (_, certificate, _, _) =>
+                {
+                    ClientCertificateMatched = certificate is not null && string.Equals(Convert.ToHexString(SHA256.HashData(certificate.GetRawCertData())), expectedFingerprint, StringComparison.Ordinal);
+                    return ClientCertificateMatched;
+                });
+                await tls.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+                {
+                    ServerCertificate = serverCertificate,
+                    ClientCertificateRequired = true,
+                    EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                    CertificateRevocationCheckMode = X509RevocationMode.NoCheck
+                }, cancellation.Token);
+                byte[] terminator = "\r\n\r\n"u8.ToArray();
+                using MemoryStream headerBuffer = new();
+                int matched = 0;
+                while (headerBuffer.Length < 16384)
+                {
+                    int value = tls.ReadByte(); if (value < 0) throw new IOException("Unexpected end of HTTPS request.");
+                    headerBuffer.WriteByte((byte)value);
+                    matched = value == terminator[matched] ? matched + 1 : value == terminator[0] ? 1 : 0;
+                    if (matched == terminator.Length) break;
+                }
+                string[] lines = Encoding.ASCII.GetString(headerBuffer.ToArray()).Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
+                Dictionary<string, string> headers = lines.Skip(1).Select(line => line.Split(':', 2)).Where(parts => parts.Length == 2)
+                    .ToDictionary(parts => parts[0], parts => parts[1].Trim(), StringComparer.OrdinalIgnoreCase);
+                if (headers.TryGetValue("Content-Length", out string? lengthText) && int.TryParse(lengthText, out int length) && length > 0)
+                {
+                    byte[] body = new byte[length]; await tls.ReadExactlyAsync(body, cancellation.Token);
+                }
+                Requests++;
+                ApiKeyMatched = headers.TryGetValue("X-Vendor-Api-Key", out string? key) && string.Equals(key, expectedApiKey, StringComparison.Ordinal);
+                CorrelationId = headers.TryGetValue("X-Correlation-ID", out string? correlationText) && Guid.TryParse(correlationText, out Guid correlation) ? correlation : null;
+                string response = ApiKeyMatched && ClientCertificateMatched
+                    ? "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 43\r\n\r\n{\"accepted\":true,\"credential\":\"[REDACTED]\"}"
+                    : "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+                await tls.WriteAsync(Encoding.ASCII.GetBytes(response), cancellation.Token);
+                await tls.FlushAsync(cancellation.Token);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            cancellation.Cancel(); listener.Stop();
+            if (serverTask is not null) { try { await serverTask; } catch (SocketException) when (cancellation.IsCancellationRequested) { } }
+            cancellation.Dispose();
+        }
     }
 
     private static string RepositoryRoot()
@@ -743,6 +944,8 @@ public sealed class AntiExfiltrationFactory : AdminDevelopmentFactory
         {
             services.RemoveAll<IConnectorApprovalPolicy>();
             services.AddSingleton<IConnectorApprovalPolicy, DeterministicFourEyesApprovalPolicy>();
+            services.Configure<RateLimiterOptions>(options => options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(_ =>
+                RateLimitPartition.GetFixedWindowLimiter("anti-exfiltration", _ => new FixedWindowRateLimiterOptions { PermitLimit = 1000, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true })));
         });
     }
 
