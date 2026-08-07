@@ -125,3 +125,13 @@ fino al completamento del response body bounded e del parsing XML. Il subset Fau
 Il server Kestrel sotto `tools/m6/SyntheticSoapServer` e i test associati qualificano
 esclusivamente il profilo sintetico. Non costituiscono caratterizzazione o conformità
 SOGEI e non autorizzano un connector healthcare production.
+
+## M6 Wave 2 certificate/signing implementation note
+
+The certificate/signing primitive consumes the frozen outbound side only. Its public
+methods accept an immutable server-derived execution context, a named profile and
+logical binding IDs fixed by that profile. A protected resolver produces the exact
+ConnectorVersion/operation/profile/Environment/endpoint/catalog-revision binding;
+provider locators never appear in `SignJwtAsync` or `ResolveClientCertificateAsync`.
+The implementation does not inspect the inbound certificate, create another principal,
+branch on `InstallationKind`, or fall back to the Broker when central custody is absent.

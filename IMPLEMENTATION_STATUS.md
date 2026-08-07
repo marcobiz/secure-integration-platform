@@ -16,6 +16,7 @@ Aggiornato: 2026-08-07
 | M5.5 — Direct Gateway Access | Implementato localmente; CI e review indipendente pending | product candidate `1b3a3b38fa7d01c8c5f96af0324d040e412ac0be`; branch `m55/direct-gateway-access` |
 | M6 — auth HTTP/OAuth primitives | Remediation mirata dei 7 finding qualificata | PR #9 product commit `9a7db4b`: CI exact-head 21/21 PASS; authority capability da snapshot Published, bearer destination-bound, correlation, refresh tombstone, query hardening, user-agent boundary e diagnostic redaction; nessun connector sanitario production |
 | M6 — SOAP/Basic/Session primitives | Implementato sul branch; remediation PR #10 e CI/review pending | AP-01/AP-02/AP-07 sintetiche, cache/stamp/deadline/Fault hardened, server SOAP HTTPS reale e 21 casi mirati PASS locali |
+| M6 — Certificate, Signing and outbound mTLS primitives | Implementazione locale Wave 2; gate finale/CI pending | branch `m6/auth-cert-signing`; 31 test AP-05/AP-06 PASS |
 | M3B e milestone/connector production successivi | Non iniziati | nessun cloud reale, connector sanitario production o adapter commerciale |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
@@ -142,6 +143,24 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 - nessuna modifica all'autenticazione inbound, nessun OAuth, certificate/signing, healthcare production, SAML, WS-Security, XML-DSig o scripting XML generico;
 - report: `docs/testing/M6-SOAP-AUTH-IMPLEMENTATION-REPORT.md`.
 
+### M6 — Certificate, Signing and outbound mTLS primitives
+
+- modulo Core provider-neutral `Authentication.CertificateSigning`, separato da inbound
+  Broker/Direct e senza dipendenze cloud o Healthcare Pack;
+- `IKeyOperationProvider` ristretto a signing digest e metadata pubblici: nessuna API di
+  export private key, nessun KMS universale e nessun fallback automatico Broker;
+- JWT RS256 con issuer/audience/subject/claim allowlist/lifetime/key binding fissati dal
+  profilo, `jti` server-generated con replay guard bounded e verifica della firma remota
+  tramite SPKI pubblico approvato;
+- mTLS outbound purpose-bound a ConnectorVersion, operation/profile, Environment,
+  endpoint e catalog revision, con fingerprint/validity/key type/strength/EKU/key usage;
+- rotate/disable risolti per invocazione senza private-key/certificate cache: revision 1
+  non viene riutilizzata dopo revision 2 e disable nega prima del provider/network;
+- provider sintetico con chiavi/certificati per-run e server TLS locale che richiede il
+  client certificate atteso; hostname e certificato errato sono negati;
+- 31 test dedicati PASS locali. Connector FVG/Umbria reali, lifecycle autoritativo,
+  OAuth/PKCE e SOAP/session restano esclusi e **NO-GO**.
+
 La run split-host `m3a-live-20260804-131718` è stata classificata **BLOCKED — PRE-HANDOFF INFRASTRUCTURE VALIDATION**: live/readiness erano HTTP 200, ma Docker health falliva per SAN incompatibile e i profili Windows Firewall erano disabilitati. Il runner VM non è stato eseguito e P02 non è stato testato. Cleanup PASS ha lasciato zero risorse della run e ha rimosso l'handoff non utilizzato. I fix health/TLS e firewall reversibile sono implementati. Il runner predispone ora un secondo switch Hyper-V Internal e una NIC VM `M3A-Isolated`, senza NAT/gateway/DNS/forwarding, con rollback SYSTEM, isolamento del profilo Private e probe VM→HOST pre-handoff. La run è storica ed è superata dal PASS product gate `m3a-live-20260805-094131`. Dettagli: `docs/reviews/M3A-BLOCKED-RUN-20260804-131718.md`.
 
 La successiva run `m3a-live-20260804-153103` è **BLOCKED — ROLLBACK WINDOW EXPIRED**:
@@ -183,9 +202,11 @@ Dettagli: `docs/reviews/M3A-SPLIT-HOST-BLOCKED-20260805.md`.
 | `Broker.Core.Tests` | 26 PASS | lifecycle/grant, AEAD/nonce/AAD/version, framing e hard limits |
 | `Broker.Integration.Tests` | 28 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction, CNG, handshake Schannel e regressioni harness M3 |
 | `VerticalSlice.Tests` | 1 PASS | vertical slice e negative/security path |
-| `Gateway.Unit.Tests` | 35 PASS | security M2/M3 e 10 contract/lifecycle/cache/bounds/corruption test M4 |
-| `Gateway.Integration.Tests` | 9 PASS | API/Admin e schema; test real-PG condizionali eseguiti nel gate PG18 |
-| Totale suite | 99 PASS | 26 Broker Core + 28 Broker integration + 35 Gateway unit + 9 Gateway integration + 1 E2E |
+| `Gateway.Unit.Tests` | 63 PASS | security M2-M5.5, contract/lifecycle/cache/bounds/corruption e runtime principal |
+| `Authentication.CertificateSigning.Tests` | 31 PASS | RS256/claim/replay/wrong-key, custody/redaction, purpose-bound mTLS, rotation/disable e handshake TLS locale |
+| `Gateway.Integration.Tests` | 34 PASS, 10 conditional SKIP | API/Admin/schema; i 10 test PostgreSQL/full-stack condizionali richiedono il gate dedicato |
+| `Architecture.Tests` | 10 PASS | boundary Core/provider, CI, provisioning e OpenAPI |
+| Totale suite locale ordinaria | 193 PASS, 10 conditional SKIP | 26 Broker Core + 28 Broker integration + 63 Gateway unit + 34 Gateway integration + 31 M6 + 10 architecture + 1 E2E |
 | CI `m3-deterministic-container-slice` | PASS, run `30903757495`, commit `91963ce` | Gateway/PostgreSQL 18/Vault/vendor reali, matrice positiva/negativa, non-root/read-only, redazione, cleanup ed evidence SHA-256 `A52CACB8…FCA30` |
 | PostgreSQL 18 effimero locale | 2 PASS | migration, FORCE RLS, registry enrollment/grant/replay/revoca |
 | CI `gateway-postgresql-18` | PASS | run `30896803567`: PostgreSQL 18, migration apply/no-op, checksum, ruoli, FORCE RLS, tenant isolation e cleanup |

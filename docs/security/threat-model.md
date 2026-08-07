@@ -9,6 +9,7 @@
 - Admin identities e audit trail.
 - Payload applicativi in transito.
 - Artefatti di release e plugin.
+- Chiavi di firma provider-side, certificati client outbound e JWT compatti in memoria.
 
 ## Attori e livelli di fiducia
 
@@ -76,6 +77,10 @@
 | TM-047 | I/E/D | Token/resource endpoint, refresh o cache vengono usati per SSRF, redirect, bearer exfiltration, scope escalation, stale token dopo rotation/disable o leakage diagnostico. | Endpoint/scopes/audience derivati dallo snapshot, query OAuth riservata non duplicabile, DNS/IP policy e `IRestrictedTransport`, nessun attach API, dispatch endpoint-bound, cache stamp completo, generation tombstone + revalidation dopo await, refresh single-flight/no stale fallback, tipi sensibili non-record con JSON/ToString redatti. | Cache in-process perde le sessioni al restart; scale-out e revocation endpoint richiedono una decisione futura, non Redis implicito. |
 | TM-048 | S/I/T/D | Fixation, furto, replay, crescita illimitata o riuso stale di una sessione/interaction SOAP upstream. | Reference casuali opache; raw session interna; una interaction e una generation corrente per security key; completion atomica; cap globale 256 ed eviction lazy; digest precedente negato; stamp server-side `Active` e revisioni binding/endpoint/credential verificati prima dell'uso; logout/invalidation. | Una compromissione della memoria del Gateway resta nella TCB; la cache M6 è in-process e non abilita scale-out. |
 | TM-049 | T/I/D | SOAP/XML malevolo usa DTD, external entity, namespace/Fault confusion, body stalled o risposta oversized per esfiltrare, provocare re-login o degradare il Gateway. | SOAP 1.1/1.2 e action compilate; DTD/entity/resolver disabilitati; QName/cardinalità Fault esatti; ambiguità negata; size/depth/node/attribute limits; deadline su header/body/parsing; Fault sanitizzati e restricted egress. | Schemi healthcare reali non sono ancora caratterizzati; nessun connector production è autorizzato. |
+| TM-050 | T/E | Algorithm confusion (`none`, HS/RS), key substitution o claim privilegiati trasformano una firma JWT in un signing oracle. | RS256 hard-coded; profilo immutabile per issuer/audience/subject/lifetime/key binding; claim allowlist e reserved-claim denial; verifica provider-side result con SPKI pubblico approvato. | Il provider e il Gateway restano nella TCB; un profilo ufficiale errato richiede nuova characterization e approval. |
+| TM-051 | S/T/E | Un certificato di firma viene sostituito al certificato mTLS, oppure una revisione ruotata/disabilitata resta in cache. | Purpose separati, binding esatto a ConnectorVersion/operation/profile/Environment/endpoint/catalog revision, metadata fingerprint/version/validity/key strength, risoluzione per invocazione e deny prima del provider. | Revocation online della CA non e introdotta dal profilo sintetico; la policy autoritativa resta da caratterizzare. |
+| TM-052 | I/E | La primitive esporta una private key/PFX o esegue un fallback automatico al Broker quando manca custody centrale. | `IKeyOperationProvider` espone solo metadata pubblici e `SignDigestAsync`; mTLS riceve soltanto un handle provider-backed; failure capability esplicito e nessun fallback/local handoff. | Gateway/provider host privilegiati possono osservare o usare handle in memoria; Administrator/SYSTEM resta rischio residuo dichiarato. |
+| TM-053 | I/R | JWT, claim, locator, certificate bytes o dettagli provider compaiono in errori/log/evidence. | Eccezioni a codice stabile senza inner provider exception, nessun logging nella primitive, test canary e secret scan; test TLS usa materiale per-run non persistito. | Dump di processo privilegiato e tracing aggiunto in futuro richiedono nuova review/redaction test. |
 
 ## Analisi degli scenari obbligatori
 
@@ -106,6 +111,22 @@ la chiave privata della propria identita inbound: la protezione del key store cl
 responsabilita del deployment. Compromissione della chiave non consente di scegliere
 Tenant, Application, endpoint o secret binding, ma consente le operation gia concesse
 fino a revoca. Grant minimo, rotation e monitoraggio audit restano obbligatori.
+
+### M6 certificate, signing and outbound mTLS primitives
+
+La primitive non implementa il lifecycle FVG/Umbria e non rende production-ready alcun
+Connector sanitario. `SEC-M6-001` mappa la matrice claim/algoritmo, wrong-key, replay e
+lifetime sui test `M6_RS256_positive_is_policy_bound_and_remote_signed`,
+`M6_JWT_security_sensitive_claim_override_is_denied_before_key_use`,
+`M6_JWT_wrong_key_result_is_rejected_after_remote_operation` e
+`M6_JWT_replayed_identifier_and_missing_capability_fail_closed`. `SEC-M6-002` mappa
+purpose/scope/rotation/disable sui test `M6_MTLS_scope_and_purpose_mismatch_deny_before_provider`,
+`M6_MTLS_rotation_uses_revision_two_and_does_not_reuse_revision_one` e
+`M6_MTLS_disabled_binding_denies_before_metadata_certificate_or_network`. `SEC-M6-003`
+mappa handshake, hostname e certificate rejection sui test del server mTLS locale.
+`SEC-M6-004` mappa non-exportability e redaction sul test
+`M6_JWT_provider_failure_is_redacted_and_private_key_is_not_in_the_capability_surface`
+e sul secret scan repository.
 
 ## Criteri di revisione
 

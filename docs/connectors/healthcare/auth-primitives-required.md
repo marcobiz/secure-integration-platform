@@ -25,6 +25,12 @@ This classification follows the actual connector waves in [M6-IMPLEMENTATION-PLA
 - AP-06 purpose-bound mTLS client authentication;
 - explicit certificate/key purpose separation for FVG signing and Umbria signing versus mTLS.
 
+Implementation state (2026-08-07): AP-05 and AP-06 have a synthetic, provider-neutral
+Core implementation on `m6/auth-cert-signing`. This is primitive evidence only. It does
+not confirm FVG/Umbria claims, lifecycle, endpoint, custody or production readiness.
+The AP-03 PKCE extension belongs to the independent HTTP/OAuth track and is not part of
+the certificate/signing boundary.
+
 ### DEFER
 
 - generic SAML and generic WS-Security frameworks;

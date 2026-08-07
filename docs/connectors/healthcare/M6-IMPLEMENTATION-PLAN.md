@@ -154,7 +154,7 @@ After the public runtime/auth contracts are explicitly authorized and frozen, th
 |---|---|---|---|
 | A - `auth-soap` | After explicit implementation authorization, with synthetic profiles | AP-01/AP-02/AP-07, SOAP mock, XML/fault/redaction tests | SOGEI profile mapping |
 | B - `auth-http` | After explicit implementation authorization, with synthetic profiles | AP-03/AP-04, OAuth mock, attempt/token lifecycle tests | Lombardia and FVG profile mapping |
-| C - certificate/signing | After explicit implementation authorization, with generated per-run material | AP-05/AP-06, purpose/rotation/replay tests | FVG signing and Umbria profile mapping |
+| C - certificate/signing | Implemented locally after explicit authorization; final CI/review pending | AP-05/AP-06, purpose/rotation/replay tests and local synthetic mTLS server | FVG signing and Umbria profile mapping remain blocked on characterization |
 | D1 - SOGEI characterization | In parallel with A | Authoritative operation/schema/fault matrix | Production SOGEI connector |
 | D2 - Lombardia characterization | In parallel with B | Resolved helper/grant/resource profiles | Production Lombardia connector |
 | D3 - FVG characterization | In parallel with B/C | OAuth/JWT/API profile | Production FVG connector |

@@ -11,7 +11,7 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | FR-003 | M1 | `IT_BRK_Authorized_application_uses_pipe_and_unauthorized_hash_is_denied`, pipe ACL, HMAC/grant negative; live identities aperte |
 | FR-004 | M1 | `UT_BRK_LocalSecretLifecycle`, idempotent/cross-Application test, forbidden classes, API surface |
 | FR-005 | M1 | AEAD roundtrip/tamper/rotation + nonce/AAD/unknown-version/malformed suite + Installation differentiation |
-| FR-006 | M1/M7 | M1 HMAC lifecycle/grant/reopen; firma/certificato: M7 |
+| FR-006 | M1/M6/M7 | M1 HMAC lifecycle/grant/reopen; M6 Wave 2 `M6_RS256_positive_is_policy_bound_and_remote_signed`, wrong-key/claim/replay/rotation matrix e purpose-bound mTLS; lifecycle service-specific resta M7/Connector Pack |
 | FR-007 | M2 | `UT_GTW_Enrollment_PoP_derives_tenant_and_replay_is_rejected`, `UT_GTW_Invoke_contract_has_no_client_controlled_endpoint_or_secret_reference`, `UT_GTW_Cross_tenant_grant_is_rejected` |
 | FR-008 | M3 | CI `m3-deterministic-container-slice` PASS; **M3A PASS-LIVE** run `m3a-live-20260805-094131`: P02/Windows Service, Legacy standard user, P01/P03–P07 e N01–N14; M3B PENDING |
 | FR-009 | M8 | `E2E-CON-ManagedConnector` |
@@ -29,9 +29,9 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 
 | Req | Test/evidence prevista |
 |---|---|
-| NFR-001 | `UT_SEC_Audit_is_metadata_only_and_excludes_payload_and_credentials`, `IT_GTW_Invalid_JSON_does_not_echo_canary_or_exception_details`, repository secret scan; M0/M1 Event Log 11-canary PASS-LIVE; M3-N15 canary scan container PASS |
+| NFR-001 | `UT_SEC_Audit_is_metadata_only_and_excludes_payload_and_credentials`, `IT_GTW_Invalid_JSON_does_not_echo_canary_or_exception_details`, M6 provider-failure canary/redaction test, repository secret scan; M0/M1 Event Log 11-canary PASS-LIVE; M3-N15 canary scan container PASS |
 | NFR-002 | `UT_EGR_Ungranted_operation_is_denied_before_DNS_vault_or_transport`, `UT_EGR_Private_or_loopback_destination_is_rejected_before_transport`, cross-Tenant grant test |
-| NFR-003 | M2 transport TLS 1.2/1.3, hostname validation e DNS pinning; M3 synthetic CA/HTTPS/mTLS e certificato errato PASS in container; Key Vault/Managed Identity live PENDING |
+| NFR-003 | M2 transport TLS 1.2/1.3, hostname validation e DNS pinning; M3 synthetic CA/HTTPS/mTLS e certificato errato PASS in container; M6 purpose-bound mTLS server locale, hostname/cert rejection, expiry/purpose/rotation PASS; Key Vault/Managed Identity live PENDING |
 | NFR-004 | IPC exact boundary/oversize pass; aggregate stream/backpressure aperti |
 | NFR-005 | M1 deadline/cancel/idempotent delete; M2 `UT_EGR_Transient_retry_occurs_only_for_idempotent_operation`; circuit breaker resta M7 |
 | NFR-006 | M2 correlation ID firmato/auditato e `traceparent` obbligatorio; propagazione Gateway→vendor PASS M3A container e Broker→Gateway PASS-LIVE run `m3a-live-20260805-094131` |
@@ -141,6 +141,19 @@ PKCE, `client_credentials` grant, production profiles, SOAP/session and certific
 | Core/auth-writer boundary e deferred scope | `M6_CT_SOAP_writer_depends_only_on_public_Core_runtime_and_provider_abstractions`; `M6_CT_SOAP_writer_exposes_no_raw_session_resolver_generic_scripting_or_deferred_auth_framework` | PASS local |
 | TM-048 session fixation/stale/replay | AP-02 negative suite, rotation/disable/logout and challenge replay tests | PASS local |
 | TM-049 SOAP/XML parser and fault confusion | XML security corpus and real HTTP fault/malformed/oversize tests | PASS local |
+
+## M6 Certificate, Signing and mTLS primitives - Wave 2 synthetic
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| RS256 fixed policy and claim authority | `M6_RS256_positive_is_policy_bound_and_remote_signed`; reserved claim theory for alg/kid/iss/aud/sub/nbf/exp/jti; duplicate/unapproved claims; excessive lifetime | PASS local |
+| Wrong key, metadata and replay denial | `M6_JWT_wrong_key_result_is_rejected_after_remote_operation`; stale metadata; replayed jti; binding purpose/scope denial | PASS local |
+| Provider-side custody/non-exportability | `M6_JWT_provider_failure_is_redacted_and_private_key_is_not_in_the_capability_surface`; `IKeyOperationProvider` surface architecture check | PASS local; real provider qualification PENDING |
+| Purpose-bound mTLS metadata | positive, expired, wrong-purpose, near-expiry, disabled and exact ConnectorVersion/operation/profile/Environment/endpoint/revision tests | PASS local |
+| Rotation/disable fail-closed | signing and mTLS revision 1 -> revision 2 tests; disabled tests assert zero subsequent provider use | PASS local |
+| Synthetic HTTPS/mTLS | real local TLS 1.2/1.3 handshake with required expected client certificate; wrong hostname and wrong certificate rejected through pinned restricted transport | PASS local |
+| Redaction and repository material | provider canary exception test; runtime-generated certificates only; repository secret scan | Test PASS; scan pending final gate |
+| Production FVG/Umbria lifecycle | Explicitly excluded pending authoritative characterization and custody approval | NO-GO |
 
 ## Security threats
 
