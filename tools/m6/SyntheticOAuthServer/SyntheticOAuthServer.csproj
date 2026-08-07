@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <AssemblyName>SecureIntegration.M6.SyntheticOAuthServer</AssemblyName>
+    <RootNamespace>SecureIntegration.M6.SyntheticOAuthServer</RootNamespace>
+  </PropertyGroup>
+</Project>

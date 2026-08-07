@@ -575,6 +575,13 @@
           "SecureIntegration.Providers.Abstractions": "[1.0.0, )"
         }
       },
+      "SecureIntegration.Gateway.ConnectorRuntime.Auth.Http": {
+        "type": "Project",
+        "dependencies": {
+          "SecureIntegration.Gateway.Application": "[1.0.0, )",
+          "SecureIntegration.Providers.Abstractions": "[1.0.0, )"
+        }
+      },
       "SecureIntegration.Gateway.Domain": {
         "type": "Project"
       },
@@ -586,6 +593,9 @@
           "SecureIntegration.Gateway.Domain": "[1.0.0, )",
           "SecureIntegration.Providers.Abstractions": "[1.0.0, )"
         }
+      },
+      "SecureIntegration.M6.SyntheticOAuthServer": {
+        "type": "Project"
       },
       "SecureIntegration.Providers.Abstractions": {
         "type": "Project"

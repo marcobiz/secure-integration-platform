@@ -110,6 +110,19 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | OpenAPI e runtime wire contract | `M5_UT_Runtime_wire_contract_exports_all_stable_admin_audit_values`; `npm run check:api`; `npm run check:runtime` | PASS local; final gate pending |
 | M6 auth contract freeze | `docs/architecture/connector-runtime-auth-contract.md`; architecture tests | Documented; independent review pending |
 
+## M6 HTTP/OAuth outbound primitives
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| AP-02 challenge transport-neutral | `M6_UT_Challenge_is_transport_neutral_correlated_single_use_and_artifact_is_not_retained`, `M6_UT_Challenge_expiry_wrong_context_wrong_challenge_and_capacity_fail_closed` | PASS local; session acquisition deferred to SOAP writer |
+| AP-03 Authorization Code baseline | `M6_IT_OAuth_real_HTTPS_authorization_bearer_cache_refresh_and_redaction`, state mismatch, expired/replayed code and scope/profile mismatch in `M6_IT_OAuth_state_replay_expired_code_scope_and_secret_rotation_fail_closed` | PASS local |
+| AP-04 token/cache/bearer/refresh | real HTTPS lifecycle plus `M6_IT_OAuth_cache_is_bounded_and_refresh_is_single_flight`; rotation/resource-stamp mismatch invalidates with no stale fallback | PASS local |
+| Restricted egress | `M6_IT_OAuth_SSRF_endpoint_manipulation_and_disabled_secret_never_reach_transport`; malicious redirect case in `M6_IT_OAuth_invalid_token_responses_and_redirect_fail_sanitized` | PASS local |
+| Redaction | code/state/token absent from metadata-only audit and sanitized `GatewayException`; synthetic server logging disabled | PASS local |
+| TM-046/TM-047 | All named M6 unit/integration tests above | PASS local; CI/review pending |
+
+PKCE, `client_credentials` grant, production profiles, SOAP/session and certificate/signing primitives are not claimed by this branch.
+
 ## Security threats
 
 La fotografia conclusiva M0/M1, inclusi gli elementi non automatizzati, è in `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md`.
