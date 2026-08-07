@@ -2,13 +2,13 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.Http;
-using SecureIntegration.Providers.Abstractions;
 
 namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OAuth;
 
-/// <summary>Authorization Code, bounded token cache, refresh and bearer application over restricted egress.</summary>
+/// <summary>Authorization Code, bounded token cache and endpoint-bound dispatch over restricted egress.</summary>
 public sealed class OAuthAuthorizationCodeClient
 {
     private readonly object sync = new();
@@ -16,46 +16,52 @@ public sealed class OAuthAuthorizationCodeClient
     private readonly Dictionary<string, TokenSession> sessions = new(StringComparer.Ordinal);
     private readonly int attemptCapacity;
     private readonly int tokenCapacity;
-    private readonly ISecretValueProvider secrets;
     private readonly RestrictedEndpointPolicy endpoints;
     private readonly IRestrictedTransport transport;
     private readonly IGatewayClock clock;
     private readonly IOutboundAuthAuditSink audit;
+    private long invalidationGeneration;
 
-    /// <summary>Creates bounded in-memory stores. Tokens never leave this component.</summary>
-    public OAuthAuthorizationCodeClient(int attemptCapacity, int tokenCapacity, ISecretValueProvider secrets, RestrictedEndpointPolicy endpoints, IRestrictedTransport transport, IGatewayClock clock, IOutboundAuthAuditSink? audit = null)
+    /// <summary>Creates bounded stores. Secret use is available only through a resolved authority capability.</summary>
+    public OAuthAuthorizationCodeClient(int attemptCapacity, int tokenCapacity, RestrictedEndpointPolicy endpoints, IRestrictedTransport transport, IGatewayClock clock, IOutboundAuthAuditSink? audit = null)
     {
         if (attemptCapacity is < 1 or > 100_000) throw new ArgumentOutOfRangeException(nameof(attemptCapacity));
         if (tokenCapacity is < 1 or > 100_000) throw new ArgumentOutOfRangeException(nameof(tokenCapacity));
         this.attemptCapacity = attemptCapacity;
         this.tokenCapacity = tokenCapacity;
-        this.secrets = secrets;
         this.endpoints = endpoints;
         this.transport = transport;
         this.clock = clock;
         this.audit = audit ?? new NullOutboundAuthAuditSink();
     }
 
-    /// <summary>Number of cached token sessions, exposed as non-sensitive operational metadata.</summary>
+    /// <summary>Number of cached sessions; non-sensitive operational metadata.</summary>
     public int CachedSessionCount { get { lock (sync) return sessions.Count; } }
 
-    /// <summary>Starts one short-lived authorization attempt after applying endpoint SSRF policy.</summary>
-    public async Task<OAuthAuthorizationChallenge> BeginAuthorizationAsync(OutboundAuthContext context, OAuthAuthorizationCodeProfile profile, CancellationToken cancellationToken)
+    /// <summary>Starts user-agent presentation without dereferencing the authorization URL server-side.</summary>
+    public async Task<OAuthAuthorizationChallenge> BeginAuthorizationAsync(OAuthResolvedExecutionContext resolvedContext, CancellationToken cancellationToken)
     {
-        Validate(context, profile);
-        _ = await endpoints.ResolveAsync(profile.AuthorizationEndpoint, cancellationToken).ConfigureAwait(false);
+        Validate(resolvedContext);
+        long generation = CurrentGeneration;
+        await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+        _ = await endpoints.ResolveAsync(resolvedContext.Profile.AuthorizationEndpoint, cancellationToken).ConfigureAwait(false);
+        await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+
+        OutboundAuthContext context = resolvedContext.Authority;
+        OAuthAuthorizationCodeProfile profile = resolvedContext.Profile;
         string attemptReference = OpaqueValue();
         string state = OpaqueValue();
         DateTimeOffset expiresAt = Min(clock.UtcNow + profile.AuthorizationLifetime, context.Deadline);
-        string key = SecurityKey(context, profile);
+        string key = SecurityKey(resolvedContext);
         lock (sync)
         {
+            EnsureGeneration(generation);
             Prune();
             EnsureAttemptCapacity();
             attempts.Add(attemptReference, new(key, profile.Fingerprint, Hash(state), expiresAt, context.CorrelationId, OAuthAuthorizationState.Pending, clock.UtcNow));
         }
         Uri authorizationUri = AuthorizationUri(profile, state);
-        try { await WriteAuditAsync(context, profile, "oauth.authorization.begin", "pending", expiresAt, cancellationToken).ConfigureAwait(false); }
+        try { await WriteAuditAsync(resolvedContext, "oauth.authorization.begin", "pending", expiresAt, cancellationToken).ConfigureAwait(false); }
         catch
         {
             lock (sync)
@@ -65,13 +71,16 @@ public sealed class OAuthAuthorizationCodeClient
         return new(attemptReference, authorizationUri, context.CorrelationId, expiresAt);
     }
 
-    /// <summary>Returns only the state of an opaque attempt.</summary>
-    public OAuthAuthorizationState PollAuthorization(OutboundAuthContext context, OAuthAuthorizationCodeProfile profile, string opaqueAttemptReference)
+    /// <summary>Returns only the state of an opaque attempt and enforces original correlation.</summary>
+    public OAuthAuthorizationState PollAuthorization(OAuthResolvedExecutionContext resolvedContext, string opaqueAttemptReference)
     {
-        Validate(context, profile);
+        Validate(resolvedContext);
+        OutboundAuthContext context = resolvedContext.Authority;
+        OAuthAuthorizationCodeProfile profile = resolvedContext.Profile;
         lock (sync)
         {
-            if (!attempts.TryGetValue(opaqueAttemptReference, out AuthorizationAttempt? attempt) || attempt.SecurityKey != SecurityKey(context, profile) || attempt.ProfileFingerprint != profile.Fingerprint)
+            if (!attempts.TryGetValue(opaqueAttemptReference, out AuthorizationAttempt? attempt) || attempt.SecurityKey != SecurityKey(resolvedContext) ||
+                attempt.ProfileFingerprint != profile.Fingerprint || attempt.CorrelationId != context.CorrelationId)
                 throw OAuthFailures.Rejected();
             if (attempt.ExpiresAt <= clock.UtcNow && attempt.State == OAuthAuthorizationState.Pending) attempt.State = OAuthAuthorizationState.Expired;
             attempt.LastAccess = clock.UtcNow;
@@ -79,15 +88,19 @@ public sealed class OAuthAuthorizationCodeClient
         }
     }
 
-    /// <summary>Consumes callback code/state once and exchanges the code through restricted egress.</summary>
-    public async Task<OAuthTokenSessionReference> CompleteAuthorizationAsync(OutboundAuthContext context, OAuthAuthorizationCodeProfile profile, string opaqueAttemptReference, string code, string state, CancellationToken cancellationToken)
+    /// <summary>Consumes callback code/state once and exchanges through restricted egress.</summary>
+    public async Task<OAuthTokenSessionReference> CompleteAuthorizationAsync(OAuthResolvedExecutionContext resolvedContext, string opaqueAttemptReference, string code, string state, CancellationToken cancellationToken)
     {
-        Validate(context, profile);
+        Validate(resolvedContext);
         if (!BoundedSecret(code, 8192) || !BoundedSecret(state, 1024)) throw OAuthFailures.Rejected();
+        OutboundAuthContext context = resolvedContext.Authority;
+        OAuthAuthorizationCodeProfile profile = resolvedContext.Profile;
         AuthorizationAttempt attempt;
+        long generation = CurrentGeneration;
         lock (sync)
         {
-            if (!attempts.TryGetValue(opaqueAttemptReference, out attempt!) || attempt.SecurityKey != SecurityKey(context, profile) || attempt.ProfileFingerprint != profile.Fingerprint || attempt.State != OAuthAuthorizationState.Pending)
+            if (!attempts.TryGetValue(opaqueAttemptReference, out attempt!) || attempt.SecurityKey != SecurityKey(resolvedContext) || attempt.ProfileFingerprint != profile.Fingerprint ||
+                attempt.CorrelationId != context.CorrelationId || attempt.State != OAuthAuthorizationState.Pending)
                 throw OAuthFailures.Rejected();
             if (attempt.ExpiresAt <= clock.UtcNow)
             {
@@ -103,25 +116,27 @@ public sealed class OAuthAuthorizationCodeClient
                 CryptographicOperations.ZeroMemory(attempt.StateHash);
                 throw OAuthFailures.Rejected();
             }
-            attempt.State = OAuthAuthorizationState.Failed; // reserve before the non-repeatable exchange
+            attempt.State = OAuthAuthorizationState.Failed;
         }
 
         string? createdSessionReference = null;
         try
         {
-            TokenSet tokens = await RequestTokenAsync(context, profile, "authorization_code", code, cancellationToken).ConfigureAwait(false);
+            TokenSet tokens = await RequestTokenAsync(resolvedContext, "authorization_code", code, generation, cancellationToken).ConfigureAwait(false);
+            await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
             string sessionReference = OpaqueValue();
             createdSessionReference = sessionReference;
-            TokenSession session = new(SecurityKey(context, profile), profile.Fingerprint, context.ConnectorId, tokens, clock.UtcNow);
+            TokenSession session = new(SecurityKey(resolvedContext), profile.Fingerprint, context.ConnectorId, tokens, clock.UtcNow, generation);
             lock (sync)
             {
+                EnsureGeneration(generation);
                 Prune();
                 EnsureTokenCapacity();
                 sessions.Add(sessionReference, session);
                 attempt.State = OAuthAuthorizationState.Completed;
                 CryptographicOperations.ZeroMemory(attempt.StateHash);
             }
-            await WriteAuditAsync(context, profile, "oauth.authorization.complete", "success", tokens.ExpiresAt, cancellationToken).ConfigureAwait(false);
+            await WriteAuditAsync(resolvedContext, "oauth.authorization.complete", "success", tokens.ExpiresAt, cancellationToken).ConfigureAwait(false);
             return new(sessionReference);
         }
         catch
@@ -131,70 +146,101 @@ public sealed class OAuthAuthorizationCodeClient
                 attempt.State = OAuthAuthorizationState.Failed;
                 if (createdSessionReference is not null) RemoveSessionCore(createdSessionReference);
             }
-            try { await WriteAuditAsync(context, profile, "oauth.authorization.complete", "denied", null, CancellationToken.None).ConfigureAwait(false); }
-            catch { /* The host maps audit failure to a sanitized generic error; token state is already removed. */ }
+            try { await WriteAuditAsync(resolvedContext, "oauth.authorization.complete", "denied", null, CancellationToken.None).ConfigureAwait(false); }
+            catch { }
             throw;
         }
     }
 
-    /// <summary>Applies exactly one bearer header after cache validation and refresh when permitted.</summary>
-    public async Task ApplyBearerAsync(OutboundAuthContext context, OAuthAuthorizationCodeProfile profile, OAuthTokenSessionReference sessionReference, HttpRequestMessage request, CancellationToken cancellationToken)
+    /// <summary>Builds, authenticates and dispatches exactly one request to the Published protected-resource endpoint.</summary>
+    public async Task<ExternalResponse> SendAuthenticatedAsync(OAuthResolvedExecutionContext resolvedContext, OAuthTokenSessionReference sessionReference, ReadOnlyMemory<byte> requestPayload, CancellationToken cancellationToken)
     {
-        Validate(context, profile);
-        if (request.Headers.Authorization is not null || request.RequestUri is null) throw OAuthFailures.Configuration();
-        TokenSession session = RequiredSession(context, profile, sessionReference);
+        Validate(resolvedContext);
+        long generation = CurrentGeneration;
+        TokenSession session = RequiredSession(resolvedContext, sessionReference, generation);
         await session.RefreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            session = RequiredSession(context, profile, sessionReference);
+            session = RequiredSession(resolvedContext, sessionReference, generation);
+            await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+            OAuthAuthorizationCodeProfile profile = resolvedContext.Profile;
             if (session.Tokens.ExpiresAt <= clock.UtcNow + profile.ExpirySkew)
             {
                 if (!profile.AllowRefresh || string.IsNullOrEmpty(session.Tokens.RefreshToken))
                 {
-                    RemoveSession(sessionReference.Value);
+                    Invalidate(sessionReference);
                     throw OAuthFailures.ReacquisitionRequired();
                 }
                 try
                 {
-                    TokenSet refreshed = await RequestTokenAsync(context, profile, "refresh_token", session.Tokens.RefreshToken, cancellationToken).ConfigureAwait(false);
-                    if (string.IsNullOrEmpty(refreshed.RefreshToken)) refreshed = refreshed with { RefreshToken = session.Tokens.RefreshToken };
+                    TokenSet refreshed = await RequestTokenAsync(resolvedContext, "refresh_token", session.Tokens.RefreshToken, generation, cancellationToken).ConfigureAwait(false);
+                    if (string.IsNullOrEmpty(refreshed.RefreshToken)) refreshed = refreshed.WithRefreshToken(session.Tokens.RefreshToken);
+                    await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
                     lock (sync)
                     {
+                        EnsureCurrentSession(sessionReference.Value, session, generation);
                         session.Tokens = refreshed;
                         session.LastAccess = clock.UtcNow;
                     }
-                    await WriteAuditAsync(context, profile, "oauth.token.refresh", "success", refreshed.ExpiresAt, cancellationToken).ConfigureAwait(false);
+                    await WriteAuditAsync(resolvedContext, "oauth.token.refresh", "success", refreshed.ExpiresAt, cancellationToken).ConfigureAwait(false);
                 }
                 catch
                 {
-                    RemoveSession(sessionReference.Value);
-                    try { await WriteAuditAsync(context, profile, "oauth.token.refresh", "denied", null, CancellationToken.None).ConfigureAwait(false); }
-                    catch { /* Preserve the sanitized refresh failure after invalidation. */ }
+                    Invalidate(sessionReference);
+                    try { await WriteAuditAsync(resolvedContext, "oauth.token.refresh", "denied", null, CancellationToken.None).ConfigureAwait(false); }
+                    catch { }
                     throw;
                 }
             }
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", session.Tokens.AccessToken);
-            lock (sync) session.LastAccess = clock.UtcNow;
+
+            IReadOnlyList<System.Net.IPAddress> addresses = await endpoints.ResolveAsync(resolvedContext.ProtectedResourceEndpoint, cancellationToken).ConfigureAwait(false);
+            await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+            string accessToken;
+            lock (sync)
+            {
+                EnsureCurrentSession(sessionReference.Value, session, generation);
+                accessToken = session.Tokens.AccessToken;
+                session.LastAccess = clock.UtcNow;
+            }
+            using HttpRequestMessage request = new(resolvedContext.ProtectedResourceMethod, resolvedContext.ProtectedResourceEndpoint);
+            if (!requestPayload.IsEmpty)
+            {
+                request.Content = new ByteArrayContent(requestPayload.ToArray());
+                if (!string.IsNullOrWhiteSpace(resolvedContext.ProtectedResourceContentType)) request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(resolvedContext.ProtectedResourceContentType);
+            }
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            EnsureGeneration(generation);
+            return await transport.SendAsync(request, addresses, null, resolvedContext.ProtectedResourceTimeout, resolvedContext.MaximumProtectedResourceResponseBytes, cancellationToken).ConfigureAwait(false);
         }
         finally { session.RefreshGate.Release(); }
     }
 
-    /// <summary>Invalidates an opaque token session.</summary>
-    public void Invalidate(OAuthTokenSessionReference sessionReference) => RemoveSession(sessionReference.Value);
+    /// <summary>Invalidates an opaque token session and tombstones in-flight refresh results.</summary>
+    public void Invalidate(OAuthTokenSessionReference sessionReference)
+    {
+        ArgumentNullException.ThrowIfNull(sessionReference);
+        Interlocked.Increment(ref invalidationGeneration);
+        lock (sync) RemoveSessionCore(sessionReference.Value);
+    }
 
-    /// <summary>Immediately invalidates every entry whose immutable security identity no longer matches.</summary>
+    /// <summary>Invalidates matching sessions and tombstones in-flight acquisition/refresh work.</summary>
     public void InvalidateConnector(string connectorId)
     {
+        Interlocked.Increment(ref invalidationGeneration);
         lock (sync)
             foreach (string key in sessions.Where(value => string.Equals(value.Value.ConnectorId, connectorId, StringComparison.Ordinal)).Select(value => value.Key).ToArray()) RemoveSessionCore(key);
     }
 
-    private async Task<TokenSet> RequestTokenAsync(OutboundAuthContext context, OAuthAuthorizationCodeProfile profile, string grantType, string sensitiveValue, CancellationToken cancellationToken)
+    private async Task<TokenSet> RequestTokenAsync(OAuthResolvedExecutionContext resolvedContext, string grantType, string sensitiveValue, long generation, CancellationToken cancellationToken)
     {
+        OAuthAuthorizationCodeProfile profile = resolvedContext.Profile;
+        await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<System.Net.IPAddress> addresses = await endpoints.ResolveAsync(profile.TokenEndpoint, cancellationToken).ConfigureAwait(false);
+        await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
         string clientSecret;
-        try { clientSecret = await secrets.GetSecretAsync(profile.ClientSecretReference, cancellationToken).ConfigureAwait(false); }
+        try { clientSecret = await resolvedContext.ClientSecret.UseAsync(cancellationToken).ConfigureAwait(false); }
         catch (Exception exception) when (exception is not OperationCanceledException) { throw OAuthFailures.Rejected(); }
+        await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
         if (!BoundedSecret(clientSecret, 4096)) throw OAuthFailures.Rejected();
         Dictionary<string, string> form = new(StringComparer.Ordinal)
         {
@@ -206,12 +252,10 @@ public sealed class OAuthAuthorizationCodeClient
         using HttpRequestMessage request = new(HttpMethod.Post, profile.TokenEndpoint) { Content = new FormUrlEncodedContent(form) };
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(profile.ClientId + ":" + clientSecret)));
         ExternalResponse response;
-        try
-        {
-            response = await transport.SendAsync(request, addresses, null, profile.TokenRequestTimeout, profile.MaximumTokenResponseBytes, cancellationToken).ConfigureAwait(false);
-        }
+        try { response = await transport.SendAsync(request, addresses, null, profile.TokenRequestTimeout, profile.MaximumTokenResponseBytes, cancellationToken).ConfigureAwait(false); }
         catch (GatewayException) { throw; }
         catch (Exception exception) when (exception is not OperationCanceledException) { throw OAuthFailures.Rejected(); }
+        await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
         return ParseToken(response, profile);
     }
 
@@ -241,12 +285,14 @@ public sealed class OAuthAuthorizationCodeClient
         catch (JsonException) { throw OAuthFailures.Rejected(); }
     }
 
-    private TokenSession RequiredSession(OutboundAuthContext context, OAuthAuthorizationCodeProfile profile, OAuthTokenSessionReference reference)
+    private TokenSession RequiredSession(OAuthResolvedExecutionContext resolvedContext, OAuthTokenSessionReference reference, long generation)
     {
-        if (reference is null || string.IsNullOrWhiteSpace(reference.Value) || reference.Value.Length > 128) throw OAuthFailures.Rejected();
+        ArgumentNullException.ThrowIfNull(reference);
+        OutboundAuthContext context = resolvedContext.Authority;
+        OAuthAuthorizationCodeProfile profile = resolvedContext.Profile;
         lock (sync)
         {
-            if (!sessions.TryGetValue(reference.Value, out TokenSession? session) || session.SecurityKey != SecurityKey(context, profile) || session.ProfileFingerprint != profile.Fingerprint)
+            if (!sessions.TryGetValue(reference.Value, out TokenSession? session) || session.SecurityKey != SecurityKey(resolvedContext) || session.ProfileFingerprint != profile.Fingerprint || session.Generation != generation)
             {
                 if (session is not null) RemoveSessionCore(reference.Value);
                 throw OAuthFailures.ReacquisitionRequired();
@@ -255,14 +301,24 @@ public sealed class OAuthAuthorizationCodeClient
         }
     }
 
-    private void Validate(OutboundAuthContext context, OAuthAuthorizationCodeProfile profile)
+    private void Validate(OAuthResolvedExecutionContext resolvedContext)
     {
-        context.Validate();
-        if (context.Deadline <= clock.UtcNow || profile.Policy != HttpAuthenticationPolicy.OAuthAuthorizationCode) throw OAuthFailures.Rejected();
+        ArgumentNullException.ThrowIfNull(resolvedContext);
+        if (resolvedContext.Authority.Deadline <= clock.UtcNow || resolvedContext.Profile.Policy != HttpAuthenticationPolicy.OAuthAuthorizationCode) throw OAuthFailures.Rejected();
     }
 
-    private async Task WriteAuditAsync(OutboundAuthContext context, OAuthAuthorizationCodeProfile profile, string action, string outcome, DateTimeOffset? expiresAt, CancellationToken cancellationToken) =>
-        await audit.WriteAsync(new(context.CorrelationId, context.TenantId, context.ConnectorId, context.OperationId, profile.ProfileId, action, outcome, clock.UtcNow, expiresAt), cancellationToken).ConfigureAwait(false);
+    private async Task RevalidateAsync(OAuthResolvedExecutionContext resolvedContext, long generation, CancellationToken cancellationToken)
+    {
+        EnsureGeneration(generation);
+        await resolvedContext.Revalidate(cancellationToken).ConfigureAwait(false);
+        EnsureGeneration(generation);
+    }
+
+    private async Task WriteAuditAsync(OAuthResolvedExecutionContext resolvedContext, string action, string outcome, DateTimeOffset? expiresAt, CancellationToken cancellationToken)
+    {
+        OutboundAuthContext context = resolvedContext.Authority;
+        await audit.WriteAsync(new(context.CorrelationId, context.TenantId, context.ConnectorId, context.OperationId, resolvedContext.Profile.ProfileId, action, outcome, clock.UtcNow, expiresAt), cancellationToken).ConfigureAwait(false);
+    }
 
     private void Prune()
     {
@@ -285,34 +341,57 @@ public sealed class OAuthAuthorizationCodeClient
     private void EnsureTokenCapacity()
     {
         if (sessions.Count < tokenCapacity) return;
-        string oldest = sessions.MinBy(value => value.Value.LastAccess).Key;
-        RemoveSessionCore(oldest);
+        RemoveSessionCore(sessions.MinBy(value => value.Value.LastAccess).Key);
     }
 
-    private void RemoveSession(string key) { lock (sync) RemoveSessionCore(key); }
+    private void EnsureCurrentSession(string reference, TokenSession expected, long generation)
+    {
+        EnsureGeneration(generation);
+        if (!sessions.TryGetValue(reference, out TokenSession? current) || !ReferenceEquals(current, expected) || current.Generation != generation) throw OAuthFailures.ReacquisitionRequired();
+    }
+
     private void RemoveSessionCore(string key)
     {
         if (!sessions.Remove(key, out TokenSession? removed)) return;
-        removed.Tokens = new(string.Empty, string.Empty, DateTimeOffset.MinValue);
+        removed.Tokens.Redact();
+        removed.Disabled = true;
     }
+
+    private long CurrentGeneration => Interlocked.Read(ref invalidationGeneration);
+    private void EnsureGeneration(long generation) { if (CurrentGeneration != generation) throw OAuthFailures.ReacquisitionRequired(); }
 
     private static Uri AuthorizationUri(OAuthAuthorizationCodeProfile profile, string state)
     {
-        List<KeyValuePair<string, string?>> query =
-        [
-            new("response_type", "code"),
-            new("client_id", profile.ClientId),
-            new("redirect_uri", profile.RedirectUri.AbsoluteUri),
-            new("scope", string.Join(' ', profile.Scopes)),
-            new("state", state)
-        ];
+        List<KeyValuePair<string, string>> query = ParseExistingQuery(profile.AuthorizationEndpoint.Query);
+        query.Add(new("response_type", "code"));
+        query.Add(new("client_id", profile.ClientId));
+        query.Add(new("redirect_uri", profile.RedirectUri.AbsoluteUri));
+        query.Add(new("scope", string.Join(' ', profile.Scopes)));
+        query.Add(new("state", state));
         if (profile.Audience is not null) query.Add(new("audience", profile.Audience));
-        string encoded = string.Join('&', query.Select(value => Uri.EscapeDataString(value.Key) + "=" + Uri.EscapeDataString(value.Value!)));
-        UriBuilder builder = new(profile.AuthorizationEndpoint) { Query = string.IsNullOrEmpty(profile.AuthorizationEndpoint.Query) ? encoded : profile.AuthorizationEndpoint.Query.TrimStart('?') + "&" + encoded };
-        return builder.Uri;
+        string encoded = string.Join('&', query.Select(value => Uri.EscapeDataString(value.Key) + "=" + Uri.EscapeDataString(value.Value)));
+        return new UriBuilder(profile.AuthorizationEndpoint) { Query = encoded }.Uri;
     }
 
-    private static string SecurityKey(OutboundAuthContext context, OAuthAuthorizationCodeProfile profile) => string.Join('\n', context.TenantId, context.InstallationId, context.ApplicationId, context.EnvironmentId, context.ConnectorVersionId, context.ConnectorVersion, context.ConnectorId, context.OperationId, context.AuthBindingRevision, context.EndpointRevision, profile.ClientId, string.Join(' ', profile.Scopes), profile.Audience ?? string.Empty, context.SecretRevision, context.ResourceStamp, profile.Fingerprint);
+    private static List<KeyValuePair<string, string>> ParseExistingQuery(string query)
+    {
+        if (string.IsNullOrEmpty(query)) return [];
+        return query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries).Select(pair =>
+        {
+            string[] parts = pair.Split('=', 2);
+            return new KeyValuePair<string, string>(Decode(parts[0]), parts.Length == 2 ? Decode(parts[1]) : string.Empty);
+        }).OrderBy(value => value.Key, StringComparer.Ordinal).ThenBy(value => value.Value, StringComparer.Ordinal).ToList();
+    }
+
+    private static string Decode(string value) => Uri.UnescapeDataString(value.Replace('+', ' '));
+    private static string SecurityKey(OAuthResolvedExecutionContext resolvedContext)
+    {
+        OutboundAuthContext context = resolvedContext.Authority;
+        OAuthAuthorizationCodeProfile profile = resolvedContext.Profile;
+        return string.Join('\n', context.TenantId, context.InstallationId, context.ApplicationId, context.EnvironmentId,
+        context.ConnectorVersionId, context.ConnectorVersion, context.ConnectorId, context.OperationId, context.AuthBindingRevision, context.EndpointRevision, profile.ClientId, string.Join(' ', profile.Scopes),
+        profile.Audience ?? string.Empty, context.SecretRevision, context.ResourceStamp, resolvedContext.ProtectedResourceEndpoint.AbsoluteUri, resolvedContext.ProtectedResourceMethod.Method, profile.Fingerprint);
+    }
     private static string OpaqueValue() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     private static byte[] Hash(string value) => SHA256.HashData(Encoding.UTF8.GetBytes(value));
     private static bool BoundedSecret(string? value, int maximumLength) => !string.IsNullOrEmpty(value) && value.Length <= maximumLength && !value.Any(character => character is '\r' or '\n' or '\0');
@@ -327,17 +406,29 @@ public sealed class OAuthAuthorizationCodeClient
         internal Guid CorrelationId { get; } = correlationId;
         internal OAuthAuthorizationState State { get; set; } = state;
         internal DateTimeOffset LastAccess { get; set; } = lastAccess;
+        public override string ToString() => $"AuthorizationAttempt(State={State}, ExpiresAt={ExpiresAt:O})";
     }
 
-    private sealed class TokenSession(string securityKey, string profileFingerprint, string connectorId, TokenSet tokens, DateTimeOffset lastAccess)
+    private sealed class TokenSession(string securityKey, string profileFingerprint, string connectorId, TokenSet tokens, DateTimeOffset lastAccess, long generation)
     {
         internal string SecurityKey { get; } = securityKey;
         internal string ProfileFingerprint { get; } = profileFingerprint;
         internal string ConnectorId { get; } = connectorId;
         internal TokenSet Tokens { get; set; } = tokens;
         internal DateTimeOffset LastAccess { get; set; } = lastAccess;
+        internal long Generation { get; } = generation;
+        internal bool Disabled { get; set; }
         internal SemaphoreSlim RefreshGate { get; } = new(1, 1);
+        public override string ToString() => $"TokenSession(ConnectorId={ConnectorId}, Disabled={Disabled})";
     }
 
-    private sealed record TokenSet(string AccessToken, string? RefreshToken, DateTimeOffset ExpiresAt);
+    private sealed class TokenSet(string accessToken, string? refreshToken, DateTimeOffset expiresAt)
+    {
+        [JsonIgnore] internal string AccessToken { get; private set; } = accessToken;
+        [JsonIgnore] internal string? RefreshToken { get; private set; } = refreshToken;
+        internal DateTimeOffset ExpiresAt { get; } = expiresAt;
+        internal TokenSet WithRefreshToken(string value) => new(AccessToken, value, ExpiresAt);
+        internal void Redact() { AccessToken = string.Empty; RefreshToken = string.Empty; }
+        public override string ToString() => $"TokenSet(ExpiresAt={ExpiresAt:O}, Redacted=True)";
+    }
 }

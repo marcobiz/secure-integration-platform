@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Serialization;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OAuth;
 
@@ -18,24 +19,62 @@ public enum InteractiveChallengeState
     Invalidated
 }
 
-/// <summary>Opaque challenge that may be presented by any trusted UX adapter.</summary>
-public sealed record InteractiveChallenge(string OpaqueInteractionReference, string OpaqueChallenge, Guid CorrelationId, DateTimeOffset ExpiresAt, InteractiveChallengeState State);
+/// <summary>Opaque challenge that may be presented by a trusted UX adapter.</summary>
+public sealed class InteractiveChallenge
+{
+    internal InteractiveChallenge(string opaqueInteractionReference, string opaqueChallenge, Guid correlationId, DateTimeOffset expiresAt, InteractiveChallengeState state)
+    {
+        OpaqueInteractionReference = opaqueInteractionReference;
+        OpaqueChallenge = opaqueChallenge;
+        CorrelationId = correlationId;
+        ExpiresAt = expiresAt;
+        State = state;
+    }
+    /// <summary>Opaque one-time interaction reference.</summary>
+    [JsonIgnore] public string OpaqueInteractionReference { get; }
+    /// <summary>Opaque challenge value presented out of band.</summary>
+    [JsonIgnore] public string OpaqueChallenge { get; }
+    /// <summary>Original authenticated invocation correlation.</summary>
+    public Guid CorrelationId { get; }
+    /// <summary>Absolute expiry.</summary>
+    public DateTimeOffset ExpiresAt { get; }
+    /// <summary>State at issuance.</summary>
+    public InteractiveChallengeState State { get; }
+    /// <inheritdoc />
+    public override string ToString() => $"InteractiveChallenge(CorrelationId={CorrelationId:D}, ExpiresAt={ExpiresAt:O}, State={State})";
+}
 
 /// <summary>Server-side profile bounds for one characterized interactive challenge.</summary>
-public sealed record InteractiveChallengeProfile(string ProfileId, TimeSpan Lifetime, int MaximumCompletionArtifactBytes)
+public sealed class InteractiveChallengeProfile
 {
+    /// <summary>Creates server-owned bounds for a characterized challenge.</summary>
+    public InteractiveChallengeProfile(string profileId, TimeSpan lifetime, int maximumCompletionArtifactBytes)
+    {
+        ProfileId = profileId;
+        Lifetime = lifetime;
+        MaximumCompletionArtifactBytes = maximumCompletionArtifactBytes;
+        Validate();
+    }
+    /// <summary>Logical profile identifier.</summary>
+    public string ProfileId { get; }
+    /// <summary>Maximum challenge lifetime.</summary>
+    public TimeSpan Lifetime { get; }
+    /// <summary>Maximum accepted completion artifact size.</summary>
+    public int MaximumCompletionArtifactBytes { get; }
     internal void Validate()
     {
         if (!OAuthValidation.Identifier(ProfileId) || Lifetime < TimeSpan.FromMinutes(1) || Lifetime > TimeSpan.FromMinutes(30) || MaximumCompletionArtifactBytes is < 1 or > 4096)
             throw OAuthFailures.Configuration();
     }
+    /// <inheritdoc />
+    public override string ToString() => $"InteractiveChallengeProfile(ProfileId={ProfileId})";
 }
 
 /// <summary>Server-owned completion callback; presentation transports never implement this capability.</summary>
 public interface IInteractiveChallengeCompletionHandler
 {
     /// <summary>Consumes one bounded sensitive artifact without returning it to the caller.</summary>
-    Task CompleteAsync(OutboundAuthContext context, string profileId, ReadOnlyMemory<byte> artifact, CancellationToken cancellationToken);
+    Task CompleteAsync(OAuthResolvedExecutionContext context, string profileId, ReadOnlyMemory<byte> artifact, CancellationToken cancellationToken);
 }
 
 /// <summary>Bounded in-memory AP-02 challenge store with expiry and single-completion enforcement.</summary>
@@ -55,9 +94,10 @@ public sealed class InteractiveChallengeStore
     }
 
     /// <summary>Issues an opaque reference and challenge correlated to the immutable execution context.</summary>
-    public InteractiveChallenge Request(OutboundAuthContext context, InteractiveChallengeProfile profile)
+    public InteractiveChallenge Request(OAuthResolvedExecutionContext resolvedContext, InteractiveChallengeProfile profile)
     {
-        context.Validate();
+        ArgumentNullException.ThrowIfNull(resolvedContext);
+        OutboundAuthContext context = resolvedContext.Authority;
         profile.Validate();
         if (context.Deadline <= clock.UtcNow) throw OAuthFailures.Rejected();
         string reference = OpaqueValue();
@@ -73,12 +113,13 @@ public sealed class InteractiveChallengeStore
     }
 
     /// <summary>Returns metadata-only state for presentation polling.</summary>
-    public InteractiveChallengeState Poll(OutboundAuthContext context, string opaqueInteractionReference)
+    public InteractiveChallengeState Poll(OAuthResolvedExecutionContext resolvedContext, string opaqueInteractionReference)
     {
-        context.Validate();
+        ArgumentNullException.ThrowIfNull(resolvedContext);
+        OutboundAuthContext context = resolvedContext.Authority;
         lock (sync)
         {
-            if (!entries.TryGetValue(opaqueInteractionReference, out Entry? entry) || entry.ContextKey != ContextKey(context)) throw OAuthFailures.Rejected();
+            if (!entries.TryGetValue(opaqueInteractionReference, out Entry? entry) || entry.ContextKey != ContextKey(context) || entry.CorrelationId != context.CorrelationId) throw OAuthFailures.Rejected();
             if (entry.ExpiresAt <= clock.UtcNow && entry.State == InteractiveChallengeState.Pending) entry.State = InteractiveChallengeState.Expired;
             entry.LastAccess = clock.UtcNow;
             return entry.State;
@@ -86,15 +127,16 @@ public sealed class InteractiveChallengeStore
     }
 
     /// <summary>Completes once through a server-owned handler; replay and cross-context use fail closed.</summary>
-    public async Task CompleteAsync(OutboundAuthContext context, InteractiveChallengeProfile profile, string opaqueInteractionReference, string opaqueChallenge, ReadOnlyMemory<byte> completionArtifact, IInteractiveChallengeCompletionHandler handler, CancellationToken cancellationToken)
+    public async Task CompleteAsync(OAuthResolvedExecutionContext resolvedContext, InteractiveChallengeProfile profile, string opaqueInteractionReference, string opaqueChallenge, ReadOnlyMemory<byte> completionArtifact, IInteractiveChallengeCompletionHandler handler, CancellationToken cancellationToken)
     {
-        context.Validate();
+        ArgumentNullException.ThrowIfNull(resolvedContext);
+        OutboundAuthContext context = resolvedContext.Authority;
         profile.Validate();
         if (completionArtifact.Length is < 1 || completionArtifact.Length > profile.MaximumCompletionArtifactBytes) throw OAuthFailures.Rejected();
         Entry entry;
         lock (sync)
         {
-            if (!entries.TryGetValue(opaqueInteractionReference, out entry!) || entry.ContextKey != ContextKey(context) || !string.Equals(entry.ProfileId, profile.ProfileId, StringComparison.Ordinal) || entry.State != InteractiveChallengeState.Pending)
+            if (!entries.TryGetValue(opaqueInteractionReference, out entry!) || entry.ContextKey != ContextKey(context) || entry.CorrelationId != context.CorrelationId || !string.Equals(entry.ProfileId, profile.ProfileId, StringComparison.Ordinal) || entry.State != InteractiveChallengeState.Pending)
                 throw OAuthFailures.Rejected();
             if (entry.ExpiresAt <= clock.UtcNow)
             {
@@ -109,7 +151,7 @@ public sealed class InteractiveChallengeStore
         }
         try
         {
-            await handler.CompleteAsync(context, profile.ProfileId, completionArtifact, cancellationToken).ConfigureAwait(false);
+            await handler.CompleteAsync(resolvedContext, profile.ProfileId, completionArtifact, cancellationToken).ConfigureAwait(false);
             lock (sync) entry.State = InteractiveChallengeState.Completed;
         }
         catch
@@ -120,10 +162,12 @@ public sealed class InteractiveChallengeStore
     }
 
     /// <summary>Invalidates a matching challenge immediately.</summary>
-    public void Invalidate(OutboundAuthContext context, string opaqueInteractionReference)
+    public void Invalidate(OAuthResolvedExecutionContext resolvedContext, string opaqueInteractionReference)
     {
+        ArgumentNullException.ThrowIfNull(resolvedContext);
+        OutboundAuthContext context = resolvedContext.Authority;
         lock (sync)
-            if (entries.TryGetValue(opaqueInteractionReference, out Entry? entry) && entry.ContextKey == ContextKey(context)) entry.State = InteractiveChallengeState.Invalidated;
+            if (entries.TryGetValue(opaqueInteractionReference, out Entry? entry) && entry.ContextKey == ContextKey(context) && entry.CorrelationId == context.CorrelationId) entry.State = InteractiveChallengeState.Invalidated;
     }
 
     private void PruneExpired()
@@ -146,11 +190,13 @@ public sealed class InteractiveChallengeStore
     private static string OpaqueValue() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     private static byte[] Hash(string value) => SHA256.HashData(Encoding.UTF8.GetBytes(value));
     private static DateTimeOffset Min(DateTimeOffset left, DateTimeOffset right) => left <= right ? left : right;
-    private static string ContextKey(OutboundAuthContext context) => string.Join('\n', context.TenantId, context.InstallationId, context.EnvironmentId, context.ConnectorVersionId, context.OperationId, context.AuthBindingRevision, context.EndpointRevision, context.SecretRevision, context.ResourceStamp);
+    private static string ContextKey(OutboundAuthContext context) => string.Join('\n', context.TenantId, context.InstallationId, context.ApplicationId, context.EnvironmentId, context.ConnectorVersionId,
+        context.ConnectorId, context.ConnectorVersion, context.OperationId, context.AuthBindingRevision, context.EndpointRevision, context.SecretRevision, context.ResourceStamp);
 
     private sealed class Entry(OutboundAuthContext context, string profileId, byte[] challengeHash, DateTimeOffset expiresAt, InteractiveChallengeState state, DateTimeOffset lastAccess)
     {
         internal string ContextKey { get; } = InteractiveChallengeStore.ContextKey(context);
+        internal Guid CorrelationId { get; } = context.CorrelationId;
         internal string ProfileId { get; } = profileId;
         internal byte[] ChallengeHash { get; } = challengeHash;
         internal DateTimeOffset ExpiresAt { get; } = expiresAt;

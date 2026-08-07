@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace SecureIntegration.Architecture.Tests;
@@ -31,6 +32,28 @@ public sealed class HttpOAuthBoundaryTests
         foreach (string dimension in new[] { "TenantId", "InstallationId", "ApplicationId", "EnvironmentId", "ConnectorVersionId", "ConnectorVersion", "AuthBindingRevision", "EndpointRevision", "ClientId", "Scopes", "Audience", "SecretRevision", "ResourceStamp" })
             Assert.Contains(dimension, source, StringComparison.Ordinal);
         Assert.DoesNotContain("Redis", source, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void M6_ARCH_authority_and_bearer_surface_is_capability_based_destination_bound_and_has_no_server_side_browser_adapter()
+    {
+        string directory = Path.Combine(Root, "src", "Gateway", "Gateway.ConnectorRuntime.Auth.Http");
+        string contracts = File.ReadAllText(Path.Combine(directory, "OAuth", "OAuthContracts.cs"));
+        string client = File.ReadAllText(Path.Combine(directory, "OAuth", "OAuthAuthorizationCodeClient.cs"));
+        string resolver = File.ReadAllText(Path.Combine(directory, "OAuth", "PublishedOAuthAuthorityResolver.cs"));
+
+        Assert.Contains("internal sealed class OutboundAuthContext", contracts, StringComparison.Ordinal);
+        Assert.Contains("internal sealed class OAuthAuthorizationCodeProfile", contracts, StringComparison.Ordinal);
+        Assert.Contains("internal OAuthAuthorizedInvocation(", contracts, StringComparison.Ordinal);
+        Assert.Contains("internal OAuthResolvedExecutionContext(", contracts, StringComparison.Ordinal);
+        Assert.Contains("PublishedOAuthAuthorityResolver", resolver, StringComparison.Ordinal);
+        Assert.Contains("PublishedConnectorSnapshot", resolver, StringComparison.Ordinal);
+        Assert.Contains("ScopedOAuthSecretCapability", resolver, StringComparison.Ordinal);
+        Assert.Contains("SendAuthenticatedAsync", client, StringComparison.Ordinal);
+        Assert.DoesNotContain("ApplyBearerAsync", client, StringComparison.Ordinal);
+        Assert.DoesNotMatch(new Regex(@"public\s+(?:async\s+)?[^\r\n(]+\([^)]*HttpRequestMessage", RegexOptions.CultureInvariant), client);
+        Assert.Contains("external-user-agent-navigation", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("new HttpClient", client, StringComparison.Ordinal);
     }
 
     [Fact]

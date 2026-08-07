@@ -3,6 +3,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
@@ -10,13 +11,48 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 namespace SecureIntegration.M6.SyntheticOAuthServer;
 
 /// <summary>Per-run settings for the isolated synthetic OAuth server.</summary>
-public sealed record SyntheticOAuthServerOptions(string ClientId, string ClientSecret, Uri RedirectUri, string Scope, string? Audience, TimeSpan CodeLifetime, TimeSpan TokenLifetime);
+public sealed class SyntheticOAuthServerOptions
+{
+    /// <summary>Creates synthetic per-run server settings.</summary>
+    public SyntheticOAuthServerOptions(string clientId, string clientSecret, Uri redirectUri, string scope, string? audience, TimeSpan codeLifetime, TimeSpan tokenLifetime)
+    {
+        ClientId = clientId;
+        ClientSecret = clientSecret;
+        RedirectUri = redirectUri;
+        Scope = scope;
+        Audience = audience;
+        CodeLifetime = codeLifetime;
+        TokenLifetime = tokenLifetime;
+    }
+    /// <summary>Synthetic client identifier.</summary>
+    public string ClientId { get; }
+    /// <summary>Synthetic confidential value, excluded from diagnostics and serialization.</summary>
+    [JsonIgnore] public string ClientSecret { get; }
+    /// <summary>Registered callback.</summary>
+    public Uri RedirectUri { get; }
+    /// <summary>Expected scope.</summary>
+    public string Scope { get; }
+    /// <summary>Optional audience.</summary>
+    public string? Audience { get; }
+    /// <summary>Authorization code lifetime.</summary>
+    public TimeSpan CodeLifetime { get; }
+    /// <summary>Access token lifetime.</summary>
+    public TimeSpan TokenLifetime { get; }
+    /// <inheritdoc />
+    public override string ToString() => $"SyntheticOAuthServerOptions(ClientId={ClientId}, RedirectUri={RedirectUri}, Scope={Scope}, Audience={Audience}, ClientSecret=Redacted)";
+}
 
 /// <summary>Running local HTTPS server used by real-HTTP integration tests.</summary>
-public sealed class SyntheticOAuthServerInstance(WebApplication application, Uri baseAddress) : IAsyncDisposable
+public sealed class SyntheticOAuthServerInstance(WebApplication application, Uri baseAddress, SyntheticOAuthServerMetrics metrics) : IAsyncDisposable
 {
     /// <summary>Root HTTPS address selected by the OS.</summary>
     public Uri BaseAddress { get; } = baseAddress;
+    /// <summary>Authorization endpoint request count.</summary>
+    public int AuthorizationRequestCount => metrics.AuthorizationRequestCount;
+    /// <summary>Token endpoint request count.</summary>
+    public int TokenRequestCount => metrics.TokenRequestCount;
+    /// <summary>Protected-resource request count.</summary>
+    public int ResourceRequestCount => metrics.ResourceRequestCount;
     /// <summary>Stops and disposes the isolated server.</summary>
     public async ValueTask DisposeAsync()
     {
@@ -39,9 +75,11 @@ public static class SyntheticOAuthServerHost
         ConcurrentDictionary<string, CodeRecord> codes = new(StringComparer.Ordinal);
         ConcurrentDictionary<string, TokenRecord> accessTokens = new(StringComparer.Ordinal);
         ConcurrentDictionary<string, bool> refreshTokens = new(StringComparer.Ordinal);
+        SyntheticOAuthServerMetrics metrics = new();
 
         app.MapGet("/authorize", (HttpRequest request) =>
         {
+            metrics.CountAuthorization();
             if (!Fixed(request.Query["client_id"].ToString(), options.ClientId) || !Fixed(request.Query["redirect_uri"].ToString(), options.RedirectUri.AbsoluteUri) || !Fixed(request.Query["scope"].ToString(), options.Scope) ||
                 !Fixed(request.Query["response_type"].ToString(), "code") || options.Audience is not null && !Fixed(request.Query["audience"].ToString(), options.Audience)) return Results.BadRequest();
             string state = request.Query["state"].ToString();
@@ -56,6 +94,7 @@ public static class SyntheticOAuthServerHost
 
         app.MapPost("/token", async (HttpRequest request, CancellationToken token) =>
         {
+            metrics.CountToken();
             if (!ValidBasic(request.Headers.Authorization.ToString(), options.ClientId, options.ClientSecret) || !request.HasFormContentType) return Results.Json(new { error = "invalid_client" }, statusCode: 401);
             IFormCollection form = await request.ReadFormAsync(token).ConfigureAwait(false);
             if (!Fixed(form["client_id"].ToString(), options.ClientId)) return Results.Json(new { error = "invalid_client" }, statusCode: 400);
@@ -89,6 +128,7 @@ public static class SyntheticOAuthServerHost
 
         app.MapGet("/resource", (HttpRequest request) =>
         {
+            metrics.CountResource();
             string authorization = request.Headers.Authorization.ToString();
             if (!authorization.StartsWith("Bearer ", StringComparison.Ordinal) || !accessTokens.TryGetValue(authorization[7..], out TokenRecord? token) || token.ExpiresAt <= DateTimeOffset.UtcNow)
                 return Results.Unauthorized();
@@ -98,7 +138,7 @@ public static class SyntheticOAuthServerHost
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
         string address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()?.Addresses.Single()
             ?? throw new InvalidOperationException("Synthetic OAuth server did not publish an address.");
-        return new(app, new Uri(address));
+        return new(app, new Uri(address), metrics);
     }
 
     private static void Validate(SyntheticOAuthServerOptions options)
@@ -127,4 +167,21 @@ public static class SyntheticOAuthServerHost
     private static string Opaque() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     private sealed record CodeRecord(DateTimeOffset ExpiresAt, string Mode, bool Used);
     private sealed record TokenRecord(DateTimeOffset ExpiresAt);
+}
+
+/// <summary>Thread-safe non-sensitive request counters for assertions.</summary>
+public sealed class SyntheticOAuthServerMetrics
+{
+    private int authorizationRequestCount;
+    private int tokenRequestCount;
+    private int resourceRequestCount;
+    /// <summary>Authorization request count.</summary>
+    public int AuthorizationRequestCount => Volatile.Read(ref authorizationRequestCount);
+    /// <summary>Token request count.</summary>
+    public int TokenRequestCount => Volatile.Read(ref tokenRequestCount);
+    /// <summary>Resource request count.</summary>
+    public int ResourceRequestCount => Volatile.Read(ref resourceRequestCount);
+    internal void CountAuthorization() => Interlocked.Increment(ref authorizationRequestCount);
+    internal void CountToken() => Interlocked.Increment(ref tokenRequestCount);
+    internal void CountResource() => Interlocked.Increment(ref resourceRequestCount);
 }

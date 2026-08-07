@@ -46,6 +46,19 @@ Responsabilita di un auth module Connector:
 - non restituire password, API key, token non necessari, private key, PFX o locator;
 - rispettare restricted egress, timeout, redirect, header e redaction comuni.
 
+Per OAuth Authorization Code il Connector fornisce soltanto un logical profile ID. Il
+runtime crea una `OAuthAuthorizedInvocation` non costruibile dal Connector dopo grant e
+autenticazione. `PublishedOAuthAuthorityResolver` combina quella capability, il relativo
+`GatewayClientPrincipal` e lo snapshot Published corrente con le
+`OperationBindingDependencies`, la binding revision e la provider resource esatta. Il
+risultato e una `OAuthResolvedExecutionContext` immutabile, con costruttore non pubblico;
+raw profile, endpoint, client ID, scope/audience e provider locator non fanno parte della
+superficie Connector-facing.
+
+La capability di secret use e scoped al solo provider reference risolto per quel binding.
+Il client OAuth non riceve un `ISecretValueProvider` generico e non accetta reference dal
+consumer.
+
 ## Contratto minimo stabile
 
 Un writer M6 puo dipendere da:
@@ -57,6 +70,17 @@ Un writer M6 puo dipendere da:
 - `OperationBindingDependencies` con riferimenti logici;
 - capability provider-neutral e trasporto ristretto;
 - correlation ID e audit sink metadata-only.
+
+Una token session outbound e legata a ConnectorVersion, operation, Environment, endpoint
+e binding revision, scope/audience, provider resource revision e resource stamp. Il bearer
+non puo essere attached a un `HttpRequestMessage` del consumer: il modulo costruisce la
+request verso il protected-resource endpoint Published, inietta il bearer immediatamente
+prima del dispatch e usa sempre `IRestrictedTransport`.
+
+L'authorization endpoint e un confine differente: `BeginAuthorizationAsync` valida il
+Published HTTPS endpoint e produce una navigation per external user agent, senza fetch
+server-side. Token endpoint e protected-resource endpoint sono invece sempre dereferenziati
+dal Gateway tramite restricted transport.
 
 Non puo dipendere da:
 
