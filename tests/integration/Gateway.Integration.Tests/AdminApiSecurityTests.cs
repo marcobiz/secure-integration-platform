@@ -25,13 +25,11 @@ using Xunit;
 
 namespace SecureIntegration.Gateway.Integration.Tests;
 
-[Collection(PostgreSqlSharedDatabaseGroup.Name)]
 public sealed class AdminApiSecurityTests
 {
     private static readonly JsonSerializerOptions WireJson = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
 
-    [Fact]
-    public async Task M5_E2E_Admin_approval_publish_runtime_provider_transport_prevents_credential_exfiltration()
+    internal static async Task RunPostgreSqlApprovalPublishAntiExfiltrationAsync()
     {
         string? adminConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
         string? migrationConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
@@ -979,6 +977,14 @@ public sealed class AdminApiSecurityTests
             await command.ExecuteNonQueryAsync();
         }
     }
+}
+
+[Collection(PostgreSqlSharedDatabaseGroup.Name)]
+public sealed class AdminApiPostgreSqlSecurityTests
+{
+    [Fact]
+    public Task M5_E2E_Admin_approval_publish_runtime_provider_transport_prevents_credential_exfiltration() =>
+        AdminApiSecurityTests.RunPostgreSqlApprovalPublishAntiExfiltrationAsync();
 }
 
 public class AdminDevelopmentFactory : WebApplicationFactory<Program>

@@ -337,35 +337,55 @@ public sealed class PostgresIsolationTests
         await using AdminPostgresDataSource pool = new(connectionString);
         PostgresGatewayRegistry registry = new(pool.Value);
         PostgresAdminDirectoryStore directory = new(pool);
+        int tenantBaseline = (await directory.ListTenantsAsync(0, 1, TestContext.Current.CancellationToken)).Total;
+        int applicationBaseline = (await directory.ListApplicationsAsync(0, 1, TestContext.Current.CancellationToken)).Total;
         DateTimeOffset tiedCreatedAt = DateTimeOffset.UtcNow;
         string prefix = "page-" + Guid.NewGuid().ToString("N")[..12];
-        await ExecuteNonQueryAsync(migrationConnectionString, "TRUNCATE gateway.tenant, gateway.application CASCADE", TestContext.Current.CancellationToken);
+        Guid foreignTenantId = Guid.NewGuid();
+        Guid foreignApplicationId = Guid.NewGuid();
+        Guid[] tenantIds = Enumerable.Range(0, 101).Select(_ => Guid.NewGuid()).ToArray();
+        Guid[] applicationIds = Enumerable.Range(0, 101).Select(_ => Guid.NewGuid()).ToArray();
+        await registry.AddTenantAsync(new(foreignTenantId, $"foreign-{Guid.NewGuid():N}", "Foreign tenant", TenantStatus.Active, tiedCreatedAt.AddSeconds(-1)), TestContext.Current.CancellationToken);
+        await registry.AddApplicationAsync(new(foreignApplicationId, $"foreign-{Guid.NewGuid():N}", "Foreign application", ApplicationStatus.Active, "1.0.0", null, tiedCreatedAt.AddSeconds(-1)), TestContext.Current.CancellationToken);
         try
         {
-            Assert.Equal(0, (await directory.ListTenantsAsync(0, 1, TestContext.Current.CancellationToken)).Total);
-            Assert.Equal(0, (await directory.ListApplicationsAsync(0, 1, TestContext.Current.CancellationToken)).Total);
             for (int index = 0; index < 101; index++)
             {
-                await registry.AddTenantAsync(new(Guid.NewGuid(), $"{prefix}-t-{index:D3}", $"Tenant {index:D3}", TenantStatus.Active, tiedCreatedAt), TestContext.Current.CancellationToken);
-                await registry.AddApplicationAsync(new(Guid.NewGuid(), $"{prefix}-a-{index:D3}", $"Application {index:D3}", ApplicationStatus.Active, "1.0.0", null, tiedCreatedAt), TestContext.Current.CancellationToken);
+                await registry.AddTenantAsync(new(tenantIds[index], $"{prefix}-t-{index:D3}", $"Tenant {index:D3}", TenantStatus.Active, tiedCreatedAt), TestContext.Current.CancellationToken);
+                await registry.AddApplicationAsync(new(applicationIds[index], $"{prefix}-a-{index:D3}", $"Application {index:D3}", ApplicationStatus.Active, "1.0.0", null, tiedCreatedAt), TestContext.Current.CancellationToken);
             }
 
-            const int expectedTotal = 101;
-            AdminPage<TenantRecord> page51 = await directory.ListTenantsAsync(50, 1, TestContext.Current.CancellationToken);
-            AdminPage<TenantRecord> page101 = await directory.ListTenantsAsync(100, 1, TestContext.Current.CancellationToken);
-            AdminPage<TenantRecord> page101Repeat = await directory.ListTenantsAsync(100, 1, TestContext.Current.CancellationToken);
-            AdminPage<TenantRecord> empty = await directory.ListTenantsAsync(expectedTotal, 1, TestContext.Current.CancellationToken);
-            Assert.Equal(expectedTotal, page51.Total); Assert.Single(page51.Items);
-            Assert.Equal(expectedTotal, page101.Total); Assert.Single(page101.Items);
-            Assert.Equal(page101.Items[0].Id, page101Repeat.Items[0].Id);
-            Assert.Equal(expectedTotal, empty.Total); Assert.Empty(empty.Items);
-            AdminPage<ApplicationRecord> applications = await directory.ListApplicationsAsync(expectedTotal, 1, TestContext.Current.CancellationToken);
-            Assert.Equal(expectedTotal, applications.Total); Assert.Empty(applications.Items);
+            int expectedTenantTotal = tenantBaseline + tenantIds.Length + 1;
+            int expectedApplicationTotal = applicationBaseline + applicationIds.Length + 1;
+            IReadOnlyList<Guid> tenantOrder = await ListAllTenantIdsAsync(directory, expectedTenantTotal, TestContext.Current.CancellationToken);
+            IReadOnlyList<Guid> repeatedTenantOrder = await ListAllTenantIdsAsync(directory, expectedTenantTotal, TestContext.Current.CancellationToken);
+            IReadOnlyList<Guid> applicationOrder = await ListAllApplicationIdsAsync(directory, expectedApplicationTotal, TestContext.Current.CancellationToken);
+            IReadOnlyList<Guid> repeatedApplicationOrder = await ListAllApplicationIdsAsync(directory, expectedApplicationTotal, TestContext.Current.CancellationToken);
+            Assert.Equal(tenantOrder.ToArray(), repeatedTenantOrder.ToArray());
+            Assert.Equal(applicationOrder.ToArray(), repeatedApplicationOrder.ToArray());
+            Assert.All(tenantIds, id => Assert.Contains(id, tenantOrder));
+            Assert.All(applicationIds, id => Assert.Contains(id, applicationOrder));
+            Assert.Contains(foreignTenantId, tenantOrder);
+            Assert.Contains(foreignApplicationId, applicationOrder);
+            AdminPage<TenantRecord> emptyTenants = await directory.ListTenantsAsync(expectedTenantTotal, 1, TestContext.Current.CancellationToken);
+            AdminPage<ApplicationRecord> emptyApplications = await directory.ListApplicationsAsync(expectedApplicationTotal, 1, TestContext.Current.CancellationToken);
+            Assert.Equal(expectedTenantTotal, emptyTenants.Total); Assert.Empty(emptyTenants.Items);
+            Assert.Equal(expectedApplicationTotal, emptyApplications.Total); Assert.Empty(emptyApplications.Items);
         }
         finally
         {
-            await ExecuteNonQueryAsync(migrationConnectionString, "DELETE FROM gateway.tenant WHERE code LIKE $1", CancellationToken.None, prefix + "%");
-            await ExecuteNonQueryAsync(migrationConnectionString, "DELETE FROM gateway.application WHERE code LIKE $1", CancellationToken.None, prefix + "%");
+            try
+            {
+                await ExecuteNonQueryAsync(migrationConnectionString, "DELETE FROM gateway.tenant WHERE id=ANY($1)", CancellationToken.None, tenantIds);
+                await ExecuteNonQueryAsync(migrationConnectionString, "DELETE FROM gateway.application WHERE id=ANY($1)", CancellationToken.None, applicationIds);
+                Assert.Equal(1L, await ScalarAsync(pool.Value, "SELECT count(*) FROM gateway.tenant WHERE id=$1", foreignTenantId));
+                Assert.Equal(1L, await ScalarAsync(pool.Value, "SELECT count(*) FROM gateway.application WHERE id=$1", foreignApplicationId));
+            }
+            finally
+            {
+                await ExecuteNonQueryAsync(migrationConnectionString, "DELETE FROM gateway.tenant WHERE id=$1", CancellationToken.None, foreignTenantId);
+                await ExecuteNonQueryAsync(migrationConnectionString, "DELETE FROM gateway.application WHERE id=$1", CancellationToken.None, foreignApplicationId);
+            }
         }
     }
 
@@ -838,6 +858,32 @@ public sealed class PostgresIsolationTests
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(TestContext.Current.CancellationToken);
         await using NpgsqlCommand command = new(sql, connection); command.Parameters.AddWithValue(value);
         return (string)(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken))!;
+    }
+
+    private static async Task<IReadOnlyList<Guid>> ListAllTenantIdsAsync(PostgresAdminDirectoryStore directory, int expectedTotal, CancellationToken cancellationToken)
+    {
+        List<Guid> ids = [];
+        for (int offset = 0; offset < expectedTotal; offset += 50)
+        {
+            AdminPage<TenantRecord> page = await directory.ListTenantsAsync(offset, 50, cancellationToken);
+            Assert.Equal(expectedTotal, page.Total);
+            ids.AddRange(page.Items.Select(item => item.Id));
+        }
+        Assert.Equal(expectedTotal, ids.Count);
+        return ids;
+    }
+
+    private static async Task<IReadOnlyList<Guid>> ListAllApplicationIdsAsync(PostgresAdminDirectoryStore directory, int expectedTotal, CancellationToken cancellationToken)
+    {
+        List<Guid> ids = [];
+        for (int offset = 0; offset < expectedTotal; offset += 50)
+        {
+            AdminPage<ApplicationRecord> page = await directory.ListApplicationsAsync(offset, 50, cancellationToken);
+            Assert.Equal(expectedTotal, page.Total);
+            ids.AddRange(page.Items.Select(item => item.Id));
+        }
+        Assert.Equal(expectedTotal, ids.Count);
+        return ids;
     }
 
     private static async Task ExecuteNonQueryAsync(string connectionString, string sql, CancellationToken cancellationToken, params object[] values)
