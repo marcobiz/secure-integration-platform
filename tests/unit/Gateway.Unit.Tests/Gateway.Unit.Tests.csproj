@@ -10,6 +10,7 @@
     <ProjectReference Include="..\..\..\src\Gateway\Gateway.Application\Gateway.Application.csproj" />
     <ProjectReference Include="..\..\..\src\Gateway\Gateway.ConnectorRuntime.Auth.Http\Gateway.ConnectorRuntime.Auth.Http.csproj" />
     <ProjectReference Include="..\..\..\src\Gateway\Gateway.Infrastructure\Gateway.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\src\Gateway\Gateway.ConnectorRuntime.Auth.Soap\Gateway.ConnectorRuntime.Auth.Soap.csproj" />
     <ProjectReference Include="..\..\..\src\Providers\Synthetic\Providers.Synthetic.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />

@@ -1,6 +1,6 @@
 using System.Collections.ObjectModel;
 
-namespace SecureIntegration.Gateway.Application;
+namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 
 /// <summary>SOAP envelope versions supported by the bounded connector runtime.</summary>
 public enum SoapEnvelopeVersion

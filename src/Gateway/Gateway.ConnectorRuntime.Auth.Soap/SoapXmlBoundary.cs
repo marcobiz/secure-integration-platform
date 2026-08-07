@@ -3,11 +3,12 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
+using SecureIntegration.Gateway.Application;
 
-namespace SecureIntegration.Gateway.Application;
+namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 
-/// <summary>Deterministic serializer and hardened parser for the compiled SOAP profile boundary.</summary>
-public static class SoapXmlBoundary
+/// <summary>Deterministic serializer and hardened parser used only behind the opaque session client.</summary>
+internal static class SoapXmlBoundary
 {
     private const int MaximumDepth = 32;
     private const int MaximumNodes = 10_000;
@@ -17,7 +18,7 @@ public static class SoapXmlBoundary
     private static readonly UTF8Encoding Utf8 = new(false, true);
 
     /// <summary>Creates a bounded deterministic SOAP request for one allowlisted operation.</summary>
-    public static byte[] SerializeRequest(SoapOperationProfile operation, IReadOnlyDictionary<string, string>? values, SoapElementRule? sessionHeader, string? sessionValue)
+    internal static byte[] SerializeRequest(SoapOperationProfile operation, IReadOnlyDictionary<string, string>? values, SoapElementRule? sessionHeader, string? sessionValue)
     {
         ArgumentNullException.ThrowIfNull(operation);
         values ??= new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.Ordinal));
@@ -63,7 +64,7 @@ public static class SoapXmlBoundary
     }
 
     /// <summary>Applies the exact version-specific HTTP content type and SOAP action policy.</summary>
-    public static void ApplyHttpHeaders(HttpRequestMessage request, SoapOperationProfile operation, byte[] envelope)
+    internal static void ApplyHttpHeaders(HttpRequestMessage request, SoapOperationProfile operation, byte[] envelope)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(operation);
@@ -82,7 +83,7 @@ public static class SoapXmlBoundary
     }
 
     /// <summary>Parses one bounded response and returns only values allowlisted by the compiled profile.</summary>
-    public static SoapDecodedResponse ParseResponse(
+    internal static SoapDecodedResponse ParseResponse(
         SoapOperationProfile operation,
         ExternalResponse response,
         SoapElementRule? sessionElement,
@@ -214,4 +215,4 @@ public static class SoapXmlBoundary
 }
 
 /// <summary>Internal decoded response containing only explicitly selected values.</summary>
-public sealed record SoapDecodedResponse(IReadOnlyDictionary<string, string> Values, string? SessionValue, string? ChallengeValue);
+internal sealed record SoapDecodedResponse(IReadOnlyDictionary<string, string> Values, string? SessionValue, string? ChallengeValue);

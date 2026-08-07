@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using SecureIntegration.Providers.Abstractions;
 
-namespace SecureIntegration.Gateway.Application;
+namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 
 /// <summary>Applies HTTP Basic only from an exact server-resolved credential binding.</summary>
 public sealed class ServerBoundBasicAuthentication(ISecretValueProvider secrets)

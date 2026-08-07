@@ -582,6 +582,13 @@
           "SecureIntegration.Providers.Abstractions": "[1.0.0, )"
         }
       },
+      "SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap": {
+        "type": "Project",
+        "dependencies": {
+          "SecureIntegration.Gateway.Application": "[1.0.0, )",
+          "SecureIntegration.Providers.Abstractions": "[1.0.0, )"
+        }
+      },
       "SecureIntegration.Gateway.Domain": {
         "type": "Project"
       },
@@ -595,6 +602,9 @@
         }
       },
       "SecureIntegration.M6.SyntheticOAuthServer": {
+        "type": "Project"
+      },
+      "SecureIntegration.M6.SyntheticSoapServer": {
         "type": "Project"
       },
       "SecureIntegration.Providers.Abstractions": {

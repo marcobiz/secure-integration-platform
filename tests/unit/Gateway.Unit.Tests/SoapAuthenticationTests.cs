@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 using SecureIntegration.Providers.Abstractions;
 using Xunit;
 
@@ -61,7 +62,7 @@ public sealed class SoapAuthenticationTests
     }
 
     [Fact]
-    public void M6_SEC_XML_boundary_rejects_DTD_XXE_malformed_oversize_namespace_confusion_and_wrong_content_type()
+    public void M6_SEC_XML_boundary_rejects_DTD_XXE_external_entity_complexity_malformed_oversize_namespace_and_content_type()
     {
         SoapOperationProfile operation = BusinessOperation(SoapEnvelopeVersion.Soap11, maximumResponseBytes: 512);
         string validPayload = $"<op:BusinessOperationResponse xmlns:op=\"{OperationNamespace}\"><op:Result>accepted</op:Result></op:BusinessOperationResponse>";
@@ -82,6 +83,9 @@ public sealed class SoapAuthenticationTests
         string deep = string.Concat(Enumerable.Repeat("<x>", 40)) + "value" + string.Concat(Enumerable.Repeat("</x>", 40));
         AssertCode("SOAP-XML-COMPLEXITY", () => SoapXmlBoundary.ParseResponse(BusinessOperation(SoapEnvelopeVersion.Soap11, maximumResponseBytes: 4096),
             Response(SoapEnvelopeVersion.Soap11, Envelope(SoapEnvelopeVersion.Soap11, deep)), null, null, new Dictionary<(string, string), SoapFaultCategory>()));
+        string attributes = string.Join(' ', Enumerable.Range(0, 33).Select(index => $"a{index}=\"x\""));
+        AssertCode("SOAP-XML-COMPLEXITY", () => SoapXmlBoundary.ParseResponse(BusinessOperation(SoapEnvelopeVersion.Soap11, maximumResponseBytes: 4096),
+            Response(SoapEnvelopeVersion.Soap11, Envelope(SoapEnvelopeVersion.Soap11, $"<op:BusinessOperationResponse xmlns:op=\"{OperationNamespace}\"><op:Result {attributes}>accepted</op:Result></op:BusinessOperationResponse>")), null, null, new Dictionary<(string, string), SoapFaultCategory>()));
     }
 
     [Fact]

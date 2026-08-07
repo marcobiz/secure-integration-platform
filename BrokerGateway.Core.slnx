@@ -9,6 +9,7 @@
     <Project Path="src/Gateway/Gateway.Domain/Gateway.Domain.csproj" />
     <Project Path="src/Gateway/Gateway.Application/Gateway.Application.csproj" />
     <Project Path="src/Gateway/Gateway.ConnectorRuntime.Auth.Http/Gateway.ConnectorRuntime.Auth.Http.csproj" />
+    <Project Path="src/Gateway/Gateway.ConnectorRuntime.Auth.Soap/Gateway.ConnectorRuntime.Auth.Soap.csproj" />
     <Project Path="src/Gateway/Gateway.Infrastructure/Gateway.Infrastructure.csproj" />
     <Project Path="src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj" />
     <Project Path="src/Gateway/Gateway.Api/Gateway.Api.csproj" />
@@ -36,5 +37,6 @@
     <Project Path="tools/m3/FixtureGenerator/FixtureGenerator.csproj" />
     <Project Path="tools/m3/LegacySimulator/LegacySimulator.csproj" />
     <Project Path="tools/m3/SecurityDriver/SecurityDriver.csproj" />
+    <Project Path="tools/m6/SyntheticSoapServer/SyntheticSoapServer.csproj" />
   </Folder>
 </Solution>

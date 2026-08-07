@@ -1,8 +1,9 @@
 using System.Collections.Concurrent;
 using System.Net;
+using SecureIntegration.Gateway.Application;
 using SecureIntegration.Providers.Abstractions;
 
-namespace SecureIntegration.Gateway.Application;
+namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 
 /// <summary>
 /// Executes the fixed Basic/SOAP/session lifecycle for a compiled connector profile.
@@ -191,6 +192,10 @@ public sealed class SoapSessionClient
         }
         catch (OperationCanceledException) { throw; }
         catch (SoapAuthException) { throw; }
+        catch (GatewayException exception) when (string.Equals(exception.Code, "BGW-EGRESS-RESPONSE-TOO-LARGE", StringComparison.Ordinal))
+        {
+            throw new SoapAuthException("SOAP-RESPONSE-TOO-LARGE");
+        }
         catch (Exception exception) when (exception is HttpRequestException or TimeoutException or GatewayException)
         {
             _ = exception;

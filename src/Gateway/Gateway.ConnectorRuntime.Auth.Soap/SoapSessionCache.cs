@@ -1,8 +1,9 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using SecureIntegration.Gateway.Application;
 
-namespace SecureIntegration.Gateway.Application;
+namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 
 internal sealed class SoapSessionCache
 {

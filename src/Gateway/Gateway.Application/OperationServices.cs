@@ -140,9 +140,9 @@ public sealed class RestrictedEgressService(
             case GatewayAuthenticationKind.None:
                 return null;
             case GatewayAuthenticationKind.Basic:
-                await new ServerBoundBasicAuthentication(secrets)
-                    .ApplyAsync(request, new ResolvedBasicCredentialBinding(operation.UsernameSecretReference!, operation.PasswordSecretReference!), cancellationToken)
-                    .ConfigureAwait(false);
+                string username = await secrets.GetSecretAsync(operation.UsernameSecretReference!, cancellationToken).ConfigureAwait(false);
+                string password = await secrets.GetSecretAsync(operation.PasswordSecretReference!, cancellationToken).ConfigureAwait(false);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(username + ":" + password)));
                 return null;
             case GatewayAuthenticationKind.ApiKey:
                 string key = await secrets.GetSecretAsync(operation.ApiKeySecretReference!, cancellationToken).ConfigureAwait(false);
