@@ -14,7 +14,7 @@ public sealed record CreateApplicationRequest(string Code, string DisplayName, s
 public sealed record UpdateApplicationRequest(string DisplayName, string MinimumBrokerVersion, string? MaximumBrokerVersion);
 
 /// <summary>Creates a pending installation under existing server-side resources.</summary>
-public sealed record CreateInstallationRequest(Guid TenantId, Guid ApplicationId, Guid EnvironmentId);
+public sealed record CreateInstallationRequest(Guid TenantId, Guid ApplicationId, Guid EnvironmentId, SecureIntegration.Gateway.Domain.InstallationKind InstallationKind = SecureIntegration.Gateway.Domain.InstallationKind.Broker);
 
 /// <summary>Immediately revokes an installation.</summary>
 public sealed record RevokeInstallationRequest(string Reason);

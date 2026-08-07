@@ -13,7 +13,7 @@ public sealed class RuntimeIdentityService(IGatewayRegistry registry, IGatewayCl
     private static readonly TimeSpan NonceLifetime = TimeSpan.FromMinutes(10);
 
     /// <summary>Authenticates a certificate-bound and signed request and consumes its nonce.</summary>
-    public async Task<AuthenticatedInstallation> AuthenticateAsync(X509Certificate2? presentedCertificate, string method, string rawPathAndQuery, RuntimeSignatureHeaders headers, ReadOnlyMemory<byte> body, Guid correlationId, CancellationToken cancellationToken)
+    public async Task<GatewayClientPrincipal> AuthenticateAsync(X509Certificate2? presentedCertificate, string method, string rawPathAndQuery, RuntimeSignatureHeaders headers, ReadOnlyMemory<byte> body, Guid correlationId, CancellationToken cancellationToken)
     {
         if (presentedCertificate is null) throw new GatewayException("BGW-AUTHN-CERTIFICATE-REQUIRED", 401);
         byte[] certificateHash = SHA256.HashData(presentedCertificate.RawData);
@@ -42,8 +42,8 @@ public sealed class RuntimeIdentityService(IGatewayRegistry registry, IGatewayCl
         using ECDsa? publicKey = registeredCertificate.GetECDsaPublicKey();
         if (publicKey is null || !publicKey.VerifyData(Encoding.UTF8.GetBytes(signingInput), signature, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation)) throw new GatewayException("BGW-AUTHN-SIGNATURE", 401);
         if (!await registry.TryStoreNonceAsync(identity.InstallationId, SHA256.HashData(nonce), now.Add(NonceLifetime), cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-AUTHN-REPLAY", 401);
-        await registry.AppendAuditAsync(new GatewayAuditEvent(Guid.NewGuid(), now, identity.TenantId, "installation", identity.InstallationId.ToString("D"), "runtime.authenticate", "credential", identity.CredentialId.ToString("D"), correlationId, "success", "BGW-AUTHN-OK", new Dictionary<string, string> { ["method"] = method.ToUpperInvariant() }), cancellationToken).ConfigureAwait(false);
-        return new AuthenticatedInstallation(identity, correlationId);
+        await registry.AppendAuditAsync(new GatewayAuditEvent(Guid.NewGuid(), now, identity.TenantId, "installation", identity.InstallationId.ToString("D"), "runtime.authenticate", "credential", identity.CredentialId.ToString("D"), correlationId, "success", "BGW-AUTHN-OK", new Dictionary<string, string> { ["method"] = method.ToUpperInvariant(), ["callerKind"] = identity.InstallationKind.ToString(), ["authenticationMethod"] = GatewayClientAuthenticationMethod.MutualTlsPopBgw1.ToString() }), cancellationToken).ConfigureAwait(false);
+        return new GatewayClientPrincipal(identity, correlationId);
     }
 
     /// <summary>Builds the canonical BGW1 request signing input.</summary>

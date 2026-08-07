@@ -37,6 +37,15 @@ public enum InstallationStatus
     Retired
 }
 
+/// <summary>Origin of a machine identity authenticated by the Gateway.</summary>
+public enum InstallationKind
+{
+    /// <summary>A Local Broker installed as a Windows Service.</summary>
+    Broker,
+    /// <summary>An authorized application that authenticates directly to the Gateway.</summary>
+    Direct
+}
+
 /// <summary>Lifecycle state of an Installation credential.</summary>
 public enum CredentialStatus
 {
@@ -61,7 +70,7 @@ public sealed record ApplicationRecord(Guid Id, string Code, string DisplayName,
 /// <summary>An isolated deployment environment.</summary>
 public sealed record GatewayEnvironmentRecord(Guid Id, string Code, string DisplayName, bool ProductionControls);
 
-/// <summary>One installed Broker identity bound immutably to Tenant/Application/Environment.</summary>
+/// <summary>One machine identity bound immutably to Tenant/Application/Environment.</summary>
 public sealed record InstallationRecord(
     Guid Id,
     Guid TenantId,
@@ -72,7 +81,21 @@ public sealed record InstallationRecord(
     DateTimeOffset CreatedAt,
     DateTimeOffset? LastSeenAt = null,
     DateTimeOffset? RevokedAt = null,
-    string? RevocationReason = null);
+    string? RevocationReason = null,
+    InstallationKind InstallationKind = InstallationKind.Broker,
+    string? ClientVersion = null,
+    DateTimeOffset? UpdatedAt = null,
+    InstallationCredentialPublicMetadata? Credential = null);
+
+/// <summary>Public credential metadata safe for administrative display.</summary>
+public sealed record InstallationCredentialPublicMetadata(
+    Guid CredentialId,
+    CredentialStatus Status,
+    string CertificateSha256,
+    string SpkiSha256,
+    string SerialNumber,
+    DateTimeOffset NotBefore,
+    DateTimeOffset NotAfter);
 
 /// <summary>A registered ClientAuth credential. Certificate bytes contain public material only.</summary>
 public sealed record InstallationCredentialRecord(
@@ -126,7 +149,9 @@ public sealed record RegisteredInstallationIdentity(
     DateTimeOffset CredentialNotBefore,
     DateTimeOffset CredentialNotAfter,
     string MinimumBrokerVersion,
-    string? MaximumBrokerVersion);
+    string? MaximumBrokerVersion,
+    InstallationKind InstallationKind = InstallationKind.Broker,
+    string? ClientVersion = null);
 
 /// <summary>Metadata-only audit event.</summary>
 public sealed record GatewayAuditEvent(

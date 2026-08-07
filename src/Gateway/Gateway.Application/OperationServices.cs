@@ -76,7 +76,7 @@ public sealed class RestrictedEgressService(
     IPrivateDestinationAllowance? privateDestinationAllowance = null)
 {
     /// <summary>Authorizes and invokes a server-owned external operation.</summary>
-    public async Task<GatewayInvokeResponse> InvokeAsync(AuthenticatedInstallation authenticated, string connectorId, string operationId, GatewayInvokeRequest request, CancellationToken cancellationToken)
+    public async Task<GatewayInvokeResponse> InvokeAsync(GatewayClientPrincipal authenticated, string connectorId, string operationId, GatewayInvokeRequest request, CancellationToken cancellationToken)
     {
         if (!string.Equals(request.ProtocolVersion, "1.0", StringComparison.Ordinal) || request.CorrelationId == Guid.Empty)
             throw new GatewayException("BGW-PROTOCOL-VERSION", 400);
@@ -122,7 +122,7 @@ public sealed class RestrictedEgressService(
             {
                 clientCertificate = await ApplyAuthenticationAsync(outbound, operation, cancellationToken).ConfigureAwait(false);
                 ExternalResponse result = await transport.SendAsync(outbound, addresses, clientCertificate, TimeSpan.FromMilliseconds(operation.TimeoutMilliseconds), operation.MaximumResponseBytes, cancellationToken).ConfigureAwait(false);
-                await registry.AppendAuditAsync(new GatewayAuditEvent(Guid.NewGuid(), clock.UtcNow, identity.TenantId, "installation", identity.InstallationId.ToString("D"), "operation.invoke", "operation", connectorId + "/" + operationId, request.CorrelationId, "success", "BGW-OPERATION-OK", new Dictionary<string, string> { ["connectorVersion"] = operation.Version, ["statusCategory"] = (result.StatusCode / 100).ToString(System.Globalization.CultureInfo.InvariantCulture) + "xx" }), cancellationToken).ConfigureAwait(false);
+                await registry.AppendAuditAsync(new GatewayAuditEvent(Guid.NewGuid(), clock.UtcNow, identity.TenantId, "installation", identity.InstallationId.ToString("D"), "operation.invoke", "operation", connectorId + "/" + operationId, request.CorrelationId, "success", "BGW-OPERATION-OK", new Dictionary<string, string> { ["connectorVersion"] = operation.Version, ["statusCategory"] = (result.StatusCode / 100).ToString(System.Globalization.CultureInfo.InvariantCulture) + "xx", ["callerKind"] = identity.InstallationKind.ToString() }), cancellationToken).ConfigureAwait(false);
                 return new GatewayInvokeResponse(request.CorrelationId, operation.Version, new GatewayPayload(result.ContentType, "base64", Convert.ToBase64String(result.Body)));
             }
             catch (Exception exception) when (attempt < attempts && exception is HttpRequestException or TimeoutException)

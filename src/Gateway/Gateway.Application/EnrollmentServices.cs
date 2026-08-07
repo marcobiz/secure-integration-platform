@@ -50,14 +50,15 @@ public sealed class GatewayProvisioningService(IGatewayRegistry registry, IGatew
         GatewayEnvironmentRecord environment,
         Guid installationId,
         string createdBy,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        InstallationKind installationKind = InstallationKind.Broker)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(createdBy);
         DateTimeOffset now = clock.UtcNow;
         await registry.AddTenantAsync(tenant, cancellationToken).ConfigureAwait(false);
         await registry.AddApplicationAsync(application, cancellationToken).ConfigureAwait(false);
         await registry.AddEnvironmentAsync(environment, cancellationToken).ConfigureAwait(false);
-        await registry.AddInstallationAsync(new InstallationRecord(installationId, tenant.Id, application.Id, environment.Id, InstallationStatus.Pending, null, now), cancellationToken).ConfigureAwait(false);
+        await registry.AddInstallationAsync(new InstallationRecord(installationId, tenant.Id, application.Id, environment.Id, InstallationStatus.Pending, null, now, InstallationKind: installationKind, UpdatedAt: now), cancellationToken).ConfigureAwait(false);
         return await CreateActivationCodeAsync(installationId, createdBy, cancellationToken).ConfigureAwait(false);
     }
 
@@ -145,7 +146,9 @@ public sealed class InstallationEnrollmentService(IGatewayRegistry registry, IEn
             byte[] certificateHash = SHA256.HashData(certificate.RawData);
             byte[] spkiHash = SHA256.HashData(certificateSpki);
             InstallationCredentialRecord credential = new(Guid.NewGuid(), activation.InstallationId, certificateHash, spkiHash, certificate.RawData, certificate.SerialNumber, certificate.NotBefore.ToUniversalTime(), certificate.NotAfter.ToUniversalTime(), CredentialStatus.Active, now);
-            bool activated = await registry.ActivateAsync(activation.Id, presentedHmac, credential, ValidateBrokerVersion(request.BrokerVersion), now, cancellationToken).ConfigureAwait(false);
+            ValidateVersionField(request.BrokerVersion, "BGW-INSTALLATION-BROKER-VERSION");
+            ValidateVersionField(request.ClientVersion, "BGW-INSTALLATION-CLIENT-VERSION");
+            bool activated = await registry.ActivateAsync(activation.Id, presentedHmac, credential, request.BrokerVersion, request.ClientVersion, now, cancellationToken).ConfigureAwait(false);
             if (!activated) throw new GatewayException("BGW-AUTHN-ENROLLMENT-CONFLICT", 409);
             RegisteredInstallationIdentity identity = await registry.FindIdentityByCertificateAsync(certificateHash, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-AUTHN-ENROLLMENT-CONFLICT", 409);
             return new EnrollmentResult(identity.InstallationId, identity.TenantId, identity.ApplicationId, credential.NotAfter, credential.NotAfter.Subtract(options.RenewalWindow));
@@ -193,10 +196,9 @@ public sealed class InstallationEnrollmentService(IGatewayRegistry registry, IEn
     /// <summary>Builds the canonical renewal proof bytes.</summary>
     public static byte[] BuildRenewalProof(Guid installationId, Guid currentCredentialId, byte[] newSpkiSha256) => Encoding.UTF8.GetBytes(FormattableString.Invariant($"BGW-RENEW1\n{installationId:D}\n{currentCredentialId:D}\n{Base64Url.Encode(newSpkiSha256)}"));
 
-    private static string ValidateBrokerVersion(string value)
+    private static void ValidateVersionField(string? value, string errorCode)
     {
-        if (string.IsNullOrWhiteSpace(value) || value.Length > 64 || !Version.TryParse(value, out _)) throw new GatewayException("BGW-INSTALLATION-BROKER-VERSION", 400);
-        return value;
+        if (value is not null && (string.IsNullOrWhiteSpace(value) || value.Length > 64 || !Version.TryParse(value, out _))) throw new GatewayException(errorCode, 400);
     }
 
     private static X509Certificate2 LoadAndValidateClientCertificate(string base64Der, DateTimeOffset now, TimeSpan maximumLifetime)

@@ -30,7 +30,7 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null, IAdminT
         InstallationRecord[] Installations, InstallationGrantRecord[] Grants, GatewayAuditEvent[] Audit) SnapshotDirectory()
     {
         lock (gate) return (tenants.Values.ToArray(), applications.Values.ToArray(), environments.Values.ToArray(),
-            installations.Values.ToArray(), grants.Values.ToArray(), auditEvents.ToArray());
+            installations.Values.Select(WithPublicCredential).ToArray(), grants.Values.ToArray(), auditEvents.ToArray());
     }
 
     /// <inheritdoc />
@@ -232,7 +232,7 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null, IAdminT
     }
 
     /// <inheritdoc />
-    public Task<bool> ActivateAsync(Guid activationCodeId, byte[] expectedCodeHmac, InstallationCredentialRecord credential, string brokerVersion, DateTimeOffset now, CancellationToken cancellationToken)
+    public Task<bool> ActivateAsync(Guid activationCodeId, byte[] expectedCodeHmac, InstallationCredentialRecord credential, string? brokerVersion, string? clientVersion, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (gate)
@@ -240,10 +240,28 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null, IAdminT
             if (!activationCodes.TryGetValue(activationCodeId, out ActivationCodeRecord? activation) || activation.UsedAt is not null || activation.ExpiresAt <= now || activation.AttemptCount >= 5 || !CryptographicOperations.FixedTimeEquals(activation.CodeHmac, expectedCodeHmac)) return Task.FromResult(false);
             if (!installations.TryGetValue(activation.InstallationId, out InstallationRecord? installation) || installation.Status != InstallationStatus.Pending || credential.InstallationId != installation.Id) return Task.FromResult(false);
             ApplicationRecord application = applications[installation.ApplicationId];
-            if (!IsVersionAllowed(brokerVersion, application.MinimumBrokerVersion, application.MaximumBrokerVersion)) throw new GatewayException("BGW-INSTALLATION-BROKER-INCOMPATIBLE", 409);
+            string activatedVersion;
+            if (installation.InstallationKind == InstallationKind.Broker)
+            {
+                if (clientVersion is not null || string.IsNullOrWhiteSpace(brokerVersion) || !Version.TryParse(brokerVersion, out _)) throw new GatewayException("BGW-INSTALLATION-BROKER-VERSION", 400);
+                if (!IsVersionAllowed(brokerVersion, application.MinimumBrokerVersion, application.MaximumBrokerVersion)) throw new GatewayException("BGW-INSTALLATION-BROKER-INCOMPATIBLE", 409);
+                activatedVersion = brokerVersion;
+            }
+            else
+            {
+                if (brokerVersion is not null || string.IsNullOrWhiteSpace(clientVersion) || !Version.TryParse(clientVersion, out _)) throw new GatewayException("BGW-INSTALLATION-CLIENT-VERSION", 400);
+                activatedVersion = clientVersion;
+            }
             if (credentials.Values.Any(item => CryptographicOperations.FixedTimeEquals(item.CertificateSha256, credential.CertificateSha256) || CryptographicOperations.FixedTimeEquals(item.SpkiSha256, credential.SpkiSha256))) return Task.FromResult(false);
             activationCodes[activationCodeId] = activation with { UsedAt = now };
-            installations[installation.Id] = installation with { Status = InstallationStatus.Active, BrokerVersion = brokerVersion, LastSeenAt = now };
+            installations[installation.Id] = installation with
+            {
+                Status = InstallationStatus.Active,
+                BrokerVersion = installation.InstallationKind == InstallationKind.Broker ? activatedVersion : null,
+                ClientVersion = installation.InstallationKind == InstallationKind.Direct ? activatedVersion : null,
+                LastSeenAt = now,
+                UpdatedAt = now
+            };
             credentials.Add(credential.Id, Clone(credential));
             return Task.FromResult(true);
         }
@@ -258,7 +276,7 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null, IAdminT
             InstallationCredentialRecord? credential = credentials.Values.FirstOrDefault(item => CryptographicOperations.FixedTimeEquals(item.CertificateSha256, certificateSha256));
             if (credential is null || !installations.TryGetValue(credential.InstallationId, out InstallationRecord? installation) || !applications.TryGetValue(installation.ApplicationId, out ApplicationRecord? application)) return Task.FromResult<RegisteredInstallationIdentity?>(null);
             TenantRecord tenant = tenants[installation.TenantId];
-            return Task.FromResult<RegisteredInstallationIdentity?>(new RegisteredInstallationIdentity(installation.Id, installation.TenantId, installation.ApplicationId, installation.EnvironmentId, tenant.Status, application.Status, installation.Status, credential.Id, credential.Status, credential.CertificateDer.ToArray(), credential.NotBefore, credential.NotAfter, application.MinimumBrokerVersion, application.MaximumBrokerVersion));
+            return Task.FromResult<RegisteredInstallationIdentity?>(new RegisteredInstallationIdentity(installation.Id, installation.TenantId, installation.ApplicationId, installation.EnvironmentId, tenant.Status, application.Status, installation.Status, credential.Id, credential.Status, credential.CertificateDer.ToArray(), credential.NotBefore, credential.NotAfter, application.MinimumBrokerVersion, application.MaximumBrokerVersion, installation.InstallationKind, installation.ClientVersion));
         }
     }
 
@@ -272,6 +290,7 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null, IAdminT
             if (credentials.Values.Any(item => CryptographicOperations.FixedTimeEquals(item.CertificateSha256, replacement.CertificateSha256) || CryptographicOperations.FixedTimeEquals(item.SpkiSha256, replacement.SpkiSha256))) return Task.FromResult(false);
             credentials[currentCredentialId] = current with { Status = CredentialStatus.Overlap, NotAfter = current.NotAfter < overlapEndsAt ? current.NotAfter : overlapEndsAt, ReplacedById = replacement.Id };
             credentials.Add(replacement.Id, Clone(replacement));
+            installations[installationId] = installation with { UpdatedAt = replacement.CreatedAt };
             return Task.FromResult(true);
         }
     }
@@ -283,7 +302,7 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null, IAdminT
         lock (gate)
         {
             if (!installations.TryGetValue(installationId, out InstallationRecord? installation) || installation.Status is InstallationStatus.Revoked or InstallationStatus.Retired) return Task.FromResult(false);
-            installations[installationId] = installation with { Status = InstallationStatus.Revoked, RevokedAt = now, RevocationReason = reason };
+            installations[installationId] = installation with { Status = InstallationStatus.Revoked, RevokedAt = now, RevocationReason = reason, UpdatedAt = now };
             foreach (Guid credentialId in credentials.Values.Where(item => item.InstallationId == installationId && item.Status is CredentialStatus.Active or CredentialStatus.Overlap).Select(item => item.Id).ToArray()) credentials[credentialId] = credentials[credentialId] with { Status = CredentialStatus.Revoked, RevokedAt = now };
             return Task.FromResult(true);
         }
@@ -334,5 +353,22 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null, IAdminT
 
     private static ActivationCodeRecord Clone(ActivationCodeRecord value) => value with { CodeHmac = value.CodeHmac.ToArray() };
     private static InstallationCredentialRecord Clone(InstallationCredentialRecord value) => value with { CertificateSha256 = value.CertificateSha256.ToArray(), SpkiSha256 = value.SpkiSha256.ToArray(), CertificateDer = value.CertificateDer.ToArray() };
+    private InstallationRecord WithPublicCredential(InstallationRecord installation)
+    {
+        InstallationCredentialRecord? credential = credentials.Values
+            .Where(value => value.InstallationId == installation.Id)
+            .OrderBy(value => value.Status == CredentialStatus.Active ? 0 : value.Status == CredentialStatus.Overlap ? 1 : 2)
+            .ThenByDescending(value => value.CreatedAt)
+            .FirstOrDefault();
+        InstallationCredentialPublicMetadata? metadata = credential is null ? null : new(
+            credential.Id,
+            credential.Status,
+            Convert.ToHexString(credential.CertificateSha256),
+            Convert.ToHexString(credential.SpkiSha256),
+            credential.SerialNumber,
+            credential.NotBefore,
+            credential.NotAfter);
+        return installation with { UpdatedAt = installation.UpdatedAt ?? installation.CreatedAt, Credential = metadata };
+    }
     private static bool IsVersionAllowed(string value, string minimum, string? maximum) => Version.TryParse(value, out Version? parsed) && Version.TryParse(minimum, out Version? min) && parsed >= min && (maximum is null || (Version.TryParse(maximum, out Version? max) && parsed <= max));
 }

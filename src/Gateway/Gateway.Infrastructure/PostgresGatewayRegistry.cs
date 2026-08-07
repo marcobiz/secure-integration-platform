@@ -133,8 +133,8 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
         await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await SetTenantAsync(connection, transaction, installation.TenantId, cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, transaction,
-            "INSERT INTO gateway.installation(id,tenant_id,application_id,environment_id,status,broker_version,created_at,last_seen_at,revoked_at,revocation_reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)", cancellationToken,
-            installation.Id, installation.TenantId, installation.ApplicationId, installation.EnvironmentId, Db(installation.Status), installation.BrokerVersion, installation.CreatedAt, installation.LastSeenAt, installation.RevokedAt, installation.RevocationReason).ConfigureAwait(false);
+            "INSERT INTO gateway.installation(id,tenant_id,application_id,environment_id,status,broker_version,created_at,last_seen_at,revoked_at,revocation_reason,installation_kind,client_version,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)", cancellationToken,
+            installation.Id, installation.TenantId, installation.ApplicationId, installation.EnvironmentId, Db(installation.Status), installation.BrokerVersion, installation.CreatedAt, installation.LastSeenAt, installation.RevokedAt, installation.RevocationReason, Db(installation.InstallationKind), installation.ClientVersion, installation.UpdatedAt ?? installation.CreatedAt).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -154,7 +154,7 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
         await SetTenantAsync(connection, transaction, installation.TenantId, cancellationToken).ConfigureAwait(false);
-        await ExecuteAsync(connection, transaction, "INSERT INTO gateway.installation(id,tenant_id,application_id,environment_id,status,broker_version,created_at,last_seen_at,revoked_at,revocation_reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)", cancellationToken, installation.Id, installation.TenantId, installation.ApplicationId, installation.EnvironmentId, Db(installation.Status), installation.BrokerVersion, installation.CreatedAt, installation.LastSeenAt, installation.RevokedAt, installation.RevocationReason).ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction, "INSERT INTO gateway.installation(id,tenant_id,application_id,environment_id,status,broker_version,created_at,last_seen_at,revoked_at,revocation_reason,installation_kind,client_version,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)", cancellationToken, installation.Id, installation.TenantId, installation.ApplicationId, installation.EnvironmentId, Db(installation.Status), installation.BrokerVersion, installation.CreatedAt, installation.LastSeenAt, installation.RevokedAt, installation.RevocationReason, Db(installation.InstallationKind), installation.ClientVersion, installation.UpdatedAt ?? installation.CreatedAt).ConfigureAwait(false);
         faultInjector?.Check("installation.create.after-installation");
         await ExecuteAsync(connection, transaction, "INSERT INTO gateway.activation_code(id,installation_id,code_hmac,expires_at,created_at,created_by,attempt_count,used_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", cancellationToken, activationCode.Id, activationCode.InstallationId, activationCode.CodeHmac, activationCode.ExpiresAt, activationCode.CreatedAt, activationCode.CreatedBy, activationCode.AttemptCount, activationCode.UsedAt).ConfigureAwait(false);
         faultInjector?.Check("installation.create.after-activation");
@@ -208,7 +208,7 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
         "SELECT gateway.record_activation_failure($1)", cancellationToken, activationCodeId).ConfigureAwait(false);
 
     /// <inheritdoc />
-    public async Task<bool> ActivateAsync(Guid activationCodeId, byte[] expectedCodeHmac, InstallationCredentialRecord credential, string brokerVersion, DateTimeOffset now, CancellationToken cancellationToken)
+    public async Task<bool> ActivateAsync(Guid activationCodeId, byte[] expectedCodeHmac, InstallationCredentialRecord credential, string? brokerVersion, string? clientVersion, DateTimeOffset now, CancellationToken cancellationToken)
     {
         ActivationCodeRecord? activation = await FindActivationCodeAsync(activationCodeId, cancellationToken).ConfigureAwait(false);
         if (activation is null) return false;
@@ -216,19 +216,29 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
         await SetTenantAsync(connection, transaction, tenantId, cancellationToken).ConfigureAwait(false);
-        await using (NpgsqlCommand policy = CreateCommand(connection, transaction, "SELECT a.minimum_broker_version,a.maximum_broker_version FROM gateway.installation i JOIN gateway.application a ON a.id=i.application_id WHERE i.id=$1", activation.InstallationId))
+        InstallationKind installationKind;
+        await using (NpgsqlCommand policy = CreateCommand(connection, transaction, "SELECT i.installation_kind,a.minimum_broker_version,a.maximum_broker_version FROM gateway.installation i JOIN gateway.application a ON a.id=i.application_id WHERE i.id=$1", activation.InstallationId))
         await using (NpgsqlDataReader policyReader = await policy.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken).ConfigureAwait(false))
         {
             if (!await policyReader.ReadAsync(cancellationToken).ConfigureAwait(false)) return false;
-            string minimum = policyReader.GetString(0);
-            string? maximum = policyReader.IsDBNull(1) ? null : policyReader.GetString(1);
-            if (!IsVersionAllowed(brokerVersion, minimum, maximum)) throw new GatewayException("BGW-INSTALLATION-BROKER-INCOMPATIBLE", 409);
+            installationKind = Parse<InstallationKind>(policyReader.GetString(0));
+            string minimum = policyReader.GetString(1);
+            string? maximum = policyReader.IsDBNull(2) ? null : policyReader.GetString(2);
+            if (installationKind == InstallationKind.Broker)
+            {
+                if (clientVersion is not null || string.IsNullOrWhiteSpace(brokerVersion) || !Version.TryParse(brokerVersion, out _)) throw new GatewayException("BGW-INSTALLATION-BROKER-VERSION", 400);
+                if (!IsVersionAllowed(brokerVersion, minimum, maximum)) throw new GatewayException("BGW-INSTALLATION-BROKER-INCOMPATIBLE", 409);
+            }
+            else if (brokerVersion is not null || string.IsNullOrWhiteSpace(clientVersion) || !Version.TryParse(clientVersion, out _))
+            {
+                throw new GatewayException("BGW-INSTALLATION-CLIENT-VERSION", 400);
+            }
         }
         await using NpgsqlCommand consume = CreateCommand(connection, transaction,
             "UPDATE gateway.activation_code SET used_at=$2 WHERE id=$1 AND used_at IS NULL AND expires_at>$2 AND attempt_count<5 AND code_hmac=$3 RETURNING installation_id", activationCodeId, now, expectedCodeHmac);
         object? installationValue = await consume.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         if (installationValue is not Guid installationId || installationId != credential.InstallationId) { await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false); return false; }
-        int activated = await ExecuteAsync(connection, transaction, "UPDATE gateway.installation SET status='active',broker_version=$2,last_seen_at=$3,row_version=row_version+1 WHERE id=$1 AND status='pending'", cancellationToken, installationId, brokerVersion, now).ConfigureAwait(false);
+        int activated = await ExecuteAsync(connection, transaction, "UPDATE gateway.installation SET status='active',broker_version=$2,client_version=$3,last_seen_at=$4,updated_at=$4,row_version=row_version+1 WHERE id=$1 AND status='pending'", cancellationToken, installationId, installationKind == InstallationKind.Broker ? brokerVersion : null, installationKind == InstallationKind.Direct ? clientVersion : null, now).ConfigureAwait(false);
         if (activated != 1) { await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false); return false; }
         await InsertCredentialAsync(connection, transaction, credential, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -239,11 +249,11 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
     public async Task<RegisteredInstallationIdentity?> FindIdentityByCertificateAsync(byte[] certificateSha256, CancellationToken cancellationToken)
     {
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using NpgsqlCommand command = new("SELECT * FROM gateway.resolve_installation_identity($1)", connection);
+        await using NpgsqlCommand command = new("SELECT identity.*,metadata.installation_kind,metadata.client_version FROM gateway.resolve_installation_identity($1) identity CROSS JOIN gateway.resolve_installation_client_metadata($1) metadata", connection);
         command.Parameters.AddWithValue(certificateSha256);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) return null;
-        return new(reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetGuid(3), Parse<TenantStatus>(reader.GetString(4)), Parse<ApplicationStatus>(reader.GetString(5)), Parse<InstallationStatus>(reader.GetString(6)), reader.GetGuid(7), Parse<CredentialStatus>(reader.GetString(8)), reader.GetFieldValue<byte[]>(9), reader.GetFieldValue<DateTimeOffset>(10), reader.GetFieldValue<DateTimeOffset>(11), reader.GetString(12), reader.IsDBNull(13) ? null : reader.GetString(13));
+        return new(reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetGuid(3), Parse<TenantStatus>(reader.GetString(4)), Parse<ApplicationStatus>(reader.GetString(5)), Parse<InstallationStatus>(reader.GetString(6)), reader.GetGuid(7), Parse<CredentialStatus>(reader.GetString(8)), reader.GetFieldValue<byte[]>(9), reader.GetFieldValue<DateTimeOffset>(10), reader.GetFieldValue<DateTimeOffset>(11), reader.GetString(12), reader.IsDBNull(13) ? null : reader.GetString(13), Parse<InstallationKind>(reader.GetString(14)), reader.IsDBNull(15) ? null : reader.GetString(15));
     }
 
     /// <inheritdoc />
@@ -257,6 +267,7 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
         if (updated != 1) { await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false); return false; }
         await InsertCredentialAsync(connection, transaction, replacement, cancellationToken).ConfigureAwait(false);
         await ExecuteAsync(connection, transaction, "UPDATE gateway.installation_credential SET replaced_by_id=$2 WHERE id=$1", cancellationToken, currentCredentialId, replacement.Id).ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction, "UPDATE gateway.installation SET updated_at=$2 WHERE id=$1", cancellationToken, installationId, replacement.CreatedAt).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return true;
     }
@@ -268,7 +279,7 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await SetTenantAsync(connection, transaction, tenantId, cancellationToken).ConfigureAwait(false);
-        int result = await ExecuteAsync(connection, transaction, "UPDATE gateway.installation SET status='revoked',revoked_at=$2,revocation_reason=$3,row_version=row_version+1 WHERE id=$1 AND status NOT IN ('revoked','retired')", cancellationToken, installationId, now, reason).ConfigureAwait(false);
+        int result = await ExecuteAsync(connection, transaction, "UPDATE gateway.installation SET status='revoked',revoked_at=$2,revocation_reason=$3,updated_at=$2,row_version=row_version+1 WHERE id=$1 AND status NOT IN ('revoked','retired')", cancellationToken, installationId, now, reason).ConfigureAwait(false);
         if (result == 1) await ExecuteAsync(connection, transaction, "UPDATE gateway.installation_credential SET status='revoked',revoked_at=$2 WHERE installation_id=$1 AND status IN ('active','overlap')", cancellationToken, installationId, now).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result == 1;
@@ -281,7 +292,7 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
         await SetTenantAsync(connection, transaction, tenantId, cancellationToken).ConfigureAwait(false);
-        int result = await ExecuteAsync(connection, transaction, "UPDATE gateway.installation SET status='revoked',revoked_at=$2,revocation_reason=$3,row_version=row_version+1 WHERE id=$1 AND tenant_id=$4 AND status NOT IN ('revoked','retired')", cancellationToken, installationId, now, reason, tenantId).ConfigureAwait(false);
+        int result = await ExecuteAsync(connection, transaction, "UPDATE gateway.installation SET status='revoked',revoked_at=$2,revocation_reason=$3,updated_at=$2,row_version=row_version+1 WHERE id=$1 AND tenant_id=$4 AND status NOT IN ('revoked','retired')", cancellationToken, installationId, now, reason, tenantId).ConfigureAwait(false);
         if (result == 1) await ExecuteAsync(connection, transaction, "UPDATE gateway.installation_credential SET status='revoked',revoked_at=$2 WHERE installation_id=$1 AND status IN ('active','overlap')", cancellationToken, installationId, now).ConfigureAwait(false);
         if (result == 1)
         {

@@ -307,7 +307,8 @@ app.MapPost("/v1/enrollments:activate", async (HttpContext context, Installation
 
 app.MapGet("/v1/broker-policy", async (HttpContext context, RuntimeIdentityService identityService, CancellationToken cancellationToken) =>
 {
-    AuthenticatedInstallation authenticated = await AuthenticateAsync(context, identityService, ReadOnlyMemory<byte>.Empty, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+    GatewayClientPrincipal authenticated = await AuthenticateAsync(context, identityService, ReadOnlyMemory<byte>.Empty, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+    if (authenticated.InstallationKind != InstallationKind.Broker) throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403);
     return Results.Ok(new BrokerPolicy(authenticated.Identity.MinimumBrokerVersion, 1, 0, false));
 });
 
@@ -315,7 +316,7 @@ app.MapPost("/v1/enrollments:renew", async (HttpContext context, RuntimeIdentity
 {
     byte[] body = await ReadBodyAsync(context.Request, cancellationToken).ConfigureAwait(false);
     RenewalRequest request = DeserializeRequired<RenewalRequest>(body);
-    AuthenticatedInstallation authenticated = await AuthenticateAsync(context, identityService, body, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+    GatewayClientPrincipal authenticated = await AuthenticateAsync(context, identityService, body, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
     return Results.Ok(await enrollmentService.RenewAsync(authenticated.Identity, request, cancellationToken).ConfigureAwait(false));
 });
 
@@ -324,7 +325,7 @@ app.MapPost("/v1/connectors/{connectorId}/operations/{operationId}:invoke", asyn
     _ = RequiredHeader(context, "traceparent");
     byte[] body = await ReadBodyAsync(context.Request, cancellationToken).ConfigureAwait(false);
     GatewayInvokeRequest request = DeserializeRequired<GatewayInvokeRequest>(body);
-    AuthenticatedInstallation authenticated = await AuthenticateAsync(context, identityService, body, request.CorrelationId, cancellationToken).ConfigureAwait(false);
+    GatewayClientPrincipal authenticated = await AuthenticateAsync(context, identityService, body, request.CorrelationId, cancellationToken).ConfigureAwait(false);
     return Results.Ok(await egressService.InvokeAsync(authenticated, connectorId, operationId, request, cancellationToken).ConfigureAwait(false));
 });
 
@@ -613,9 +614,12 @@ adminApi.MapPost("/installations", async (CreateInstallationRequest request, Htt
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
     AdminAccessService.Require(admin, request.TenantId, AdminRole.SecurityAdministrator);
     Guid id = Guid.NewGuid(); DateTimeOffset now = DateTimeOffset.UtcNow;
-    GatewayAuditEvent audit = AdminAudit(context, admin, request.TenantId, "installation.create", "installation", id.ToString("D"), "success", "BGW-INSTALLATION-CREATED");
+    GatewayAuditEvent audit = AdminAudit(context, admin, request.TenantId, "installation.create", "installation", id.ToString("D"), "success", "BGW-INSTALLATION-CREATED") with
+    {
+        Metadata = new Dictionary<string, string> { ["installationKind"] = request.InstallationKind.ToString() }
+    };
     GatewayProvisioningService provisioning = new(registry, clock, enrollmentOptions);
-    ProvisionedActivation activation = await provisioning.CreateAdminInstallationAsync(new(id, request.TenantId, request.ApplicationId, request.EnvironmentId, InstallationStatus.Pending, null, now), admin.ActorId, audit, cancellationToken).ConfigureAwait(false);
+    ProvisionedActivation activation = await provisioning.CreateAdminInstallationAsync(new(id, request.TenantId, request.ApplicationId, request.EnvironmentId, InstallationStatus.Pending, null, now, InstallationKind: request.InstallationKind, UpdatedAt: now), admin.ActorId, audit, cancellationToken).ConfigureAwait(false);
     context.Response.Headers.CacheControl = "no-store";
     return Results.Json(activation, statusCode: StatusCodes.Status201Created);
 });
@@ -898,7 +902,7 @@ static ProviderServices CreateProviderServices(GatewayProviderOptions options, I
     return new ProviderServices(inMemory, inMemory, inMemory, inMemory, CertificateMetadata: inMemory);
 }
 
-static async Task<AuthenticatedInstallation> AuthenticateAsync(HttpContext context, RuntimeIdentityService service, ReadOnlyMemory<byte> body, Guid correlationId, CancellationToken cancellationToken)
+static async Task<GatewayClientPrincipal> AuthenticateAsync(HttpContext context, RuntimeIdentityService service, ReadOnlyMemory<byte> body, Guid correlationId, CancellationToken cancellationToken)
 {
     X509Certificate2? certificate = await context.Connection.GetClientCertificateAsync(cancellationToken).ConfigureAwait(false);
     if (certificate is null) throw new GatewayException("BGW-AUTHN-CERTIFICATE-REQUIRED", 401);

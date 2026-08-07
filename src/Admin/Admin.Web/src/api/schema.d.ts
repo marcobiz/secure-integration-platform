@@ -1097,6 +1097,8 @@ export interface components {
         EnvironmentPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Environment"][];
         };
+        /** @enum {string} */
+        InstallationKind: "Broker" | "Direct";
         Installation: {
             /** Format: uuid */
             id: string;
@@ -1108,10 +1110,30 @@ export interface components {
             environmentId: string;
             status: string;
             brokerVersion?: string | null;
+            clientVersion?: string | null;
+            installationKind: components["schemas"]["InstallationKind"];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
+            updatedAt?: string | null;
+            /** Format: date-time */
             lastSeenAt?: string | null;
+            /** Format: date-time */
+            revokedAt?: string | null;
+            revocationReason?: string | null;
+            credential?: components["schemas"]["InstallationCredentialPublicMetadata"] | null;
+        };
+        InstallationCredentialPublicMetadata: {
+            /** Format: uuid */
+            credentialId: string;
+            status: string;
+            certificateSha256: string;
+            spkiSha256: string;
+            serialNumber: string;
+            /** Format: date-time */
+            notBefore: string;
+            /** Format: date-time */
+            notAfter: string;
         };
         InstallationPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["Installation"][];
@@ -1123,6 +1145,45 @@ export interface components {
             applicationId: string;
             /** Format: uuid */
             environmentId: string;
+            /** @default Broker */
+            installationKind: components["schemas"]["InstallationKind"];
+        };
+        EnrollmentChallengeRequest: {
+            /** Format: uuid */
+            activationCodeId: string;
+            publicKeySpki: string;
+        };
+        EnrollmentChallengeResponse: {
+            /** Format: uuid */
+            challengeId: string;
+            challenge: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        ActivationRequest: {
+            /** Format: uuid */
+            challengeId: string;
+            activationCode: string;
+            clientCertificate: string;
+            proofSignature: string;
+            brokerVersion?: string | null;
+            clientVersion?: string | null;
+        };
+        RenewalRequest: {
+            newClientCertificate: string;
+            proofSignature: string;
+        };
+        EnrollmentResult: {
+            /** Format: uuid */
+            installationId: string;
+            /** Format: uuid */
+            tenantId: string;
+            /** Format: uuid */
+            applicationId: string;
+            /** Format: date-time */
+            credentialExpiresAt: string;
+            /** Format: date-time */
+            renewalStartsAt: string;
         };
         ProvisionedActivation: {
             /** Format: uuid */
@@ -1583,14 +1644,20 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnrollmentChallengeRequest"];
+            };
+        };
         responses: {
             /** @description Short-lived enrollment challenge. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["EnrollmentChallengeResponse"];
+                };
             };
             default: components["responses"]["Problem"];
         };
@@ -1602,14 +1669,20 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ActivationRequest"];
+            };
+        };
         responses: {
             /** @description Installation enrolled. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["EnrollmentResult"];
+                };
             };
             default: components["responses"]["Problem"];
         };
@@ -1621,14 +1694,20 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenewalRequest"];
+            };
+        };
         responses: {
             /** @description Installation credential renewed. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["EnrollmentResult"];
+                };
             };
             default: components["responses"]["Problem"];
         };

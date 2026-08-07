@@ -196,6 +196,7 @@ public static class BackendRuntimeWireCodes
         new(RuntimeWireCodeKind.Reason, "BGW-IDEMPOTENCY-KEY"),
         new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-BROKER-INCOMPATIBLE"),
         new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-BROKER-VERSION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-CLIENT-VERSION"),
         new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-CREATED"),
         new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-CREDENTIAL-EXPIRED"),
         new(RuntimeWireCodeKind.Reason, "BGW-INSTALLATION-NOT-FOUND"),

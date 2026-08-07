@@ -35,7 +35,7 @@ public sealed class PostgresAdminDirectoryStore(AdminPostgresDataSource adminDat
 
     /// <inheritdoc />
     public Task<AdminPage<InstallationRecord>> ListInstallationsAsync(Guid tenantId, int offset, int limit, CancellationToken cancellationToken) => QueryTenantAsync<InstallationRecord>(tenantId,
-        "SELECT id,tenant_id,application_id,environment_id,status,broker_version,created_at,last_seen_at,revoked_at,revocation_reason FROM gateway.installation WHERE tenant_id=$1 ORDER BY created_at DESC,id OFFSET $2 LIMIT $3", "SELECT count(*) FROM gateway.installation WHERE tenant_id=$1",
+        "SELECT i.id,i.tenant_id,i.application_id,i.environment_id,i.status,i.broker_version,i.created_at,i.last_seen_at,i.revoked_at,i.revocation_reason,i.installation_kind,i.client_version,i.updated_at,c.id,c.status,encode(c.certificate_sha256,'hex'),encode(c.spki_sha256,'hex'),c.serial_number,c.not_before,c.not_after FROM gateway.installation i LEFT JOIN LATERAL (SELECT ic.* FROM gateway.installation_credential ic WHERE ic.installation_id=i.id ORDER BY CASE ic.status WHEN 'active' THEN 0 WHEN 'overlap' THEN 1 ELSE 2 END,ic.created_at DESC LIMIT 1) c ON true WHERE i.tenant_id=$1 ORDER BY i.created_at DESC,i.id OFFSET $2 LIMIT $3", "SELECT count(*) FROM gateway.installation WHERE tenant_id=$1",
         reader => ReadInstallation(reader), offset, limit, cancellationToken);
 
     /// <inheritdoc />
@@ -44,7 +44,7 @@ public sealed class PostgresAdminDirectoryStore(AdminPostgresDataSource adminDat
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await SetTenantAsync(connection, transaction, tenantId, cancellationToken).ConfigureAwait(false);
-        await using NpgsqlCommand command = new("SELECT id,tenant_id,application_id,environment_id,status,broker_version,created_at,last_seen_at,revoked_at,revocation_reason FROM gateway.installation WHERE tenant_id=$1 AND id=$2", connection, transaction);
+        await using NpgsqlCommand command = new("SELECT i.id,i.tenant_id,i.application_id,i.environment_id,i.status,i.broker_version,i.created_at,i.last_seen_at,i.revoked_at,i.revocation_reason,i.installation_kind,i.client_version,i.updated_at,c.id,c.status,encode(c.certificate_sha256,'hex'),encode(c.spki_sha256,'hex'),c.serial_number,c.not_before,c.not_after FROM gateway.installation i LEFT JOIN LATERAL (SELECT ic.* FROM gateway.installation_credential ic WHERE ic.installation_id=i.id ORDER BY CASE ic.status WHEN 'active' THEN 0 WHEN 'overlap' THEN 1 ELSE 2 END,ic.created_at DESC LIMIT 1) c ON true WHERE i.tenant_id=$1 AND i.id=$2", connection, transaction);
         command.Parameters.AddWithValue(tenantId); command.Parameters.AddWithValue(installationId);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken).ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadInstallation(reader) : null;
@@ -110,7 +110,18 @@ public sealed class PostgresAdminDirectoryStore(AdminPostgresDataSource adminDat
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private static InstallationRecord ReadInstallation(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetGuid(3), Enum.Parse<InstallationStatus>(reader.GetString(4), true), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetFieldValue<DateTimeOffset>(6), reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7), reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8), reader.IsDBNull(9) ? null : reader.GetString(9));
+    private static InstallationRecord ReadInstallation(NpgsqlDataReader reader)
+    {
+        InstallationCredentialPublicMetadata? credential = reader.IsDBNull(13) ? null : new(
+            reader.GetGuid(13),
+            Enum.Parse<CredentialStatus>(reader.GetString(14), true),
+            reader.GetString(15).ToUpperInvariant(),
+            reader.GetString(16).ToUpperInvariant(),
+            reader.GetString(17),
+            reader.GetFieldValue<DateTimeOffset>(18),
+            reader.GetFieldValue<DateTimeOffset>(19));
+        return new(reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetGuid(3), Enum.Parse<InstallationStatus>(reader.GetString(4), true), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetFieldValue<DateTimeOffset>(6), reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7), reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8), reader.IsDBNull(9) ? null : reader.GetString(9), Enum.Parse<InstallationKind>(reader.GetString(10), true), reader.IsDBNull(11) ? null : reader.GetString(11), reader.GetFieldValue<DateTimeOffset>(12), credential);
+    }
     private static TenantRecord ReadTenant(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Enum.Parse<TenantStatus>(reader.GetString(3), true), reader.GetFieldValue<DateTimeOffset>(4), reader.GetInt64(5));
     private static ApplicationRecord ReadApplication(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Enum.Parse<ApplicationStatus>(reader.GetString(3), true), reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetFieldValue<DateTimeOffset>(6), reader.GetInt64(7));
     private static void ValidatePage(int offset, int limit) { if (offset < 0 || limit is < 1 or > 100) throw new GatewayException("BGW-ADMIN-PAGINATION", 400); }

@@ -30,7 +30,8 @@ public sealed record EnrollmentChallengeRequest(Guid ActivationCodeId, string Pu
 /// <summary>Short-lived enrollment challenge.</summary>
 public sealed record EnrollmentChallengeResponse(Guid ChallengeId, string Challenge, DateTimeOffset ExpiresAt);
 /// <summary>Activation code, certificate and proof-of-possession request.</summary>
-public sealed record ActivationRequest(Guid ChallengeId, string ActivationCode, string ClientCertificate, string ProofSignature, string BrokerVersion);
+/// <remarks>BrokerVersion is retained for BGW1 Broker compatibility; Direct clients use ClientVersion.</remarks>
+public sealed record ActivationRequest(Guid ChallengeId, string ActivationCode, string ClientCertificate, string ProofSignature, string? BrokerVersion = null, string? ClientVersion = null);
 /// <summary>Credential renewal request.</summary>
 public sealed record RenewalRequest(string NewClientCertificate, string ProofSignature);
 /// <summary>Successful enrollment or renewal result.</summary>
@@ -94,5 +95,31 @@ public sealed record GatewayOperationDefinition(
 /// <summary>Runtime headers covered by the Installation signature.</summary>
 public sealed record RuntimeSignatureHeaders(string Timestamp, string Nonce, string ContentSha256, string Signature);
 
-/// <summary>Authenticated runtime request identity.</summary>
-public sealed record AuthenticatedInstallation(RegisteredInstallationIdentity Identity, Guid CorrelationId);
+/// <summary>Inbound authentication method used to establish a Gateway client principal.</summary>
+public enum GatewayClientAuthenticationMethod
+{
+    /// <summary>Registry-bound ClientAuth certificate plus ECDSA-signed BGW1 envelope.</summary>
+    MutualTlsPopBgw1
+}
+
+/// <summary>
+/// Provider-neutral principal consumed by the shared runtime after inbound authentication.
+/// Tenant, Application, Installation and kind are derived exclusively from server state.
+/// </summary>
+public sealed record GatewayClientPrincipal(RegisteredInstallationIdentity Identity, Guid CorrelationId)
+{
+    /// <summary>Server-derived Tenant identity.</summary>
+    public Guid TenantId => Identity.TenantId;
+    /// <summary>Server-derived Application identity.</summary>
+    public Guid ApplicationId => Identity.ApplicationId;
+    /// <summary>Server-derived Installation identity.</summary>
+    public Guid InstallationId => Identity.InstallationId;
+    /// <summary>Server-derived caller kind.</summary>
+    public InstallationKind InstallationKind => Identity.InstallationKind;
+    /// <summary>Credential that authenticated this request.</summary>
+    public Guid AuthenticatedCredentialId => Identity.CredentialId;
+    /// <summary>Inbound authentication mechanism; independent from outbound Connector authentication.</summary>
+    public GatewayClientAuthenticationMethod AuthenticationMethod { get; init; } = GatewayClientAuthenticationMethod.MutualTlsPopBgw1;
+    /// <summary>Authenticated protocol scopes. Operation grants remain a separate server-side authorization check.</summary>
+    public IReadOnlySet<string> AuthenticatedScopes { get; init; } = new HashSet<string>(StringComparer.Ordinal) { "gateway.runtime" };
+}

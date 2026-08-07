@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Secure Integration Platform Gateway API
-  version: 1.2.0-m5
+  version: 1.3.0-m55
   description: Provider-neutral runtime and same-origin OIDC Admin API.
 servers:
   - url: https://gateway.example.invalid
@@ -17,23 +17,38 @@ paths:
     post:
       tags: [Enrollment]
       operationId: createEnrollmentChallenge
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/EnrollmentChallengeRequest' } } }
       responses:
-        '200': { description: Short-lived enrollment challenge. }
+        '200':
+          description: Short-lived enrollment challenge.
+          content: { application/json: { schema: { $ref: '#/components/schemas/EnrollmentChallengeResponse' } } }
         default: { $ref: '#/components/responses/Problem' }
   /v1/enrollments:activate:
     post:
       tags: [Enrollment]
       operationId: activateInstallation
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ActivationRequest' } } }
       responses:
-        '200': { description: Installation enrolled. }
+        '200':
+          description: Installation enrolled.
+          content: { application/json: { schema: { $ref: '#/components/schemas/EnrollmentResult' } } }
         default: { $ref: '#/components/responses/Problem' }
   /v1/enrollments:renew:
     post:
       tags: [Enrollment]
       operationId: renewInstallationCredential
       security: [{ InstallationMutualTLS: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RenewalRequest' } } }
       responses:
-        '200': { description: Installation credential renewed. }
+        '200':
+          description: Installation credential renewed.
+          content: { application/json: { schema: { $ref: '#/components/schemas/EnrollmentResult' } } }
         default: { $ref: '#/components/responses/Problem' }
   /v1/broker-policy:
     get:
@@ -687,17 +702,50 @@ components:
       properties: { id: { type: string, format: uuid }, code: { type: string }, displayName: { type: string }, productionControls: { type: boolean } }
     EnvironmentPage:
       allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Environment' } } } }]
+    InstallationKind:
+      type: string
+      enum: [Broker, Direct]
     Installation:
       type: object
-      required: [id, tenantId, applicationId, environmentId, status, createdAt]
-      properties: { id: { type: string, format: uuid }, tenantId: { type: string, format: uuid }, applicationId: { type: string, format: uuid }, environmentId: { type: string, format: uuid }, status: { type: string }, brokerVersion: { type: [string, 'null'] }, createdAt: { type: string, format: date-time }, lastSeenAt: { type: [string, 'null'], format: date-time } }
+      required: [id, tenantId, applicationId, environmentId, status, createdAt, installationKind]
+      properties: { id: { type: string, format: uuid }, tenantId: { type: string, format: uuid }, applicationId: { type: string, format: uuid }, environmentId: { type: string, format: uuid }, status: { type: string }, brokerVersion: { type: [string, 'null'] }, clientVersion: { type: [string, 'null'] }, installationKind: { $ref: '#/components/schemas/InstallationKind' }, createdAt: { type: string, format: date-time }, updatedAt: { type: [string, 'null'], format: date-time }, lastSeenAt: { type: [string, 'null'], format: date-time }, revokedAt: { type: [string, 'null'], format: date-time }, revocationReason: { type: [string, 'null'] }, credential: { anyOf: [{ $ref: '#/components/schemas/InstallationCredentialPublicMetadata' }, { type: 'null' }] } }
+    InstallationCredentialPublicMetadata:
+      type: object
+      additionalProperties: false
+      required: [credentialId, status, certificateSha256, spkiSha256, serialNumber, notBefore, notAfter]
+      properties: { credentialId: { type: string, format: uuid }, status: { type: string }, certificateSha256: { type: string, pattern: '^[0-9A-F]{64}$' }, spkiSha256: { type: string, pattern: '^[0-9A-F]{64}$' }, serialNumber: { type: string }, notBefore: { type: string, format: date-time }, notAfter: { type: string, format: date-time } }
     InstallationPage:
       allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Installation' } } } }]
     CreateInstallation:
       type: object
       additionalProperties: false
       required: [tenantId, applicationId, environmentId]
-      properties: { tenantId: { type: string, format: uuid }, applicationId: { type: string, format: uuid }, environmentId: { type: string, format: uuid } }
+      properties: { tenantId: { type: string, format: uuid }, applicationId: { type: string, format: uuid }, environmentId: { type: string, format: uuid }, installationKind: { allOf: [{ $ref: '#/components/schemas/InstallationKind' }], default: Broker } }
+    EnrollmentChallengeRequest:
+      type: object
+      additionalProperties: false
+      required: [activationCodeId, publicKeySpki]
+      properties: { activationCodeId: { type: string, format: uuid }, publicKeySpki: { type: string } }
+    EnrollmentChallengeResponse:
+      type: object
+      additionalProperties: false
+      required: [challengeId, challenge, expiresAt]
+      properties: { challengeId: { type: string, format: uuid }, challenge: { type: string }, expiresAt: { type: string, format: date-time } }
+    ActivationRequest:
+      type: object
+      additionalProperties: false
+      required: [challengeId, activationCode, clientCertificate, proofSignature]
+      properties: { challengeId: { type: string, format: uuid }, activationCode: { type: string, writeOnly: true }, clientCertificate: { type: string, writeOnly: true }, proofSignature: { type: string, writeOnly: true }, brokerVersion: { type: [string, 'null'] }, clientVersion: { type: [string, 'null'] } }
+    RenewalRequest:
+      type: object
+      additionalProperties: false
+      required: [newClientCertificate, proofSignature]
+      properties: { newClientCertificate: { type: string, writeOnly: true }, proofSignature: { type: string, writeOnly: true } }
+    EnrollmentResult:
+      type: object
+      additionalProperties: false
+      required: [installationId, tenantId, applicationId, credentialExpiresAt, renewalStartsAt]
+      properties: { installationId: { type: string, format: uuid }, tenantId: { type: string, format: uuid }, applicationId: { type: string, format: uuid }, credentialExpiresAt: { type: string, format: date-time }, renewalStartsAt: { type: string, format: date-time } }
     ProvisionedActivation:
       type: object
       required: [installationId, activationCodeId, activationCode, expiresAt]

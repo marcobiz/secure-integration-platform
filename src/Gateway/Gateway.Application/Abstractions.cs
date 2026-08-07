@@ -54,7 +54,7 @@ public interface IGatewayRegistry
     /// <summary>Records a denied activation attempt.</summary>
     Task RecordActivationFailureAsync(Guid activationCodeId, CancellationToken cancellationToken);
     /// <summary>Atomically consumes activation material and registers a credential.</summary>
-    Task<bool> ActivateAsync(Guid activationCodeId, byte[] expectedCodeHmac, InstallationCredentialRecord credential, string brokerVersion, DateTimeOffset now, CancellationToken cancellationToken);
+    Task<bool> ActivateAsync(Guid activationCodeId, byte[] expectedCodeHmac, InstallationCredentialRecord credential, string? brokerVersion, string? clientVersion, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Resolves identity from an exact certificate digest.</summary>
     Task<RegisteredInstallationIdentity?> FindIdentityByCertificateAsync(byte[] certificateSha256, CancellationToken cancellationToken);
     /// <summary>Atomically replaces the active credential with a bounded overlap.</summary>
