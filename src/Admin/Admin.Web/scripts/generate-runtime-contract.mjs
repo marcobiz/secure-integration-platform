@@ -1,3 +1,4 @@
+/* global process */
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath, URL } from 'node:url';
