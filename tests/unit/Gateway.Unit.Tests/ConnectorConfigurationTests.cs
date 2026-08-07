@@ -1,7 +1,11 @@
+using System.Net;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
+using SecureIntegration.Providers.Abstractions;
 using Xunit;
 
 namespace SecureIntegration.Gateway.Unit.Tests;
@@ -189,6 +193,62 @@ public sealed class ConnectorConfigurationTests
     }
 
     [Fact]
+    public async Task M5_UT_Runtime_cache_and_locator_material_are_scoped_to_invoked_operation()
+    {
+        Fixture fixture = new();
+        DateTimeOffset now = fixture.Clock.UtcNow;
+        CertificatePublicMetadata metadata = new(new string('B', 64), "CN=operation-b", "CN=synthetic-ca", now.AddDays(-1), now.AddDays(60), "ECDSA", 256, "2");
+        ProviderResourceCatalogRecord secretB = await fixture.Store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic vault", "synthetic", "api-key-b", ProviderResourceType.Secret, "Operation B API key", fixture.EnvironmentId, "sample-secure-service", "check-status", "synthetic://api-key-b", ProviderResourceStatus.Active, null, 0, null, null, string.Empty, now), TestContext.Current.CancellationToken);
+        _ = await fixture.Store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic vault", "synthetic", "client-certificate-b", ProviderResourceType.ClientCertificate, "Operation B certificate", fixture.EnvironmentId, "sample-secure-service", "check-status", "synthetic://client-cert-b", ProviderResourceStatus.Active, null, 0, 2, metadata, string.Empty, now), TestContext.Current.CancellationToken);
+
+        using JsonDocument definition = CrossOperationSample();
+        ConnectorVersionResource version = await fixture.ImportAsync(definition);
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorBindingRequest request = new(fixture.EnvironmentId,
+            new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor-a.example.test/", ["status-endpoint"] = "https://vendor-b.example.test/" },
+            new Dictionary<string, ProviderResourceReference> { ["sample-vendor-api-key"] = SecretReference(), ["status-api-key"] = new("synthetic", "api-key-b", ProviderResourceType.Secret) },
+            CertificateResources: new Dictionary<string, ProviderResourceReference> { ["sample-vendor-client-certificate"] = CertificateReference(), ["status-client-certificate"] = new("synthetic", "client-certificate-b", ProviderResourceType.ClientCertificate, PublicMetadataRevision: 2) });
+        _ = await fixture.Admin.PutBindingsAsync(version.ConnectorId, request, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        version = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "approver", Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        PublishedConnectorAccessContext accessA = new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "submit");
+        GatewayOperationDefinition operationA = await fixture.Catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, accessA, TestContext.Current.CancellationToken);
+        Assert.Equal("synthetic://api-key", operationA.ApiKeySecretReference);
+        Assert.Equal("synthetic://client-cert", operationA.ClientCertificateReference);
+        Assert.DoesNotContain("api-key-b", operationA.ApiKeySecretReference, StringComparison.Ordinal);
+
+        PublishedConnectorAccessContext accessB = accessA with { OperationId = "check-status" };
+        GatewayOperationDefinition operationB = await fixture.Catalog.GetRequiredAsync(version.ConnectorId, "check-status", fixture.EnvironmentId, accessB, TestContext.Current.CancellationToken);
+        Assert.Equal("synthetic://api-key-b", operationB.ApiKeySecretReference);
+        Assert.Equal("synthetic://client-cert-b", operationB.ClientCertificateReference);
+
+        Guid tenantId = Guid.NewGuid(); Guid applicationId = Guid.NewGuid(); Guid installationId = accessA.InstallationId;
+        await fixture.Registry.AddTenantAsync(new(tenantId, "cross-op", "Cross operation", TenantStatus.Active, now), TestContext.Current.CancellationToken);
+        await fixture.Registry.AddApplicationAsync(new(applicationId, "cross-op", "Cross operation", ApplicationStatus.Active, "3.0.0", null, now), TestContext.Current.CancellationToken);
+        await fixture.Registry.AddEnvironmentAsync(new(fixture.EnvironmentId, "cross-op", "Cross operation", false), TestContext.Current.CancellationToken);
+        await fixture.Registry.AddInstallationAsync(new(installationId, tenantId, applicationId, fixture.EnvironmentId, InstallationStatus.Active, "3.0.0", now), TestContext.Current.CancellationToken);
+        await fixture.Registry.AddGrantAsync(new(Guid.NewGuid(), installationId, tenantId, version.ConnectorId, "submit", true, now.AddMinutes(-1)), TestContext.Current.CancellationToken);
+        await fixture.Registry.AddGrantAsync(new(Guid.NewGuid(), installationId, tenantId, version.ConnectorId, "check-status", true, now.AddMinutes(-1)), TestContext.Current.CancellationToken);
+        CountingProvider provider = new(); CountingTransport transport = new();
+        RestrictedEgressService runtime = new(fixture.Registry, fixture.Catalog, provider, provider, new PublicResolver(), transport, fixture.Clock);
+        using X509Certificate2 identityCertificate = provider.Certificate;
+        RegisteredInstallationIdentity identity = new(installationId, tenantId, applicationId, fixture.EnvironmentId, TenantStatus.Active, ApplicationStatus.Active, InstallationStatus.Active, Guid.NewGuid(), CredentialStatus.Active, identityCertificate.RawData, now.AddMinutes(-1), now.AddHours(1), "3.0.0", null);
+        GatewayInvokeRequest invocation = new("1.0", new("application/json", "utf8", "{}"), Guid.NewGuid());
+        _ = await runtime.InvokeAsync(new(identity, invocation.CorrelationId), version.ConnectorId, "submit", invocation, TestContext.Current.CancellationToken);
+        Assert.Equal(1, provider.Count("synthetic://api-key")); Assert.Equal(1, provider.Count("synthetic://client-cert"));
+        Assert.Equal(0, provider.Count("synthetic://api-key-b")); Assert.Equal(0, provider.Count("synthetic://client-cert-b"));
+        GatewayInvokeRequest invocationB = invocation with { CorrelationId = Guid.NewGuid() };
+        _ = await runtime.InvokeAsync(new(identity, invocationB.CorrelationId), version.ConnectorId, "check-status", invocationB, TestContext.Current.CancellationToken);
+        Assert.Equal(1, provider.Count("synthetic://api-key")); Assert.Equal(1, provider.Count("synthetic://client-cert"));
+        Assert.Equal(1, provider.Count("synthetic://api-key-b")); Assert.Equal(1, provider.Count("synthetic://client-cert-b"));
+
+        _ = await fixture.Store.RegisterProviderResourceAsync(secretB with { Id = Guid.NewGuid(), ProviderReference = "synthetic://api-key-b-rotated", Revision = 0, ChecksumSha256 = string.Empty, CreatedAt = now.AddMinutes(1) }, TestContext.Current.CancellationToken);
+        Assert.Equal("synthetic://api-key", (await fixture.Catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, accessA, TestContext.Current.CancellationToken)).ApiKeySecretReference);
+        GatewayException staleB = await Assert.ThrowsAsync<GatewayException>(() => fixture.Catalog.GetRequiredAsync(version.ConnectorId, "check-status", fixture.EnvironmentId, accessB, TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-PROVIDER-RESOURCE-REVISION-STALE", staleB.Code);
+    }
+
+    [Fact]
     public async Task M4_UT_Runtime_denies_missing_endpoint_secret_and_operation()
     {
         Fixture fixture = new();
@@ -270,6 +330,10 @@ public sealed class ConnectorConfigurationTests
         ApprovalReviewResult review = ConnectorApprovalArtifacts.Create(stored, [binding]);
         ApprovalOperationReview operation = Assert.Single(review.Artifact.Operations);
         ApprovalSecretReview secret = Assert.Single(operation.SecretBindings);
+        Assert.Equal("submit", operation.BindingDependencies.OperationId);
+        Assert.Equal("sample-vendor-endpoint", operation.BindingDependencies.EndpointBindingId);
+        Assert.Equal(["sample-vendor-api-key"], operation.BindingDependencies.SecretBindingIds);
+        Assert.Equal(["sample-vendor-client-certificate"], operation.BindingDependencies.CertificateBindingIds);
         Assert.Equal("controlled-public.example.test", operation.Endpoint.Hostname);
         Assert.Equal(443, operation.Endpoint.Port);
         Assert.Equal("/vendor/orders", operation.Endpoint.Path);
@@ -381,6 +445,19 @@ public sealed class ConnectorConfigurationTests
 
     private static JsonDocument Sample() => JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Samples", "sample-secure-service.connector.json")));
 
+    private static JsonDocument CrossOperationSample() => JsonDocument.Parse("""
+        {
+          "schemaVersion":"1.0","connectorId":"sample-secure-service","version":"1.0.0","displayName":"Cross-operation connector","description":"Synthetic least-privilege fixture.",
+          "bindings":{"endpoints":[{"name":"sample-vendor-endpoint"},{"name":"status-endpoint"}],"secrets":[
+            {"name":"sample-vendor-api-key","kind":"opaque"},{"name":"sample-vendor-client-certificate","kind":"clientCertificate"},
+            {"name":"status-api-key","kind":"opaque"},{"name":"status-client-certificate","kind":"clientCertificate"}]},
+          "operations":[
+            {"operationId":"submit","endpointBinding":"sample-vendor-endpoint","method":"POST","path":"/vendor/orders","request":{"contentType":"application/json","maximumBytes":1048576},"response":{"maximumBytes":1048576},"authentication":{"kind":"apiKeyAndMtls","secretBinding":"sample-vendor-api-key","headerName":"X-Vendor-Api-Key","certificateBinding":"sample-vendor-client-certificate"},"timeoutMs":30000,"redirectPolicy":"deny","allowedClientHeaders":[],"idempotent":false,"maximumRetries":0},
+            {"operationId":"check-status","endpointBinding":"status-endpoint","method":"POST","path":"/vendor/status","request":{"contentType":"application/json","maximumBytes":1048576},"response":{"maximumBytes":1048576},"authentication":{"kind":"apiKeyAndMtls","secretBinding":"status-api-key","headerName":"X-Vendor-Api-Key","certificateBinding":"status-client-certificate"},"timeoutMs":30000,"redirectPolicy":"deny","allowedClientHeaders":[],"idempotent":false,"maximumRetries":0}
+          ]
+        }
+        """);
+
     private static JsonDocument WithVersion(string version)
     {
         using JsonDocument sample = Sample();
@@ -422,6 +499,35 @@ public sealed class ConnectorConfigurationTests
     private sealed class FixedClock : IGatewayClock
     {
         public DateTimeOffset UtcNow { get; set; } = new(2026, 8, 5, 10, 0, 0, TimeSpan.Zero);
+    }
+
+    private sealed class PublicResolver : IHostResolver
+    {
+        public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) => Task.FromResult(new[] { IPAddress.Parse("203.0.113.10") });
+    }
+
+    private sealed class CountingTransport : IRestrictedTransport
+    {
+        public Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken) =>
+            Task.FromResult(new ExternalResponse(200, "application/json", "{}"u8.ToArray()));
+    }
+
+    private sealed class CountingProvider : ISecretValueProvider, IClientCertificateProvider
+    {
+        private readonly Dictionary<string, int> counts = new(StringComparer.Ordinal);
+        private readonly X509Certificate2 certificate;
+
+        public CountingProvider()
+        {
+            using RSA key = RSA.Create(2048);
+            CertificateRequest request = new("CN=operation-scoped", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            certificate = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddHours(1));
+        }
+
+        public X509Certificate2 Certificate => X509CertificateLoader.LoadCertificate(certificate.RawData);
+        public int Count(string reference) => counts.GetValueOrDefault(reference);
+        public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken) { counts[logicalReference] = Count(logicalReference) + 1; return Task.FromResult("synthetic"); }
+        public Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken) { counts[logicalReference] = Count(logicalReference) + 1; return Task.FromResult(X509CertificateLoader.LoadCertificate(certificate.RawData)); }
     }
 }
 

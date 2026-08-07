@@ -1366,9 +1366,16 @@ export interface components {
             environment: string;
             executionStrategy: string;
             protocol: string;
+            bindingDependencies: components["schemas"]["OperationBindingDependencies"];
             endpoint: components["schemas"]["ApprovalEndpointReview"];
             secretBindings: components["schemas"]["ApprovalSecretReview"][];
             certificateBindings: components["schemas"]["ApprovalCertificateReview"][];
+        };
+        OperationBindingDependencies: {
+            operationId: string;
+            endpointBindingId: string;
+            secretBindingIds: string[];
+            certificateBindingIds: string[];
         };
         ApprovalEndpointReview: {
             logicalBindingId: string;

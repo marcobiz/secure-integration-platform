@@ -341,8 +341,9 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
             if (!connectorIds.TryGetValue(connectorId, out Guid id) || !activeVersions.TryGetValue(id, out Guid active)) return Task.FromResult<PublishedConnectorStamp?>(null);
             if (!bindingSets.TryGetValue(BindingKey(active, environmentId), out List<ConnectorBindingSet>? revisions) || revisions.Count == 0 || revisions[^1].State != ConnectorBindingState.Active) return Task.FromResult<PublishedConnectorStamp?>(new(active, publicationRevisions[id], 0, string.Empty, string.Empty));
             ConnectorBindingSet binding = revisions[^1];
-            ValidateCurrentResources(binding);
-            return Task.FromResult<PublishedConnectorStamp?>(new(active, publicationRevisions[id], binding.Revision, binding.ChecksumSha256, ResourceStamp(binding)));
+            OperationBindingDependencies? dependencies = accessContext is null ? null : ConnectorOperationBindings.Required(versions[active].CanonicalJson, accessContext.OperationId);
+            ValidateCurrentResources(binding, dependencies);
+            return Task.FromResult<PublishedConnectorStamp?>(new(active, publicationRevisions[id], binding.Revision, binding.ChecksumSha256, ResourceStamp(binding, dependencies)));
         }
     }
 
@@ -354,10 +355,11 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
         {
             if (!connectorIds.TryGetValue(connectorId, out Guid id) || !activeVersions.TryGetValue(id, out Guid active) || !bindingSets.TryGetValue(BindingKey(active, environmentId), out List<ConnectorBindingSet>? revisions) || revisions.Count == 0 || revisions[^1].State != ConnectorBindingState.Active) return Task.FromResult<PublishedConnectorSnapshot?>(null);
             ConnectorBindingSet binding = revisions[^1];
-            PublishedConnectorStamp stamp = new(active, publicationRevisions[id], binding.Revision, binding.ChecksumSha256, ResourceStamp(binding));
-            ValidateCurrentResources(binding);
-            Dictionary<string, string> secrets = binding.SecretResources.ToDictionary(value => value.Key, value => RequiredResource(value.Value).ProviderReference, StringComparer.Ordinal);
-            Dictionary<string, string> certificates = binding.CertificateResources.ToDictionary(value => value.Key, value => RequiredResource(value.Value).ProviderReference, StringComparer.Ordinal);
+            OperationBindingDependencies? dependencies = accessContext is null ? null : ConnectorOperationBindings.Required(versions[active].CanonicalJson, accessContext.OperationId);
+            PublishedConnectorStamp stamp = new(active, publicationRevisions[id], binding.Revision, binding.ChecksumSha256, ResourceStamp(binding, dependencies));
+            ValidateCurrentResources(binding, dependencies);
+            Dictionary<string, string> secrets = Select(binding.SecretResources, dependencies?.SecretBindingIds).ToDictionary(value => value.Key, value => RequiredResource(value.Value).ProviderReference, StringComparer.Ordinal);
+            Dictionary<string, string> certificates = Select(binding.CertificateResources, dependencies?.CertificateBindingIds).ToDictionary(value => value.Key, value => RequiredResource(value.Value).ProviderReference, StringComparer.Ordinal);
             return Task.FromResult<PublishedConnectorSnapshot?>(new(Clone(versions[active]), Clone(binding), stamp, secrets, certificates));
         }
     }
@@ -374,9 +376,9 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
     private static ConnectorVersionRecord Clone(ConnectorVersionRecord value) => value with { ChecksumSha256 = value.ChecksumSha256.ToArray() };
     private static ConnectorBindingSet Clone(ConnectorBindingSet value) => value with { Endpoints = new Dictionary<string, Uri>(value.Endpoints, StringComparer.Ordinal), SecretResources = new Dictionary<string, ProviderResourceBinding>(value.SecretResources, StringComparer.Ordinal), CertificateResources = new Dictionary<string, ProviderResourceBinding>(value.CertificateResources, StringComparer.Ordinal) };
 
-    private void ValidateCurrentResources(ConnectorBindingSet binding)
+    private void ValidateCurrentResources(ConnectorBindingSet binding, OperationBindingDependencies? dependencies = null)
     {
-        foreach (ProviderResourceBinding resource in binding.SecretResources.Values.Concat(binding.CertificateResources.Values)) _ = RequiredResource(resource);
+        foreach (ProviderResourceBinding resource in Select(binding.SecretResources, dependencies?.SecretBindingIds).Values.Concat(Select(binding.CertificateResources, dependencies?.CertificateBindingIds).Values)) _ = RequiredResource(resource);
     }
 
     private ProviderResourceCatalogRecord RequiredResource(ProviderResourceBinding binding)
@@ -389,12 +391,15 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
         return current;
     }
 
-    private string ResourceStamp(ConnectorBindingSet binding)
+    private string ResourceStamp(ConnectorBindingSet binding, OperationBindingDependencies? dependencies = null)
     {
-        var values = binding.SecretResources.Concat(binding.CertificateResources).OrderBy(value => value.Key, StringComparer.Ordinal)
+        var values = Select(binding.SecretResources, dependencies?.SecretBindingIds).Concat(Select(binding.CertificateResources, dependencies?.CertificateBindingIds)).OrderBy(value => value.Key, StringComparer.Ordinal)
             .Select(value => new { value.Key, Current = RequiredResource(value.Value).ChecksumSha256 }).ToArray();
         return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(values)));
     }
+
+    private static IReadOnlyDictionary<string, ProviderResourceBinding> Select(IReadOnlyDictionary<string, ProviderResourceBinding> bindings, IReadOnlyList<string>? logicalIds) =>
+        logicalIds is null ? bindings : logicalIds.ToDictionary(id => id, id => bindings.TryGetValue(id, out ProviderResourceBinding? binding) ? binding : throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING-MISSING", 503), StringComparer.Ordinal);
 
     private static void EnsureResourceScope(ProviderResourceCatalogRecord resource, ProviderResourceReference reference, Guid environmentId, string connectorId, IReadOnlyCollection<string> operationIds)
     {

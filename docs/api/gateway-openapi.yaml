@@ -812,15 +812,24 @@ components:
       properties: { connectorId: { type: string }, version: { type: string }, displayName: { type: string }, schemaVersion: { type: string }, canonicalDefinitionChecksumSha256: { type: string, pattern: '^[A-F0-9]{64}$' } }
     ApprovalOperationReview:
       type: object
-      required: [operationId, environment, executionStrategy, protocol, endpoint, secretBindings, certificateBindings]
+      required: [operationId, environment, executionStrategy, protocol, bindingDependencies, endpoint, secretBindings, certificateBindings]
       properties:
         operationId: { type: string }
         environment: { type: string }
         executionStrategy: { type: string }
         protocol: { type: string }
+        bindingDependencies: { $ref: '#/components/schemas/OperationBindingDependencies' }
         endpoint: { $ref: '#/components/schemas/ApprovalEndpointReview' }
         secretBindings: { type: array, items: { $ref: '#/components/schemas/ApprovalSecretReview' } }
         certificateBindings: { type: array, items: { $ref: '#/components/schemas/ApprovalCertificateReview' } }
+    OperationBindingDependencies:
+      type: object
+      required: [operationId, endpointBindingId, secretBindingIds, certificateBindingIds]
+      properties:
+        operationId: { type: string }
+        endpointBindingId: { type: string }
+        secretBindingIds: { type: array, items: { type: string } }
+        certificateBindingIds: { type: array, items: { type: string } }
     ApprovalEndpointReview:
       type: object
       required: [logicalBindingId, bindingRevision, scheme, hostname, port, path, allowedMethods, redirectPolicy, tlsPolicy, endpointChecksumSha256, bindingChecksumSha256, destinationClassification]

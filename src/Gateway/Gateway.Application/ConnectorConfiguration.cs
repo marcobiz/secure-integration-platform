@@ -251,9 +251,53 @@ public sealed record ApprovalOperationReview(
     string Environment,
     string ExecutionStrategy,
     string Protocol,
+    OperationBindingDependencies BindingDependencies,
     ApprovalEndpointReview Endpoint,
     IReadOnlyList<ApprovalSecretReview> SecretBindings,
     IReadOnlyList<ApprovalCertificateReview> CertificateBindings);
+
+/// <summary>Canonical immutable logical bindings required by one Connector operation.</summary>
+public sealed record OperationBindingDependencies(
+    string OperationId,
+    string EndpointBindingId,
+    IReadOnlyList<string> SecretBindingIds,
+    IReadOnlyList<string> CertificateBindingIds);
+
+/// <summary>Derives operation dependencies only from the validated immutable Connector definition.</summary>
+public static class ConnectorOperationBindings
+{
+    /// <summary>Returns the exact dependency set for one operation.</summary>
+    public static OperationBindingDependencies Required(string canonicalJson, string operationId)
+    {
+        using JsonDocument document = JsonDocument.Parse(canonicalJson);
+        JsonElement operation = document.RootElement.GetProperty("operations").EnumerateArray()
+            .SingleOrDefault(value => string.Equals(value.GetProperty("operationId").GetString(), operationId, StringComparison.Ordinal));
+        if (operation.ValueKind == JsonValueKind.Undefined) throw new GatewayException("BGW-OPERATION-NOT-FOUND", 404);
+        return From(operation);
+    }
+
+    /// <summary>Returns every operation dependency set in stable operation-id order.</summary>
+    public static IReadOnlyList<OperationBindingDependencies> All(string canonicalJson)
+    {
+        using JsonDocument document = JsonDocument.Parse(canonicalJson);
+        return document.RootElement.GetProperty("operations").EnumerateArray()
+            .Select(From).OrderBy(value => value.OperationId, StringComparer.Ordinal).ToArray();
+    }
+
+    private static OperationBindingDependencies From(JsonElement operation)
+    {
+        string operationId = operation.GetProperty("operationId").GetString()!;
+        JsonElement authentication = operation.GetProperty("authentication");
+        List<string> secrets = [];
+        foreach (string property in new[] { "usernameBinding", "passwordBinding", "secretBinding" })
+            if (authentication.TryGetProperty(property, out JsonElement value)) secrets.Add(value.GetString()!);
+        List<string> certificates = [];
+        if (authentication.TryGetProperty("certificateBinding", out JsonElement certificate)) certificates.Add(certificate.GetString()!);
+        return new(operationId, operation.GetProperty("endpointBinding").GetString()!,
+            secrets.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
+            certificates.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
+    }
+}
 
 /// <summary>Canonical, server-built approval artefact containing every non-secret runtime decision.</summary>
 public sealed record ApprovalReviewArtifact(ApprovalConnectorReview Connector, IReadOnlyList<ApprovalOperationReview> Operations);
@@ -307,6 +351,7 @@ public static class ConnectorApprovalArtifacts
     private static ApprovalOperationReview Operation(ConnectorVersionRecord version, ConnectorBindingSet binding, JsonElement operation)
     {
         string operationId = operation.GetProperty("operationId").GetString()!;
+        OperationBindingDependencies dependencies = ConnectorOperationBindings.Required(version.CanonicalJson, operationId);
         string endpointName = operation.GetProperty("endpointBinding").GetString()!;
         if (!binding.Endpoints.TryGetValue(endpointName, out Uri? baseUri)) throw new GatewayException("BGW-CONNECTOR-ENDPOINT-BINDING-MISSING", 503);
         string path = operation.GetProperty("path").GetString()!;
@@ -339,7 +384,7 @@ public static class ConnectorApprovalArtifacts
                 binding.EnvironmentId.ToString("D"), resource.ConnectorScope, resource.OperationScope, resource.CatalogChecksumSha256,
                 Component(logical, resource), binding.ChecksumSha256));
         }
-        return new(operationId, binding.EnvironmentId.ToString("D"), "gateway-server-side", effective.Scheme.ToUpperInvariant(), endpoint, secrets, certificates);
+        return new(operationId, binding.EnvironmentId.ToString("D"), "gateway-server-side", effective.Scheme.ToUpperInvariant(), dependencies, endpoint, secrets, certificates);
     }
 
     private static string Canonical(ApprovalReviewArtifact artifact)
@@ -764,7 +809,7 @@ public sealed class PublishedConnectorCatalog(
     {
         if (accessContext is not null && !string.Equals(accessContext.OperationId, operationId, StringComparison.Ordinal))
             throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403);
-        string key = connectorId + "\n" + environmentId.ToString("D") + "\n" + (accessContext?.InstallationId.ToString("D") ?? "admin");
+        string key = connectorId + "\n" + environmentId.ToString("D") + "\n" + operationId + "\n" + (accessContext?.InstallationId.ToString("D") ?? "admin");
         PublishedConnectorStamp? stamp;
         try { stamp = await store.GetPublishedStampAsync(connectorId, environmentId, accessContext, cancellationToken).ConfigureAwait(false); }
         catch (GatewayException) { throw; }
@@ -777,7 +822,7 @@ public sealed class PublishedConnectorCatalog(
             catch (GatewayException) { throw; }
             catch (Exception) { throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-UNAVAILABLE", 503, true); }
             if (snapshot.Stamp != stamp || snapshot.Version.State != ConnectorVersionState.Published) throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-STALE", 503, true);
-            entry = Build(snapshot);
+            entry = Build(snapshot, operationId);
             cache[key] = entry;
         }
         if (!entry.Operations.TryGetValue(operationId, out GatewayOperationDefinition? operation)) throw new GatewayException("BGW-OPERATION-NOT-FOUND", 404);
@@ -790,7 +835,7 @@ public sealed class PublishedConnectorCatalog(
         foreach (string key in cache.Keys.Where(value => value.StartsWith(connectorId + "\n", StringComparison.Ordinal)).ToArray()) cache.TryRemove(key, out _);
     }
 
-    private CacheEntry Build(PublishedConnectorSnapshot snapshot)
+    private CacheEntry Build(PublishedConnectorSnapshot snapshot, string requiredOperationId)
     {
         ValidatedConnectorDefinition parsed = validator.ParseStored(snapshot.Version.CanonicalJson, snapshot.Version.ChecksumSha256);
         using JsonDocument document = JsonDocument.Parse(parsed.CanonicalJson);
@@ -798,6 +843,7 @@ public sealed class PublishedConnectorCatalog(
         foreach (JsonElement operation in document.RootElement.GetProperty("operations").EnumerateArray())
         {
             string operationId = operation.GetProperty("operationId").GetString()!;
+            if (!string.Equals(operationId, requiredOperationId, StringComparison.Ordinal)) continue;
             string endpointName = operation.GetProperty("endpointBinding").GetString()!;
             if (!snapshot.Bindings.Endpoints.TryGetValue(endpointName, out Uri? baseUri)) throw new GatewayException("BGW-CONNECTOR-ENDPOINT-BINDING-MISSING", 503);
             Uri endpoint = new(baseUri, operation.GetProperty("path").GetString()!);

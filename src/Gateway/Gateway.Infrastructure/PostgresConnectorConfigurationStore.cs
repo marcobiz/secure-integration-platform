@@ -419,7 +419,7 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
     public async Task<PublishedConnectorStamp?> GetPublishedStampAsync(string connectorId, Guid environmentId, PublishedConnectorAccessContext? accessContext, CancellationToken cancellationToken)
     {
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using NpgsqlCommand command = new("SELECT c.active_version_id,c.publication_revision,coalesce(b.revision,0),coalesce(encode(b.checksum_sha256,'hex'),''),b.id,b.secret_references_json::text,b.certificate_references_json::text FROM gateway.connector_definition c LEFT JOIN gateway.connector_binding_bundle_version b ON b.connector_version_id=c.active_version_id AND b.environment_id=$2 AND b.state='active' WHERE c.slug=$1 AND c.active_version_id IS NOT NULL ORDER BY b.revision DESC NULLS LAST LIMIT 1", connection);
+        await using NpgsqlCommand command = new("SELECT c.active_version_id,c.publication_revision,coalesce(b.revision,0),coalesce(encode(b.checksum_sha256,'hex'),''),b.id,b.secret_references_json::text,b.certificate_references_json::text,v.configuration_json::text FROM gateway.connector_definition c JOIN gateway.connector_version v ON v.id=c.active_version_id LEFT JOIN gateway.connector_binding_bundle_version b ON b.connector_version_id=c.active_version_id AND b.environment_id=$2 AND b.state='active' WHERE c.slug=$1 AND c.active_version_id IS NOT NULL ORDER BY b.revision DESC NULLS LAST LIMIT 1", connection);
         command.Parameters.AddWithValue(connectorId);
         command.Parameters.AddWithValue(environmentId);
         await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken).ConfigureAwait(false);
@@ -432,13 +432,14 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
         Guid bindingId = reader.GetGuid(4);
         Dictionary<string, ProviderResourceBinding> secrets = DeserializeResources(reader.GetString(5));
         Dictionary<string, ProviderResourceBinding> certificates = DeserializeResources(reader.GetString(6));
+        OperationBindingDependencies? dependencies = accessContext is null ? null : ConnectorOperationBindings.Required(reader.GetString(7), accessContext.OperationId);
         await reader.DisposeAsync().ConfigureAwait(false);
-        ConnectorBindingSet binding = new(bindingId, Guid.Empty, versionId, environmentId, new Dictionary<string, Uri>(), secrets, certificates, bindingRevision, bindingChecksum, ConnectorBindingState.Active, default, string.Empty);
+        ConnectorBindingSet binding = SelectedBinding(new(bindingId, Guid.Empty, versionId, environmentId, new Dictionary<string, Uri>(), secrets, certificates, bindingRevision, bindingChecksum, ConnectorBindingState.Active, default, string.Empty), dependencies);
         string resourceStamp = await ValidateCurrentResourcesAsync(connection, null, [binding], false, cancellationToken).ConfigureAwait(false);
         if (accessContext is not null)
         {
-            _ = await ResolveProviderReferencesAsync(connection, null, connectorId, binding, accessContext, secrets, cancellationToken).ConfigureAwait(false);
-            _ = await ResolveProviderReferencesAsync(connection, null, connectorId, binding, accessContext, certificates, cancellationToken).ConfigureAwait(false);
+            _ = await ResolveProviderReferencesAsync(connection, null, connectorId, binding, accessContext, binding.SecretResources, cancellationToken).ConfigureAwait(false);
+            _ = await ResolveProviderReferencesAsync(connection, null, connectorId, binding, accessContext, binding.CertificateResources, cancellationToken).ConfigureAwait(false);
         }
         return new(versionId, publicationRevision, bindingRevision, bindingChecksum, resourceStamp);
     }
@@ -465,9 +466,11 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
         string actual = ConnectorBindingDigests.Revision(version.Id, binding.EnvironmentId, endpoints, secrets, certificates);
         if (!string.Equals(actual, checksum, StringComparison.Ordinal)) throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-CORRUPT", 503);
         await reader.DisposeAsync().ConfigureAwait(false);
-        string resourceStamp = await ValidateCurrentResourcesAsync(connection, null, [binding], false, cancellationToken).ConfigureAwait(false);
-        Dictionary<string, string> secretProviderReferences = await ResolveProviderReferencesAsync(connection, null, connectorId, binding, accessContext, binding.SecretResources, cancellationToken).ConfigureAwait(false);
-        Dictionary<string, string> certificateProviderReferences = await ResolveProviderReferencesAsync(connection, null, connectorId, binding, accessContext, binding.CertificateResources, cancellationToken).ConfigureAwait(false);
+        OperationBindingDependencies? dependencies = accessContext is null ? null : ConnectorOperationBindings.Required(version.CanonicalJson, accessContext.OperationId);
+        ConnectorBindingSet selected = SelectedBinding(binding, dependencies);
+        string resourceStamp = await ValidateCurrentResourcesAsync(connection, null, [selected], false, cancellationToken).ConfigureAwait(false);
+        Dictionary<string, string> secretProviderReferences = await ResolveProviderReferencesAsync(connection, null, connectorId, selected, accessContext, selected.SecretResources, cancellationToken).ConfigureAwait(false);
+        Dictionary<string, string> certificateProviderReferences = await ResolveProviderReferencesAsync(connection, null, connectorId, selected, accessContext, selected.CertificateResources, cancellationToken).ConfigureAwait(false);
         return new(version, binding, new(version.Id, publicationRevision, bindingRevision, checksum, resourceStamp), secretProviderReferences, certificateProviderReferences);
     }
 
@@ -596,8 +599,8 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
             string? providerReference = current.ProviderReference;
             if (accessContext is not null)
             {
-                const string sql = "SELECT gateway.resolve_published_provider_locator($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)";
-                await using NpgsqlCommand command = Command(connection, transaction, sql, current.Id, connectorId, accessContext.OperationId, bindingSet.EnvironmentId, bindingSet.Id,
+                const string sql = "SELECT gateway.resolve_published_provider_locator($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)";
+                await using NpgsqlCommand command = Command(connection, transaction, sql, current.Id, connectorId, accessContext.OperationId, logicalId, bindingSet.EnvironmentId, bindingSet.Id,
                     bindingSet.Revision, Convert.FromHexString(bindingSet.ChecksumSha256), accessContext.InstallationId, accessContext.TenantId, accessContext.ApplicationId);
                 providerReference = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
             }
@@ -605,6 +608,16 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
             result.Add(logicalId, providerReference);
         }
         return result;
+    }
+
+    private static ConnectorBindingSet SelectedBinding(ConnectorBindingSet binding, OperationBindingDependencies? dependencies)
+    {
+        if (dependencies is null) return binding;
+        Dictionary<string, ProviderResourceBinding> secrets = dependencies.SecretBindingIds.ToDictionary(id => id,
+            id => binding.SecretResources.TryGetValue(id, out ProviderResourceBinding? value) ? value : throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING-MISSING", 503), StringComparer.Ordinal);
+        Dictionary<string, ProviderResourceBinding> certificates = dependencies.CertificateBindingIds.ToDictionary(id => id,
+            id => binding.CertificateResources.TryGetValue(id, out ProviderResourceBinding? value) ? value : throw new GatewayException("BGW-CONNECTOR-CERTIFICATE-BINDING-MISSING", 503), StringComparer.Ordinal);
+        return binding with { SecretResources = secrets, CertificateResources = certificates };
     }
 
     private static Dictionary<string, ProviderResourceBinding> DeserializeResources(string json)
