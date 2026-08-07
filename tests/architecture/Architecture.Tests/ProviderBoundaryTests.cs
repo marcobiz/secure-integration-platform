@@ -44,9 +44,25 @@ public sealed class ProviderBoundaryTests
         Assert.Contains("ISecretValueProvider", contracts, StringComparison.Ordinal);
         Assert.Contains("IClientCertificateProvider", contracts, StringComparison.Ordinal);
         Assert.Contains("ISigningKeyProvider", contracts, StringComparison.Ordinal);
+        Assert.Contains("IKeyOperationProvider", contracts, StringComparison.Ordinal);
         Assert.Contains("IMacProvider", contracts, StringComparison.Ordinal);
         Assert.Contains("IProviderHealthCheck", contracts, StringComparison.Ordinal);
         Assert.Contains("IProviderCapabilitySource", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("IKms", contracts, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Certificate_signing_module_depends_only_on_provider_neutral_capabilities()
+    {
+        string project = File.ReadAllText(Path.Combine(Root, "src", "Authentication", "CertificateSigning", "Authentication.CertificateSigning.csproj"));
+        Assert.Contains("Providers.Abstractions", project, StringComparison.Ordinal);
+        Assert.DoesNotContain("Gateway.Infrastructure", project, StringComparison.Ordinal);
+        Assert.DoesNotContain("packs", project, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Azure", project, StringComparison.Ordinal);
+
+        string contracts = File.ReadAllText(Path.Combine(Root, "src", "Authentication", "CertificateSigning", "Contracts.cs"));
+        Assert.DoesNotContain("PFX", contracts, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("PrivateKey", contracts, StringComparison.Ordinal);
         Assert.DoesNotContain("IKms", contracts, StringComparison.Ordinal);
     }
 

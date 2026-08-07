@@ -8,11 +8,30 @@ using SecureIntegration.Providers.Abstractions;
 namespace SecureIntegration.Providers.Synthetic;
 
 /// <summary>In-memory provider for Development and deterministic tests.</summary>
-public sealed class InMemoryProvider(IReadOnlyDictionary<string, string> values, IReadOnlyDictionary<string, byte[]>? certificates = null) :
-    ISecretValueProvider, IClientCertificateProvider, ICertificateMetadataProvider, IProviderHealthCheck, IProviderCapabilitySource
+public sealed class InMemoryProvider :
+    ISecretValueProvider, IClientCertificateProvider, ICertificateMetadataProvider, IKeyOperationProvider, IProviderHealthCheck, IProviderCapabilitySource
 {
+    private readonly IReadOnlyDictionary<string, string> values;
+    private readonly IReadOnlyDictionary<string, byte[]>? encodedCertificates;
+    private readonly IReadOnlyDictionary<string, X509Certificate2>? certificateHandles;
+    private readonly IReadOnlyDictionary<string, X509Certificate2>? signingKeyHandles;
+
+    /// <summary>Creates a synthetic provider from runtime-only values and certificate handles.</summary>
+    public InMemoryProvider(
+        IReadOnlyDictionary<string, string> values,
+        IReadOnlyDictionary<string, byte[]>? certificates = null,
+        IReadOnlyDictionary<string, X509Certificate2>? certificateHandles = null,
+        IReadOnlyDictionary<string, X509Certificate2>? signingKeyHandles = null)
+    {
+        this.values = values;
+        encodedCertificates = certificates;
+        this.certificateHandles = certificateHandles;
+        this.signingKeyHandles = signingKeyHandles;
+        Capabilities = new(true, certificates is not null || certificateHandles is not null, signingKeyHandles is not null, false);
+    }
+
     /// <inheritdoc />
-    public ProviderCapabilities Capabilities { get; } = new(true, true, false, false);
+    public ProviderCapabilities Capabilities { get; }
 
     /// <inheritdoc />
     public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken)
@@ -26,7 +45,9 @@ public sealed class InMemoryProvider(IReadOnlyDictionary<string, string> values,
     public Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (certificates is null || !certificates.TryGetValue(logicalReference, out byte[]? value)) throw new ProviderAccessException("BGW-PROVIDER-SECRET-NOT-FOUND", true);
+        if (certificateHandles is not null && certificateHandles.TryGetValue(logicalReference, out X509Certificate2? handle))
+            return Task.FromResult(new X509Certificate2(handle));
+        if (encodedCertificates is null || !encodedCertificates.TryGetValue(logicalReference, out byte[]? value)) throw new ProviderAccessException("BGW-PROVIDER-SECRET-NOT-FOUND", true);
         return Task.FromResult(LoadCertificate(value));
     }
 
@@ -35,6 +56,32 @@ public sealed class InMemoryProvider(IReadOnlyDictionary<string, string> values,
     {
         using X509Certificate2 certificate = await GetClientCertificateAsync(logicalReference, cancellationToken).ConfigureAwait(false);
         return PublicMetadata(certificate);
+    }
+
+    /// <inheritdoc />
+    public Task<byte[]> SignDigestAsync(string logicalReference, string algorithm, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!string.Equals(algorithm, "RS256", StringComparison.Ordinal) || digest.Length != 32)
+            throw new ProviderAccessException("BGW-PROVIDER-SIGNING-ALGORITHM-DENIED");
+        if (signingKeyHandles is null || !signingKeyHandles.TryGetValue(logicalReference, out X509Certificate2? certificate))
+            throw new ProviderAccessException("BGW-PROVIDER-SIGNING-KEY-NOT-FOUND");
+        using RSA? rsa = certificate.GetRSAPrivateKey();
+        if (rsa is null) throw new ProviderAccessException("BGW-PROVIDER-SIGNING-KEY-INVALID");
+        return Task.FromResult(rsa.SignHash(digest.Span, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1));
+    }
+
+    /// <inheritdoc />
+    public Task<ProviderSigningKeyPublicMetadata> GetSigningKeyMetadataAsync(string logicalReference, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (signingKeyHandles is null || !signingKeyHandles.TryGetValue(logicalReference, out X509Certificate2? certificate))
+            throw new ProviderAccessException("BGW-PROVIDER-SIGNING-KEY-NOT-FOUND");
+        using RSA? rsa = certificate.GetRSAPublicKey();
+        if (rsa is null) throw new ProviderAccessException("BGW-PROVIDER-SIGNING-KEY-INVALID");
+        return Task.FromResult(new ProviderSigningKeyPublicMetadata(
+            Convert.ToHexString(SHA256.HashData(certificate.RawData)), certificate.NotBefore.ToUniversalTime(), certificate.NotAfter.ToUniversalTime(),
+            "RSA", rsa.KeySize, certificate.SerialNumber, rsa.ExportSubjectPublicKeyInfo()));
     }
 
     /// <inheritdoc />
@@ -52,7 +99,9 @@ public sealed class InMemoryProvider(IReadOnlyDictionary<string, string> values,
         using ECDsa? ecdsa = certificate.GetECDsaPublicKey();
         int keySize = rsa?.KeySize ?? ecdsa?.KeySize ?? certificate.PublicKey.EncodedKeyValue.RawData.Length * 8;
         string algorithm = rsa is not null ? "RSA" : ecdsa is not null ? "ECDSA" : certificate.PublicKey.Oid.Value ?? "unknown";
-        return new(Convert.ToHexString(SHA256.HashData(certificate.RawData)), certificate.Subject, certificate.Issuer, certificate.NotBefore.ToUniversalTime(), certificate.NotAfter.ToUniversalTime(), algorithm, keySize, certificate.SerialNumber);
+        IReadOnlyList<string>? enhancedKeyUsages = certificate.Extensions.OfType<X509EnhancedKeyUsageExtension>().SingleOrDefault()?.EnhancedKeyUsages.Cast<Oid>().Select(value => value.Value ?? string.Empty).ToArray();
+        X509KeyUsageFlags? keyUsage = certificate.Extensions.OfType<X509KeyUsageExtension>().SingleOrDefault()?.KeyUsages;
+        return new(Convert.ToHexString(SHA256.HashData(certificate.RawData)), certificate.Subject, certificate.Issuer, certificate.NotBefore.ToUniversalTime(), certificate.NotAfter.ToUniversalTime(), algorithm, keySize, certificate.SerialNumber, enhancedKeyUsages, keyUsage);
     }
 }
 

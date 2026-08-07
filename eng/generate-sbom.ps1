@@ -58,6 +58,9 @@ New-DotNetSbom broker 'SecureIntegration.Broker.Service' @(
     'src/Broker/Broker.Core/packages.lock.json')
 New-DotNetSbom sdk-dotnet 'SecureIntegration.Broker.Sdk' @('sdk/dotnet/Broker.Sdk/packages.lock.json')
 New-DotNetSbom connector-cli 'SecureIntegration.Connector.Cli' @('tools/connector-cli/packages.lock.json')
+New-DotNetSbom auth-certificate-signing 'SecureIntegration.Authentication.CertificateSigning' @(
+    'src/Authentication/CertificateSigning/packages.lock.json',
+    'src/Providers/Abstractions/packages.lock.json')
 
 Push-Location (Join-Path $root 'src\Admin\Admin.Web')
 try {

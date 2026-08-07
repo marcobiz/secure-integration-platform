@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>SecureIntegration.Authentication.CertificateSigning</AssemblyName>
+    <RootNamespace>SecureIntegration.Authentication.CertificateSigning</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Providers\Abstractions\Providers.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

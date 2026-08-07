@@ -125,6 +125,7 @@ if (-not $SkipVerification) {
         @{ Path = 'tests/architecture/Architecture.Tests/Architecture.Tests.csproj'; Filter = $null },
         @{ Path = 'tests/unit/Broker.Core.Tests/Broker.Core.Tests.csproj'; Filter = $null },
         @{ Path = 'tests/unit/Gateway.Unit.Tests/Gateway.Unit.Tests.csproj'; Filter = $null },
+        @{ Path = 'tests/unit/Authentication.CertificateSigning.Tests/Authentication.CertificateSigning.Tests.csproj'; Filter = $null },
         @{ Path = 'tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj'; Filter = $null }
     )
     if ($isWindowsHost) {

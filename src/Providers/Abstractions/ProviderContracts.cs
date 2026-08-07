@@ -24,14 +24,39 @@ public interface ICertificateMetadataProvider
 }
 
 /// <summary>Provider-neutral public certificate metadata.</summary>
-public sealed record ProviderCertificatePublicMetadata(string FingerprintSha256, string Subject, string Issuer, DateTimeOffset NotBefore, DateTimeOffset NotAfter, string KeyAlgorithm, int PublicKeySize, string Version);
+public sealed record ProviderCertificatePublicMetadata(
+    string FingerprintSha256,
+    string Subject,
+    string Issuer,
+    DateTimeOffset NotBefore,
+    DateTimeOffset NotAfter,
+    string KeyAlgorithm,
+    int PublicKeySize,
+    string Version,
+    IReadOnlyList<string>? EnhancedKeyUsages = null,
+    X509KeyUsageFlags? KeyUsage = null);
 
-/// <summary>Uses a provider-owned signing key without exporting private material.</summary>
-public interface ISigningKeyProvider
+/// <summary>Public metadata for a provider-owned signing key. SubjectPublicKeyInfo never contains private material.</summary>
+public sealed record ProviderSigningKeyPublicMetadata(
+    string FingerprintSha256,
+    DateTimeOffset NotBefore,
+    DateTimeOffset NotAfter,
+    string KeyAlgorithm,
+    int PublicKeySize,
+    string Version,
+    byte[] SubjectPublicKeyInfo);
+
+/// <summary>Uses a provider-owned signing key and exposes only its public verification metadata.</summary>
+public interface IKeyOperationProvider
 {
     /// <summary>Signs a digest with the referenced key and algorithm.</summary>
     Task<byte[]> SignDigestAsync(string logicalReference, string algorithm, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken);
+    /// <summary>Returns public metadata used to bind and verify a provider-side signing operation.</summary>
+    Task<ProviderSigningKeyPublicMetadata> GetSigningKeyMetadataAsync(string logicalReference, CancellationToken cancellationToken);
 }
+
+/// <summary>Compatibility name for the narrow signing/key-use capability.</summary>
+public interface ISigningKeyProvider : IKeyOperationProvider { }
 
 /// <summary>Computes a MAC without exporting provider-owned key material.</summary>
 public interface IMacProvider
@@ -66,7 +91,7 @@ public sealed record ProviderServices(
     IClientCertificateProvider ClientCertificates,
     IProviderHealthCheck Health,
     IProviderCapabilitySource CapabilitySource,
-    ISigningKeyProvider? SigningKeys = null,
+    IKeyOperationProvider? SigningKeys = null,
     IMacProvider? Mac = null,
     ICertificateMetadataProvider? CertificateMetadata = null);
 

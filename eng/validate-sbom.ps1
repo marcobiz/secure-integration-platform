@@ -11,6 +11,7 @@ $expected = [ordered]@{
     'broker.spdx.json' = @('SecureIntegration.Broker.Service', 'System.Security.Cryptography.ProtectedData')
     'sdk-dotnet.spdx.json' = @('SecureIntegration.Broker.Sdk', 'System.Text.Json')
     'connector-cli.spdx.json' = @('SecureIntegration.Connector.Cli', 'JsonSchema.Net')
+    'auth-certificate-signing.spdx.json' = @('SecureIntegration.Authentication.CertificateSigning', 'SecureIntegration.Providers.Abstractions')
     'admin-frontend.spdx.json' = @('@secure-integration/admin-web', 'react')
 }
 if (-not $SkipContainer) { $expected['gateway-container.spdx.json'] = @('SecureIntegration.Gateway.Api', 'Npgsql') }
