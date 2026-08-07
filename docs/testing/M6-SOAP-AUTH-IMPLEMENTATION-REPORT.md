@@ -86,7 +86,11 @@ inoltre PASS `validate-docs`, secret scan, SBOM SPDX (inclusa immagine container
 package indicizzati), vulnerability scan transitive e `git diff --check`. Il primo run
 completo aveva rilevato una soglia timeout di test condivisa con il caso oversized; la
 causa è stata separata in un profilo latency-specifico e l'intero gate è stato rieseguito
-verde sul nuovo commit. CI exact-head resta da associare alla PR.
+verde sul nuovo commit. La prima CI della PR ha inoltre rilevato una scadenza temporale
+non deterministica sotto carico e l'assenza del server sintetico dall'allowlist di export
+Core. Il test ora usa una singola scadenza esplicita e l'architecture gate vincola
+l'allowlist; `Export-OpenSourceCore.ps1` è stato rieseguito integralmente con esito PASS
+(324 file). Lo stato exact-head autorevole resta quello associato alla PR.
 
 ## Review
 

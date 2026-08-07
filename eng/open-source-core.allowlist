@@ -72,3 +72,4 @@ tools/m3/split-host/
 tools/m4/
 tools/m5/
 tools/m6/SyntheticOAuthServer/
+tools/m6/SyntheticSoapServer/

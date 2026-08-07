@@ -19,6 +19,8 @@ public sealed class SoapAuthBoundaryTests
 
         string solution = File.ReadAllText(Path.Combine(Root, "BrokerGateway.Core.slnx"));
         Assert.Contains("Gateway.ConnectorRuntime.Auth.Soap", solution, StringComparison.Ordinal);
+        string exportAllowlist = File.ReadAllText(Path.Combine(Root, "eng", "open-source-core.allowlist"));
+        Assert.Contains("tools/m6/SyntheticSoapServer/", exportAllowlist, StringComparison.Ordinal);
     }
 
     [Fact]

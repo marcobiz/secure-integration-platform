@@ -25,7 +25,7 @@ public sealed class SoapRealHttpIntegrationTests
     {
         using CertificateFixture certificates = CertificateFixture.Create();
         await using SyntheticSoapServerInstance server = await SyntheticSoapServerHost.StartAsync(
-            new("synthetic-user", "synthetic-password", false, TimeSpan.FromMilliseconds(100), TimeSpan.FromSeconds(2)), certificates.Server, TestContext.Current.CancellationToken);
+            new("synthetic-user", "synthetic-password", false, TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2)), certificates.Server, TestContext.Current.CancellationToken);
         SoapSessionClient client = CreateClient(certificates.Root, certificates.Server, server.Endpoint);
         SoapSessionProfile profile = Profile(version, timeoutMilliseconds: 2_000, maximumResponseBytes: 32_768);
         SystemGatewayClock clock = new();
@@ -35,8 +35,7 @@ public sealed class SoapRealHttpIntegrationTests
         OpaqueSoapSessionReference session = await client.AcquireSessionAsync(context, endpoint, profile, TestContext.Current.CancellationToken);
         SoapBusinessResult result = await client.InvokeAsync(context, endpoint, profile, new Dictionary<string, string> { ["payload"] = "normal" }, session, TestContext.Current.CancellationToken);
         Assert.Equal("accepted", result.Values["result"]);
-        await Task.Delay(150, TestContext.Current.CancellationToken);
-        SoapBusinessResult reacquired = await client.InvokeAsync(context, endpoint, profile, new Dictionary<string, string> { ["payload"] = "normal" }, null, TestContext.Current.CancellationToken);
+        SoapBusinessResult reacquired = await client.InvokeAsync(context, endpoint, profile, new Dictionary<string, string> { ["payload"] = "expire-once" }, null, TestContext.Current.CancellationToken);
         Assert.Equal("accepted", reacquired.Values["result"]);
         Assert.Equal(2, server.Counters.Login);
         Assert.Equal(3, server.Counters.Business);

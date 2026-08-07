@@ -75,6 +75,7 @@ public static class SyntheticSoapServerHost
         ConcurrentDictionary<string, DateTimeOffset> sessions = new(StringComparer.Ordinal);
         ConcurrentDictionary<string, bool> challenges = new(StringComparer.Ordinal);
         SyntheticSoapCounters counters = new();
+        int expireBusinessOnce = 0;
 
         app.MapPost("/service", async (HttpRequest request, HttpResponse response, CancellationToken token) =>
         {
@@ -136,6 +137,12 @@ public static class SyntheticSoapServerHost
             if (parsed.Operation != "BusinessOperation") { response.StatusCode = StatusCodes.Status400BadRequest; return; }
 
             string payload = parsed.Fields.GetValueOrDefault("Payload") ?? string.Empty;
+            if (payload == "expire-once" && Interlocked.CompareExchange(ref expireBusinessOnce, 1, 0) == 0)
+            {
+                sessions.TryRemove(session, out _);
+                await WriteFaultAsync(response, version, "SessionExpired", token).ConfigureAwait(false);
+                return;
+            }
             if (payload == "fault") { await WriteFaultAsync(response, version, "BusinessRejected", token).ConfigureAwait(false); return; }
             if (payload == "malformed")
             {
