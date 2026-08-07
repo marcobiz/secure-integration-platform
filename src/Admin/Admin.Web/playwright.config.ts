@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const testPort = process.env.ADMIN_WEB_TEST_PORT ?? '5173';
+const testPort = (globalThis as typeof globalThis & { process?: { env?: Record<string, string | undefined> } }).process?.env?.ADMIN_WEB_TEST_PORT ?? '5173';
 const adminBaseUrl = `http://127.0.0.1:${testPort}/admin/`;
 
 export default defineConfig({
