@@ -50,8 +50,18 @@ function Invoke-NativeChecked {
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
 
-    $output = & $FilePath @Arguments 2>&1
-    $exitCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5.1 wraps native stderr (including harmless psql
+        # NOTICE messages) as ErrorRecord objects. The native exit code remains
+        # the authoritative fail-closed result.
+        $ErrorActionPreference = 'Continue'
+        $output = & $FilePath @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     foreach ($line in $output) { Write-Host $line }
     if ($exitCode -ne 0) {
         throw "POSTGRESQL_QUALIFICATION_NATIVE_FAILURE: $([IO.Path]::GetFileName($FilePath)) exited with $exitCode."
