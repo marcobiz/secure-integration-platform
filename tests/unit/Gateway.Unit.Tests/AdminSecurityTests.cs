@@ -24,6 +24,13 @@ public sealed class AdminSecurityTests
         Assert.Contains("BGW-INSTALLATION-CREATED", catalog.Reason);
         Assert.Contains("BGW-OPERATION-OK", catalog.Reason);
         Assert.Contains("BGW-ADMIN-ACTION", catalog.Reason);
+        Assert.Contains("BGW-CONNECTOR-BINDING-SCOPE", catalog.Reason);
+        Assert.Contains("BGW-ADMIN-FOUR-EYES", catalog.Reason);
+        Assert.Contains("BGW-ADMIN-BOOTSTRAP-DENIED", catalog.Reason);
+        Assert.Contains("BGW-PROVIDER-LOCATOR-DENIED", catalog.Reason);
+        Assert.True(catalog.Reason.Count >= 100, $"Backend reason catalog unexpectedly contains only {catalog.Reason.Count} entries.");
+        Assert.Equal(catalog.Reason.Count, catalog.Reason.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(catalog.AuditAction.Count, catalog.AuditAction.Distinct(StringComparer.Ordinal).Count());
         Assert.All(catalog.AuditAction.Concat(catalog.Reason), value => Assert.DoesNotContain('<', value));
     }
 

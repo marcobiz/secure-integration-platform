@@ -3,6 +3,15 @@ using System.Text.Json;
 
 namespace SecureIntegration.Gateway.Application;
 
+/// <summary>Stable audit values reserved by the backend contract even when an optional mutation is not exposed by the current host.</summary>
+public static class RuntimeAuditActions
+{
+    /// <summary>Revocation of an installation operation grant.</summary>
+    public const string GrantRevoke = "grant.revoke";
+    /// <summary>Stable successful grant-revocation reason.</summary>
+    public const string GrantRevoked = "BGW-GRANT-REVOKED";
+}
+
 /// <summary>The embedded, versioned wire-value contract exported to Admin clients.</summary>
 public sealed record RuntimeWireCodeCatalog(
     IReadOnlyList<string> Status,

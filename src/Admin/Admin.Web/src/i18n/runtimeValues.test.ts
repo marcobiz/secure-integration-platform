@@ -10,6 +10,8 @@ describe('runtime wire value localization', () => {
     for (const [kind, values] of Object.entries(knownRuntimeValues)) for (const wire of Object.keys(values)) {
       expect(runtimeLabel(translate(enTranslation), kind as keyof typeof knownRuntimeValues, wire)).not.toMatch(/^MISSING:/i);
       expect(runtimeLabel(translate(itTranslation), kind as keyof typeof knownRuntimeValues, wire)).not.toMatch(/^MISSING:/i);
+      expect(runtimeLabel(translate(enTranslation), kind as keyof typeof knownRuntimeValues, wire)).not.toMatch(/^Unknown value/i);
+      expect(runtimeLabel(translate(itTranslation), kind as keyof typeof knownRuntimeValues, wire)).not.toMatch(/^Valore sconosciuto/i);
     }
   });
 
