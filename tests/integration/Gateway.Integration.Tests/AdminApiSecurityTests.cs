@@ -15,6 +15,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Npgsql;
 using SecureIntegration.Gateway.Api;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
@@ -31,7 +32,13 @@ public sealed class AdminApiSecurityTests
     [Fact]
     public async Task M5_E2E_Admin_approval_publish_runtime_provider_transport_prevents_credential_exfiltration()
     {
-        await using AntiExfiltrationFactory factory = new();
+        string? adminConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        string? migrationConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
+        if (string.IsNullOrWhiteSpace(adminConnectionString) || string.IsNullOrWhiteSpace(migrationConnectionString))
+            Assert.Skip("The definitive anti-exfiltration scenario requires the dedicated PostgreSQL 18 gate.");
+        await ApplyMigrationsAsync(migrationConnectionString);
+        await using PostgresRuntimeRoleLease runtimeRole = await PostgresRuntimeRoleLease.CreateAsync(adminConnectionString, migrationConnectionString, TestContext.Current.CancellationToken);
+        await using AntiExfiltrationFactory factory = new(runtimeRole.ConnectionString, adminConnectionString);
         using HttpClient editor = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
         using HttpClient approver = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
         string editorCsrf = await LoginAsync(editor, "security-admin", TestContext.Current.CancellationToken);
@@ -45,14 +52,15 @@ public sealed class AdminApiSecurityTests
         CertificatePublicMetadata publicMetadata = new(Convert.ToHexString(SHA256.HashData(created.RawData)), created.Subject, created.Issuer, created.NotBefore, created.NotAfter, "RSA", 2048, created.SerialNumber);
 
         Guid environmentId = Guid.NewGuid(); Guid tenantId = Guid.NewGuid(); Guid applicationId = Guid.NewGuid(); Guid installationId = Guid.NewGuid();
-        InMemoryGatewayRegistry registry = factory.Services.GetRequiredService<InMemoryGatewayRegistry>();
-        await registry.AddEnvironmentAsync(new(environmentId, "m5-e2e", "M5 E2E", false), TestContext.Current.CancellationToken);
-        await registry.AddTenantAsync(new(tenantId, "m5-e2e", "M5 E2E", TenantStatus.Active, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
-        await registry.AddApplicationAsync(new(applicationId, "m5-e2e", "M5 E2E", ApplicationStatus.Active, "3.0.0", null, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
-        await registry.AddInstallationAsync(new(installationId, tenantId, applicationId, environmentId, InstallationStatus.Active, "3.0.0", DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+        IAdminGatewayRegistry adminRegistry = factory.Services.GetRequiredService<IAdminGatewayRegistry>();
+        IGatewayRegistry registry = factory.Services.GetRequiredService<IGatewayRegistry>();
+        await adminRegistry.AddEnvironmentAsync(new(environmentId, "m5-e2e-" + environmentId.ToString("N")[..12], "M5 E2E", false), TestContext.Current.CancellationToken);
+        await adminRegistry.AddTenantAsync(new(tenantId, "m5-e2e-" + tenantId.ToString("N")[..12], "M5 E2E", TenantStatus.Active, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+        await adminRegistry.AddApplicationAsync(new(applicationId, "m5-e2e-" + applicationId.ToString("N")[..12], "M5 E2E", ApplicationStatus.Active, "3.0.0", null, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+        await adminRegistry.AddInstallationAsync(new(installationId, tenantId, applicationId, environmentId, InstallationStatus.Active, "3.0.0", DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
 
         ConnectorVersionResource version = await ImportAndValidateSampleAsync(editor, editorCsrf, TestContext.Current.CancellationToken);
-        await registry.AddGrantAsync(new(Guid.NewGuid(), installationId, tenantId, version.ConnectorId, "submit", true, DateTimeOffset.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
+        await adminRegistry.AddGrantAsync(new(Guid.NewGuid(), installationId, tenantId, version.ConnectorId, "submit", true, DateTimeOffset.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
         IConnectorConfigurationStore store = factory.Services.GetRequiredService<IConnectorConfigurationStore>();
         ProviderResourceCatalogRecord secret = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "instrumented", "Instrumented provider", "synthetic", "api-key", ProviderResourceType.Secret, "Vendor API key", environmentId, version.ConnectorId, "submit", "instrumented://api-key", ProviderResourceStatus.Active, "api-v1", 0, null, null, string.Empty, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
         _ = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "instrumented", "Instrumented provider", "synthetic", "certificate", ProviderResourceType.ClientCertificate, "Vendor certificate", environmentId, version.ConnectorId, "submit", "instrumented://certificate", ProviderResourceStatus.Active, "cert-resource-v1", 0, 1, publicMetadata, string.Empty, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
@@ -74,6 +82,7 @@ public sealed class AdminApiSecurityTests
         }
 
         await using RealVendorMock vendor = await RealVendorMock.StartAsync(certificates, canary, publicMetadata.FingerprintSha256, TestContext.Current.CancellationToken);
+        await using RealVendorMock attackerVendor = await RealVendorMock.StartAsync(certificates, "synthetic-never-approved", publicMetadata.FingerprintSha256, TestContext.Current.CancellationToken);
         object binding = new
         {
             environmentId,
@@ -92,7 +101,7 @@ public sealed class AdminApiSecurityTests
         GatewayInvokeRequest invocation = new("1.0", new("application/json", "utf8", "{\"synthetic\":true}"), Guid.NewGuid());
 
         await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, invocation.CorrelationId), version.ConnectorId, "submit", invocation, TestContext.Current.CancellationToken));
-        Assert.Equal(0, provider.SecretInvocations); Assert.Equal(0, transport.Invocations); Assert.Equal(0, vendor.Requests);
+        Assert.Equal(0, provider.SecretInvocations); Assert.Equal(0, transport.Invocations); Assert.Equal(0, vendor.Requests); Assert.Equal(0, attackerVendor.Requests);
 
         using HttpRequestMessage requestApproval = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}/approval-requests");
         requestApproval.Headers.Add("X-CSRF-TOKEN", editorCsrf);
@@ -114,7 +123,7 @@ public sealed class AdminApiSecurityTests
         approve.Headers.Add("X-CSRF-TOKEN", approverCsrf);
         using (HttpResponseMessage approved = await approver.SendAsync(approve, TestContext.Current.CancellationToken)) approved.EnsureSuccessStatusCode();
         await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, invocation.CorrelationId), version.ConnectorId, "submit", invocation, TestContext.Current.CancellationToken));
-        Assert.Equal(0, provider.SecretInvocations); Assert.Equal(0, transport.Invocations); Assert.Equal(0, vendor.Requests);
+        Assert.Equal(0, provider.SecretInvocations); Assert.Equal(0, transport.Invocations); Assert.Equal(0, vendor.Requests); Assert.Equal(0, attackerVendor.Requests);
 
         using HttpRequestMessage publish = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}:publish") { Content = JsonContent.Create(new { expectedRowVersion = version.RowVersion, expectedPublicationRevision = 0 }) };
         publish.Headers.Add("X-CSRF-TOKEN", approverCsrf); publish.Headers.TryAddWithoutValidation("If-Match", $"\"{version.RowVersion}\"");
@@ -122,18 +131,18 @@ public sealed class AdminApiSecurityTests
             Assert.True(published.IsSuccessStatusCode, $"{published.StatusCode}: {await published.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)}");
         GatewayInvokeResponse result = await runtime.InvokeAsync(new(identity, invocation.CorrelationId), version.ConnectorId, "submit", invocation, TestContext.Current.CancellationToken);
         Assert.Equal(1, provider.SecretInvocations); Assert.Equal(1, provider.CertificateInvocations); Assert.Equal(1, transport.Invocations);
-        Assert.Equal(1, vendor.Requests); Assert.True(vendor.ApiKeyMatched); Assert.True(vendor.ClientCertificateMatched); Assert.Equal(invocation.CorrelationId, vendor.CorrelationId);
+        Assert.Equal(1, vendor.Requests); Assert.Equal(0, attackerVendor.Requests); Assert.True(vendor.ApiKeyMatched); Assert.True(vendor.ClientCertificateMatched); Assert.Equal(invocation.CorrelationId, vendor.CorrelationId);
         Assert.Contains("accepted", Encoding.UTF8.GetString(Convert.FromBase64String(result.Result.Data)), StringComparison.Ordinal);
         Assert.DoesNotContain(canary, JsonSerializer.Serialize(result), StringComparison.Ordinal);
 
         int secretCount = provider.SecretInvocations; int transportCount = transport.Invocations;
         GatewayException attacker = await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, Guid.NewGuid()), version.ConnectorId, "attacker-operation", invocation with { CorrelationId = Guid.NewGuid() }, TestContext.Current.CancellationToken));
-        Assert.Equal("BGW-AUTHZ-OPERATION-DENIED", attacker.Code); Assert.Equal(secretCount, provider.SecretInvocations); Assert.Equal(transportCount, transport.Invocations); Assert.Equal(1, vendor.Requests);
+        Assert.Equal("BGW-AUTHZ-OPERATION-DENIED", attacker.Code); Assert.Equal(secretCount, provider.SecretInvocations); Assert.Equal(transportCount, transport.Invocations); Assert.Equal(1, vendor.Requests); Assert.Equal(0, attackerVendor.Requests);
 
         ProviderResourceCatalogRecord rotatedResource = await store.RegisterProviderResourceAsync(secret with { Id = Guid.NewGuid(), ProviderReference = "instrumented://rotated", Revision = 0, ChecksumSha256 = string.Empty, CreatedAt = DateTimeOffset.UtcNow.AddSeconds(1) }, TestContext.Current.CancellationToken);
         GatewayException stale = await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, Guid.NewGuid()), version.ConnectorId, "submit", invocation with { CorrelationId = Guid.NewGuid() }, TestContext.Current.CancellationToken));
         Assert.Equal("BGW-PROVIDER-RESOURCE-REVISION-STALE", stale.Code); Assert.Equal(secretCount, provider.SecretInvocations); Assert.Equal(transportCount, transport.Invocations);
-        Assert.Equal(1, vendor.Requests);
+        Assert.Equal(1, vendor.Requests); Assert.Equal(0, attackerVendor.Requests);
 
         string rotatedCanary = "m5-e2e-rotated-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
         provider.Register("instrumented://rotated", rotatedCanary); vendor.ExpectedApiKey = rotatedCanary;
@@ -157,13 +166,15 @@ public sealed class AdminApiSecurityTests
         using (HttpResponseMessage published2 = await approver.SendAsync(publish2, TestContext.Current.CancellationToken)) published2.EnsureSuccessStatusCode();
         GatewayInvokeRequest rotatedInvocation = invocation with { CorrelationId = Guid.NewGuid() };
         _ = await runtime.InvokeAsync(new(identity, rotatedInvocation.CorrelationId), version2.ConnectorId, "submit", rotatedInvocation, TestContext.Current.CancellationToken);
-        Assert.Equal(2, provider.SecretInvocations); Assert.Equal(2, transport.Invocations); Assert.Equal(2, vendor.Requests); Assert.Equal(rotatedInvocation.CorrelationId, vendor.CorrelationId);
+        Assert.Equal(2, provider.SecretInvocations); Assert.Equal(2, transport.Invocations); Assert.Equal(2, vendor.Requests); Assert.Equal(0, attackerVendor.Requests); Assert.Equal(rotatedInvocation.CorrelationId, vendor.CorrelationId);
 
         _ = await store.RegisterProviderResourceAsync(rotatedResource with { Id = Guid.NewGuid(), Status = ProviderResourceStatus.Disabled, Revision = 0, ChecksumSha256 = string.Empty, CreatedAt = DateTimeOffset.UtcNow.AddSeconds(2) }, TestContext.Current.CancellationToken);
         GatewayException disabled = await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, Guid.NewGuid()), version2.ConnectorId, "submit", invocation with { CorrelationId = Guid.NewGuid() }, TestContext.Current.CancellationToken));
-        Assert.Equal("BGW-PROVIDER-RESOURCE-REVISION-STALE", disabled.Code); Assert.Equal(2, provider.SecretInvocations); Assert.Equal(2, transport.Invocations); Assert.Equal(2, vendor.Requests);
-        Assert.DoesNotContain(canary, JsonSerializer.Serialize(registry.SnapshotAuditEvents()), StringComparison.Ordinal);
-        Assert.DoesNotContain(rotatedCanary, JsonSerializer.Serialize(registry.SnapshotAuditEvents()), StringComparison.Ordinal);
+        Assert.Equal("BGW-PROVIDER-RESOURCE-REVISION-STALE", disabled.Code); Assert.Equal(2, provider.SecretInvocations); Assert.Equal(2, transport.Invocations); Assert.Equal(2, vendor.Requests); Assert.Equal(0, attackerVendor.Requests);
+        IAdminDirectoryStore directory = factory.Services.GetRequiredService<IAdminDirectoryStore>();
+        string auditJson = JsonSerializer.Serialize(await directory.ListAuditAsync(tenantId, 0, 100, TestContext.Current.CancellationToken));
+        Assert.DoesNotContain(canary, auditJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(rotatedCanary, auditJson, StringComparison.Ordinal);
         Assert.DoesNotContain(canary, reviewJson, StringComparison.Ordinal);
     }
     [Fact]
@@ -922,6 +933,53 @@ public sealed class AdminApiSecurityTests
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "BrokerGateway.slnx")) && !File.Exists(Path.Combine(directory.FullName, "BrokerGateway.Core.slnx"))) directory = directory.Parent;
         return directory?.FullName ?? throw new InvalidOperationException("Repository root not found.");
     }
+
+    private static async Task ApplyMigrationsAsync(string connectionString)
+    {
+        await using NpgsqlConnection connection = new(connectionString);
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        string directory = Path.Combine(RepositoryRoot(), "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations");
+        foreach (string path in Directory.GetFiles(directory, "*.sql").Order(StringComparer.Ordinal))
+        {
+            await using NpgsqlCommand command = new(await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken), connection);
+            await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
+    private sealed class PostgresRuntimeRoleLease : IAsyncDisposable
+    {
+        private readonly string migrationConnectionString;
+        private readonly string roleName;
+
+        private PostgresRuntimeRoleLease(string connectionString, string migrationConnectionString, string roleName)
+        {
+            ConnectionString = connectionString;
+            this.migrationConnectionString = migrationConnectionString;
+            this.roleName = roleName;
+        }
+
+        public string ConnectionString { get; }
+
+        public static async Task<PostgresRuntimeRoleLease> CreateAsync(string adminConnectionString, string migrationConnectionString, CancellationToken cancellationToken)
+        {
+            string roleName = "m5_e2e_runtime_" + Guid.NewGuid().ToString("N");
+            string rolePassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+            await using NpgsqlConnection connection = new(migrationConnectionString);
+            await connection.OpenAsync(cancellationToken);
+            await using NpgsqlCommand command = new($"CREATE ROLE {roleName} LOGIN PASSWORD '{rolePassword}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION; GRANT gateway_runtime TO {roleName};", connection);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+            NpgsqlConnectionStringBuilder runtime = new(adminConnectionString) { Username = roleName, Password = rolePassword };
+            return new(runtime.ConnectionString, migrationConnectionString, roleName);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await using NpgsqlConnection connection = new(migrationConnectionString);
+            await connection.OpenAsync();
+            await using NpgsqlCommand command = new($"DROP ROLE IF EXISTS {roleName};", connection);
+            await command.ExecuteNonQueryAsync();
+        }
+    }
 }
 
 public class AdminDevelopmentFactory : WebApplicationFactory<Program>
@@ -933,31 +991,19 @@ public class AdminDevelopmentFactory : WebApplicationFactory<Program>
     }
 }
 
-/// <summary>Deterministic four-eyes host used only for the cross-layer anti-exfiltration test.
-/// PostgreSQL tests separately prove the production atomic publication transaction.</summary>
-public sealed class AntiExfiltrationFactory : AdminDevelopmentFactory
+/// <summary>PostgreSQL-backed host used only for the definitive cross-layer anti-exfiltration test.</summary>
+public sealed class AntiExfiltrationFactory(string runtimeConnectionString, string adminConnectionString) : AdminDevelopmentFactory
 {
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         base.ConfigureWebHost(builder);
+        builder.UseSetting("ConnectionStrings:GatewayDatabase", runtimeConnectionString);
+        builder.UseSetting("ConnectionStrings:GatewayAdminDatabase", adminConnectionString);
         builder.ConfigureServices(services =>
         {
-            services.RemoveAll<IConnectorApprovalPolicy>();
-            services.AddSingleton<IConnectorApprovalPolicy, DeterministicFourEyesApprovalPolicy>();
             services.Configure<RateLimiterOptions>(options => options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(_ =>
                 RateLimitPartition.GetFixedWindowLimiter("anti-exfiltration", _ => new FixedWindowRateLimiterOptions { PermitLimit = 1000, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true })));
         });
-    }
-
-    private sealed class DeterministicFourEyesApprovalPolicy(IAdminSecurityStore approvals) : IConnectorApprovalPolicy
-    {
-        public async Task<ConnectorVersionRecord> PublishAsync(IConnectorConfigurationStore connectorStore, ConnectorVersionRecord version, long expectedRowVersion, long expectedPublicationRevision, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
-        {
-            byte[] digest = await connectorStore.GetBindingBundleDigestAsync(version.Id, cancellationToken).ConfigureAwait(false);
-            if (!await approvals.HasValidApprovalAsync(version.Id, version.ChecksumSha256, digest, actor, cancellationToken).ConfigureAwait(false))
-                throw new GatewayException("BGW-ADMIN-APPROVAL-REQUIRED", 409);
-            return await connectorStore.PublishAsync(version.Id, expectedRowVersion, expectedPublicationRevision, actor, now, cancellationToken).ConfigureAwait(false);
-        }
     }
 }
 
