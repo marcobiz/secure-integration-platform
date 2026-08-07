@@ -78,7 +78,15 @@ trust root e certificate pinning; non disabilita TLS validation.
 I test coprono Basic/session redaction, stale/fixation, rotate/disable, DTD/XXE/external
 entity, oversize, malformed XML, namespace confusion, SOAPAction/Content-Type mismatch,
 timeout/cancellation, binding manipulation, SSRF, SOAP 1.1/1.2, challenge, logout e
-Fault. I totali completi e l'esito CI vengono aggiornati sul commit finale candidato.
+Fault.
+
+Sul commit candidato locale il gate Release completo ha eseguito 185 casi: 175 PASS,
+10 SKIP appartenenti ai gate PostgreSQL 18/dedicati già condizionali e 0 failure. Sono
+inoltre PASS `validate-docs`, secret scan, SBOM SPDX (inclusa immagine container con 162
+package indicizzati), vulnerability scan transitive e `git diff --check`. Il primo run
+completo aveva rilevato una soglia timeout di test condivisa con il caso oversized; la
+causa è stata separata in un profilo latency-specifico e l'intero gate è stato rieseguito
+verde sul nuovo commit. CI exact-head resta da associare alla PR.
 
 ## Review
 
