@@ -15,6 +15,9 @@
   <Folder Name="/sdk/">
     <Project Path="sdk/dotnet/Broker.Sdk/Broker.Sdk.csproj" />
   </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/DirectGatewayClient/DirectGatewayClient.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/architecture/Architecture.Tests/Architecture.Tests.csproj" />
     <Project Path="tests/unit/Broker.Core.Tests/Broker.Core.Tests.csproj" />
