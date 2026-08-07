@@ -50,6 +50,7 @@ eng/validate-docs.ps1
 eng/validate-tls-hardening.ps1
 eng/Export-OpenSourceCore.ps1
 sdk/
+samples/DirectGatewayClient/
 src/
 tests/
 tools/connector-cli/
