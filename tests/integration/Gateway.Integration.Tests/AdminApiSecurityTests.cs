@@ -25,6 +25,7 @@ using Xunit;
 
 namespace SecureIntegration.Gateway.Integration.Tests;
 
+[Collection(PostgreSqlSharedDatabaseGroup.Name)]
 public sealed class AdminApiSecurityTests
 {
     private static readonly JsonSerializerOptions WireJson = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };

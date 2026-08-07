@@ -10,6 +10,7 @@ using Xunit;
 
 namespace SecureIntegration.Gateway.Integration.Tests;
 
+[Collection(PostgreSqlSharedDatabaseGroup.Name)]
 public sealed class PostgresIsolationTests
 {
     [Fact]
@@ -331,32 +332,41 @@ public sealed class PostgresIsolationTests
     {
         string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
         if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        string migrationConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION") ?? connectionString;
         await ApplyMigrationAsync();
         await using AdminPostgresDataSource pool = new(connectionString);
         PostgresGatewayRegistry registry = new(pool.Value);
         PostgresAdminDirectoryStore directory = new(pool);
-        int tenantBaseline = (await directory.ListTenantsAsync(0, 1, TestContext.Current.CancellationToken)).Total;
-        int applicationBaseline = (await directory.ListApplicationsAsync(0, 1, TestContext.Current.CancellationToken)).Total;
         DateTimeOffset tiedCreatedAt = DateTimeOffset.UtcNow;
         string prefix = "page-" + Guid.NewGuid().ToString("N")[..12];
-        for (int index = 0; index < 101; index++)
+        await ExecuteNonQueryAsync(migrationConnectionString, "TRUNCATE gateway.tenant, gateway.application CASCADE", TestContext.Current.CancellationToken);
+        try
         {
-            await registry.AddTenantAsync(new(Guid.NewGuid(), $"{prefix}-t-{index:D3}", $"Tenant {index:D3}", TenantStatus.Active, tiedCreatedAt), TestContext.Current.CancellationToken);
-            await registry.AddApplicationAsync(new(Guid.NewGuid(), $"{prefix}-a-{index:D3}", $"Application {index:D3}", ApplicationStatus.Active, "1.0.0", null, tiedCreatedAt), TestContext.Current.CancellationToken);
-        }
+            Assert.Equal(0, (await directory.ListTenantsAsync(0, 1, TestContext.Current.CancellationToken)).Total);
+            Assert.Equal(0, (await directory.ListApplicationsAsync(0, 1, TestContext.Current.CancellationToken)).Total);
+            for (int index = 0; index < 101; index++)
+            {
+                await registry.AddTenantAsync(new(Guid.NewGuid(), $"{prefix}-t-{index:D3}", $"Tenant {index:D3}", TenantStatus.Active, tiedCreatedAt), TestContext.Current.CancellationToken);
+                await registry.AddApplicationAsync(new(Guid.NewGuid(), $"{prefix}-a-{index:D3}", $"Application {index:D3}", ApplicationStatus.Active, "1.0.0", null, tiedCreatedAt), TestContext.Current.CancellationToken);
+            }
 
-        int tenantTotal = tenantBaseline + 101;
-        AdminPage<TenantRecord> page51 = await directory.ListTenantsAsync(50, 1, TestContext.Current.CancellationToken);
-        AdminPage<TenantRecord> page101 = await directory.ListTenantsAsync(100, 1, TestContext.Current.CancellationToken);
-        AdminPage<TenantRecord> page101Repeat = await directory.ListTenantsAsync(100, 1, TestContext.Current.CancellationToken);
-        AdminPage<TenantRecord> empty = await directory.ListTenantsAsync(tenantTotal, 1, TestContext.Current.CancellationToken);
-        Assert.Equal(tenantTotal, page51.Total); Assert.Single(page51.Items);
-        Assert.Equal(tenantTotal, page101.Total); Assert.Single(page101.Items);
-        Assert.Equal(page101.Items[0].Id, page101Repeat.Items[0].Id);
-        Assert.Equal(tenantTotal, empty.Total); Assert.Empty(empty.Items);
-        int applicationTotal = applicationBaseline + 101;
-        AdminPage<ApplicationRecord> applications = await directory.ListApplicationsAsync(applicationTotal, 1, TestContext.Current.CancellationToken);
-        Assert.Equal(applicationTotal, applications.Total); Assert.Empty(applications.Items);
+            const int expectedTotal = 101;
+            AdminPage<TenantRecord> page51 = await directory.ListTenantsAsync(50, 1, TestContext.Current.CancellationToken);
+            AdminPage<TenantRecord> page101 = await directory.ListTenantsAsync(100, 1, TestContext.Current.CancellationToken);
+            AdminPage<TenantRecord> page101Repeat = await directory.ListTenantsAsync(100, 1, TestContext.Current.CancellationToken);
+            AdminPage<TenantRecord> empty = await directory.ListTenantsAsync(expectedTotal, 1, TestContext.Current.CancellationToken);
+            Assert.Equal(expectedTotal, page51.Total); Assert.Single(page51.Items);
+            Assert.Equal(expectedTotal, page101.Total); Assert.Single(page101.Items);
+            Assert.Equal(page101.Items[0].Id, page101Repeat.Items[0].Id);
+            Assert.Equal(expectedTotal, empty.Total); Assert.Empty(empty.Items);
+            AdminPage<ApplicationRecord> applications = await directory.ListApplicationsAsync(expectedTotal, 1, TestContext.Current.CancellationToken);
+            Assert.Equal(expectedTotal, applications.Total); Assert.Empty(applications.Items);
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync(migrationConnectionString, "DELETE FROM gateway.tenant WHERE code LIKE $1", CancellationToken.None, prefix + "%");
+            await ExecuteNonQueryAsync(migrationConnectionString, "DELETE FROM gateway.application WHERE code LIKE $1", CancellationToken.None, prefix + "%");
+        }
     }
 
     [Fact]
@@ -637,10 +647,19 @@ public sealed class PostgresIsolationTests
         AdminPrincipalRecord bootstrapPrincipal = await security.EnsurePrincipalAsync(new("https://fault.example.invalid", "bootstrap-" + Guid.NewGuid().ToString("N"), "Bootstrap", null), TestContext.Current.CancellationToken);
         Guid bootstrapCorrelation = Guid.NewGuid();
         PostgresAdminSecurityStore faultedBootstrap = new(storePool, new ThrowingFaultInjector("admin.bootstrap.after-state"));
-        await Assert.ThrowsAsync<InjectedFailureException>(() => faultedBootstrap.TryBootstrapSecurityAdministratorAsync(bootstrapPrincipal.Id, bootstrapCorrelation, now, TestContext.Current.CancellationToken));
-        Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.admin_bootstrap WHERE principal_id=$1", bootstrapPrincipal.Id));
-        Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.admin_role_assignment WHERE principal_id=$1", bootstrapPrincipal.Id));
-        Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", bootstrapCorrelation));
+        await ExecuteNonQueryAsync(migrationConnectionString, "DELETE FROM gateway.admin_bootstrap", TestContext.Current.CancellationToken);
+        try
+        {
+            await Assert.ThrowsAsync<InjectedFailureException>(() => faultedBootstrap.TryBootstrapSecurityAdministratorAsync(bootstrapPrincipal.Id, bootstrapCorrelation, now, TestContext.Current.CancellationToken));
+            Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.admin_bootstrap WHERE principal_id=$1", bootstrapPrincipal.Id));
+            Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.admin_role_assignment WHERE principal_id=$1", bootstrapPrincipal.Id));
+            Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", bootstrapCorrelation));
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync(migrationConnectionString, "DELETE FROM gateway.admin_role_assignment WHERE principal_id=$1", CancellationToken.None, bootstrapPrincipal.Id);
+            await ExecuteNonQueryAsync(migrationConnectionString, "DELETE FROM gateway.admin_bootstrap WHERE principal_id=$1", CancellationToken.None, bootstrapPrincipal.Id);
+        }
 
         Guid roleCorrelation = Guid.NewGuid();
         PostgresAdminSecurityStore faultedRole = new(storePool, new ThrowingFaultInjector("admin.role.assign.after-state"));
@@ -819,6 +838,15 @@ public sealed class PostgresIsolationTests
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(TestContext.Current.CancellationToken);
         await using NpgsqlCommand command = new(sql, connection); command.Parameters.AddWithValue(value);
         return (string)(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken))!;
+    }
+
+    private static async Task ExecuteNonQueryAsync(string connectionString, string sql, CancellationToken cancellationToken, params object[] values)
+    {
+        await using NpgsqlConnection connection = new(connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using NpgsqlCommand command = new(sql, connection);
+        foreach (object value in values) command.Parameters.AddWithValue(value);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task ApplyMigrationAsync()
