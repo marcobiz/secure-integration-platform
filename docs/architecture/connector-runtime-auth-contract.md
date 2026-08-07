@@ -96,3 +96,22 @@ BGW1 e le route runtime restano il contratto inbound corrente per Broker e Direc
 metodi inbound futuri devono terminare nello stesso `GatewayClientPrincipal`; nuovi auth
 module outbound devono innestarsi dopo authorization e publication resolution. Qualsiasi
 deviazione richiede ADR, threat-model update e test positivi/negativi.
+
+## Implementazione Track A sintetica
+
+`Gateway.ConnectorRuntime.Auth.Soap` implementa AP-01/AP-02/AP-07 senza modificare il
+contratto inbound. Il runtime costruisce `ConnectorAuthExecutionContext`,
+`SoapEndpointBinding` e `SoapSessionProfile` soltanto dopo grant, publication e binding
+resolution. Il connector dichiara operazioni, QName, action, mapping di campi bounded,
+estrazione/placement sessione, fault di expiry e policy di retry; non riceve un raw HTTP
+client, un parser configurabile o un motore di scripting.
+
+Le sole reference restituibili al runtime sono opache. Username, password, challenge
+state upstream e session value restano nell'assembly e non sono parte di cache key,
+audit, errori o risposta. La cache include Tenant/Installation/Application,
+Connector/version, Environment, endpoint revision, credential revision e profile; un
+cambio revisione non può risolvere una sessione precedente.
+
+Il server Kestrel sotto `tools/m6/SyntheticSoapServer` e i test associati qualificano
+esclusivamente il profilo sintetico. Non costituiscono caratterizzazione o conformità
+SOGEI e non autorizzano un connector healthcare production.

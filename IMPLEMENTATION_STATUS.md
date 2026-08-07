@@ -15,7 +15,8 @@ Aggiornato: 2026-08-07
 | M5 — Admin UI MVP | **Done** | baseline `8774c252b233456173c3ab31346fb21390fb8d7d`, tag `m5-admin-ui-baseline-20260807` |
 | M5.5 — Direct Gateway Access | Implementato localmente; CI e review indipendente pending | product candidate `1b3a3b38fa7d01c8c5f96af0324d040e412ac0be`; branch `m55/direct-gateway-access` |
 | M6 — auth HTTP/OAuth primitives | Remediation mirata dei 7 finding qualificata | PR #9 product commit `9a7db4b`: CI exact-head 21/21 PASS; authority capability da snapshot Published, bearer destination-bound, correlation, refresh tombstone, query hardening, user-agent boundary e diagnostic redaction; nessun connector sanitario production |
-| M3B e milestone successive | Non iniziate | nessun cloud reale, connector sanitario production o adapter commerciale |
+| M6 — SOAP/Basic/Session primitives | Implementato sul branch; gate CI/review pending | AP-01/AP-02/AP-07 sintetiche, server SOAP HTTPS reale e 14 casi mirati PASS locali |
+| M3B e milestone/connector production successivi | Non iniziati | nessun cloud reale, connector sanitario production o adapter commerciale |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
 ## Gate Review prima di M2
@@ -128,6 +129,17 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 - sample `samples/DirectGatewayClient` completa enrollment e invoke senza Broker, Named Pipe, DPAPI o vendor secret.
 - candidate prodotto `1b3a3b38fa7d01c8c5f96af0324d040e412ac0be`: build Release PASS, 161 test .NET ordinari PASS, PostgreSQL 18 10/10 PASS, 28 Vitest, browser mock 37/37, `FULLSTACK-01`, scan, SBOM e cleanup Docker PASS. CI e review indipendente restano pending; M5.5 non è ancora dichiarata Done.
 - contratti: `docs/architecture/direct-gateway-access.md`, `docs/architecture/connector-runtime-auth-contract.md`, ADR-0020 e coupling audit M5.5.
+
+### M6 — SOAP/Basic/Session Authentication Primitives
+
+- assembly Core separato `Gateway.ConnectorRuntime.Auth.Soap`, dipendente soltanto dal runtime pubblico e dalle provider abstractions;
+- AP-01 applica HTTP Basic esclusivamente da binding server-side e risolve username/password al momento dell'uso, senza cache plaintext o valori nelle eccezioni;
+- AP-07 serializza deterministicamente SOAP 1.1/1.2, fissa Content-Type/SOAPAction e applica parser XML con DTD/entity/network resolution disabilitati e limiti di size, depth, node e attribute complexity;
+- AP-02 mantiene sessione upstream e challenge nel Gateway, espone soltanto reference opache, usa chiavi cache scoped a Tenant/Installation/Application, Connector/version, Environment, endpoint revision, credential revision e profile;
+- login, challenge completion transport-neutral, expiry, una sola reacquisition controllata, retry business solo se dichiarato, logout/invalidation e SOAP Fault mapping tipizzato;
+- server sintetico Kestrel HTTPS reale con Login, challenge, BusinessOperation, Logout, expiry, invalid session, Fault, malformed XML, oversize, timeout e contatori;
+- nessuna modifica all'autenticazione inbound, nessun OAuth, certificate/signing, healthcare production, SAML, WS-Security, XML-DSig o scripting XML generico;
+- report: `docs/testing/M6-SOAP-AUTH-IMPLEMENTATION-REPORT.md`.
 
 La run split-host `m3a-live-20260804-131718` è stata classificata **BLOCKED — PRE-HANDOFF INFRASTRUCTURE VALIDATION**: live/readiness erano HTTP 200, ma Docker health falliva per SAN incompatibile e i profili Windows Firewall erano disabilitati. Il runner VM non è stato eseguito e P02 non è stato testato. Cleanup PASS ha lasciato zero risorse della run e ha rimosso l'handoff non utilizzato. I fix health/TLS e firewall reversibile sono implementati. Il runner predispone ora un secondo switch Hyper-V Internal e una NIC VM `M3A-Isolated`, senza NAT/gateway/DNS/forwarding, con rollback SYSTEM, isolamento del profilo Private e probe VM→HOST pre-handoff. La run è storica ed è superata dal PASS product gate `m3a-live-20260805-094131`. Dettagli: `docs/reviews/M3A-BLOCKED-RUN-20260804-131718.md`.
 

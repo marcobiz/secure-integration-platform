@@ -123,6 +123,21 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 
 PKCE, `client_credentials` grant, production profiles, SOAP/session and certificate/signing primitives are not claimed by this branch.
 
+## M6 SOAP/Basic/Session primitives
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| AP-01 Basic server-side e redaction | `M6_UT_Basic_is_resolved_only_at_use_applied_once_and_redacted`; real HTTPS integration | PASS local |
+| AP-02 opaque session e interactive completion | `M6_SEC_Interactive_challenge_is_opaque_single_use_cross_context_bound_and_fixation_safe`; `M6_IT_SOAP_real_HTTPS_interactive_challenge_completion_is_transport_neutral` | PASS local |
+| Session cache, expiry, rotate/disable e logout | `M6_UT_Session_cache_expiry_rotation_disable_logout_and_controlled_reacquisition`; real HTTPS expiry/reacquisition/logout matrix | PASS local |
+| AP-07 SOAP 1.1/1.2 deterministic boundary | `M6_UT_SOAP_11_12_serialization_and_HTTP_policy_are_deterministic`; real HTTPS SOAP 1.1/1.2 theory | PASS local |
+| XML security e namespace policy | `M6_SEC_XML_boundary_rejects_DTD_XXE_external_entity_complexity_malformed_oversize_namespace_and_content_type`; real malformed/oversize test | PASS local |
+| Fault, timeout e cancellation | real HTTPS Fault/malformed/oversize/timeout/cancellation integration; `M6_SEC_Timeout_and_cancellation_are_distinct_and_sanitized` | PASS local |
+| Endpoint, SOAPAction, Content-Type e SSRF | `M6_SEC_Binding_mismatch_and_SSRF_fail_before_transport_and_caller_has_no_endpoint_override`; real HTTPS action/content-type negatives | PASS local |
+| Core/auth-writer boundary e deferred scope | `M6_CT_SOAP_writer_depends_only_on_public_Core_runtime_and_provider_abstractions`; `M6_CT_SOAP_writer_exposes_no_raw_session_resolver_generic_scripting_or_deferred_auth_framework` | PASS local |
+| TM-048 session fixation/stale/replay | AP-02 negative suite, rotation/disable/logout and challenge replay tests | PASS local |
+| TM-049 SOAP/XML parser and fault confusion | XML security corpus and real HTTP fault/malformed/oversize tests | PASS local |
+
 ## Security threats
 
 La fotografia conclusiva M0/M1, inclusi gli elementi non automatizzati, è in `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md`.
