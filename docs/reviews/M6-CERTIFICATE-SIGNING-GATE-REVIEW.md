@@ -8,9 +8,10 @@
 - **NO-GO** for OAuth/PKCE lifecycle, SOAP/session, inbound authentication changes,
   automatic Broker fallback or a universal KMS in this branch.
 
-This review covers synthetic AP-05/AP-06 capability only. The original PR CI is green;
-the targeted four-finding remediation requires a new exact-head CI pass and independent
-delta review. The PR must not be auto-merged.
+This review covers synthetic AP-05/AP-06 capability only. The targeted four-finding
+remediation product HEAD passed the complete PR workflow matrix; the documentation-only
+publication commit remains subject to the same exact-head gate. The PR must not be
+auto-merged.
 
 ## Lineage and scope
 
@@ -20,6 +21,7 @@ delta review. The PR must not be auto-merged.
 | Branch | `m6/auth-cert-signing` |
 | Pull request | `#11` |
 | Initial remediated-from HEAD | `eee40668e01ef2ec75155e4d7edfb54ff11434e5` |
+| Remediated product HEAD | `1ae76f6e73e6c9b8f99bcbb883e12c2a623cdd64` |
 | Worktree | `C:\Codice\broker-gateway-m6-cert` |
 | Migration change | None |
 | Admin Web/API change | None |
@@ -96,20 +98,26 @@ surface changed in this branch.
 
 ## CI and publication
 
-PR `#11` is open without merge. CI ran on the product and local-gate commit
-`8ab5a4d07f4858bd0a0548725282d4c4bcfb83f3`:
+PR `#11` is open without merge. The first remediation CI attempt on
+`c0fc62e00543809e709ac25f950e8a8d0e2584fa` remains visible as failed: selective
+Provisioner image builds did not copy the newly referenced authentication project
+(`ci` run `31200406140`, `m5-admin-ui` run `31200405950`). The product code itself built
+and tested successfully, but the container/quick-start jobs correctly kept the gate red.
 
-- workflow `ci`, run `31194728177`: PASS, including Windows build/test, Gitleaks,
+Commit `1ae76f6e73e6c9b8f99bcbb883e12c2a623cdd64` added only the missing project, lockfile
+and source copies to the existing Provisioner Dockerfile. The full workflow matrix then
+passed on that exact product HEAD:
+
+- workflow `ci`, run `31201004049`: 6/6 PASS, including Windows build/test, Gitleaks,
   PostgreSQL 18, Gateway container, M3 deterministic slice and M4 quick start;
-- workflow `m5-admin-ui`, run `31194729082`: PASS, including secret/license scans,
+- workflow `m5-admin-ui`, run `31201004276`: 15/15 PASS, including secret/license scans,
   SBOM, open-source boundary export, PostgreSQL 18, UI/API tests, browser/full-stack,
   UI container and clean-clone quick start.
 
-All 21 reported PR checks passed. This CI evidence is separate from the local
-deterministic evidence above and does not change production healthcare readiness from
-NO-GO. It predates the targeted remediation and is not evidence for the delta. The
-remediation commit and its documentation publication commit must pass the same PR
-workflows before hand-off.
+All 21 reported PR checks passed on the remediated product HEAD. This CI evidence is
+separate from the local deterministic evidence above and does not change production
+healthcare readiness from NO-GO. The documentation publication commit must pass the same
+PR workflows before hand-off.
 
 ## Targeted four-finding remediation
 
