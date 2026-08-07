@@ -76,7 +76,7 @@ public sealed class SoapRealHttpIntegrationTests
         await using SyntheticSoapServerInstance server = await SyntheticSoapServerHost.StartAsync(
             new("synthetic-user", "synthetic-password", false, TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2)), certificates.Server, TestContext.Current.CancellationToken);
         SoapSessionClient client = CreateClient(certificates.Root, certificates.Server, server.Endpoint);
-        SoapSessionProfile profile = Profile(SoapEnvelopeVersion.Soap11, timeoutMilliseconds: 150, maximumResponseBytes: 4_096);
+        SoapSessionProfile profile = Profile(SoapEnvelopeVersion.Soap11, timeoutMilliseconds: 10_000, maximumResponseBytes: 4_096);
         SystemGatewayClock clock = new();
         ConnectorAuthExecutionContext context = Context(clock);
         SoapEndpointBinding endpoint = new(server.Endpoint, 4);
@@ -88,7 +88,8 @@ public sealed class SoapRealHttpIntegrationTests
         Assert.Equal("SOAP-XML-MALFORMED", malformed.Code);
         SoapAuthException oversized = await Assert.ThrowsAsync<SoapAuthException>(() => client.InvokeAsync(context, endpoint, profile, new Dictionary<string, string> { ["payload"] = "oversize" }, session, TestContext.Current.CancellationToken));
         Assert.Equal("SOAP-RESPONSE-TOO-LARGE", oversized.Code);
-        SoapAuthException timeout = await Assert.ThrowsAsync<SoapAuthException>(() => client.InvokeAsync(context, endpoint, profile, new Dictionary<string, string> { ["payload"] = "timeout" }, session, TestContext.Current.CancellationToken));
+        SoapSessionProfile timeoutProfile = Profile(SoapEnvelopeVersion.Soap11, timeoutMilliseconds: 150, maximumResponseBytes: 4_096);
+        SoapAuthException timeout = await Assert.ThrowsAsync<SoapAuthException>(() => client.InvokeAsync(context, endpoint, timeoutProfile, new Dictionary<string, string> { ["payload"] = "timeout" }, session, TestContext.Current.CancellationToken));
         Assert.Equal("SOAP-TIMEOUT", timeout.Code);
 
         using CancellationTokenSource cancellation = new(TimeSpan.FromMilliseconds(50));
