@@ -4,5 +4,5 @@
 
 # Exact M6 documentation false positives: prose describing identity/token risks was
 # misclassified as a generic key. Both phrases were rewritten in the next commit.
-4ebe375a13271ce6466d41aee84dcf7629e2b029:docs/connectors/healthcare/M6-IMPLEMENTATION-PLAN.md:generic-api-key:116
-4ebe375a13271ce6466d41aee84dcf7629e2b029:docs/connectors/healthcare/M6-IMPLEMENTATION-PLAN.md:generic-api-key:158
+33f838226b2aadbf4425ef8e265233f004a0a431:docs/connectors/healthcare/M6-IMPLEMENTATION-PLAN.md:generic-api-key:116
+33f838226b2aadbf4425ef8e265233f004a0a431:docs/connectors/healthcare/M6-IMPLEMENTATION-PLAN.md:generic-api-key:158
