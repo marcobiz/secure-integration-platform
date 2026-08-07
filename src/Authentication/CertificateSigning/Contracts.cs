@@ -1,4 +1,3 @@
-using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 
 namespace SecureIntegration.Authentication.CertificateSigning;
@@ -37,6 +36,7 @@ public enum AuthenticationResourceStatus
 /// <summary>Approved public metadata frozen into a resource binding.</summary>
 public sealed record BoundResourcePublicMetadata(
     string FingerprintSha256,
+    string SubjectPublicKeyInfoSha256,
     DateTimeOffset NotBefore,
     DateTimeOffset NotAfter,
     string KeyAlgorithm,
@@ -45,7 +45,7 @@ public sealed record BoundResourcePublicMetadata(
 
 /// <summary>
 /// Server-owned resolution result. ProviderReference is produced only by the protected resolver;
-/// it is never an input to SignJwt or ResolveClientCertificate.
+/// it is never an input to a connector-facing signing or mTLS operation.
 /// </summary>
 public sealed record BoundAuthenticationResource(
     string LogicalBindingId,
@@ -55,6 +55,8 @@ public sealed record BoundAuthenticationResource(
     string ConnectorId,
     string OperationId,
     string ProfileId,
+    long PolicyRevision,
+    string PolicyChecksumSha256,
     Guid EnvironmentId,
     Uri Endpoint,
     long CatalogRevision,
@@ -70,6 +72,22 @@ public interface IAuthenticationResourceBindingResolver
         AuthenticationExecutionContext context,
         string logicalBindingId,
         AuthenticationResourcePurpose purpose,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>Server-owned source for approved authentication policies.</summary>
+public interface IAuthenticationPolicySource
+{
+    /// <summary>Resolves the approved RS256 policy for one Published operation.</summary>
+    Task<ServerOwnedRs256PolicySnapshot> ResolveRs256Async(
+        AuthenticationExecutionContext context,
+        string policyId,
+        CancellationToken cancellationToken);
+
+    /// <summary>Resolves the approved outbound mTLS policy for one Published operation.</summary>
+    Task<ServerOwnedMutualTlsPolicySnapshot> ResolveMutualTlsAsync(
+        AuthenticationExecutionContext context,
+        string policyId,
         CancellationToken cancellationToken);
 }
 
@@ -111,24 +129,227 @@ public enum JwtSubjectPolicy
     Installation,
     /// <summary>Use the authenticated Application identifier.</summary>
     Application,
-    /// <summary>Use a fixed value compiled into the profile.</summary>
+    /// <summary>Use a fixed value compiled into the approved policy.</summary>
     Fixed
 }
 
-/// <summary>Immutable RS256 policy. Algorithm and key binding are not caller inputs.</summary>
-public sealed record Rs256JwtProfile(
-    string ProfileId,
-    string Issuer,
-    string Audience,
-    JwtSubjectPolicy SubjectPolicy,
-    string? FixedSubject,
-    IReadOnlySet<string> AllowedClaims,
-    TimeSpan Lifetime,
-    TimeSpan AllowedClockSkew,
-    string LogicalKeyBindingId,
-    int MinimumRsaKeySize = 2048);
+/// <summary>Immutable server-owned RS256 policy snapshot for an exact Published operation.</summary>
+public sealed class ServerOwnedRs256PolicySnapshot
+{
+    private ServerOwnedRs256PolicySnapshot(
+        string policyId,
+        long policyRevision,
+        Guid connectorVersionId,
+        string connectorId,
+        string operationId,
+        Guid environmentId,
+        Uri endpoint,
+        string issuer,
+        string audience,
+        JwtSubjectPolicy subjectPolicy,
+        string? fixedSubject,
+        IReadOnlySet<string> allowedClaims,
+        TimeSpan lifetime,
+        TimeSpan allowedClockSkew,
+        string logicalKeyBindingId,
+        string resourceVersion,
+        long catalogRevision,
+        string catalogChecksumSha256,
+        int minimumRsaKeySize)
+    {
+        PolicyId = policyId;
+        PolicyRevision = policyRevision;
+        ConnectorVersionId = connectorVersionId;
+        ConnectorId = connectorId;
+        OperationId = operationId;
+        EnvironmentId = environmentId;
+        Endpoint = endpoint;
+        Issuer = issuer;
+        Audience = audience;
+        SubjectPolicy = subjectPolicy;
+        FixedSubject = fixedSubject;
+        AllowedClaims = new HashSet<string>(allowedClaims, StringComparer.Ordinal);
+        Lifetime = lifetime;
+        AllowedClockSkew = allowedClockSkew;
+        LogicalKeyBindingId = logicalKeyBindingId;
+        ResourceVersion = resourceVersion;
+        CatalogRevision = catalogRevision;
+        CatalogChecksumSha256 = catalogChecksumSha256;
+        MinimumRsaKeySize = minimumRsaKeySize;
+        PolicyChecksumSha256 = AuthenticationPolicyDigest.Rs256(this);
+    }
 
-/// <summary>One server-derived, profile-allowlisted claim.</summary>
+    /// <summary>Creates a policy snapshot for use by the protected server-side policy catalogue.</summary>
+    public static ServerOwnedRs256PolicySnapshot Create(
+        string policyId,
+        long policyRevision,
+        Guid connectorVersionId,
+        string connectorId,
+        string operationId,
+        Guid environmentId,
+        Uri endpoint,
+        string issuer,
+        string audience,
+        JwtSubjectPolicy subjectPolicy,
+        string? fixedSubject,
+        IReadOnlySet<string> allowedClaims,
+        TimeSpan lifetime,
+        TimeSpan allowedClockSkew,
+        string logicalKeyBindingId,
+        string resourceVersion,
+        long catalogRevision,
+        string catalogChecksumSha256,
+        int minimumRsaKeySize = 2048) => new(
+            policyId, policyRevision, connectorVersionId, connectorId, operationId, environmentId, endpoint,
+            issuer, audience, subjectPolicy, fixedSubject, allowedClaims, lifetime, allowedClockSkew,
+            logicalKeyBindingId, resourceVersion, catalogRevision, catalogChecksumSha256, minimumRsaKeySize);
+
+    /// <summary>Logical approved policy identifier.</summary>
+    public string PolicyId { get; }
+    /// <summary>Immutable policy revision.</summary>
+    public long PolicyRevision { get; }
+    /// <summary>Digest over all security-relevant policy fields.</summary>
+    public string PolicyChecksumSha256 { get; }
+    /// <summary>Published ConnectorVersion identity.</summary>
+    public Guid ConnectorVersionId { get; }
+    /// <summary>Connector identity.</summary>
+    public string ConnectorId { get; }
+    /// <summary>Invoked operation identity.</summary>
+    public string OperationId { get; }
+    /// <summary>Server-derived Environment identity.</summary>
+    public Guid EnvironmentId { get; }
+    /// <summary>Approved outbound endpoint.</summary>
+    public Uri Endpoint { get; }
+    /// <summary>Approved issuer.</summary>
+    public string Issuer { get; }
+    /// <summary>Approved audience.</summary>
+    public string Audience { get; }
+    /// <summary>Approved subject derivation.</summary>
+    public JwtSubjectPolicy SubjectPolicy { get; }
+    /// <summary>Approved fixed subject when applicable.</summary>
+    public string? FixedSubject { get; }
+    /// <summary>Approved business-claim names.</summary>
+    public IReadOnlySet<string> AllowedClaims { get; }
+    /// <summary>Approved token lifetime.</summary>
+    public TimeSpan Lifetime { get; }
+    /// <summary>Approved clock skew.</summary>
+    public TimeSpan AllowedClockSkew { get; }
+    /// <summary>Logical key binding resolved only by the runtime.</summary>
+    public string LogicalKeyBindingId { get; }
+    /// <summary>Exact approved resource revision.</summary>
+    public string ResourceVersion { get; }
+    /// <summary>Exact approved resource-catalog revision.</summary>
+    public long CatalogRevision { get; }
+    /// <summary>Exact approved resource-catalog checksum.</summary>
+    public string CatalogChecksumSha256 { get; }
+    /// <summary>Minimum accepted RSA strength.</summary>
+    public int MinimumRsaKeySize { get; }
+}
+
+/// <summary>Immutable server-owned mTLS policy snapshot for an exact Published operation.</summary>
+public sealed class ServerOwnedMutualTlsPolicySnapshot
+{
+    private ServerOwnedMutualTlsPolicySnapshot(
+        string policyId,
+        long policyRevision,
+        Guid connectorVersionId,
+        string connectorId,
+        string operationId,
+        Guid environmentId,
+        Uri endpoint,
+        string httpMethod,
+        string logicalCertificateBindingId,
+        string resourceVersion,
+        long catalogRevision,
+        string catalogChecksumSha256,
+        TimeSpan nearExpiryWarningWindow,
+        TimeSpan timeout,
+        long maximumResponseBytes,
+        int minimumRsaKeySize,
+        int minimumEcdsaKeySize)
+    {
+        PolicyId = policyId;
+        PolicyRevision = policyRevision;
+        ConnectorVersionId = connectorVersionId;
+        ConnectorId = connectorId;
+        OperationId = operationId;
+        EnvironmentId = environmentId;
+        Endpoint = endpoint;
+        HttpMethod = httpMethod;
+        LogicalCertificateBindingId = logicalCertificateBindingId;
+        ResourceVersion = resourceVersion;
+        CatalogRevision = catalogRevision;
+        CatalogChecksumSha256 = catalogChecksumSha256;
+        NearExpiryWarningWindow = nearExpiryWarningWindow;
+        Timeout = timeout;
+        MaximumResponseBytes = maximumResponseBytes;
+        MinimumRsaKeySize = minimumRsaKeySize;
+        MinimumEcdsaKeySize = minimumEcdsaKeySize;
+        PolicyChecksumSha256 = AuthenticationPolicyDigest.MutualTls(this);
+    }
+
+    /// <summary>Creates a policy snapshot for use by the protected server-side policy catalogue.</summary>
+    public static ServerOwnedMutualTlsPolicySnapshot Create(
+        string policyId,
+        long policyRevision,
+        Guid connectorVersionId,
+        string connectorId,
+        string operationId,
+        Guid environmentId,
+        Uri endpoint,
+        string httpMethod,
+        string logicalCertificateBindingId,
+        string resourceVersion,
+        long catalogRevision,
+        string catalogChecksumSha256,
+        TimeSpan nearExpiryWarningWindow,
+        TimeSpan timeout,
+        long maximumResponseBytes,
+        int minimumRsaKeySize = 2048,
+        int minimumEcdsaKeySize = 256) => new(
+            policyId, policyRevision, connectorVersionId, connectorId, operationId, environmentId, endpoint,
+            httpMethod, logicalCertificateBindingId, resourceVersion, catalogRevision, catalogChecksumSha256,
+            nearExpiryWarningWindow, timeout, maximumResponseBytes, minimumRsaKeySize, minimumEcdsaKeySize);
+
+    /// <summary>Logical approved policy identifier.</summary>
+    public string PolicyId { get; }
+    /// <summary>Immutable policy revision.</summary>
+    public long PolicyRevision { get; }
+    /// <summary>Digest over all security-relevant policy fields.</summary>
+    public string PolicyChecksumSha256 { get; }
+    /// <summary>Published ConnectorVersion identity.</summary>
+    public Guid ConnectorVersionId { get; }
+    /// <summary>Connector identity.</summary>
+    public string ConnectorId { get; }
+    /// <summary>Invoked operation identity.</summary>
+    public string OperationId { get; }
+    /// <summary>Server-derived Environment identity.</summary>
+    public Guid EnvironmentId { get; }
+    /// <summary>Approved outbound endpoint.</summary>
+    public Uri Endpoint { get; }
+    /// <summary>Approved outbound HTTP method.</summary>
+    public string HttpMethod { get; }
+    /// <summary>Logical certificate binding resolved only by the runtime.</summary>
+    public string LogicalCertificateBindingId { get; }
+    /// <summary>Exact approved resource revision.</summary>
+    public string ResourceVersion { get; }
+    /// <summary>Exact approved resource-catalog revision.</summary>
+    public long CatalogRevision { get; }
+    /// <summary>Exact approved resource-catalog checksum.</summary>
+    public string CatalogChecksumSha256 { get; }
+    /// <summary>Non-blocking warning window.</summary>
+    public TimeSpan NearExpiryWarningWindow { get; }
+    /// <summary>Server-owned dispatch timeout.</summary>
+    public TimeSpan Timeout { get; }
+    /// <summary>Server-owned maximum response size.</summary>
+    public long MaximumResponseBytes { get; }
+    /// <summary>Minimum accepted RSA strength.</summary>
+    public int MinimumRsaKeySize { get; }
+    /// <summary>Minimum accepted ECDSA strength.</summary>
+    public int MinimumEcdsaKeySize { get; }
+}
+
+/// <summary>One profile-allowlisted business claim.</summary>
 public sealed record JwtBoundClaim(string Name, JsonElement Value);
 
 /// <summary>Stores only a digest of a generated JWT identifier until expiry.</summary>
@@ -145,14 +366,6 @@ public interface IJwtIdentifierSource
     string Create();
 }
 
-/// <summary>Fixed outbound mTLS policy.</summary>
-public sealed record MutualTlsClientProfile(
-    string ProfileId,
-    string LogicalCertificateBindingId,
-    TimeSpan NearExpiryWarningWindow,
-    int MinimumRsaKeySize = 2048,
-    int MinimumEcdsaKeySize = 256);
-
 /// <summary>Non-blocking public health classification for a valid mTLS certificate.</summary>
 public enum ClientCertificateHealth
 {
@@ -160,31 +373,4 @@ public enum ClientCertificateHealth
     Healthy,
     /// <summary>Valid but inside the configured warning window.</summary>
     NearExpiry
-}
-
-/// <summary>Validated certificate handle and metadata for one outbound channel.</summary>
-public sealed class ResolvedClientCertificate : IDisposable
-{
-    internal ResolvedClientCertificate(X509Certificate2 certificate, ClientCertificateHealth health, string fingerprintSha256, string version, long catalogRevision)
-    {
-        Certificate = certificate;
-        Health = health;
-        FingerprintSha256 = fingerprintSha256;
-        Version = version;
-        CatalogRevision = catalogRevision;
-    }
-
-    /// <summary>Ephemeral provider-backed certificate handle; never serialize or return it to a client.</summary>
-    public X509Certificate2 Certificate { get; }
-    /// <summary>Public health state.</summary>
-    public ClientCertificateHealth Health { get; }
-    /// <summary>Approved public fingerprint.</summary>
-    public string FingerprintSha256 { get; }
-    /// <summary>Provider resource version.</summary>
-    public string Version { get; }
-    /// <summary>Approved catalog revision used for the channel.</summary>
-    public long CatalogRevision { get; }
-
-    /// <inheritdoc />
-    public void Dispose() => Certificate.Dispose();
 }

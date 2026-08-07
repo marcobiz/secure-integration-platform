@@ -22,6 +22,7 @@ internal static class BindingPolicy
             !string.Equals(resource.ConnectorId, context.ConnectorId, StringComparison.Ordinal) ||
             !string.Equals(resource.OperationId, context.OperationId, StringComparison.Ordinal) ||
             !string.Equals(resource.ProfileId, context.ProfileId, StringComparison.Ordinal) ||
+            resource.PolicyRevision <= 0 || !IsSha256(resource.PolicyChecksumSha256) ||
             resource.Endpoint != context.Endpoint || resource.CatalogRevision <= 0 ||
             !IsSha256(resource.CatalogChecksumSha256) || string.IsNullOrWhiteSpace(resource.ProviderReference) ||
             resource.ProviderReference.Length > 1024 || resource.ProviderReference.Any(character => character is '\r' or '\n'))
@@ -31,7 +32,7 @@ internal static class BindingPolicy
 
     internal static void ValidateExpectedMetadata(BoundResourcePublicMetadata metadata)
     {
-        if (!IsSha256(metadata.FingerprintSha256) || metadata.NotAfter <= metadata.NotBefore ||
+        if (!IsSha256(metadata.FingerprintSha256) || !IsSha256(metadata.SubjectPublicKeyInfoSha256) || metadata.NotAfter <= metadata.NotBefore ||
             string.IsNullOrWhiteSpace(metadata.KeyAlgorithm) || metadata.PublicKeySize <= 0 ||
             string.IsNullOrWhiteSpace(metadata.Version) || metadata.Version.Length > 128)
             throw new AuthenticationPrimitiveException("BGW-AUTH-RESOURCE-METADATA");
@@ -45,9 +46,57 @@ internal static class BindingPolicy
             throw new AuthenticationPrimitiveException("BGW-AUTH-RESOURCE-METADATA-STALE");
     }
 
+    internal static void ValidateRs256Policy(AuthenticationExecutionContext context, string requestedPolicyId, ServerOwnedRs256PolicySnapshot policy)
+    {
+        if (!IsIdentifier(requestedPolicyId) || !string.Equals(requestedPolicyId, context.ProfileId, StringComparison.Ordinal) ||
+            !string.Equals(policy.PolicyId, requestedPolicyId, StringComparison.Ordinal) || policy.PolicyRevision <= 0 ||
+            policy.ConnectorVersionId != context.ConnectorVersionId || policy.EnvironmentId != context.EnvironmentId ||
+            !string.Equals(policy.ConnectorId, context.ConnectorId, StringComparison.Ordinal) ||
+            !string.Equals(policy.OperationId, context.OperationId, StringComparison.Ordinal) || policy.Endpoint != context.Endpoint ||
+            !FixedHexEquals(policy.PolicyChecksumSha256, AuthenticationPolicyDigest.Rs256(policy)) ||
+            !SafeAuthority(policy.Issuer) || !SafeAuthority(policy.Audience) || !IsIdentifier(policy.LogicalKeyBindingId) ||
+            policy.Lifetime <= TimeSpan.Zero || policy.Lifetime > TimeSpan.FromHours(1) ||
+            policy.AllowedClockSkew < TimeSpan.Zero || policy.AllowedClockSkew > TimeSpan.FromMinutes(5) ||
+            policy.MinimumRsaKeySize < 2048 || policy.MinimumRsaKeySize > 16384 || policy.AllowedClaims.Count > 32 ||
+            policy.AllowedClaims.Any(name => !ValidClaimName(name) || Rs256JwtSigner.IsReservedClaim(name)) ||
+            (policy.SubjectPolicy == JwtSubjectPolicy.Fixed) != !string.IsNullOrWhiteSpace(policy.FixedSubject) ||
+            policy.FixedSubject?.Length > 512 || string.IsNullOrWhiteSpace(policy.ResourceVersion) || policy.ResourceVersion.Length > 128 ||
+            policy.CatalogRevision <= 0 || !IsSha256(policy.CatalogChecksumSha256))
+            throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-POLICY-DENIED");
+    }
+
+    internal static void ValidateMutualTlsPolicy(AuthenticationExecutionContext context, string requestedPolicyId, ServerOwnedMutualTlsPolicySnapshot policy)
+    {
+        if (!IsIdentifier(requestedPolicyId) || !string.Equals(requestedPolicyId, context.ProfileId, StringComparison.Ordinal) ||
+            !string.Equals(policy.PolicyId, requestedPolicyId, StringComparison.Ordinal) || policy.PolicyRevision <= 0 ||
+            policy.ConnectorVersionId != context.ConnectorVersionId || policy.EnvironmentId != context.EnvironmentId ||
+            !string.Equals(policy.ConnectorId, context.ConnectorId, StringComparison.Ordinal) ||
+            !string.Equals(policy.OperationId, context.OperationId, StringComparison.Ordinal) || policy.Endpoint != context.Endpoint ||
+            !FixedHexEquals(policy.PolicyChecksumSha256, AuthenticationPolicyDigest.MutualTls(policy)) ||
+            !IsIdentifier(policy.LogicalCertificateBindingId) || string.IsNullOrWhiteSpace(policy.ResourceVersion) || policy.ResourceVersion.Length > 128 ||
+            policy.CatalogRevision <= 0 || !IsSha256(policy.CatalogChecksumSha256) ||
+            policy.HttpMethod is not ("GET" or "POST" or "PUT" or "DELETE") ||
+            policy.NearExpiryWarningWindow < TimeSpan.Zero || policy.NearExpiryWarningWindow > TimeSpan.FromDays(90) ||
+            policy.Timeout < TimeSpan.FromMilliseconds(100) || policy.Timeout > TimeSpan.FromMinutes(2) ||
+            policy.MaximumResponseBytes <= 0 || policy.MaximumResponseBytes > 16 * 1024 * 1024 ||
+            policy.MinimumRsaKeySize < 2048 || policy.MinimumRsaKeySize > 16384 ||
+            policy.MinimumEcdsaKeySize < 256 || policy.MinimumEcdsaKeySize > 1024)
+            throw new AuthenticationPrimitiveException("BGW-AUTH-MTLS-POLICY-DENIED");
+    }
+
+    internal static void ValidateExactPolicyBinding(BoundAuthenticationResource resource, long policyRevision, string policyChecksum, long catalogRevision, string catalogChecksum, string resourceVersion)
+    {
+        if (resource.PolicyRevision != policyRevision || !FixedHexEquals(resource.PolicyChecksumSha256, policyChecksum) ||
+            resource.CatalogRevision != catalogRevision || !FixedHexEquals(resource.CatalogChecksumSha256, catalogChecksum) ||
+            !string.Equals(resource.PublicMetadata.Version, resourceVersion, StringComparison.Ordinal))
+            throw new AuthenticationPrimitiveException("BGW-AUTH-POLICY-BINDING-STALE");
+    }
+
     internal static bool IsIdentifier(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 128 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
 
     internal static bool IsSha256(string? value) => value is { Length: 64 } && value.All(Uri.IsHexDigit);
+
+    internal static bool ValidClaimName(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 64 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
 
     private static bool FixedHexEquals(string left, string right)
     {
@@ -57,4 +106,6 @@ internal static class BindingPolicy
 
     private static bool IsSafeEndpoint(Uri endpoint) => endpoint.IsAbsoluteUri && endpoint.Scheme == Uri.UriSchemeHttps &&
         string.IsNullOrEmpty(endpoint.UserInfo) && string.IsNullOrEmpty(endpoint.Fragment);
+
+    private static bool SafeAuthority(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 512 && !value.Any(char.IsControl);
 }

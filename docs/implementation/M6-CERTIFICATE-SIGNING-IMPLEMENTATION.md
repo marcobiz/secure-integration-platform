@@ -22,9 +22,10 @@ The Core keeps distinct provider contracts:
 
 There is no generic KMS and no private-key retrieval method. The signing primitive asks
 the provider to sign a SHA-256 digest with fixed `RS256`, then verifies the returned
-signature with the approved public SPKI. The mTLS primitive receives only an ephemeral
-certificate handle suitable for the TLS channel. Missing signing or certificate
-capability returns a stable fail-closed state and never triggers a Broker fallback.
+signature with the exact SPKI identity approved by its SHA-256 digest. The mTLS sender
+keeps the certificate handle inside one transport operation and disposes it after
+dispatch. Missing signing or certificate capability returns a stable fail-closed state
+and never triggers a Broker fallback.
 
 FVG and Umbria remain **GATEWAY CONDITIONAL**: a deployment must offer central/provider-side
 signing and client-certificate use, including remote signing for non-exportable keys.
@@ -32,12 +33,14 @@ Reclassification to Hybrid is Connector Pack work after authoritative characteri
 
 ## Small connector-facing API
 
-- `Rs256JwtSigner.SignJwtAsync(context, profile, claims)`;
-- `PurposeBoundClientCertificateResolver.ResolveClientCertificateAsync(context, profile)`.
+- `Rs256JwtSigner.SignJwtAsync(context, policyId, businessClaims)`;
+- `PurposeBoundMutualTlsSender.SendAsync(context, policyId, approvedRequest)`.
 
-The profile fixes issuer, audience, subject policy, claim allowlist, lifetime, clock skew,
-minimum strength and logical resource binding. The caller cannot pass algorithm, provider,
-locator, key, PFX, endpoint override or privileged standard claim.
+The connector-facing caller supplies only a logical policy ID and bounded business input.
+`IAuthenticationPolicySource` resolves the immutable server-owned policy for the exact
+Published ConnectorVersion and operation. The caller cannot pass issuer, audience,
+subject policy, lifetime, allowlist, algorithm, provider, locator, key, PFX, endpoint
+override or privileged standard claim.
 
 The binding resolver result is exact for Tenant/Installation/Application context plus:
 
@@ -52,27 +55,47 @@ The binding resolver result is exact for Tenant/Installation/Application context
 
 ## RS256 and JWT policy
 
+The signer first resolves a policy snapshot containing policy revision/checksum, exact
+ConnectorVersion/operation/Environment/endpoint, issuer, audience, subject policy,
+lifetime/skew, claim allowlist, logical key binding, catalog revision/checksum and resource
+revision. The snapshot digest is recomputed and must match the exact identity frozen into
+the resource binding before any provider call. `ResolvedRs256SigningContext` is internal
+and cannot be constructed or supplied by a Connector.
+
 The signer emits only `alg=RS256`, `typ=JWT`. Issuer, audience, subject, `iat`, `nbf`,
 `exp` and random `jti` are server-generated. Reserved claim override, duplicate claims,
-objects/arrays, oversized values, non-allowlisted claims, excessive lifetime and unsafe
-profile values fail before key use. A bounded replay store reserves only SHA-256 of each
+objects/arrays, oversized values, non-allowlisted claims, excessive lifetime and policy
+substitution fail before key use. A bounded replay store reserves only SHA-256 of each
 generated `jti`. Private key bytes never enter the signing primitive.
 
 Provider metadata must match the approved fingerprint, version, validity, RSA type and
-strength. The returned signature is verified with public SPKI, denying wrong-key and
-HS/RS-style provider confusion.
+strength. The SHA-256 digest of the returned SPKI must match the separately approved SPKI
+digest. That exact SPKI is copied into the resolved context and used to verify the returned
+signature, denying scalar-fingerprint plus substituted-SPKI attacks, wrong-key and
+HS/RS-style confusion.
 
 ## Purpose-bound outbound mTLS
 
 Client certificates require current validity, private-key use, ClientAuth EKU, Digital
-Signature key usage, approved fingerprint/version and RSA/ECDSA minimum strength.
+Signature key usage, approved DER fingerprint, approved SPKI digest/version and RSA/ECDSA minimum strength.
 Expired, not-yet-valid, disabled, wrong-purpose and metadata-stale resources are denied.
 A valid certificate inside the configured warning window returns `NearExpiry` without
 automatic blocking.
 
-The primitive has no private-key or certificate cache. Every call re-resolves the current
-revision and metadata, so rotation revision 1 -> 2 stops all revision 1 use. Disable is
-checked before metadata/provider/network access.
+The primitive has no private-key or certificate cache and no certificate-returning API.
+`PurposeBoundMutualTlsSender` owns resolve, validation, attachment and dispatch. It
+re-resolves policy and binding after certificate validation and immediately before DNS
+and transport, then compares policy/catalog/resource identities. Rotation revision 1 -> 2,
+disable, endpoint substitution or a stale revision 1 certificate therefore deny before
+network dispatch.
+
+## Provider boundary sanitization
+
+Metadata, signing and certificate provider calls preserve a genuine caller cancellation
+only when the supplied cancellation token is canceled. Every other provider exception,
+including unexpected SDK exceptions, is replaced by a stable
+`AuthenticationPrimitiveException` containing no provider message, inner exception,
+locator, token, credential or SDK detail.
 
 ## Synthetic provider and server
 
@@ -92,12 +115,13 @@ trust root, and reject hostname mismatch and the wrong client certificate.
 
 ## Automated security evidence
 
-The dedicated suite currently contains 31 passing tests covering RS256 positive flow,
-reserved/duplicate/unsafe claims, excessive lifetime, replay, wrong key, stale metadata,
-remote signing, missing capability, non-exportability surface, redaction, exact binding,
-mTLS positive/expiry/purpose/near-expiry/rotation/disable, real handshake, hostname and
-certificate rejection. Final repository totals, scans, SBOM, CI and review are recorded
-only after the complete gate on the final commit.
+The dedicated suite contains 49 passing tests. In addition to the original RS256, claim,
+replay, rotation, certificate-purpose, hostname and real mTLS coverage, it now proves
+same-ID issuer/audience/subject/lifetime/allowlist substitution denial with zero provider
+sign calls; malicious fingerprint/SPKI substitution denial; retained revision 1 and
+endpoint substitution denial before dispatch; one-shot disable revalidation; restricted
+egress; public API non-exposure; and unexpected provider exception sanitization at
+metadata, signing and certificate boundaries.
 
 ## Readiness boundary
 

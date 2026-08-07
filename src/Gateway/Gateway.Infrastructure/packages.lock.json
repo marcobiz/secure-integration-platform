@@ -43,6 +43,12 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.0"
         }
       },
+      "SecureIntegration.Authentication.CertificateSigning": {
+        "type": "Project",
+        "dependencies": {
+          "SecureIntegration.Providers.Abstractions": "[1.0.0, )"
+        }
+      },
       "SecureIntegration.Gateway.Application": {
         "type": "Project",
         "dependencies": {

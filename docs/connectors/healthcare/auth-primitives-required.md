@@ -29,7 +29,9 @@ Implementation state (2026-08-07): AP-05 and AP-06 have a synthetic, provider-ne
 Core implementation on `m6/auth-cert-signing`. This is primitive evidence only. It does
 not confirm FVG/Umbria claims, lifecycle, endpoint, custody or production readiness.
 The AP-03 PKCE extension belongs to the independent HTTP/OAuth track and is not part of
-the certificate/signing boundary.
+the certificate/signing boundary. PR #11 remediation makes the JWT policy entirely
+server-owned and mTLS transport-bound through a non-constructible one-use certificate
+lease; no Connector receives a raw profile or certificate handle.
 
 ### DEFER
 

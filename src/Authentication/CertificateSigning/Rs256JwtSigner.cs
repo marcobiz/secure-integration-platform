@@ -7,6 +7,7 @@ namespace SecureIntegration.Authentication.CertificateSigning;
 
 /// <summary>Creates policy-bound compact JWTs through a provider-side RS256 operation.</summary>
 public sealed class Rs256JwtSigner(
+    IAuthenticationPolicySource policySource,
     IAuthenticationResourceBindingResolver bindingResolver,
     IKeyOperationProvider? keyOperations,
     IJwtReplayStore replayStore,
@@ -20,74 +21,84 @@ public sealed class Rs256JwtSigner(
     private readonly IJwtIdentifierSource identifiers = identifierSource ?? new RandomJwtIdentifierSource();
 
     /// <summary>
-    /// Signs claims already derived by the Connector runtime. The algorithm, authority, subject,
-    /// lifetime and key are fixed by <paramref name="profile"/> and cannot be overridden by claims.
+    /// Resolves the immutable server-owned policy and signs only its allowlisted business claims.
+    /// The caller supplies no issuer, audience, subject, lifetime, key, algorithm or provider reference.
     /// </summary>
     public async Task<string> SignJwtAsync(
         AuthenticationExecutionContext context,
-        Rs256JwtProfile profile,
+        string policyId,
         IReadOnlyList<JwtBoundClaim> claims,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
-        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(policyId);
         ArgumentNullException.ThrowIfNull(claims);
         BindingPolicy.ValidateContext(context);
-        ValidateProfile(context, profile);
-        IReadOnlyList<JwtBoundClaim> validatedClaims = ValidateClaims(profile, claims);
+
+        ServerOwnedRs256PolicySnapshot policy = await policySource.ResolveRs256Async(context, policyId, cancellationToken).ConfigureAwait(false)
+            ?? throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-POLICY-DENIED");
+        BindingPolicy.ValidateRs256Policy(context, policyId, policy);
+        IReadOnlyList<JwtBoundClaim> validatedClaims = ValidateClaims(policy, claims);
         if (keyOperations is null) throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-CAPABILITY-UNAVAILABLE");
 
-        BoundAuthenticationResource resource = await bindingResolver.ResolveAsync(context, profile.LogicalKeyBindingId, AuthenticationResourcePurpose.JwtSigning, cancellationToken).ConfigureAwait(false)
+        BoundAuthenticationResource resource = await bindingResolver.ResolveAsync(context, policy.LogicalKeyBindingId, AuthenticationResourcePurpose.JwtSigning, cancellationToken).ConfigureAwait(false)
             ?? throw new AuthenticationPrimitiveException("BGW-AUTH-RESOURCE-BOUNDARY");
-        BindingPolicy.ValidateBinding(context, resource, profile.LogicalKeyBindingId, AuthenticationResourcePurpose.JwtSigning);
+        BindingPolicy.ValidateBinding(context, resource, policy.LogicalKeyBindingId, AuthenticationResourcePurpose.JwtSigning);
+        BindingPolicy.ValidateExactPolicyBinding(resource, policy.PolicyRevision, policy.PolicyChecksumSha256, policy.CatalogRevision, policy.CatalogChecksumSha256, policy.ResourceVersion);
 
         ProviderSigningKeyPublicMetadata metadata;
-        try { metadata = await keyOperations.GetSigningKeyMetadataAsync(resource.ProviderReference, cancellationToken).ConfigureAwait(false) ?? throw new ProviderAccessException("BGW-PROVIDER-METADATA-INVALID"); }
-        catch (ProviderAccessException exception) { throw ProviderFailure("BGW-AUTH-SIGNING-METADATA-UNAVAILABLE", exception); }
-        ValidateKeyMetadata(resource.PublicMetadata, metadata, profile, clock.UtcNow);
+        try
+        {
+            metadata = await keyOperations.GetSigningKeyMetadataAsync(resource.ProviderReference, cancellationToken).ConfigureAwait(false)
+                ?? throw new ProviderAccessException("BGW-PROVIDER-METADATA-INVALID");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (ProviderAccessException exception) { throw ProviderFailure("BGW-AUTH-SIGNING-METADATA-UNAVAILABLE", exception.Retryable); }
+        catch (Exception) { throw ProviderFailure("BGW-AUTH-SIGNING-METADATA-UNAVAILABLE"); }
+
+        byte[] verificationKey;
+        try { verificationKey = ValidateKeyMetadata(resource.PublicMetadata, metadata, policy, clock.UtcNow); }
+        catch (AuthenticationPrimitiveException) { throw; }
+        catch (Exception) { throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-KEY-DENIED"); }
+        ResolvedRs256SigningContext resolved = new(policy, resource, verificationKey);
 
         DateTimeOffset issuedAt = clock.UtcNow;
-        DateTimeOffset expiresAt = issuedAt.Add(profile.Lifetime);
+        DateTimeOffset expiresAt = issuedAt.Add(resolved.Policy.Lifetime);
         string jwtIdentifier = identifiers.Create();
         if (string.IsNullOrWhiteSpace(jwtIdentifier) || jwtIdentifier.Length > 256)
             throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-IDENTIFIER");
         byte[] identifierDigest = SHA256.HashData(Encoding.UTF8.GetBytes(jwtIdentifier));
-        if (!await replayStore.TryReserveAsync(identifierDigest, expiresAt.Add(profile.AllowedClockSkew), cancellationToken).ConfigureAwait(false))
+        if (!await replayStore.TryReserveAsync(identifierDigest, expiresAt.Add(resolved.Policy.AllowedClockSkew), cancellationToken).ConfigureAwait(false))
             throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-REPLAY");
 
         string encodedHeader = Base64Url(Encoding.UTF8.GetBytes("{\"alg\":\"RS256\",\"typ\":\"JWT\"}"));
-        byte[] payload = BuildPayload(context, profile, validatedClaims, issuedAt, expiresAt, jwtIdentifier);
+        byte[] payload = BuildPayload(context, resolved.Policy, validatedClaims, issuedAt, expiresAt, jwtIdentifier);
         string encodedPayload = Base64Url(payload);
         byte[] signingInput = Encoding.ASCII.GetBytes(encodedHeader + "." + encodedPayload);
         byte[] digest = SHA256.HashData(signingInput);
         byte[] signature;
-        try { signature = await keyOperations.SignDigestAsync(resource.ProviderReference, "RS256", digest, cancellationToken).ConfigureAwait(false); }
-        catch (ProviderAccessException exception) { throw ProviderFailure("BGW-AUTH-SIGNING-OPERATION-FAILED", exception); }
-        if (signature.Length is < 256 or > 1024 || !VerifySignature(metadata.SubjectPublicKeyInfo, digest, signature))
+        try
+        {
+            signature = await keyOperations.SignDigestAsync(resolved.Resource.ProviderReference, "RS256", digest, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (ProviderAccessException exception) { throw ProviderFailure("BGW-AUTH-SIGNING-OPERATION-FAILED", exception.Retryable); }
+        catch (Exception) { throw ProviderFailure("BGW-AUTH-SIGNING-OPERATION-FAILED"); }
+
+        if (signature is null || signature.Length is < 256 or > 1024 || !VerifySignature(resolved.VerificationSubjectPublicKeyInfo, digest, signature))
             throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-RESULT-INVALID");
         return encodedHeader + "." + encodedPayload + "." + Base64Url(signature);
     }
 
-    private static void ValidateProfile(AuthenticationExecutionContext context, Rs256JwtProfile profile)
-    {
-        if (!BindingPolicy.IsIdentifier(profile.ProfileId) || !string.Equals(profile.ProfileId, context.ProfileId, StringComparison.Ordinal) ||
-            !SafeAuthority(profile.Issuer) || !SafeAuthority(profile.Audience) || !BindingPolicy.IsIdentifier(profile.LogicalKeyBindingId) ||
-            profile.Lifetime <= TimeSpan.Zero || profile.Lifetime > TimeSpan.FromHours(1) ||
-            profile.AllowedClockSkew < TimeSpan.Zero || profile.AllowedClockSkew > TimeSpan.FromMinutes(5) ||
-            profile.MinimumRsaKeySize < 2048 || profile.MinimumRsaKeySize > 16384 || profile.AllowedClaims is null || profile.AllowedClaims.Count > 32 ||
-            profile.AllowedClaims.Any(name => !ValidClaimName(name) || ReservedClaims.Contains(name)) ||
-            (profile.SubjectPolicy == JwtSubjectPolicy.Fixed) != !string.IsNullOrWhiteSpace(profile.FixedSubject) ||
-            profile.FixedSubject?.Length > 512)
-            throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-PROFILE");
-    }
+    internal static bool IsReservedClaim(string claim) => ReservedClaims.Contains(claim);
 
-    private static IReadOnlyList<JwtBoundClaim> ValidateClaims(Rs256JwtProfile profile, IReadOnlyList<JwtBoundClaim> claims)
+    private static IReadOnlyList<JwtBoundClaim> ValidateClaims(ServerOwnedRs256PolicySnapshot policy, IReadOnlyList<JwtBoundClaim> claims)
     {
         if (claims.Count > 32) throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-CLAIMS");
         HashSet<string> names = new(StringComparer.Ordinal);
         foreach (JwtBoundClaim claim in claims)
         {
-            if (!ValidClaimName(claim.Name) || ReservedClaims.Contains(claim.Name) || !profile.AllowedClaims.Contains(claim.Name))
+            if (!BindingPolicy.ValidClaimName(claim.Name) || ReservedClaims.Contains(claim.Name) || !policy.AllowedClaims.Contains(claim.Name))
                 throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-CLAIM-DENIED");
             if (!names.Add(claim.Name)) throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-CLAIM-DUPLICATE");
             if (claim.Value.ValueKind is JsonValueKind.Array or JsonValueKind.Object or JsonValueKind.Undefined || claim.Value.GetRawText().Length > 4096 ||
@@ -97,20 +108,20 @@ public sealed class Rs256JwtSigner(
         return claims;
     }
 
-    private static byte[] BuildPayload(AuthenticationExecutionContext context, Rs256JwtProfile profile, IReadOnlyList<JwtBoundClaim> claims, DateTimeOffset issuedAt, DateTimeOffset expiresAt, string jwtIdentifier)
+    private static byte[] BuildPayload(AuthenticationExecutionContext context, ServerOwnedRs256PolicySnapshot policy, IReadOnlyList<JwtBoundClaim> claims, DateTimeOffset issuedAt, DateTimeOffset expiresAt, string jwtIdentifier)
     {
         using MemoryStream output = new();
         using (Utf8JsonWriter writer = new(output))
         {
             writer.WriteStartObject();
-            writer.WriteString("iss", profile.Issuer);
-            writer.WriteString("aud", profile.Audience);
-            writer.WriteString("sub", profile.SubjectPolicy switch
+            writer.WriteString("iss", policy.Issuer);
+            writer.WriteString("aud", policy.Audience);
+            writer.WriteString("sub", policy.SubjectPolicy switch
             {
                 JwtSubjectPolicy.Installation => context.InstallationId.ToString("D"),
                 JwtSubjectPolicy.Application => context.ApplicationId.ToString("D"),
-                JwtSubjectPolicy.Fixed => profile.FixedSubject!,
-                _ => throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-PROFILE")
+                JwtSubjectPolicy.Fixed => policy.FixedSubject!,
+                _ => throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-POLICY-DENIED")
             });
             writer.WriteNumber("iat", issuedAt.ToUnixTimeSeconds());
             writer.WriteNumber("nbf", issuedAt.ToUnixTimeSeconds());
@@ -126,11 +137,13 @@ public sealed class Rs256JwtSigner(
         return output.ToArray();
     }
 
-    private static void ValidateKeyMetadata(BoundResourcePublicMetadata expected, ProviderSigningKeyPublicMetadata actual, Rs256JwtProfile profile, DateTimeOffset now)
+    private static byte[] ValidateKeyMetadata(BoundResourcePublicMetadata expected, ProviderSigningKeyPublicMetadata actual, ServerOwnedRs256PolicySnapshot policy, DateTimeOffset now)
     {
         BindingPolicy.MatchMetadata(expected, actual.FingerprintSha256, actual.NotBefore, actual.NotAfter, actual.KeyAlgorithm, actual.PublicKeySize, actual.Version);
-        if (!string.Equals(actual.KeyAlgorithm, "RSA", StringComparison.Ordinal) || actual.PublicKeySize < profile.MinimumRsaKeySize ||
-            actual.NotBefore > now.Add(profile.AllowedClockSkew) || actual.NotAfter <= now.Add(profile.Lifetime) || actual.SubjectPublicKeyInfo.Length is < 256 or > 4096)
+        if (actual.SubjectPublicKeyInfo is null || actual.SubjectPublicKeyInfo.Length is < 256 or > 4096 ||
+            !FixedDigestEquals(expected.SubjectPublicKeyInfoSha256, SHA256.HashData(actual.SubjectPublicKeyInfo)) ||
+            !string.Equals(actual.KeyAlgorithm, "RSA", StringComparison.Ordinal) || actual.PublicKeySize < policy.MinimumRsaKeySize ||
+            actual.NotBefore > now.Add(policy.AllowedClockSkew) || actual.NotAfter <= now.Add(policy.Lifetime))
             throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-KEY-DENIED");
         try
         {
@@ -138,6 +151,7 @@ public sealed class Rs256JwtSigner(
             rsa.ImportSubjectPublicKeyInfo(actual.SubjectPublicKeyInfo, out int read);
             if (read != actual.SubjectPublicKeyInfo.Length || rsa.KeySize != actual.PublicKeySize)
                 throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-KEY-DENIED");
+            return actual.SubjectPublicKeyInfo.ToArray();
         }
         catch (CryptographicException) { throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-KEY-DENIED"); }
     }
@@ -153,10 +167,11 @@ public sealed class Rs256JwtSigner(
         catch (CryptographicException) { return false; }
     }
 
-    private static AuthenticationPrimitiveException ProviderFailure(string code, ProviderAccessException exception) => new(code, exception.Retryable);
+    private static bool FixedDigestEquals(string expectedHex, byte[] actual) =>
+        BindingPolicy.IsSha256(expectedHex) && CryptographicOperations.FixedTimeEquals(Convert.FromHexString(expectedHex), actual);
+
+    private static AuthenticationPrimitiveException ProviderFailure(string code, bool retryable = false) => new(code, retryable);
     private static string Base64Url(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-    private static bool ValidClaimName(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 64 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
-    private static bool SafeAuthority(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 512 && !value.Any(character => char.IsControl(character));
 }
 
 /// <summary>Bounded in-memory replay guard for generated JWT identifiers.</summary>
@@ -185,4 +200,18 @@ public sealed class RandomJwtIdentifierSource : IJwtIdentifierSource
 {
     /// <inheritdoc />
     public string Create() => Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+}
+
+internal sealed class ResolvedRs256SigningContext
+{
+    internal ResolvedRs256SigningContext(ServerOwnedRs256PolicySnapshot policy, BoundAuthenticationResource resource, byte[] verificationSubjectPublicKeyInfo)
+    {
+        Policy = policy;
+        Resource = resource;
+        VerificationSubjectPublicKeyInfo = verificationSubjectPublicKeyInfo.ToArray();
+    }
+
+    internal ServerOwnedRs256PolicySnapshot Policy { get; }
+    internal BoundAuthenticationResource Resource { get; }
+    internal byte[] VerificationSubjectPublicKeyInfo { get; }
 }

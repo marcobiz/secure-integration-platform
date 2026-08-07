@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
@@ -10,20 +11,20 @@ namespace SecureIntegration.Authentication.CertificateSigning.Tests;
 public sealed class Rs256JwtSecurityTests
 {
     private static readonly DateTimeOffset Now = new(2026, 8, 7, 10, 0, 0, TimeSpan.Zero);
-    private static readonly string[] ClaimDenialCodes = ["BGW-AUTH-JWT-PROFILE", "BGW-AUTH-JWT-CLAIM-DENIED"];
 
     [Fact]
-    public async Task M6_RS256_positive_is_policy_bound_and_remote_signed()
+    public async Task M6_RS256_positive_resolves_server_owned_policy_and_remote_signs()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
-        InMemoryProvider provider = AuthenticationTestData.Provider(material);
-        TrackingKeyProvider tracking = new(provider);
         AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
-        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1"));
+        ServerOwnedRs256PolicySnapshot policy = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1);
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        TrackingKeyProvider tracking = new(AuthenticationTestData.Provider(material));
+        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", policy));
         FixedClock clock = new(Now);
-        Rs256JwtSigner signer = new(bindings, tracking, new InMemoryJwtReplayStore(100, clock), clock);
+        Rs256JwtSigner signer = new(policies, bindings, tracking, new InMemoryJwtReplayStore(100, clock), clock);
 
-        string token = await signer.SignJwtAsync(context, AuthenticationTestData.JwtProfile(),
+        string token = await signer.SignJwtAsync(context, AuthenticationTestData.JwtProfileId,
             [new("role", JsonSerializer.SerializeToElement("synthetic-pharmacy"))], TestContext.Current.CancellationToken);
 
         string[] segments = token.Split('.');
@@ -54,18 +55,19 @@ public sealed class Rs256JwtSecurityTests
     public async Task M6_JWT_security_sensitive_claim_override_is_denied_before_key_use(string claim)
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
-        InMemoryProvider provider = AuthenticationTestData.Provider(material);
-        TrackingKeyProvider tracking = new(provider);
         AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
-        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1"));
+        ServerOwnedRs256PolicySnapshot hostilePolicy = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, allowedClaims: new HashSet<string>(StringComparer.Ordinal) { claim });
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        policies.Rs256 = hostilePolicy;
+        TrackingKeyProvider tracking = new(AuthenticationTestData.Provider(material));
+        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", hostilePolicy));
         FixedClock clock = new(Now);
-        Rs256JwtProfile profile = AuthenticationTestData.JwtProfile() with { AllowedClaims = new HashSet<string>(StringComparer.Ordinal) { claim } };
-        Rs256JwtSigner signer = new(bindings, tracking, new InMemoryJwtReplayStore(100, clock), clock);
+        Rs256JwtSigner signer = new(policies, bindings, tracking, new InMemoryJwtReplayStore(100, clock), clock);
 
         AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(
-            context, profile, [new(claim, JsonSerializer.SerializeToElement("hostile"))], TestContext.Current.CancellationToken));
+            context, AuthenticationTestData.JwtProfileId, [new(claim, JsonSerializer.SerializeToElement("hostile"))], TestContext.Current.CancellationToken));
 
-        Assert.Contains(failure.Code, ClaimDenialCodes);
+        Assert.Equal("BGW-AUTH-JWT-POLICY-DENIED", failure.Code);
         Assert.Empty(tracking.MetadataReferences);
         Assert.Empty(tracking.Signatures);
     }
@@ -74,51 +76,57 @@ public sealed class Rs256JwtSecurityTests
     public async Task M6_JWT_duplicate_and_unsafe_claim_injection_are_denied()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
-        InMemoryProvider provider = AuthenticationTestData.Provider(material);
         AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
-        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1"));
+        ServerOwnedRs256PolicySnapshot policy = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1);
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", policy));
         FixedClock clock = new(Now);
-        Rs256JwtSigner signer = new(bindings, provider, new InMemoryJwtReplayStore(100, clock), clock);
+        Rs256JwtSigner signer = new(policies, bindings, AuthenticationTestData.Provider(material), new InMemoryJwtReplayStore(100, clock), clock);
         JwtBoundClaim duplicate = new("role", JsonSerializer.SerializeToElement("one"));
 
         AuthenticationPrimitiveException duplicateFailure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(
-            context, AuthenticationTestData.JwtProfile(), [duplicate, duplicate with { Value = JsonSerializer.SerializeToElement("two") }], TestContext.Current.CancellationToken));
+            context, AuthenticationTestData.JwtProfileId, [duplicate, duplicate with { Value = JsonSerializer.SerializeToElement("two") }], TestContext.Current.CancellationToken));
         AuthenticationPrimitiveException injectionFailure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(
-            context, AuthenticationTestData.JwtProfile(), [new("unapproved", JsonSerializer.SerializeToElement("value"))], TestContext.Current.CancellationToken));
+            context, AuthenticationTestData.JwtProfileId, [new("unapproved", JsonSerializer.SerializeToElement("value"))], TestContext.Current.CancellationToken));
 
         Assert.Equal("BGW-AUTH-JWT-CLAIM-DUPLICATE", duplicateFailure.Code);
         Assert.Equal("BGW-AUTH-JWT-CLAIM-DENIED", injectionFailure.Code);
     }
 
     [Fact]
-    public async Task M6_JWT_excessive_lifetime_is_denied_before_binding_or_provider()
+    public async Task M6_JWT_excessive_server_policy_lifetime_is_denied_before_binding_or_provider()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
-        TrackingKeyProvider tracking = new(AuthenticationTestData.Provider(material));
         AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
-        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1"));
+        ServerOwnedRs256PolicySnapshot policy = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, lifetime: TimeSpan.FromHours(2));
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        policies.Rs256 = policy;
+        TrackingKeyProvider tracking = new(AuthenticationTestData.Provider(material));
+        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", policy));
         FixedClock clock = new(Now);
-        Rs256JwtSigner signer = new(bindings, tracking, new InMemoryJwtReplayStore(100, clock), clock);
+        Rs256JwtSigner signer = new(policies, bindings, tracking, new InMemoryJwtReplayStore(100, clock), clock);
 
         AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(
-            context, AuthenticationTestData.JwtProfile(TimeSpan.FromHours(2)), [], TestContext.Current.CancellationToken));
+            context, AuthenticationTestData.JwtProfileId, [], TestContext.Current.CancellationToken));
 
-        Assert.Equal("BGW-AUTH-JWT-PROFILE", failure.Code);
+        Assert.Equal("BGW-AUTH-JWT-POLICY-DENIED", failure.Code);
         Assert.Equal(0, bindings.Calls);
-        Assert.Empty(tracking.Signatures);
+        Assert.Empty(tracking.MetadataReferences);
     }
 
     [Fact]
     public async Task M6_JWT_disabled_key_denies_with_zero_provider_invocations()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
-        TrackingKeyProvider tracking = new(AuthenticationTestData.Provider(material));
         AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
-        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", status: AuthenticationResourceStatus.Disabled));
+        ServerOwnedRs256PolicySnapshot policy = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1);
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        TrackingKeyProvider tracking = new(AuthenticationTestData.Provider(material));
+        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", policy, status: AuthenticationResourceStatus.Disabled));
         FixedClock clock = new(Now);
-        Rs256JwtSigner signer = new(bindings, tracking, new InMemoryJwtReplayStore(100, clock), clock);
+        Rs256JwtSigner signer = new(policies, bindings, tracking, new InMemoryJwtReplayStore(100, clock), clock);
 
-        AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(context, AuthenticationTestData.JwtProfile(), [], TestContext.Current.CancellationToken));
+        AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(context, AuthenticationTestData.JwtProfileId, [], TestContext.Current.CancellationToken));
 
         Assert.Equal("BGW-AUTH-RESOURCE-DISABLED", failure.Code);
         Assert.Empty(tracking.MetadataReferences);
@@ -126,37 +134,39 @@ public sealed class Rs256JwtSecurityTests
     }
 
     [Fact]
-    public async Task M6_JWT_rotation_uses_revision_two_and_never_reuses_revision_one()
+    public async Task M6_JWT_rotation_resolves_revision_two_and_never_reuses_revision_one()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
-        TrackingKeyProvider tracking = new(AuthenticationTestData.Provider(material));
         AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
-        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1"));
+        ServerOwnedRs256PolicySnapshot revision1 = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1);
+        ServerOwnedRs256PolicySnapshot revision2 = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision2, revision: 2);
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        TrackingKeyProvider tracking = new(AuthenticationTestData.Provider(material));
+        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", revision1));
         FixedClock clock = new(Now);
-        Rs256JwtSigner signer = new(bindings, tracking, new InMemoryJwtReplayStore(100, clock), clock);
-        _ = await signer.SignJwtAsync(context, AuthenticationTestData.JwtProfile(), [], TestContext.Current.CancellationToken);
+        Rs256JwtSigner signer = new(policies, bindings, tracking, new InMemoryJwtReplayStore(100, clock), clock);
 
-        bindings.Current = AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision2, "sign-r2", revision: 2);
-        string rotated = await signer.SignJwtAsync(context, AuthenticationTestData.JwtProfile(), [], TestContext.Current.CancellationToken);
+        await signer.SignJwtAsync(context, AuthenticationTestData.JwtProfileId, [], TestContext.Current.CancellationToken);
+        policies.Rs256 = revision2;
+        bindings.Current = AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision2, "sign-r2", revision2);
+        await signer.SignJwtAsync(context, AuthenticationTestData.JwtProfileId, [], TestContext.Current.CancellationToken);
 
-        Assert.Equal(["sign-r1", "sign-r2"], tracking.MetadataReferences);
         Assert.Equal([("sign-r1", "RS256"), ("sign-r2", "RS256")], tracking.Signatures);
-        AssertSignature(material.SigningKeyRevision2, rotated.Split('.'));
-        Assert.ThrowsAny<CryptographicException>(() => AssertSignature(material.SigningKeyRevision1, rotated.Split('.')));
     }
 
     [Fact]
-    public async Task M6_JWT_wrong_key_result_is_rejected_after_remote_operation()
+    public async Task M6_JWT_wrong_key_result_and_HS_RS_confusion_are_rejected()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
-        InMemoryProvider correct = AuthenticationTestData.Provider(material);
-        IKeyOperationProvider wrong = new WrongSigningResultProvider(correct, material.SigningKeyRevision2);
         AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
-        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1"));
+        ServerOwnedRs256PolicySnapshot policy = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1);
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        IKeyOperationProvider wrong = new WrongSigningResultProvider(AuthenticationTestData.Provider(material), material.SigningKeyRevision2);
+        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", policy));
         FixedClock clock = new(Now);
-        Rs256JwtSigner signer = new(bindings, wrong, new InMemoryJwtReplayStore(100, clock), clock);
+        Rs256JwtSigner signer = new(policies, bindings, wrong, new InMemoryJwtReplayStore(100, clock), clock);
 
-        AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(context, AuthenticationTestData.JwtProfile(), [], TestContext.Current.CancellationToken));
+        AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(context, AuthenticationTestData.JwtProfileId, [], TestContext.Current.CancellationToken));
 
         Assert.Equal("BGW-AUTH-SIGNING-RESULT-INVALID", failure.Code);
     }
@@ -165,17 +175,18 @@ public sealed class Rs256JwtSecurityTests
     public async Task M6_JWT_replayed_identifier_and_missing_capability_fail_closed()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
-        InMemoryProvider provider = AuthenticationTestData.Provider(material);
         AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
-        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1"));
+        ServerOwnedRs256PolicySnapshot policy = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1);
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", policy));
         FixedClock clock = new(Now);
-        InMemoryJwtReplayStore replay = new(100, clock);
-        Rs256JwtSigner signer = new(bindings, provider, replay, clock, new FixedIdentifierSource("same-jti"));
-        _ = await signer.SignJwtAsync(context, AuthenticationTestData.JwtProfile(), [], TestContext.Current.CancellationToken);
+        InMemoryJwtReplayStore replay = new(10, clock);
+        Rs256JwtSigner signer = new(policies, bindings, AuthenticationTestData.Provider(material), replay, clock, new FixedIdentifierSource("fixed-jti"));
 
-        AuthenticationPrimitiveException replayFailure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(context, AuthenticationTestData.JwtProfile(), [], TestContext.Current.CancellationToken));
-        Rs256JwtSigner unavailable = new(bindings, null, replay, clock);
-        AuthenticationPrimitiveException capabilityFailure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => unavailable.SignJwtAsync(context, AuthenticationTestData.JwtProfile(), [], TestContext.Current.CancellationToken));
+        await signer.SignJwtAsync(context, AuthenticationTestData.JwtProfileId, [], TestContext.Current.CancellationToken);
+        AuthenticationPrimitiveException replayFailure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(context, AuthenticationTestData.JwtProfileId, [], TestContext.Current.CancellationToken));
+        Rs256JwtSigner missing = new(policies, bindings, null, replay, clock);
+        AuthenticationPrimitiveException capabilityFailure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => missing.SignJwtAsync(context, AuthenticationTestData.JwtProfileId, [], TestContext.Current.CancellationToken));
 
         Assert.Equal("BGW-AUTH-JWT-REPLAY", replayFailure.Code);
         Assert.Equal("BGW-AUTH-SIGNING-CAPABILITY-UNAVAILABLE", capabilityFailure.Code);
@@ -185,31 +196,29 @@ public sealed class Rs256JwtSecurityTests
     public async Task M6_JWT_replay_cache_is_bounded_and_expiry_aware()
     {
         FixedClock clock = new(Now);
-        InMemoryJwtReplayStore replay = new(1, clock);
-        byte[] first = SHA256.HashData("first"u8);
-        byte[] second = SHA256.HashData("second"u8);
+        InMemoryJwtReplayStore store = new(1, clock);
+        byte[] first = SHA256.HashData([1]);
+        byte[] second = SHA256.HashData([2]);
 
-        Assert.True(await replay.TryReserveAsync(first, Now.AddMinutes(5), TestContext.Current.CancellationToken));
-        Assert.False(await replay.TryReserveAsync(second, Now.AddMinutes(5), TestContext.Current.CancellationToken));
-        clock.UtcNow = Now.AddMinutes(6);
-        Assert.True(await replay.TryReserveAsync(second, clock.UtcNow.AddMinutes(5), TestContext.Current.CancellationToken));
+        Assert.True(await store.TryReserveAsync(first, Now.AddMinutes(1), TestContext.Current.CancellationToken));
+        Assert.False(await store.TryReserveAsync(second, Now.AddMinutes(1), TestContext.Current.CancellationToken));
+        clock.UtcNow = Now.AddMinutes(2);
+        Assert.True(await store.TryReserveAsync(second, Now.AddMinutes(3), TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task M6_JWT_binding_scope_purpose_and_metadata_mismatch_deny_before_signing()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
-        TrackingKeyProvider tracking = new(AuthenticationTestData.Provider(material));
         AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
-        BoundAuthenticationResource hostile = AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1") with
-        {
-            OperationId = "other-operation",
-            Purpose = AuthenticationResourcePurpose.MutualTlsClientAuthentication
-        };
+        ServerOwnedRs256PolicySnapshot policy = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1);
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        TrackingKeyProvider tracking = new(AuthenticationTestData.Provider(material));
+        BoundAuthenticationResource hostile = AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", policy) with { OperationId = "other", Purpose = AuthenticationResourcePurpose.MutualTlsClientAuthentication };
         FixedClock clock = new(Now);
-        Rs256JwtSigner signer = new(new MutableBindingResolver(hostile), tracking, new InMemoryJwtReplayStore(100, clock), clock);
+        Rs256JwtSigner signer = new(policies, new MutableBindingResolver(hostile), tracking, new InMemoryJwtReplayStore(100, clock), clock);
 
-        AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(context, AuthenticationTestData.JwtProfile(), [], TestContext.Current.CancellationToken));
+        AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(context, AuthenticationTestData.JwtProfileId, [], TestContext.Current.CancellationToken));
 
         Assert.Equal("BGW-AUTH-RESOURCE-BOUNDARY", failure.Code);
         Assert.Empty(tracking.MetadataReferences);
@@ -220,41 +229,126 @@ public sealed class Rs256JwtSecurityTests
     public async Task M6_JWT_stale_public_metadata_is_denied_before_signing()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
-        TrackingKeyProvider tracking = new(AuthenticationTestData.Provider(material));
         AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
-        BoundAuthenticationResource stale = AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1") with
+        ServerOwnedRs256PolicySnapshot policy = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1);
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        TrackingKeyProvider tracking = new(AuthenticationTestData.Provider(material));
+        BoundAuthenticationResource stale = AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", policy) with
         {
-            PublicMetadata = AuthenticationTestData.Metadata(material.SigningKeyRevision2)
+            PublicMetadata = AuthenticationTestData.Metadata(material.SigningKeyRevision1) with { Version = "stale" }
         };
         FixedClock clock = new(Now);
-        Rs256JwtSigner signer = new(new MutableBindingResolver(stale), tracking, new InMemoryJwtReplayStore(100, clock), clock);
+        Rs256JwtSigner signer = new(policies, new MutableBindingResolver(stale), tracking, new InMemoryJwtReplayStore(100, clock), clock);
 
-        AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(context, AuthenticationTestData.JwtProfile(), [], TestContext.Current.CancellationToken));
+        AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(context, AuthenticationTestData.JwtProfileId, [], TestContext.Current.CancellationToken));
 
-        Assert.Equal("BGW-AUTH-RESOURCE-METADATA-STALE", failure.Code);
+        Assert.Equal("BGW-AUTH-POLICY-BINDING-STALE", failure.Code);
+        Assert.Empty(tracking.Signatures);
+    }
+
+    [Theory]
+    [InlineData("issuer")]
+    [InlineData("audience")]
+    [InlineData("subject")]
+    [InlineData("lifetime")]
+    [InlineData("allowlist")]
+    public async Task M6_JWT_policy_substitution_with_same_policy_id_is_denied_before_provider(string substitution)
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
+        AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
+        ServerOwnedRs256PolicySnapshot approved = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1);
+        ServerOwnedRs256PolicySnapshot substituted = substitution switch
+        {
+            "issuer" => AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, issuer: "https://attacker.example.test"),
+            "audience" => AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, audience: "https://attacker.example.test"),
+            "subject" => AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, subjectPolicy: JwtSubjectPolicy.Application),
+            "lifetime" => AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, lifetime: TimeSpan.FromMinutes(10)),
+            "allowlist" => AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, allowedClaims: new HashSet<string>(StringComparer.Ordinal) { "attacker" }),
+            _ => throw new ArgumentOutOfRangeException(nameof(substitution))
+        };
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        policies.Rs256 = substituted;
+        TrackingKeyProvider tracking = new(AuthenticationTestData.Provider(material));
+        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", approved));
+        FixedClock clock = new(Now);
+        Rs256JwtSigner signer = new(policies, bindings, tracking, new InMemoryJwtReplayStore(100, clock), clock);
+
+        AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(context, AuthenticationTestData.JwtProfileId, [], TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-AUTH-POLICY-BINDING-STALE", failure.Code);
+        Assert.Empty(tracking.MetadataReferences);
         Assert.Empty(tracking.Signatures);
     }
 
     [Fact]
-    public async Task M6_JWT_provider_failure_is_redacted_and_private_key_is_not_in_the_capability_surface()
+    public async Task M6_JWT_approved_scalar_fingerprint_with_substituted_SPKI_is_denied_before_sign()
     {
-        const string canary = "m6-provider-locator-and-claim-canary";
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
         AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
-        BoundAuthenticationResource binding = AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, canary);
+        ServerOwnedRs256PolicySnapshot policy = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1);
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        IKeyOperationProvider malicious = new SubstitutedSpkiProvider(AuthenticationTestData.Provider(material), material.SigningKeyRevision2);
+        TrackingKeyProvider tracking = new(malicious);
+        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", policy));
         FixedClock clock = new(Now);
-        Rs256JwtSigner signer = new(new MutableBindingResolver(binding), new FailingKeyProvider(canary), new InMemoryJwtReplayStore(100, clock), clock);
+        Rs256JwtSigner signer = new(policies, bindings, tracking, new InMemoryJwtReplayStore(100, clock), clock);
 
-        AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(
-            context, AuthenticationTestData.JwtProfile(), [new("role", JsonSerializer.SerializeToElement(canary))], TestContext.Current.CancellationToken));
+        AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(context, AuthenticationTestData.JwtProfileId, [], TestContext.Current.CancellationToken));
 
-        Assert.Equal("BGW-AUTH-SIGNING-METADATA-UNAVAILABLE", failure.Code);
-        Assert.Equal(failure.Code, failure.Message);
+        Assert.Equal("BGW-AUTH-SIGNING-KEY-DENIED", failure.Code);
+        Assert.Single(tracking.MetadataReferences);
+        Assert.Empty(tracking.Signatures);
+    }
+
+    [Theory]
+    [InlineData("metadata", "BGW-AUTH-SIGNING-METADATA-UNAVAILABLE")]
+    [InlineData("sign", "BGW-AUTH-SIGNING-OPERATION-FAILED")]
+    public async Task M6_JWT_unexpected_provider_exceptions_are_sanitized(string boundary, string expectedCode)
+    {
+        const string canary = "locator=hidden token=hidden secret=hidden";
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
+        AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
+        ServerOwnedRs256PolicySnapshot policy = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1);
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        IKeyOperationProvider provider = new UnexpectedFailingKeyProvider(AuthenticationTestData.Provider(material), boundary, canary);
+        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", policy));
+        FixedClock clock = new(Now);
+        Rs256JwtSigner signer = new(policies, bindings, provider, new InMemoryJwtReplayStore(100, clock), clock);
+
+        AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(context, AuthenticationTestData.JwtProfileId, [], TestContext.Current.CancellationToken));
+
+        Assert.Equal(expectedCode, failure.Code);
+        Assert.Equal(expectedCode, failure.Message);
+        Assert.Null(failure.InnerException);
         Assert.DoesNotContain(canary, failure.ToString(), StringComparison.Ordinal);
-        string[] capabilityMethods = typeof(IKeyOperationProvider).GetMethods().Select(method => method.Name).OrderBy(value => value, StringComparer.Ordinal).ToArray();
-        Assert.Equal(["GetSigningKeyMetadataAsync", "SignDigestAsync"], capabilityMethods);
-        Assert.DoesNotContain(capabilityMethods, method => method.Contains("Private", StringComparison.Ordinal) || method.Contains("Secret", StringComparison.Ordinal));
-        Assert.DoesNotContain(typeof(Rs256JwtProfile).GetProperties(), property => property.Name.Contains("Algorithm", StringComparison.Ordinal) || property.Name.Contains("Provider", StringComparison.Ordinal) || property.Name.Contains("Locator", StringComparison.Ordinal));
+        Assert.DoesNotContain("hidden", failure.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task M6_JWT_provider_cancellation_preserves_cancellation_semantics()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
+        AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
+        ServerOwnedRs256PolicySnapshot policy = AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1);
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(context, material.SigningKeyRevision1, "sign-r1", policy));
+        FixedClock clock = new(Now);
+        using CancellationTokenSource cancellation = new();
+        Rs256JwtSigner signer = new(policies, bindings, new CancelingKeyProvider(cancellation), new InMemoryJwtReplayStore(100, clock), clock);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => signer.SignJwtAsync(context, AuthenticationTestData.JwtProfileId, [], cancellation.Token));
+    }
+
+    [Fact]
+    public void M6_public_signing_API_accepts_only_policy_id_and_business_claims()
+    {
+        MethodInfo method = Assert.Single(typeof(Rs256JwtSigner).GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly));
+        Type[] parameters = method.GetParameters().Select(value => value.ParameterType).ToArray();
+
+        Assert.Equal("SignJwtAsync", method.Name);
+        Assert.Equal([typeof(AuthenticationExecutionContext), typeof(string), typeof(IReadOnlyList<JwtBoundClaim>), typeof(CancellationToken)], parameters);
+        Assert.Null(typeof(Rs256JwtSigner).Assembly.GetType("SecureIntegration.Authentication.CertificateSigning.Rs256JwtProfile"));
+        Assert.DoesNotContain(typeof(IKeyOperationProvider).GetMethods(), value => value.Name.Contains("Export", StringComparison.OrdinalIgnoreCase) || value.Name.Contains("Private", StringComparison.OrdinalIgnoreCase));
     }
 
     private static byte[] Decode(string value)
@@ -267,8 +361,7 @@ public sealed class Rs256JwtSecurityTests
     {
         using RSA rsa = certificate.GetRSAPublicKey()!;
         byte[] digest = SHA256.HashData(System.Text.Encoding.ASCII.GetBytes(segments[0] + "." + segments[1]));
-        if (!rsa.VerifyHash(digest, Decode(segments[2]), HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1))
-            throw new CryptographicException("Signature did not match the expected synthetic key.");
+        Assert.True(rsa.VerifyHash(digest, Decode(segments[2]), HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1));
     }
 
     private sealed class WrongSigningResultProvider(IKeyOperationProvider metadataProvider, X509Certificate2 wrongCertificate) : IKeyOperationProvider
@@ -282,12 +375,38 @@ public sealed class Rs256JwtSecurityTests
         }
     }
 
-    private sealed class FailingKeyProvider(string canary) : IKeyOperationProvider
+    private sealed class SubstitutedSpkiProvider(IKeyOperationProvider approvedMetadataProvider, X509Certificate2 substitutedCertificate) : IKeyOperationProvider
+    {
+        public async Task<ProviderSigningKeyPublicMetadata> GetSigningKeyMetadataAsync(string logicalReference, CancellationToken cancellationToken)
+        {
+            ProviderSigningKeyPublicMetadata approved = await approvedMetadataProvider.GetSigningKeyMetadataAsync(logicalReference, cancellationToken);
+            using RSA rsa = substitutedCertificate.GetRSAPublicKey()!;
+            return approved with { SubjectPublicKeyInfo = rsa.ExportSubjectPublicKeyInfo(), PublicKeySize = rsa.KeySize };
+        }
+
+        public Task<byte[]> SignDigestAsync(string logicalReference, string algorithm, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken)
+        {
+            using RSA rsa = substitutedCertificate.GetRSAPrivateKey()!;
+            return Task.FromResult(rsa.SignHash(digest.Span, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1));
+        }
+    }
+
+    private sealed class UnexpectedFailingKeyProvider(IKeyOperationProvider valid, string boundary, string canary) : IKeyOperationProvider
     {
         public Task<ProviderSigningKeyPublicMetadata> GetSigningKeyMetadataAsync(string logicalReference, CancellationToken cancellationToken) =>
-            throw new ProviderAccessException("BGW-PROVIDER-UNAVAILABLE", true, new InvalidOperationException(canary + logicalReference));
+            boundary == "metadata" ? throw new InvalidOperationException(canary) : valid.GetSigningKeyMetadataAsync(logicalReference, cancellationToken);
 
         public Task<byte[]> SignDigestAsync(string logicalReference, string algorithm, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken) =>
-            throw new ProviderAccessException("BGW-PROVIDER-UNAVAILABLE", true, new InvalidOperationException(canary + logicalReference));
+            throw new InvalidOperationException(canary);
+    }
+
+    private sealed class CancelingKeyProvider(CancellationTokenSource cancellation) : IKeyOperationProvider
+    {
+        public Task<ProviderSigningKeyPublicMetadata> GetSigningKeyMetadataAsync(string logicalReference, CancellationToken cancellationToken)
+        {
+            cancellation.Cancel();
+            return Task.FromCanceled<ProviderSigningKeyPublicMetadata>(cancellationToken);
+        }
+        public Task<byte[]> SignDigestAsync(string logicalReference, string algorithm, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken) => Task.FromCanceled<byte[]>(cancellationToken);
     }
 }

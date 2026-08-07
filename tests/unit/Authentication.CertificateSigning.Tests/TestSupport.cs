@@ -1,3 +1,4 @@
+using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using SecureIntegration.Providers.Abstractions;
@@ -13,13 +14,38 @@ internal sealed class FixedClock(DateTimeOffset now) : IAuthenticationClock
 internal sealed class MutableBindingResolver(BoundAuthenticationResource current) : IAuthenticationResourceBindingResolver
 {
     public BoundAuthenticationResource Current { get; set; } = current;
+    public Func<int, BoundAuthenticationResource>? OnResolve { get; set; }
     public int Calls { get; private set; }
 
     public Task<BoundAuthenticationResource> ResolveAsync(AuthenticationExecutionContext context, string logicalBindingId, AuthenticationResourcePurpose purpose, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Calls++;
-        return Task.FromResult(Current);
+        return Task.FromResult(OnResolve?.Invoke(Calls) ?? Current);
+    }
+}
+
+internal sealed class MutablePolicySource(
+    ServerOwnedRs256PolicySnapshot rs256,
+    ServerOwnedMutualTlsPolicySnapshot mutualTls) : IAuthenticationPolicySource
+{
+    public ServerOwnedRs256PolicySnapshot Rs256 { get; set; } = rs256;
+    public ServerOwnedMutualTlsPolicySnapshot MutualTls { get; set; } = mutualTls;
+    public int Rs256Calls { get; private set; }
+    public int MutualTlsCalls { get; private set; }
+
+    public Task<ServerOwnedRs256PolicySnapshot> ResolveRs256Async(AuthenticationExecutionContext context, string policyId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Rs256Calls++;
+        return Task.FromResult(Rs256);
+    }
+
+    public Task<ServerOwnedMutualTlsPolicySnapshot> ResolveMutualTlsAsync(AuthenticationExecutionContext context, string policyId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        MutualTlsCalls++;
+        return Task.FromResult(MutualTls);
     }
 }
 
@@ -41,27 +67,46 @@ internal sealed class TrackingKeyProvider(IKeyOperationProvider inner) : IKeyOpe
     }
 }
 
-internal sealed class TrackingCertificateProvider(InMemoryProvider inner) : IClientCertificateProvider, ICertificateMetadataProvider
+internal sealed class TrackingCertificateProvider(IClientCertificateProvider certificates, ICertificateMetadataProvider metadata) : IClientCertificateProvider, ICertificateMetadataProvider
 {
+    public TrackingCertificateProvider(InMemoryProvider provider) : this(provider, provider) { }
+
     public List<string> MetadataReferences { get; } = [];
     public List<string> CertificateReferences { get; } = [];
 
     public Task<ProviderCertificatePublicMetadata> GetPublicMetadataAsync(string logicalReference, CancellationToken cancellationToken)
     {
         MetadataReferences.Add(logicalReference);
-        return inner.GetPublicMetadataAsync(logicalReference, cancellationToken);
+        return metadata.GetPublicMetadataAsync(logicalReference, cancellationToken);
     }
 
     public Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken)
     {
         CertificateReferences.Add(logicalReference);
-        return inner.GetClientCertificateAsync(logicalReference, cancellationToken);
+        return certificates.GetClientCertificateAsync(logicalReference, cancellationToken);
     }
 }
 
 internal sealed class FixedIdentifierSource(string identifier) : IJwtIdentifierSource
 {
     public string Create() => identifier;
+}
+
+internal sealed class StaticHostResolver(params IPAddress[] addresses) : IAuthenticationHostResolver
+{
+    public int Calls { get; private set; }
+
+    public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Calls++;
+        return Task.FromResult(addresses);
+    }
+}
+
+internal sealed class LoopbackAllowance : IAuthenticationPrivateDestinationAllowance
+{
+    public bool IsAllowed(string host, IPAddress address) => string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase) && IPAddress.IsLoopback(address);
 }
 
 internal static class AuthenticationTestData
@@ -85,34 +130,73 @@ internal static class AuthenticationTestData
         endpoint ?? new Uri("https://synthetic.example.test/api"),
         Guid.Parse("66666666-6666-6666-6666-666666666666"));
 
-    internal static Rs256JwtProfile JwtProfile(TimeSpan? lifetime = null) => new(
-        JwtProfileId,
-        "https://issuer.example.test",
-        "https://audience.example.test",
-        JwtSubjectPolicy.Installation,
-        null,
-        new HashSet<string>(StringComparer.Ordinal) { "role", "payload_sha256" },
-        lifetime ?? TimeSpan.FromMinutes(5),
-        TimeSpan.FromSeconds(30),
-        JwtBindingId);
+    internal static ServerOwnedRs256PolicySnapshot JwtPolicy(
+        AuthenticationExecutionContext context,
+        X509Certificate2 certificate,
+        long revision = 1,
+        string? issuer = null,
+        string? audience = null,
+        JwtSubjectPolicy subjectPolicy = JwtSubjectPolicy.Installation,
+        string? fixedSubject = null,
+        IReadOnlySet<string>? allowedClaims = null,
+        TimeSpan? lifetime = null) => ServerOwnedRs256PolicySnapshot.Create(
+            JwtProfileId,
+            revision,
+            context.ConnectorVersionId,
+            context.ConnectorId,
+            context.OperationId,
+            context.EnvironmentId,
+            context.Endpoint,
+            issuer ?? "https://issuer.example.test",
+            audience ?? "https://audience.example.test",
+            subjectPolicy,
+            fixedSubject,
+            allowedClaims ?? new HashSet<string>(StringComparer.Ordinal) { "role", "payload_sha256" },
+            lifetime ?? TimeSpan.FromMinutes(5),
+            TimeSpan.FromSeconds(30),
+            JwtBindingId,
+            certificate.SerialNumber,
+            revision,
+            CatalogChecksum(revision));
 
-    internal static MutualTlsClientProfile MutualTlsProfile(TimeSpan? warning = null) => new(
-        MutualTlsProfileId,
-        MutualTlsBindingId,
-        warning ?? TimeSpan.FromDays(7));
+    internal static ServerOwnedMutualTlsPolicySnapshot MutualTlsPolicy(
+        AuthenticationExecutionContext context,
+        X509Certificate2 certificate,
+        long revision = 1,
+        TimeSpan? warning = null) => ServerOwnedMutualTlsPolicySnapshot.Create(
+            MutualTlsProfileId,
+            revision,
+            context.ConnectorVersionId,
+            context.ConnectorId,
+            context.OperationId,
+            context.EnvironmentId,
+            context.Endpoint,
+            "GET",
+            MutualTlsBindingId,
+            certificate.SerialNumber,
+            revision,
+            CatalogChecksum(revision),
+            warning ?? TimeSpan.FromDays(7),
+            TimeSpan.FromSeconds(10),
+            4096);
 
-    internal static BoundAuthenticationResource SigningBinding(AuthenticationExecutionContext context, X509Certificate2 certificate, string providerReference, long revision = 1, AuthenticationResourceStatus status = AuthenticationResourceStatus.Active, AuthenticationResourcePurpose purpose = AuthenticationResourcePurpose.JwtSigning) =>
-        Binding(context, certificate, providerReference, JwtBindingId, purpose, revision, status);
+    internal static MutablePolicySource Policies(AuthenticationExecutionContext context, X509Certificate2 signingCertificate, X509Certificate2 mutualTlsCertificate) =>
+        new(JwtPolicy(context with { ProfileId = JwtProfileId }, signingCertificate), MutualTlsPolicy(context with { ProfileId = MutualTlsProfileId }, mutualTlsCertificate));
 
-    internal static BoundAuthenticationResource MutualTlsBinding(AuthenticationExecutionContext context, X509Certificate2 certificate, string providerReference, long revision = 1, AuthenticationResourceStatus status = AuthenticationResourceStatus.Active, AuthenticationResourcePurpose purpose = AuthenticationResourcePurpose.MutualTlsClientAuthentication) =>
-        Binding(context, certificate, providerReference, MutualTlsBindingId, purpose, revision, status);
+    internal static BoundAuthenticationResource SigningBinding(AuthenticationExecutionContext context, X509Certificate2 certificate, string providerReference, ServerOwnedRs256PolicySnapshot policy, AuthenticationResourceStatus status = AuthenticationResourceStatus.Active, AuthenticationResourcePurpose purpose = AuthenticationResourcePurpose.JwtSigning) =>
+        Binding(context, certificate, providerReference, JwtBindingId, purpose, policy.PolicyRevision, policy.PolicyChecksumSha256, policy.CatalogRevision, policy.CatalogChecksumSha256, status);
+
+    internal static BoundAuthenticationResource MutualTlsBinding(AuthenticationExecutionContext context, X509Certificate2 certificate, string providerReference, ServerOwnedMutualTlsPolicySnapshot policy, AuthenticationResourceStatus status = AuthenticationResourceStatus.Active, AuthenticationResourcePurpose purpose = AuthenticationResourcePurpose.MutualTlsClientAuthentication) =>
+        Binding(context, certificate, providerReference, MutualTlsBindingId, purpose, policy.PolicyRevision, policy.PolicyChecksumSha256, policy.CatalogRevision, policy.CatalogChecksumSha256, status);
 
     internal static BoundResourcePublicMetadata Metadata(X509Certificate2 certificate)
     {
         using RSA? rsa = certificate.GetRSAPublicKey();
         using ECDsa? ecdsa = certificate.GetECDsaPublicKey();
+        byte[] spki = rsa?.ExportSubjectPublicKeyInfo() ?? ecdsa?.ExportSubjectPublicKeyInfo() ?? [];
         return new(
             Convert.ToHexString(SHA256.HashData(certificate.RawData)),
+            Convert.ToHexString(SHA256.HashData(spki)),
             certificate.NotBefore.ToUniversalTime(),
             certificate.NotAfter.ToUniversalTime(),
             rsa is not null ? "RSA" : ecdsa is not null ? "ECDSA" : "unknown",
@@ -136,18 +220,32 @@ internal static class AuthenticationTestData
             ["sign-r2"] = material.SigningKeyRevision2
         });
 
-    private static BoundAuthenticationResource Binding(AuthenticationExecutionContext context, X509Certificate2 certificate, string providerReference, string logicalBinding, AuthenticationResourcePurpose purpose, long revision, AuthenticationResourceStatus status) => new(
-        logicalBinding,
-        purpose,
-        status,
-        context.ConnectorVersionId,
-        context.ConnectorId,
-        context.OperationId,
-        context.ProfileId,
-        context.EnvironmentId,
-        context.Endpoint,
-        revision,
-        new string(revision % 2 == 0 ? 'B' : 'A', 64),
-        providerReference,
-        Metadata(certificate));
+    private static BoundAuthenticationResource Binding(
+        AuthenticationExecutionContext context,
+        X509Certificate2 certificate,
+        string providerReference,
+        string logicalBinding,
+        AuthenticationResourcePurpose purpose,
+        long policyRevision,
+        string policyChecksum,
+        long catalogRevision,
+        string catalogChecksum,
+        AuthenticationResourceStatus status) => new(
+            logicalBinding,
+            purpose,
+            status,
+            context.ConnectorVersionId,
+            context.ConnectorId,
+            context.OperationId,
+            context.ProfileId,
+            policyRevision,
+            policyChecksum,
+            context.EnvironmentId,
+            context.Endpoint,
+            catalogRevision,
+            catalogChecksum,
+            providerReference,
+            Metadata(certificate));
+
+    private static string CatalogChecksum(long revision) => new(revision % 2 == 0 ? 'B' : 'A', 64);
 }

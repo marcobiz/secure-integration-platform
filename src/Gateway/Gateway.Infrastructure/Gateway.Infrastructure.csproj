@@ -5,6 +5,7 @@
     <RootNamespace>SecureIntegration.Gateway.Infrastructure</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\..\Authentication\CertificateSigning\Authentication.CertificateSigning.csproj" />
     <ProjectReference Include="..\Gateway.Application\Gateway.Application.csproj" />
     <ProjectReference Include="..\Gateway.Domain\Gateway.Domain.csproj" />
     <ProjectReference Include="..\..\Providers\Abstractions\Providers.Abstractions.csproj" />

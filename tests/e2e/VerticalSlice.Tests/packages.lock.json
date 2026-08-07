@@ -182,6 +182,12 @@
           "xunit.v3.runner.common": "[3.2.2]"
         }
       },
+      "SecureIntegration.Authentication.CertificateSigning": {
+        "type": "Project",
+        "dependencies": {
+          "SecureIntegration.Providers.Abstractions": "[1.0.0, )"
+        }
+      },
       "SecureIntegration.Broker.Core": {
         "type": "Project",
         "dependencies": {
@@ -220,6 +226,7 @@
         "type": "Project",
         "dependencies": {
           "Npgsql": "[10.0.3, )",
+          "SecureIntegration.Authentication.CertificateSigning": "[1.0.0, )",
           "SecureIntegration.Gateway.Application": "[1.0.0, )",
           "SecureIntegration.Gateway.Domain": "[1.0.0, )",
           "SecureIntegration.Providers.Abstractions": "[1.0.0, )"
