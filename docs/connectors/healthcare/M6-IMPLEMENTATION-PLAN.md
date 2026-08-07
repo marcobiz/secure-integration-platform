@@ -113,7 +113,7 @@ Provider access remains capability-specific: secret retrieval, client-certificat
 | Primitives | AP-03 Authorization Code + S256 PKCE, AP-04 token session, AP-05 policy-bound RS256 signing |
 | Shared work | Reuse Wave 1 attempt/token store; introduce signing profiles and replay-safe claim generation |
 | Complexity | High |
-| Risks | Incorrect ID-token semantics, claim/subject authority, algorithm confusion, code/token leakage, replay |
+| Risks | Incorrect identity semantics or authority binding; algorithm confusion; authorization-code leakage; replay |
 | Dependencies | OAuth metadata, redirects/scopes/client auth, token validation, JWT claim/header profile, key custody and FSE API schema |
 | Tests | PKCE positive/mismatch; state/nonce/code reuse; issuer/audience/expiry; wrong algorithm/key purpose; three auth headers; redaction |
 | Execution | HYBRID: browser local; token/signing/API central |
@@ -155,7 +155,7 @@ Tracks A, B and C do not depend on each other. D1-D4 do not share restricted sou
 - every JSON/XML fixture parsed with DTD prohibited;
 - PKCE S256 verifier/challenge consistency;
 - no compact JWT, private key, PFX/DER/PEM or real certificate bytes in Git;
-- no real endpoint, token, credential, patient/operator/pharmacy identity or raw evidence;
+- no operational authentication artefact, endpoint, identity or raw evidence;
 - repository secret scan and `git diff --check`;
 - manual provenance review: each fact is official/provided/observed/inferred/unknown.
 

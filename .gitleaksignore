@@ -1,3 +1,8 @@
 # Exact historical false positive: the word `key` was a typed ECDSA fixture parameter,
 # not a credential. The source was renamed in the following commit for clarity.
 9f3447ce497d5bc5f86c45c1b6b9101cf7074976:tests/unit/Gateway.Unit.Tests/GatewaySecurityTests.cs:generic-api-key:290
+
+# Exact M6 documentation false positives: prose describing identity/token risks was
+# misclassified as a generic key. Both phrases were rewritten in the next commit.
+4ebe375a13271ce6466d41aee84dcf7629e2b029:docs/connectors/healthcare/M6-IMPLEMENTATION-PLAN.md:generic-api-key:116
+4ebe375a13271ce6466d41aee84dcf7629e2b029:docs/connectors/healthcare/M6-IMPLEMENTATION-PLAN.md:generic-api-key:158

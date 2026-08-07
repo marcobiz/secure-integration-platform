@@ -24,7 +24,11 @@ deploy/windows/
 docs/adr/
 docs/api/
 docs/architecture/
-docs/connectors/
+docs/connectors/connector-cli.md
+docs/connectors/connector-definition.schema.json
+docs/connectors/connector-sdk.md
+docs/connectors/connector-specification.md
+docs/connectors/examples/
 docs/data/
 docs/deployment/
 docs/images/
@@ -52,7 +56,10 @@ eng/Export-OpenSourceCore.ps1
 sdk/
 samples/DirectGatewayClient/
 src/
-tests/
+tests/architecture/
+tests/e2e/
+tests/integration/
+tests/unit/
 tools/connector-cli/
 tools/m3/FixtureGenerator/
 tools/m3/LegacySimulator/
