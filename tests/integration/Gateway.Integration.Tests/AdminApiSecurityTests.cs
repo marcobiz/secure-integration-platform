@@ -36,7 +36,6 @@ public sealed class AdminApiSecurityTests
         string? migrationConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
         if (string.IsNullOrWhiteSpace(adminConnectionString) || string.IsNullOrWhiteSpace(migrationConnectionString))
             Assert.Skip("The definitive anti-exfiltration scenario requires the dedicated PostgreSQL 18 gate.");
-        await ApplyMigrationsAsync(migrationConnectionString);
         await using PostgresRuntimeRoleLease runtimeRole = await PostgresRuntimeRoleLease.CreateAsync(adminConnectionString, migrationConnectionString, TestContext.Current.CancellationToken);
         await using AntiExfiltrationFactory factory = new(runtimeRole.ConnectionString, adminConnectionString);
         using HttpClient editor = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
@@ -932,18 +931,6 @@ public sealed class AdminApiSecurityTests
         DirectoryInfo? directory = new(AppContext.BaseDirectory);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "BrokerGateway.slnx")) && !File.Exists(Path.Combine(directory.FullName, "BrokerGateway.Core.slnx"))) directory = directory.Parent;
         return directory?.FullName ?? throw new InvalidOperationException("Repository root not found.");
-    }
-
-    private static async Task ApplyMigrationsAsync(string connectionString)
-    {
-        await using NpgsqlConnection connection = new(connectionString);
-        await connection.OpenAsync(TestContext.Current.CancellationToken);
-        string directory = Path.Combine(RepositoryRoot(), "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations");
-        foreach (string path in Directory.GetFiles(directory, "*.sql").Order(StringComparer.Ordinal))
-        {
-            await using NpgsqlCommand command = new(await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken), connection);
-            await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
-        }
     }
 
     private sealed class PostgresRuntimeRoleLease : IAsyncDisposable
