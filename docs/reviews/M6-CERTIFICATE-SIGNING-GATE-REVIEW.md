@@ -86,7 +86,7 @@ delta review. The PR must not be auto-merged.
 | SBOM generation/validation | PASS, includes `auth-certificate-signing.spdx.json` |
 | SBOM mode regression | PASS |
 | Vulnerable transitive packages | None reported |
-| Core OSS export | Remediation staged-content PASS: 326 files; manifest SHA-256 `2CF47BAE4AFEC9ED1B72E9FAC400772503D9C146E8C8D2EDF1E59F165ABCE88D` |
+| Core OSS export | Remediation staged-content PASS: 326 files; manifest SHA-256 `6D1C218E5549BB9796241DB04BD611357150A1B6B3D486BC3D1BAEE88A9D29EA` |
 | Core export frontend regression | PASS: lint, 28/28 Vitest, build, license scan |
 | `git diff --check` | PASS |
 
