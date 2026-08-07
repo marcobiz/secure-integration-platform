@@ -2,8 +2,8 @@
 
 **Baseline M4:** `m4-connector-configuration-baseline-20260805` (`49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b`)  
 **Branch:** `m5/admin-ui-mvp`  
-**Implementation candidate:** `7385ab3209deb193ecffa69af5dab8d121c19f68`
-**Stato:** **FINAL THREE-FINDING REMEDIATION LOCAL PASS — exact-head CI and one final read-only acceptance review pending. M5 is not declared Done; PR #5 remains open and unmerged.**
+**Implementation candidate:** `9f523e9c7efb07d81ca96032869e76c1e6ab07f1`
+**Stato:** **ABSOLUTE FINAL B/C/D REMEDIATION LOCAL PASS — exact-head CI and one final read-only acceptance review pending. M5 is not declared Done; PR #5 remains open and unmerged.**
 
 > Historical evidence and counts below remain provenance only. The authoritative current delta is `M5-FINAL-ACCEPTANCE-FIXES.md`; the external evidence bundle binds the final documentation HEAD and is verified before the one read-only acceptance review.
 
@@ -13,7 +13,7 @@ The merge-blocking delta review is tracked in `M5-MULTI-AGENT-REMEDIATION.md`. T
 
 The final-cycle evidence directory is newly generated under `C:\SecureEvidence\m5-final-remediation-gate-*`; earlier bundles are not reused. This remains a delta-review candidate: M5 is not declared Done here, PR #5 is not merged, and M6 is not started.
 
-The exact implementation candidate passed general CI run `31088473433` (6/6 jobs), M5 pull-request run `31088472335` (15/15) and M5 push run `31088472535` (15/15). The final local gate records 149 ordinary .NET PASS plus eight explicit PostgreSQL skips, nine PostgreSQL 18 PASS, 25 Vitest PASS, 35 Playwright browser-mock PASS and `FULLSTACK-01` PASS. The authoritative delta is `M5-TECHNICAL-FINAL-REMEDIATION.md`; this review still does not declare M5 Done or authorize merge.
+Historical CI identifiers below predate the current candidate. For `9f523e9`, the local gate records 159 ordinary .NET PASS plus 10 PostgreSQL-gated skips, 10/10 PostgreSQL isolation tests plus 1/1 real anti-exfiltration E2E, 28 Vitest PASS, `UI-MOCK-29` 20/20, the complete 36-test browser suite 360/360, and `FULLSTACK-01` PASS. The authoritative current delta is `M5-FINAL-ACCEPTANCE-FIXES.md`; exact-head CI identifiers are intentionally recorded in the external evidence bundle so that no post-CI documentation commit changes the attested HEAD.
 
 ## Product result
 
