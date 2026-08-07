@@ -97,6 +97,7 @@ jobs:
       GATEWAY_POSTGRES_MIGRATION_CONNECTION: Host=127.0.0.1;Port=5432;Database=broker_gateway_test;Username=postgres;SSL Mode=Disable;GSS Encryption Mode=Disable
       EXPECTED_M2_MIGRATION_SHA256: 182CC690E16BB986638A4B52EE1554A4B540A8E58FD673F2111A79D194C66A98
       EXPECTED_M4_MIGRATION_SHA256: 9D991B0E4E8268D47C32121DECE2D3593B183623059BB17F4A82A479DC8D322C
+      EXPECTED_M55_MIGRATION_SHA256: 62D79829F1B3DF072E563A415B9380053227C6BCCA774C70C113DA372BC977C1
     steps:
       - uses: actions/checkout@v6
         with:
@@ -118,11 +119,14 @@ jobs:
           set -euo pipefail
           actual_m2_sha="$(sha256sum src/Gateway/Gateway.Infrastructure/Persistence/Migrations/0001_gateway_m2.sql | awk '{print toupper($1)}')"
           actual_m4_sha="$(sha256sum src/Gateway/Gateway.Infrastructure/Persistence/Migrations/0002_connector_configuration_m4.sql | awk '{print toupper($1)}')"
+          actual_m55_sha="$(sha256sum src/Gateway/Gateway.Infrastructure/Persistence/Migrations/0011_direct_installation_m55.sql | awk '{print toupper($1)}')"
           test "$actual_m2_sha" = "$EXPECTED_M2_MIGRATION_SHA256"
           test "$actual_m4_sha" = "$EXPECTED_M4_MIGRATION_SHA256"
+          test "$actual_m55_sha" = "$EXPECTED_M55_MIGRATION_SHA256"
           first_output="$(dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release --no-build -- apply)"
           grep -F "Applied 0001_gateway_m2.sql ($EXPECTED_M2_MIGRATION_SHA256)" <<<"$first_output"
           grep -F "Applied 0002_connector_configuration_m4.sql ($EXPECTED_M4_MIGRATION_SHA256)" <<<"$first_output"
+          grep -F "Applied 0011_direct_installation_m55.sql ($EXPECTED_M55_MIGRATION_SHA256)" <<<"$first_output"
           second_output="$(dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release --no-build -- apply)"
           if grep -Fq "Applied " <<<"$second_output"; then
             echo "Second migration application was not a no-op." >&2

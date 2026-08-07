@@ -27,7 +27,8 @@ public sealed class AdminSecurityTests
         Assert.Contains("BGW-ADMIN-FOUR-EYES", catalog.Reason);
         Assert.Contains("BGW-ADMIN-BOOTSTRAP-DENIED", catalog.Reason);
         Assert.Contains("BGW-PROVIDER-LOCATOR-DENIED", catalog.Reason);
-        Assert.Equal(139, catalog.Reason.Count);
+        Assert.Contains("BGW-INSTALLATION-CLIENT-VERSION", catalog.Reason);
+        Assert.Equal(140, catalog.Reason.Count);
         Assert.DoesNotContain("grant.revoke", catalog.AuditAction);
         Assert.DoesNotContain("BGW-GRANT-REVOKED", catalog.Reason);
         Assert.Contains(BackendRuntimeWireCodes.Reserved, value => value == new RuntimeWireCode(RuntimeWireCodeKind.AuditAction, "grant.revoke"));

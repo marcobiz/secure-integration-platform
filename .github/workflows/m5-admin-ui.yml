@@ -132,6 +132,7 @@ jobs:
           grep -F 'Applied 0008_provider_resource_catalog_m5.sql' <<<"$first"
           grep -F 'Applied 0009_runtime_locator_resolution_m5.sql' <<<"$first"
           grep -F 'Applied 0010_operation_scoped_locator_m5.sql' <<<"$first"
+          grep -F 'Applied 0011_direct_installation_m55.sql' <<<"$first"
           second="$(dotnet run --project src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release --no-build -- apply)"
           ! grep -Fq 'Applied ' <<<"$second"
       - name: Exercise real M5 PostgreSQL stores and fault boundaries

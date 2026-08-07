@@ -261,16 +261,27 @@ public sealed class AdminApiSecurityTests
         Guid environmentId = Guid.NewGuid();
         InMemoryGatewayRegistry registry = factory.Services.GetRequiredService<InMemoryGatewayRegistry>();
         await registry.AddEnvironmentAsync(new(environmentId, "local", "Local", false), TestContext.Current.CancellationToken);
-        using HttpRequestMessage create = new(HttpMethod.Post, "/admin/api/v1/installations") { Content = JsonContent.Create(new { tenantId, applicationId, environmentId }) };
+        using HttpRequestMessage create = new(HttpMethod.Post, "/admin/api/v1/installations") { Content = JsonContent.Create(new { tenantId, applicationId, environmentId, installationKind = "Direct" }) };
         create.Headers.Add("X-CSRF-TOKEN", csrf);
         using HttpResponseMessage response = await client.SendAsync(create, TestContext.Current.CancellationToken);
         string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.Contains("activationCode", body, StringComparison.Ordinal);
+        using HttpRequestMessage createLegacyCompatible = new(HttpMethod.Post, "/admin/api/v1/installations") { Content = JsonContent.Create(new { tenantId, applicationId, environmentId }) };
+        createLegacyCompatible.Headers.Add("X-CSRF-TOKEN", csrf);
+        using HttpResponseMessage legacyCompatible = await client.SendAsync(createLegacyCompatible, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Created, legacyCompatible.StatusCode);
         using HttpResponseMessage listed = await client.GetAsync($"/admin/api/v1/installations?tenantId={tenantId:D}", TestContext.Current.CancellationToken);
         string listBody = await listed.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
         Assert.DoesNotContain("activationCode", listBody, StringComparison.OrdinalIgnoreCase);
+        using JsonDocument listDocument = JsonDocument.Parse(listBody);
+        JsonElement list = listDocument.RootElement;
+        Assert.Contains(list.GetProperty("items").EnumerateArray(), value => value.GetProperty("installationKind").GetString() == "Direct");
+        Assert.Contains(list.GetProperty("items").EnumerateArray(), value => value.GetProperty("installationKind").GetString() == "Broker");
+        Assert.DoesNotContain("certificateDer", listBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("private", listBody, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(registry.SnapshotAuditEvents(), value => value.Action == "installation.create" && value.Metadata.TryGetValue("installationKind", out string? kind) && kind == "Direct");
     }
 
     [Fact]

@@ -21,11 +21,95 @@ public sealed class GatewaySecurityTests
 
         byte[] body = "request"u8.ToArray();
         RuntimeSignatureHeaders headers = fixture.Sign("POST", "/v1/connectors/vendor/operations/send:invoke", body);
-        AuthenticatedInstallation authenticated = await fixture.IdentityService.AuthenticateAsync(fixture.Certificate, "POST", "/v1/connectors/vendor/operations/send:invoke", headers, body, Guid.NewGuid(), TestContext.Current.CancellationToken);
+        GatewayClientPrincipal authenticated = await fixture.IdentityService.AuthenticateAsync(fixture.Certificate, "POST", "/v1/connectors/vendor/operations/send:invoke", headers, body, Guid.NewGuid(), TestContext.Current.CancellationToken);
         Assert.Equal(fixture.InstallationId, authenticated.Identity.InstallationId);
 
         GatewayException replay = await Assert.ThrowsAsync<GatewayException>(() => fixture.IdentityService.AuthenticateAsync(fixture.Certificate, "POST", "/v1/connectors/vendor/operations/send:invoke", headers, body, Guid.NewGuid(), TestContext.Current.CancellationToken));
         Assert.Equal("BGW-AUTHN-REPLAY", replay.Code);
+    }
+
+    [Fact]
+    public async Task M55_UT_Broker_and_Direct_principals_converge_on_the_same_runtime_pipeline()
+    {
+        using Fixture broker = await Fixture.CreateAsync(InstallationKind.Broker);
+        using Fixture direct = await Fixture.CreateSiblingAsync(broker, InstallationKind.Direct);
+        RegisteredInstallationIdentity brokerIdentity = await broker.EnrollAsync();
+        RegisteredInstallationIdentity directIdentity = await direct.EnrollAsync();
+        await broker.AddGrantAsync();
+        await direct.AddGrantAsync();
+
+        GatewayClientPrincipal brokerPrincipal = await broker.AuthenticateInvokeAsync();
+        GatewayClientPrincipal directPrincipal = await direct.AuthenticateInvokeAsync();
+        Assert.Equal(InstallationKind.Broker, brokerPrincipal.InstallationKind);
+        Assert.Equal(InstallationKind.Direct, directPrincipal.InstallationKind);
+        Assert.Equal(GatewayClientAuthenticationMethod.MutualTlsPopBgw1, brokerPrincipal.AuthenticationMethod);
+        Assert.Equal(brokerPrincipal.AuthenticationMethod, directPrincipal.AuthenticationMethod);
+        Assert.Contains("gateway.runtime", directPrincipal.AuthenticatedScopes);
+        Assert.Equal(directIdentity.TenantId, directPrincipal.TenantId);
+        Assert.Equal(directIdentity.ApplicationId, directPrincipal.ApplicationId);
+        Assert.Equal(brokerPrincipal.TenantId, directPrincipal.TenantId);
+        Assert.Equal(brokerPrincipal.ApplicationId, directPrincipal.ApplicationId);
+
+        RecordingTransport brokerTransport = new();
+        RecordingTransport directTransport = new();
+        GatewayInvokeResponse brokerResponse = await broker.CreateEgress(new StaticResolver(IPAddress.Parse("8.8.8.8")), brokerTransport, GatewayAuthenticationKind.ApiKey)
+            .InvokeAsync(brokerPrincipal, "vendor", "send", Invoke(), TestContext.Current.CancellationToken);
+        GatewayInvokeResponse directResponse = await direct.CreateEgress(new StaticResolver(IPAddress.Parse("8.8.8.8")), directTransport, GatewayAuthenticationKind.ApiKey)
+            .InvokeAsync(directPrincipal, "vendor", "send", Invoke(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(brokerResponse.ConnectorVersion, directResponse.ConnectorVersion);
+        Assert.Equal(brokerTransport.Uri, directTransport.Uri);
+        Assert.Equal(brokerTransport.ApiKey, directTransport.ApiKey);
+        IReadOnlyList<GatewayAuditEvent> audit = broker.Registry.SnapshotAuditEvents();
+        Assert.Equal("Broker", audit.Single(value => value.Action == "operation.invoke" && value.ActorId == broker.InstallationId.ToString("D")).Metadata["callerKind"]);
+        Assert.Equal("Direct", audit.Single(value => value.Action == "operation.invoke" && value.ActorId == direct.InstallationId.ToString("D")).Metadata["callerKind"]);
+        Assert.Equal(InstallationKind.Broker, brokerIdentity.InstallationKind);
+        Assert.Equal(InstallationKind.Direct, directIdentity.InstallationKind);
+    }
+
+    [Fact]
+    public async Task M55_UT_Direct_installation_rejects_Broker_version_field_signature_replay_revocation_and_missing_grant()
+    {
+        using Fixture invalidVersion = await Fixture.CreateAsync(InstallationKind.Direct);
+        EnrollmentChallengeResponse challenge = await invalidVersion.CreateChallengeAsync();
+        ActivationRequest wrongVersionField = invalidVersion.CreateActivation(challenge, invalidVersion.Provisioning.ActivationCode) with { BrokerVersion = "1.0.0", ClientVersion = null };
+        GatewayException versionDenied = await Assert.ThrowsAsync<GatewayException>(() => invalidVersion.EnrollmentService.ActivateAsync(wrongVersionField, TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-INSTALLATION-CLIENT-VERSION", versionDenied.Code);
+
+        using Fixture stale = await Fixture.CreateAsync(InstallationKind.Direct);
+        await stale.EnrollAsync();
+        byte[] staleBody = "stale-direct-request"u8.ToArray();
+        RuntimeSignatureHeaders staleHeaders = stale.Sign("POST", "/v1/connectors/vendor/operations/send:invoke", staleBody);
+        stale.Clock.UtcNow = stale.Clock.UtcNow.AddMinutes(6);
+        GatewayException expiredTimestamp = await Assert.ThrowsAsync<GatewayException>(() => stale.IdentityService.AuthenticateAsync(stale.Certificate, "POST", "/v1/connectors/vendor/operations/send:invoke", staleHeaders, staleBody, Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-AUTHN-TIMESTAMP", expiredTimestamp.Code);
+
+        using ECDsa unknownKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        using X509Certificate2 unknownCertificate = CreateCertificate(unknownKey, stale.Clock.UtcNow);
+        GatewayException unknownMtls = await Assert.ThrowsAsync<GatewayException>(() => stale.IdentityService.AuthenticateAsync(unknownCertificate, "POST", "/v1/connectors/vendor/operations/send:invoke", staleHeaders, staleBody, Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-AUTHN-CREDENTIAL-UNKNOWN", unknownMtls.Code);
+
+        using Fixture direct = await Fixture.CreateAsync(InstallationKind.Direct);
+        await direct.EnrollAsync();
+        byte[] body = "direct-request"u8.ToArray();
+        RuntimeSignatureHeaders signed = direct.Sign("POST", "/v1/connectors/vendor/operations/send:invoke", body);
+        RuntimeSignatureHeaders invalidSignature = signed with { Signature = Base64Url.Encode(new byte[64]) };
+        GatewayException signatureDenied = await Assert.ThrowsAsync<GatewayException>(() => direct.IdentityService.AuthenticateAsync(direct.Certificate, "POST", "/v1/connectors/vendor/operations/send:invoke", invalidSignature, body, Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-AUTHN-SIGNATURE", signatureDenied.Code);
+
+        GatewayClientPrincipal principal = await direct.IdentityService.AuthenticateAsync(direct.Certificate, "POST", "/v1/connectors/vendor/operations/send:invoke", signed, body, Guid.NewGuid(), TestContext.Current.CancellationToken);
+        GatewayException replay = await Assert.ThrowsAsync<GatewayException>(() => direct.IdentityService.AuthenticateAsync(direct.Certificate, "POST", "/v1/connectors/vendor/operations/send:invoke", signed, body, Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-AUTHN-REPLAY", replay.Code);
+
+        TrackingResolver resolver = new();
+        GatewayException grantDenied = await Assert.ThrowsAsync<GatewayException>(() => direct.CreateEgress(resolver, new RecordingTransport(), GatewayAuthenticationKind.ApiKey).InvokeAsync(principal, "vendor", "send", Invoke(), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-AUTHZ-OPERATION-DENIED", grantDenied.Code);
+        Assert.Equal(0, resolver.CallCount);
+
+        await direct.EnrollmentService.RevokeAsync(direct.InstallationId, "direct client revoked", TestContext.Current.CancellationToken);
+        RuntimeSignatureHeaders afterRevocation = direct.Sign("GET", "/v1/broker-policy", []);
+        GatewayException revoked = await Assert.ThrowsAsync<GatewayException>(() => direct.IdentityService.AuthenticateAsync(direct.Certificate, "GET", "/v1/broker-policy", afterRevocation, ReadOnlyMemory<byte>.Empty, Guid.NewGuid(), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-INSTALLATION-REVOKED", revoked.Code);
     }
 
     [Fact]
@@ -283,6 +367,13 @@ public sealed class GatewaySecurityTests
         Assert.DoesNotContain("Url", propertyNames);
         Assert.DoesNotContain("SecretReference", propertyNames);
         Assert.DoesNotContain("TenantId", propertyNames);
+        Assert.DoesNotContain("ApplicationId", propertyNames);
+        Assert.DoesNotContain("InstallationId", propertyNames);
+        Assert.DoesNotContain("Destination", propertyNames);
+        Assert.DoesNotContain("Provider", propertyNames);
+        Assert.DoesNotContain("Locator", propertyNames);
+        Assert.DoesNotContain("SecretBinding", propertyNames);
+        Assert.DoesNotContain("CertificateBinding", propertyNames);
     }
 
     [Fact]
@@ -305,7 +396,7 @@ public sealed class GatewaySecurityTests
         using Fixture fixture = await Fixture.CreateAsync();
         RegisteredInstallationIdentity identity = await fixture.EnrollAsync();
         await fixture.AddGrantAsync();
-        AuthenticatedInstallation authenticated = new(identity, Guid.NewGuid());
+        GatewayClientPrincipal authenticated = new(identity, Guid.NewGuid());
         TrackingResolver requestResolver = new();
         RestrictedEgressService requestService = fixture.CreateEgress(requestResolver, new RecordingTransport(), GatewayAuthenticationKind.None);
         GatewayInvokeRequest oversized = new("1.0", new("application/octet-stream", "base64", Convert.ToBase64String(new byte[1025])), Guid.NewGuid());
@@ -427,7 +518,7 @@ public sealed class GatewaySecurityTests
         public RuntimeIdentityService IdentityService { get; }
         public InMemoryGatewayRegistry Registry => registry;
 
-        public static async Task<Fixture> CreateAsync()
+        public static async Task<Fixture> CreateAsync(InstallationKind installationKind = InstallationKind.Broker)
         {
             FakeClock clock = new(new DateTimeOffset(2026, 8, 4, 10, 0, 0, TimeSpan.Zero));
             ECDsa key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
@@ -442,8 +533,22 @@ public sealed class GatewaySecurityTests
             ProvisionedActivation provisioning = await provisioningService.CreateInstallationAsync(
                 new(tenantId, "tenant-a", "Tenant A", TenantStatus.Active, clock.UtcNow),
                 new(applicationId, "product-a", "Product A", ApplicationStatus.Active, "1.0.0", null, clock.UtcNow),
-                new(environmentId, "test", "Test", false), installationId, "unit-test", TestContext.Current.CancellationToken);
+                new(environmentId, "test", "Test", false), installationId, "unit-test", TestContext.Current.CancellationToken, installationKind);
             return new Fixture(key, certificate, spki, registry, clock, provisioning, tenantId, applicationId, environmentId);
+        }
+
+        public static async Task<Fixture> CreateSiblingAsync(Fixture existing, InstallationKind installationKind)
+        {
+            ArgumentNullException.ThrowIfNull(existing);
+            ECDsa key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            X509Certificate2 certificate = CreateCertificate(key, existing.Clock.UtcNow);
+            byte[] spki = key.ExportSubjectPublicKeyInfo();
+            GatewayProvisioningService provisioningService = new(existing.registry, existing.Clock, new EnrollmentSecurityOptions { ActivationHmacKey = ActivationKey });
+            Guid installationId = Guid.NewGuid();
+            InstallationRecord installation = new(installationId, existing.TenantId, existing.ApplicationId, existing.EnvironmentId, InstallationStatus.Pending, null, existing.Clock.UtcNow, InstallationKind: installationKind, UpdatedAt: existing.Clock.UtcNow);
+            GatewayAuditEvent audit = new(Guid.NewGuid(), existing.Clock.UtcNow, existing.TenantId, "administrator", "unit-test", "installation.create", "installation", installationId.ToString("D"), Guid.NewGuid(), "success", "BGW-INSTALLATION-CREATED", new Dictionary<string, string> { ["installationKind"] = installationKind.ToString() });
+            ProvisionedActivation provisioning = await provisioningService.CreateAdminInstallationAsync(installation, "unit-test", audit, TestContext.Current.CancellationToken);
+            return new Fixture(key, certificate, spki, existing.registry, existing.Clock, provisioning, existing.TenantId, existing.ApplicationId, existing.EnvironmentId);
         }
 
         public async Task<EnrollmentChallengeResponse> CreateChallengeAsync() => await EnrollmentService.CreateChallengeAsync(new(Provisioning.ActivationCodeId, Convert.ToBase64String(spki)), TestContext.Current.CancellationToken);
@@ -452,7 +557,10 @@ public sealed class GatewaySecurityTests
         {
             EnrollmentChallenge proofChallenge = new(challenge.ChallengeId, Provisioning.ActivationCodeId, Base64Url.Decode(challenge.Challenge), spki, challenge.ExpiresAt);
             byte[] signature = key.SignData(InstallationEnrollmentService.BuildActivationProof(proofChallenge), HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
-            return new(challenge.ChallengeId, activationCode, Convert.ToBase64String(Certificate.RawData), Base64Url.Encode(signature), "1.0.0");
+            InstallationKind kind = registry.SnapshotDirectory().Installations.Single(value => value.Id == InstallationId).InstallationKind;
+            return kind == InstallationKind.Broker
+                ? new(challenge.ChallengeId, activationCode, Convert.ToBase64String(Certificate.RawData), Base64Url.Encode(signature), BrokerVersion: "1.0.0")
+                : new(challenge.ChallengeId, activationCode, Convert.ToBase64String(Certificate.RawData), Base64Url.Encode(signature), ClientVersion: "1.0.0");
         }
 
         public async Task<RegisteredInstallationIdentity> EnrollAsync()
@@ -469,6 +577,14 @@ public sealed class GatewaySecurityTests
             string digest = Base64Url.Encode(SHA256.HashData(body));
             byte[] signature = key.SignData(System.Text.Encoding.UTF8.GetBytes(RuntimeIdentityService.BuildSigningInput(method, target, timestamp, nonce, digest)), HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
             return new(timestamp, nonce, digest, Base64Url.Encode(signature));
+        }
+
+        public async Task<GatewayClientPrincipal> AuthenticateInvokeAsync()
+        {
+            GatewayInvokeRequest request = Invoke();
+            byte[] body = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(request);
+            const string target = "/v1/connectors/vendor/operations/send:invoke";
+            return await IdentityService.AuthenticateAsync(Certificate, "POST", target, Sign("POST", target, body), body, request.CorrelationId, TestContext.Current.CancellationToken);
         }
 
         public Task AddGrantAsync() => registry.AddGrantAsync(new(Guid.NewGuid(), InstallationId, TenantId, "vendor", "send", true, Clock.UtcNow), TestContext.Current.CancellationToken);

@@ -180,6 +180,29 @@ public sealed class PostgresIsolationTests
         RegisteredInstallationIdentity revoked = await registry.FindIdentityByCertificateAsync(SHA256.HashData(replacementCertificate.RawData), TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("Revoked credential lookup failed.");
         Assert.Equal(InstallationStatus.Revoked, revoked.InstallationStatus);
         Assert.Equal(CredentialStatus.Revoked, revoked.CredentialStatus);
+
+        Guid directInstallationId = Guid.NewGuid();
+        GatewayAuditEvent directCreateAudit = new(Guid.NewGuid(), clock.UtcNow, tenantId, "administrator", "postgres-test", "installation.create", "installation", directInstallationId.ToString("D"), Guid.NewGuid(), "success", "BGW-INSTALLATION-CREATED", new Dictionary<string, string> { ["installationKind"] = InstallationKind.Direct.ToString() });
+        ProvisionedActivation directProvisioning = await provisioningService.CreateAdminInstallationAsync(
+            new(directInstallationId, tenantId, applicationId, environmentId, InstallationStatus.Pending, null, clock.UtcNow, InstallationKind: InstallationKind.Direct, UpdatedAt: clock.UtcNow),
+            "postgres-test", directCreateAudit, TestContext.Current.CancellationToken);
+        using ECDsa directKey = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        CertificateRequest directCertificateRequest = new("CN=postgres-direct-integration", directKey, HashAlgorithmName.SHA256);
+        directCertificateRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new Oid("1.3.6.1.5.5.7.3.2") }, true));
+        directCertificateRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
+        using X509Certificate2 directCertificate = directCertificateRequest.CreateSelfSigned(clock.UtcNow.AddMinutes(-1), clock.UtcNow.AddDays(90));
+        byte[] directSpki = directKey.ExportSubjectPublicKeyInfo();
+        EnrollmentChallengeResponse directChallenge = await enrollmentService.CreateChallengeAsync(new(directProvisioning.ActivationCodeId, Convert.ToBase64String(directSpki)), TestContext.Current.CancellationToken);
+        EnrollmentChallenge directProofChallenge = new(directChallenge.ChallengeId, directProvisioning.ActivationCodeId, Base64Url.Decode(directChallenge.Challenge), directSpki, directChallenge.ExpiresAt);
+        byte[] directProof = directKey.SignData(InstallationEnrollmentService.BuildActivationProof(directProofChallenge), HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation);
+        await enrollmentService.ActivateAsync(new(directChallenge.ChallengeId, directProvisioning.ActivationCode, Convert.ToBase64String(directCertificate.RawData), Base64Url.Encode(directProof), ClientVersion: "1.0.0"), TestContext.Current.CancellationToken);
+        RegisteredInstallationIdentity directIdentity = await registry.FindIdentityByCertificateAsync(SHA256.HashData(directCertificate.RawData), TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("Direct credential lookup failed.");
+        Assert.Equal(InstallationKind.Direct, directIdentity.InstallationKind);
+        Assert.Equal("1.0.0", directIdentity.ClientVersion);
+        Assert.Equal(identity.TenantId, directIdentity.TenantId);
+        Assert.Equal(identity.ApplicationId, directIdentity.ApplicationId);
+        await adminRegistry.AddGrantAsync(new(Guid.NewGuid(), directInstallationId, tenantId, "vendor", "send", true, clock.UtcNow), TestContext.Current.CancellationToken);
+        Assert.True(await registry.IsGrantedAsync(directInstallationId, tenantId, "vendor", "send", clock.UtcNow, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -214,6 +237,14 @@ public sealed class PostgresIsolationTests
         Assert.Contains("p_logical_binding_id", operationLocatorSql, StringComparison.Ordinal);
         Assert.Contains("resource.key = p_logical_binding_id", operationLocatorSql, StringComparison.Ordinal);
         Assert.Contains("operation -> 'authentication'", operationLocatorSql, StringComparison.Ordinal);
+        string directInstallationSql = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0011_direct_installation_m55.sql"));
+        Assert.Contains("installation_kind IN ('broker','direct')", directInstallationSql, StringComparison.Ordinal);
+        Assert.Contains("installation_kind = 'direct' AND broker_version IS NULL", directInstallationSql, StringComparison.Ordinal);
+        Assert.Contains("CREATE OR REPLACE FUNCTION gateway.resolve_installation_client_metadata", directInstallationSql, StringComparison.Ordinal);
+        Assert.Contains("REVOKE ALL ON FUNCTION gateway.resolve_installation_client_metadata(bytea) FROM PUBLIC", directInstallationSql, StringComparison.Ordinal);
+        Assert.DoesNotContain("DROP FUNCTION", directInstallationSql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("BYPASSRLS", directInstallationSql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("secret_value", directInstallationSql, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
