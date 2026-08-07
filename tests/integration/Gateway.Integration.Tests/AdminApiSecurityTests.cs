@@ -56,7 +56,7 @@ public sealed class AdminApiSecurityTests
         IConnectorConfigurationStore store = factory.Services.GetRequiredService<IConnectorConfigurationStore>();
         ProviderResourceCatalogRecord secret = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "instrumented", "Instrumented provider", "synthetic", "api-key", ProviderResourceType.Secret, "Vendor API key", environmentId, version.ConnectorId, "submit", "instrumented://api-key", ProviderResourceStatus.Active, "api-v1", 0, null, null, string.Empty, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
         _ = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "instrumented", "Instrumented provider", "synthetic", "certificate", ProviderResourceType.ClientCertificate, "Vendor certificate", environmentId, version.ConnectorId, "submit", "instrumented://certificate", ProviderResourceStatus.Active, "cert-resource-v1", 0, 1, publicMetadata, string.Empty, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
-        string syntheticPassword = "m5-password-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(18));
+        string syntheticPassword = "synthetic-password-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(18));
         string[] hostileResourceIds = [canary, syntheticPassword, privatePem, pfxBase64, syntheticConnectionString, "https://attacker.example/credential", "missing-resource"];
         foreach (string hostileResourceId in hostileResourceIds)
         {
