@@ -109,8 +109,18 @@ client, un parser configurabile o un motore di scripting.
 Le sole reference restituibili al runtime sono opache. Username, password, challenge
 state upstream e session value restano nell'assembly e non sono parte di cache key,
 audit, errori o risposta. La cache include Tenant/Installation/Application,
-Connector/version, Environment, endpoint revision, credential revision e profile; un
-cambio revisione non può risolvere una sessione precedente.
+Connector/version, Environment, binding revision, endpoint revision, credential revision
+e profile. Per key esistono al massimo una interaction e una session generation corrente;
+la promotion dopo challenge è atomica, il digest precedente non è più risolvibile e il
+numero globale di key è limitato a 256 con sweep lazy delle entry scadute.
+
+`ISoapSessionResourceStampProvider` è obbligatorio: prima della risoluzione e subito prima
+dell'uso il client confronta lo stamp server-side corrente con credential resource
+revision/status `Active`, binding revision ed endpoint revision. Un disable o rotate
+fallisce prima di secret provider, DNS o transport. La deadline effettiva resta collegata
+fino al completamento del response body bounded e del parsing XML. Il subset Fault SOAP
+1.1/1.2 ha struttura e cardinalità esatte; un Fault ambiguo produce
+`SOAP-FAULT-STRUCTURE` e non può attivare la riacquisizione di sessione.
 
 Il server Kestrel sotto `tools/m6/SyntheticSoapServer` e i test associati qualificano
 esclusivamente il profilo sintetico. Non costituiscono caratterizzazione o conformità

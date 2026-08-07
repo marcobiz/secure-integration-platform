@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using SecureIntegration.Gateway.Application;
@@ -7,81 +6,143 @@ namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 
 internal sealed class SoapSessionCache
 {
-    private readonly ConcurrentDictionary<string, StoredSession> sessions = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<SoapSessionCacheKey, string> currentSessions = new();
-    private readonly ConcurrentDictionary<string, StoredInteraction> interactions = new(StringComparer.Ordinal);
+    internal const int MaximumEntries = 256;
+    private readonly object sync = new();
+    private readonly Dictionary<SoapSessionCacheKey, KeyState> entries = [];
 
-    public OpaqueSoapSessionReference Store(SoapSessionCacheKey key, string upstreamSession, DateTimeOffset expiresAt)
+    internal int EntryCount { get { lock (sync) return entries.Count; } }
+    internal int CurrentSessionCount { get { lock (sync) return entries.Values.Count(value => value.Current is not null); } }
+    internal int PendingInteractionCount { get { lock (sync) return entries.Values.Count(value => value.Interaction is not null); } }
+
+    public OpaqueSoapSessionReference Store(SoapSessionCacheKey key, string upstreamSession, DateTimeOffset now, DateTimeOffset expiresAt)
     {
         string reference = NewReference();
         string digest = Digest(reference);
-        StoredSession stored = new(key, reference, upstreamSession, expiresAt);
-        if (!sessions.TryAdd(digest, stored)) throw new SoapAuthException("SOAP-SESSION-COLLISION");
-        if (currentSessions.TryGetValue(key, out string? priorDigest)) sessions.TryRemove(priorDigest, out _);
-        currentSessions[key] = digest;
+        lock (sync)
+        {
+            SweepExpired(now);
+            KeyState state = GetOrCreate(key);
+            state.Generation = checked(state.Generation + 1);
+            state.Current = new StoredSession(state.Generation, reference, digest, upstreamSession, expiresAt);
+            state.Interaction = null;
+        }
         return new OpaqueSoapSessionReference(reference);
     }
 
     public (OpaqueSoapSessionReference Reference, string UpstreamSession)? ResolveCurrent(SoapSessionCacheKey key, DateTimeOffset now)
     {
-        if (!currentSessions.TryGetValue(key, out string? digest) || !sessions.TryGetValue(digest, out StoredSession? stored)) return null;
-        if (stored.ExpiresAt <= now)
+        lock (sync)
         {
-            InvalidateDigest(key, digest);
-            return null;
+            SweepExpired(now);
+            if (!entries.TryGetValue(key, out KeyState? state) || state.Current is not StoredSession stored) return null;
+            return (new OpaqueSoapSessionReference(stored.Reference), stored.UpstreamSession);
         }
-        return (new OpaqueSoapSessionReference(stored.Reference), stored.UpstreamSession);
     }
 
     public string? Resolve(SoapSessionCacheKey key, OpaqueSoapSessionReference reference, DateTimeOffset now)
     {
         ValidateReference(reference.Value);
         string digest = Digest(reference.Value);
-        if (!sessions.TryGetValue(digest, out StoredSession? stored) || stored.Key != key || stored.ExpiresAt <= now)
+        lock (sync)
         {
-            if (stored?.ExpiresAt <= now) InvalidateDigest(stored.Key, digest);
-            return null;
+            SweepExpired(now);
+            if (!entries.TryGetValue(key, out KeyState? state) || state.Current is not StoredSession stored || !string.Equals(stored.Digest, digest, StringComparison.Ordinal)) return null;
+            return stored.UpstreamSession;
         }
-        return stored.UpstreamSession;
     }
 
     public void Invalidate(SoapSessionCacheKey key, OpaqueSoapSessionReference? reference = null)
     {
-        if (reference is not null)
+        lock (sync)
         {
-            ValidateReference(reference.Value);
-            string digest = Digest(reference.Value);
-            if (sessions.TryGetValue(digest, out StoredSession? stored) && stored.Key == key) InvalidateDigest(key, digest);
-            return;
+            if (!entries.TryGetValue(key, out KeyState? state)) return;
+            if (reference is not null)
+            {
+                ValidateReference(reference.Value);
+                string digest = Digest(reference.Value);
+                if (state.Current is not null && string.Equals(state.Current.Digest, digest, StringComparison.Ordinal)) state.Current = null;
+            }
+            else state.Current = null;
+            RemoveIfEmpty(key, state);
         }
-        if (currentSessions.TryRemove(key, out string? current)) sessions.TryRemove(current, out _);
     }
 
-    public SoapInteractiveChallenge StoreInteraction(SoapSessionCacheKey key, string upstreamChallenge, DateTimeOffset expiresAt)
+    public SoapInteractiveChallenge StoreInteraction(SoapSessionCacheKey key, string upstreamChallenge, DateTimeOffset now, DateTimeOffset expiresAt)
     {
         string reference = NewReference();
-        if (!interactions.TryAdd(Digest(reference), new StoredInteraction(key, upstreamChallenge, expiresAt))) throw new SoapAuthException("SOAP-INTERACTION-COLLISION");
+        lock (sync)
+        {
+            SweepExpired(now);
+            KeyState state = GetOrCreate(key);
+            state.InteractionGeneration = checked(state.InteractionGeneration + 1);
+            state.Interaction = new StoredInteraction(state.InteractionGeneration, Digest(reference), upstreamChallenge, expiresAt, null);
+        }
         return new SoapInteractiveChallenge(reference, upstreamChallenge, expiresAt);
     }
 
-    public string ConsumeInteraction(SoapSessionCacheKey key, string interactionReference, DateTimeOffset now)
+    public InteractionCompletion BeginInteractionCompletion(SoapSessionCacheKey key, string interactionReference, DateTimeOffset now)
     {
         ValidateReference(interactionReference);
         string digest = Digest(interactionReference);
-        if (!interactions.TryGetValue(digest, out StoredInteraction? stored) || stored.Key != key || stored.ExpiresAt <= now)
+        lock (sync)
         {
-            if (stored?.ExpiresAt <= now) interactions.TryRemove(digest, out _);
-            throw new SoapAuthException("SOAP-INTERACTION-INVALID");
+            SweepExpired(now);
+            if (!entries.TryGetValue(key, out KeyState? state) || state.Interaction is not StoredInteraction interaction || interaction.CompletionId is not null || !string.Equals(interaction.Digest, digest, StringComparison.Ordinal))
+                throw new SoapAuthException("SOAP-INTERACTION-INVALID");
+            Guid completionId = Guid.NewGuid();
+            state.Interaction = interaction with { CompletionId = completionId };
+            return new InteractionCompletion(key, interaction.Generation, completionId, interaction.UpstreamChallenge);
         }
-        if (!((ICollection<KeyValuePair<string, StoredInteraction>>)interactions).Remove(new(digest, stored))) throw new SoapAuthException("SOAP-INTERACTION-INVALID");
-        return stored.UpstreamChallenge;
     }
 
-    private void InvalidateDigest(SoapSessionCacheKey key, string digest)
+    public OpaqueSoapSessionReference CompleteInteraction(InteractionCompletion completion, string upstreamSession, DateTimeOffset now, DateTimeOffset expiresAt)
     {
-        sessions.TryRemove(digest, out _);
-        currentSessions.TryGetValue(key, out string? current);
-        if (string.Equals(current, digest, StringComparison.Ordinal)) currentSessions.TryRemove(key, out _);
+        string reference = NewReference();
+        string digest = Digest(reference);
+        lock (sync)
+        {
+            SweepExpired(now);
+            if (!entries.TryGetValue(completion.Key, out KeyState? state) || state.Interaction is not StoredInteraction interaction || interaction.Generation != completion.InteractionGeneration || interaction.CompletionId != completion.CompletionId)
+                throw new SoapAuthException("SOAP-INTERACTION-INVALID");
+            state.Generation = checked(state.Generation + 1);
+            state.Current = new StoredSession(state.Generation, reference, digest, upstreamSession, expiresAt);
+            state.Interaction = null;
+        }
+        return new OpaqueSoapSessionReference(reference);
+    }
+
+    public void AbandonInteraction(InteractionCompletion completion)
+    {
+        lock (sync)
+        {
+            if (!entries.TryGetValue(completion.Key, out KeyState? state) || state.Interaction is not StoredInteraction interaction || interaction.Generation != completion.InteractionGeneration || interaction.CompletionId != completion.CompletionId) return;
+            state.Interaction = null;
+            RemoveIfEmpty(completion.Key, state);
+        }
+    }
+
+    private KeyState GetOrCreate(SoapSessionCacheKey key)
+    {
+        if (entries.TryGetValue(key, out KeyState? existing)) return existing;
+        if (entries.Count >= MaximumEntries) throw new SoapAuthException("SOAP-CACHE-CAPACITY");
+        KeyState created = new();
+        entries.Add(key, created);
+        return created;
+    }
+
+    private void SweepExpired(DateTimeOffset now)
+    {
+        foreach ((SoapSessionCacheKey key, KeyState state) in entries.ToArray())
+        {
+            if (state.Current?.ExpiresAt <= now) state.Current = null;
+            if (state.Interaction?.ExpiresAt <= now) state.Interaction = null;
+            RemoveIfEmpty(key, state);
+        }
+    }
+
+    private void RemoveIfEmpty(SoapSessionCacheKey key, KeyState state)
+    {
+        if (state.Current is null && state.Interaction is null) entries.Remove(key);
     }
 
     private static string NewReference() => Base64Url.Encode(RandomNumberGenerator.GetBytes(32));
@@ -93,9 +154,19 @@ internal sealed class SoapSessionCache
             throw new SoapAuthException("SOAP-OPAQUE-REFERENCE-INVALID");
     }
 
-    private sealed record StoredSession(SoapSessionCacheKey Key, string Reference, string UpstreamSession, DateTimeOffset ExpiresAt);
-    private sealed record StoredInteraction(SoapSessionCacheKey Key, string UpstreamChallenge, DateTimeOffset ExpiresAt);
+    private sealed class KeyState
+    {
+        public long Generation { get; set; }
+        public long InteractionGeneration { get; set; }
+        public StoredSession? Current { get; set; }
+        public StoredInteraction? Interaction { get; set; }
+    }
+
+    private sealed record StoredSession(long Generation, string Reference, string Digest, string UpstreamSession, DateTimeOffset ExpiresAt);
+    private sealed record StoredInteraction(long Generation, string Digest, string UpstreamChallenge, DateTimeOffset ExpiresAt, Guid? CompletionId);
 }
+
+internal sealed record InteractionCompletion(SoapSessionCacheKey Key, long InteractionGeneration, Guid CompletionId, string UpstreamChallenge);
 
 internal sealed record SoapSessionCacheKey(
     Guid TenantId,
@@ -104,6 +175,7 @@ internal sealed record SoapSessionCacheKey(
     Guid EnvironmentId,
     string ConnectorId,
     string ConnectorVersion,
+    long BindingRevision,
     long EndpointRevision,
     long CredentialRevision,
     string ProfileId);

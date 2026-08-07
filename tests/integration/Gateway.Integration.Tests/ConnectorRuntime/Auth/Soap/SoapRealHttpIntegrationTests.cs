@@ -105,6 +105,29 @@ public sealed class SoapRealHttpIntegrationTests
         Assert.Equal(StatusCodes.Status415UnsupportedMediaType, contentTypeResponse.StatusCode);
     }
 
+    [Fact]
+    public async Task M6_IT_SOAP_real_HTTPS_timeout_covers_headers_flushed_then_stalled_response_body()
+    {
+        using CertificateFixture certificates = CertificateFixture.Create();
+        await using SyntheticSoapServerInstance server = await SyntheticSoapServerHost.StartAsync(
+            new("synthetic-user", "synthetic-password", false, TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2)), certificates.Server, TestContext.Current.CancellationToken);
+        SoapSessionClient client = CreateClient(certificates.Root, certificates.Server, server.Endpoint);
+        SystemGatewayClock clock = new();
+        ConnectorAuthExecutionContext context = Context(clock);
+        SoapEndpointBinding endpoint = new(server.Endpoint, 4);
+        SoapSessionProfile loginProfile = Profile(SoapEnvelopeVersion.Soap11, timeoutMilliseconds: 2_000, maximumResponseBytes: 4_096);
+        OpaqueSoapSessionReference session = await client.AcquireSessionAsync(context, endpoint, loginProfile, TestContext.Current.CancellationToken);
+        SoapSessionProfile stalledBodyProfile = Profile(SoapEnvelopeVersion.Soap11, timeoutMilliseconds: 250, maximumResponseBytes: 4_096);
+
+        Task<SoapBusinessResult> invocation = client.InvokeAsync(context, endpoint, stalledBodyProfile, new Dictionary<string, string> { ["payload"] = "body-stalled" }, session, TestContext.Current.CancellationToken);
+        using CancellationTokenSource observationDeadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        observationDeadline.CancelAfter(TimeSpan.FromSeconds(10));
+        await server.Counters.WaitForBodyHeadersFlushedAsync(observationDeadline.Token);
+        SoapAuthException timeout = await Assert.ThrowsAsync<SoapAuthException>(() => invocation);
+        Assert.Equal("SOAP-TIMEOUT", timeout.Code);
+        Assert.Equal(1, server.Counters.Business);
+    }
+
     private static HttpRequestMessage RawRequest(Uri endpoint, byte[] envelope, string contentType, string action)
     {
         HttpRequestMessage request = new(HttpMethod.Post, endpoint);
@@ -116,10 +139,10 @@ public sealed class SoapRealHttpIntegrationTests
     }
 
     private static SoapSessionClient CreateClient(X509Certificate2 root, X509Certificate2 server, Uri endpoint) => new(
-        new FixedSecrets(), new FixedResolver(), new SystemRestrictedTransport(new X509Certificate2Collection(root), Convert.ToHexString(SHA256.HashData(server.RawData))), new SystemGatewayClock(), new LoopbackAllowance(endpoint.DnsSafeHost));
+        new FixedSecrets(), new FixedResolver(), new SystemRestrictedTransport(new X509Certificate2Collection(root), Convert.ToHexString(SHA256.HashData(server.RawData))), new SystemGatewayClock(), new MatchingStampProvider(), new LoopbackAllowance(endpoint.DnsSafeHost));
 
     private static ConnectorAuthExecutionContext Context(SystemGatewayClock clock) => new(
-        Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "synthetic-soap", "1.0.0", "business", 4, 9, "basic-session", Guid.NewGuid(), clock.UtcNow.AddMinutes(2));
+        Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "synthetic-soap", "1.0.0", "business", 3, 4, 9, "basic-session", Guid.NewGuid(), clock.UtcNow.AddMinutes(2));
 
     private static SoapSessionProfile Profile(SoapEnvelopeVersion version, int timeoutMilliseconds, long maximumResponseBytes)
     {
@@ -142,6 +165,12 @@ public sealed class SoapRealHttpIntegrationTests
     private sealed class FixedResolver : IHostResolver
     {
         public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) => Task.FromResult(new[] { IPAddress.Loopback });
+    }
+
+    private sealed class MatchingStampProvider : ISoapSessionResourceStampProvider
+    {
+        public Task<SoapSessionResourceStamp?> GetCurrentAsync(ConnectorAuthExecutionContext context, CancellationToken cancellationToken) =>
+            Task.FromResult<SoapSessionResourceStamp?>(new(context.CredentialRevision, SoapCredentialResourceStatus.Active, context.BindingRevision, context.EndpointRevision));
     }
 
     private sealed class LoopbackAllowance(string host) : IPrivateDestinationAllowance

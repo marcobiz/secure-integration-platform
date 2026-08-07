@@ -21,6 +21,8 @@ public sealed class SyntheticSoapCounters
     private int challenge;
     private int business;
     private int logout;
+    private readonly TaskCompletionSource<bool> bodyHeadersFlushed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> releaseStalledBody = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Login request count.</summary>
     public int Login => Volatile.Read(ref login);
@@ -30,6 +32,8 @@ public sealed class SyntheticSoapCounters
     public int Business => Volatile.Read(ref business);
     /// <summary>Logout request count.</summary>
     public int Logout => Volatile.Read(ref logout);
+    /// <summary>Completes after the stalled-body scenario has flushed its response headers.</summary>
+    public Task WaitForBodyHeadersFlushedAsync(CancellationToken cancellationToken) => bodyHeadersFlushed.Task.WaitAsync(cancellationToken);
 
     internal void Count(string operation)
     {
@@ -38,6 +42,10 @@ public sealed class SyntheticSoapCounters
         else if (operation == "BusinessOperation") Interlocked.Increment(ref business);
         else if (operation == "Logout") Interlocked.Increment(ref logout);
     }
+
+    internal void SignalBodyHeadersFlushed() => bodyHeadersFlushed.TrySetResult(true);
+    internal Task WaitForStalledBodyReleaseAsync(CancellationToken cancellationToken) => releaseStalledBody.Task.WaitAsync(cancellationToken);
+    internal void ReleaseStalledBody() => releaseStalledBody.TrySetResult(true);
 }
 
 /// <summary>Running local HTTPS SOAP server used by real-HTTP integration tests.</summary>
@@ -51,6 +59,7 @@ public sealed class SyntheticSoapServerInstance(WebApplication application, Uri 
     /// <summary>Stops and disposes the server.</summary>
     public async ValueTask DisposeAsync()
     {
+        Counters.ReleaseStalledBody();
         await application.StopAsync().ConfigureAwait(false);
         await application.DisposeAsync().ConfigureAwait(false);
     }
@@ -154,6 +163,17 @@ public static class SyntheticSoapServerHost
             if (payload == "oversize")
             {
                 await WriteSoapAsync(response, version, ResponseElement("BusinessOperationResponse", "Result", new string('x', 2_000_000)), StatusCodes.Status200OK, token).ConfigureAwait(false);
+                return;
+            }
+            if (payload == "body-stalled")
+            {
+                response.StatusCode = StatusCodes.Status200OK;
+                response.ContentType = ContentType(version);
+                response.ContentLength = 512;
+                await response.StartAsync(token).ConfigureAwait(false);
+                await response.Body.FlushAsync(token).ConfigureAwait(false);
+                counters.SignalBodyHeadersFlushed();
+                await counters.WaitForStalledBodyReleaseAsync(token).ConfigureAwait(false);
                 return;
             }
             if (payload == "timeout") await Task.Delay(options.TimeoutDelay, token).ConfigureAwait(false);

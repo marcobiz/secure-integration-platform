@@ -88,13 +88,24 @@ internal static class SoapXmlBoundary
         ExternalResponse response,
         SoapElementRule? sessionElement,
         SoapElementRule? challengeElement,
-        IReadOnlyDictionary<(string LocalName, string NamespaceUri), SoapFaultCategory> faultRules)
+        IReadOnlyDictionary<(string LocalName, string NamespaceUri), SoapFaultCategory> faultRules) =>
+        ParseResponse(operation, response, sessionElement, challengeElement, faultRules, CancellationToken.None);
+
+    /// <summary>Parses one bounded response under the effective request deadline.</summary>
+    internal static SoapDecodedResponse ParseResponse(
+        SoapOperationProfile operation,
+        ExternalResponse response,
+        SoapElementRule? sessionElement,
+        SoapElementRule? challengeElement,
+        IReadOnlyDictionary<(string LocalName, string NamespaceUri), SoapFaultCategory> faultRules,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(operation);
         ArgumentNullException.ThrowIfNull(response);
         if (response.Body.LongLength > operation.MaximumResponseBytes) throw new SoapAuthException("SOAP-RESPONSE-TOO-LARGE");
         ValidateContentType(operation.Version, response.ContentType);
-        XDocument document = LoadHardened(response.Body, operation.MaximumResponseBytes);
+        cancellationToken.ThrowIfCancellationRequested();
+        XDocument document = LoadHardened(response.Body, operation.MaximumResponseBytes, cancellationToken);
         string envelopeNamespace = EnvelopeNamespace(operation.Version);
         XElement envelope = document.Root ?? throw new SoapAuthException("SOAP-XML-MALFORMED");
         if (envelope.Name != XName.Get("Envelope", envelopeNamespace)) throw new SoapAuthException("SOAP-ENVELOPE-NAMESPACE");
@@ -106,7 +117,7 @@ internal static class SoapXmlBoundary
         XElement[] payloads = body.Elements().ToArray();
         if (payloads.Length != 1) throw new SoapAuthException("SOAP-BODY-STRUCTURE");
         XElement payload = payloads[0];
-        if (payload.Name == XName.Get("Fault", envelopeNamespace)) throw ParseFault(payload, operation.Version, faultRules);
+        if (payload.Name == XName.Get("Fault", envelopeNamespace)) throw ParseFault(payload, operation.Version, faultRules, cancellationToken);
         if (response.StatusCode is < 200 or >= 300) throw new SoapAuthException("SOAP-UPSTREAM-HTTP");
         if (payload.Name != XName.Get(operation.ResponseElement.LocalName, operation.ResponseElement.NamespaceUri)) throw new SoapAuthException("SOAP-RESPONSE-NAMESPACE");
 
@@ -116,6 +127,7 @@ internal static class SoapXmlBoundary
         HashSet<XName> seen = [];
         foreach (XElement child in payload.Elements())
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!seen.Add(child.Name) || child.HasElements || child.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration)) throw new SoapAuthException("SOAP-RESPONSE-STRUCTURE");
             string value = BoundedValue(child);
             SoapFieldRule? mappedField = operation.ResponseFields.Values.SingleOrDefault(field => child.Name == XName.Get(field.Element.LocalName, field.Element.NamespaceUri));
@@ -131,7 +143,7 @@ internal static class SoapXmlBoundary
         return new SoapDecodedResponse(new ReadOnlyDictionary<string, string>(mapped), session, challenge);
     }
 
-    private static XDocument LoadHardened(byte[] body, long maximumCharacters)
+    private static XDocument LoadHardened(byte[] body, long maximumCharacters, CancellationToken cancellationToken)
     {
         XmlReaderSettings settings = new()
         {
@@ -153,6 +165,7 @@ internal static class SoapXmlBoundary
             int attributes = 0;
             while (reader.Read())
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (++nodes > MaximumNodes || reader.Depth > MaximumDepth) throw new SoapAuthException("SOAP-XML-COMPLEXITY");
                 if (reader.NodeType == XmlNodeType.Element)
                 {
@@ -161,24 +174,92 @@ internal static class SoapXmlBoundary
             }
             input.Position = 0;
             using XmlReader documentReader = XmlReader.Create(input, settings);
-            return XDocument.Load(documentReader, LoadOptions.None);
+            XDocument document = XDocument.Load(documentReader, LoadOptions.None);
+            cancellationToken.ThrowIfCancellationRequested();
+            return document;
         }
         catch (SoapAuthException) { throw; }
         catch (XmlException) { throw new SoapAuthException("SOAP-XML-MALFORMED"); }
         catch (DecoderFallbackException) { throw new SoapAuthException("SOAP-XML-MALFORMED"); }
     }
 
-    private static SoapFaultException ParseFault(XElement fault, SoapEnvelopeVersion version, IReadOnlyDictionary<(string LocalName, string NamespaceUri), SoapFaultCategory> rules)
+    private static SoapFaultException ParseFault(XElement fault, SoapEnvelopeVersion version, IReadOnlyDictionary<(string LocalName, string NamespaceUri), SoapFaultCategory> rules, CancellationToken cancellationToken)
     {
-        XElement? valueElement = version == SoapEnvelopeVersion.Soap11
-            ? fault.Elements().SingleOrDefault(element => element.Name.LocalName == "faultcode" && string.IsNullOrEmpty(element.Name.NamespaceName))
-            : fault.Element(XName.Get("Code", EnvelopeNamespace(version)))?.Element(XName.Get("Value", EnvelopeNamespace(version)));
-        if (valueElement is null || valueElement.HasElements) return new SoapFaultException(SoapFaultCategory.Unknown);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (fault.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration) || HasSignificantText(fault)) throw FaultStructure();
+        XElement valueElement = version == SoapEnvelopeVersion.Soap11 ? ValidateSoap11Fault(fault) : ValidateSoap12Fault(fault);
         (string LocalName, string NamespaceUri)? code = ParseQualifiedName(valueElement);
-        return code is not null && rules.TryGetValue(code.Value, out SoapFaultCategory category)
+        if (code is null) throw FaultStructure();
+        return rules.TryGetValue(code.Value, out SoapFaultCategory category)
             ? new SoapFaultException(category)
             : new SoapFaultException(SoapFaultCategory.Unknown);
     }
+
+    private static XElement ValidateSoap11Fault(XElement fault)
+    {
+        XName faultCode = XName.Get("faultcode");
+        XName faultString = XName.Get("faultstring");
+        XName faultActor = XName.Get("faultactor");
+        XName detail = XName.Get("detail");
+        XElement[] children = fault.Elements().ToArray();
+        int index = 0;
+        XElement code = TakeRequired(children, ref index, faultCode);
+        XElement text = TakeRequired(children, ref index, faultString);
+        ValidateSimpleFaultElement(code, allowXmlLang: false);
+        ValidateSimpleFaultElement(text, allowXmlLang: false);
+        if (index < children.Length && children[index].Name == faultActor) ValidateSimpleFaultElement(children[index++], allowXmlLang: false);
+        if (index < children.Length && children[index].Name == detail)
+        {
+            if (children[index].Attributes().Any(attribute => !attribute.IsNamespaceDeclaration)) throw FaultStructure();
+            index++;
+        }
+        if (index != children.Length) throw FaultStructure();
+        return code;
+    }
+
+    private static XElement ValidateSoap12Fault(XElement fault)
+    {
+        XNamespace soap = EnvelopeNamespace(SoapEnvelopeVersion.Soap12);
+        XElement[] children = fault.Elements().ToArray();
+        int index = 0;
+        XElement code = TakeRequired(children, ref index, soap + "Code");
+        XElement reason = TakeRequired(children, ref index, soap + "Reason");
+        if (index < children.Length && children[index].Name == soap + "Node") ValidateSimpleFaultElement(children[index++], allowXmlLang: false);
+        if (index < children.Length && children[index].Name == soap + "Role") ValidateSimpleFaultElement(children[index++], allowXmlLang: false);
+        if (index < children.Length && children[index].Name == soap + "Detail")
+        {
+            if (children[index].Attributes().Any(attribute => !attribute.IsNamespaceDeclaration)) throw FaultStructure();
+            index++;
+        }
+        if (index != children.Length || code.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration) || reason.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration) || HasSignificantText(code) || HasSignificantText(reason)) throw FaultStructure();
+
+        XElement[] codeChildren = code.Elements().ToArray();
+        if (codeChildren.Length != 1 || codeChildren[0].Name != soap + "Value") throw FaultStructure();
+        ValidateSimpleFaultElement(codeChildren[0], allowXmlLang: false);
+
+        XElement[] reasonChildren = reason.Elements().ToArray();
+        if (reasonChildren.Length != 1 || reasonChildren[0].Name != soap + "Text") throw FaultStructure();
+        ValidateSimpleFaultElement(reasonChildren[0], allowXmlLang: true);
+        return codeChildren[0];
+    }
+
+    private static XElement TakeRequired(XElement[] children, ref int index, XName expected)
+    {
+        if (index >= children.Length || children[index].Name != expected) throw FaultStructure();
+        return children[index++];
+    }
+
+    private static void ValidateSimpleFaultElement(XElement element, bool allowXmlLang)
+    {
+        if (element.HasElements) throw FaultStructure();
+        XAttribute[] nonNamespaceAttributes = element.Attributes().Where(attribute => !attribute.IsNamespaceDeclaration).ToArray();
+        if (!allowXmlLang && nonNamespaceAttributes.Length != 0) throw FaultStructure();
+        if (allowXmlLang && (nonNamespaceAttributes.Length != 1 || nonNamespaceAttributes[0].Name != XNamespace.Xml + "lang" || string.IsNullOrWhiteSpace(nonNamespaceAttributes[0].Value))) throw FaultStructure();
+        _ = BoundedValue(element);
+    }
+
+    private static bool HasSignificantText(XElement element) => element.Nodes().OfType<XText>().Any(text => !string.IsNullOrWhiteSpace(text.Value));
+    private static SoapAuthException FaultStructure() => new("SOAP-FAULT-STRUCTURE");
 
     private static (string LocalName, string NamespaceUri)? ParseQualifiedName(XElement element)
     {

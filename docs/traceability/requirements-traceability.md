@@ -130,9 +130,13 @@ PKCE, `client_credentials` grant, production profiles, SOAP/session and certific
 | AP-01 Basic server-side e redaction | `M6_UT_Basic_is_resolved_only_at_use_applied_once_and_redacted`; real HTTPS integration | PASS local |
 | AP-02 opaque session e interactive completion | `M6_SEC_Interactive_challenge_is_opaque_single_use_cross_context_bound_and_fixation_safe`; `M6_IT_SOAP_real_HTTPS_interactive_challenge_completion_is_transport_neutral` | PASS local |
 | Session cache, expiry, rotate/disable e logout | `M6_UT_Session_cache_expiry_rotation_disable_logout_and_controlled_reacquisition`; real HTTPS expiry/reacquisition/logout matrix | PASS local |
+| Cache bounded, completion atomica e current generation only | `M6_SEC_Pending_interactions_are_bounded_per_key_and_globally_with_lazy_expiry_eviction`; `M6_SEC_Concurrent_completion_promotes_one_generation_and_denies_the_old_digest` | PASS local |
+| Credential/binding/endpoint stamp corrente | `M6_SEC_Current_resource_stamp_denies_real_disable_rotate_binding_and_endpoint_changes_before_provider_or_transport_use` | PASS local |
 | AP-07 SOAP 1.1/1.2 deterministic boundary | `M6_UT_SOAP_11_12_serialization_and_HTTP_policy_are_deterministic`; real HTTPS SOAP 1.1/1.2 theory | PASS local |
 | XML security e namespace policy | `M6_SEC_XML_boundary_rejects_DTD_XXE_external_entity_complexity_malformed_oversize_namespace_and_content_type`; real malformed/oversize test | PASS local |
 | Fault, timeout e cancellation | real HTTPS Fault/malformed/oversize/timeout/cancellation integration; `M6_SEC_Timeout_and_cancellation_are_distinct_and_sanitized` | PASS local |
+| Deadline sul response body | `M6_IT_SOAP_real_HTTPS_timeout_covers_headers_flushed_then_stalled_response_body` | PASS local, 5 repetition run PASS |
+| Fault cardinality e ambiguity denial | `M6_SEC_Ambiguous_duplicate_mixed_and_unexpected_SOAP_Fault_structures_are_sanitized_and_never_classified_for_relogin` SOAP 1.1/1.2 | PASS local |
 | Endpoint, SOAPAction, Content-Type e SSRF | `M6_SEC_Binding_mismatch_and_SSRF_fail_before_transport_and_caller_has_no_endpoint_override`; real HTTPS action/content-type negatives | PASS local |
 | Core/auth-writer boundary e deferred scope | `M6_CT_SOAP_writer_depends_only_on_public_Core_runtime_and_provider_abstractions`; `M6_CT_SOAP_writer_exposes_no_raw_session_resolver_generic_scripting_or_deferred_auth_framework` | PASS local |
 | TM-048 session fixation/stale/replay | AP-02 negative suite, rotation/disable/logout and challenge replay tests | PASS local |

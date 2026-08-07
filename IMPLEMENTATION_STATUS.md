@@ -15,7 +15,7 @@ Aggiornato: 2026-08-07
 | M5 — Admin UI MVP | **Done** | baseline `8774c252b233456173c3ab31346fb21390fb8d7d`, tag `m5-admin-ui-baseline-20260807` |
 | M5.5 — Direct Gateway Access | Implementato localmente; CI e review indipendente pending | product candidate `1b3a3b38fa7d01c8c5f96af0324d040e412ac0be`; branch `m55/direct-gateway-access` |
 | M6 — auth HTTP/OAuth primitives | Remediation mirata dei 7 finding qualificata | PR #9 product commit `9a7db4b`: CI exact-head 21/21 PASS; authority capability da snapshot Published, bearer destination-bound, correlation, refresh tombstone, query hardening, user-agent boundary e diagnostic redaction; nessun connector sanitario production |
-| M6 — SOAP/Basic/Session primitives | Implementato sul branch; gate CI/review pending | AP-01/AP-02/AP-07 sintetiche, server SOAP HTTPS reale e 14 casi mirati PASS locali |
+| M6 — SOAP/Basic/Session primitives | Implementato sul branch; remediation PR #10 e CI/review pending | AP-01/AP-02/AP-07 sintetiche, cache/stamp/deadline/Fault hardened, server SOAP HTTPS reale e 21 casi mirati PASS locali |
 | M3B e milestone/connector production successivi | Non iniziati | nessun cloud reale, connector sanitario production o adapter commerciale |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
@@ -135,8 +135,9 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 - assembly Core separato `Gateway.ConnectorRuntime.Auth.Soap`, dipendente soltanto dal runtime pubblico e dalle provider abstractions;
 - AP-01 applica HTTP Basic esclusivamente da binding server-side e risolve username/password al momento dell'uso, senza cache plaintext o valori nelle eccezioni;
 - AP-07 serializza deterministicamente SOAP 1.1/1.2, fissa Content-Type/SOAPAction e applica parser XML con DTD/entity/network resolution disabilitati e limiti di size, depth, node e attribute complexity;
-- AP-02 mantiene sessione upstream e challenge nel Gateway, espone soltanto reference opache, usa chiavi cache scoped a Tenant/Installation/Application, Connector/version, Environment, endpoint revision, credential revision e profile;
-- login, challenge completion transport-neutral, expiry, una sola reacquisition controllata, retry business solo se dichiarato, logout/invalidation e SOAP Fault mapping tipizzato;
+- AP-02 mantiene sessione upstream e challenge nel Gateway, espone soltanto reference opache, usa chiavi cache scoped a Tenant/Installation/Application, Connector/version, Environment, binding/endpoint/credential revision e profile; la cache è limitata a 256 key, una interaction e una generation corrente per key, con completion atomica ed eviction lazy delle entry scadute;
+- ogni riuso verifica obbligatoriamente lo stamp server-side corrente: credential resource `Active`, credential revision, binding revision ed endpoint revision; disable/rotate falliscono prima di secret, resolver o transport;
+- login, challenge completion transport-neutral, expiry, una sola reacquisition controllata, retry business solo se dichiarato, logout/invalidation e SOAP Fault mapping tipizzato; la deadline copre request, header, body bounded e parsing, mentre Fault SOAP 1.1/1.2 ambigui o duplicati sono negati senza re-login;
 - server sintetico Kestrel HTTPS reale con Login, challenge, BusinessOperation, Logout, expiry, invalid session, Fault, malformed XML, oversize, timeout e contatori;
 - nessuna modifica all'autenticazione inbound, nessun OAuth, certificate/signing, healthcare production, SAML, WS-Security, XML-DSig o scripting XML generico;
 - report: `docs/testing/M6-SOAP-AUTH-IMPLEMENTATION-REPORT.md`.

@@ -38,11 +38,38 @@ public sealed record ConnectorAuthExecutionContext(
     string ConnectorId,
     string ConnectorVersion,
     string OperationId,
+    long BindingRevision,
     long EndpointRevision,
     long CredentialRevision,
     string SessionProfileId,
     Guid CorrelationId,
     DateTimeOffset Deadline);
+
+/// <summary>Status of the exact server-side credential resource used by a SOAP authentication profile.</summary>
+public enum SoapCredentialResourceStatus
+{
+    /// <summary>The credential revision is current and may be used.</summary>
+    Active,
+    /// <summary>The credential resource is disabled and must fail closed.</summary>
+    Disabled
+}
+
+/// <summary>Current server-side resource stamp required before cached authentication state may be reused.</summary>
+public sealed record SoapSessionResourceStamp(
+    long CredentialResourceRevision,
+    SoapCredentialResourceStatus CredentialStatus,
+    long BindingRevision,
+    long EndpointRevision);
+
+/// <summary>
+/// Resolves the authoritative server-side stamp for one published SOAP authentication binding.
+/// Implementations must derive the lookup from authenticated server state, never a caller payload.
+/// </summary>
+public interface ISoapSessionResourceStampProvider
+{
+    /// <summary>Returns the current stamp, or <see langword="null"/> when the binding is unavailable.</summary>
+    Task<SoapSessionResourceStamp?> GetCurrentAsync(ConnectorAuthExecutionContext context, CancellationToken cancellationToken);
+}
 
 /// <summary>Resolved server-side Basic binding. Provider references are deliberately excluded from <see cref="ToString"/>.</summary>
 public sealed class ResolvedBasicCredentialBinding

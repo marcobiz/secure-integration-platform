@@ -41,46 +41,56 @@ credential binding -> login -> opaque session ref -> business call
 ```
 
 La cache key comprende Tenant, Installation, Application, Connector/version,
-Environment, endpoint revision, credential revision e auth/session profile. Reference
-cross-context, expired, rotated, disabled o logged-out falliscono prima del transport.
-La challenge completion usa uno state opaco, bounded, context-bound e one-time; il
-modulo non assume Broker o UX.
+Environment, binding revision, endpoint revision, credential revision e auth/session
+profile. La cache contiene al massimo 256 key e, per ogni key, una sola interaction e
+una sola session generation corrente. La completion riserva una interaction una sola
+volta e promuove atomicamente la nuova generation invalidando il digest precedente;
+uno sweep lazy limitato alle entry bounded rimuove sessioni/interaction scadute.
+
+Prima della risoluzione e immediatamente prima dell'uso,
+`ISoapSessionResourceStampProvider` deve confermare credential resource `Active`,
+credential revision, binding revision ed endpoint revision correnti. Disable e rotate
+falliscono prima di secret provider, DNS, login o business transport. Il modulo non
+assume Broker, UX, pub/sub o cache distribuita.
 
 ## SOAP/XML boundary
 
 - deterministic UTF-8 serialization senza XML declaration o indentation;
 - SOAP 1.1 `text/xml` più header `SOAPAction` quoted;
 - SOAP 1.2 `application/soap+xml` con action parameter e senza header SOAPAction;
-- HTTPS restricted transport, DNS/IP pinning, no redirect/proxy/cookie, timeout e cancellation;
+- HTTPS restricted transport, DNS/IP pinning, no redirect/proxy/cookie, timeout e cancellation distinti;
+- linked deadline su connect/request, header, response body bounded e parsing;
 - response e request bounded;
 - `DtdProcessing.Prohibit`, resolver nullo, entity/document limits;
 - limiti espliciti di depth, node count, attributes per element e total attributes;
 - Envelope/Body/response/fault QName esatti, elementi duplicati/inaspettati negati;
-- Fault detail mai propagato: soltanto categoria tipizzata sanitizzata.
+- cardinalità/ordine Fault SOAP 1.1/1.2 esatti; duplicati, strutture miste e ambigue negati;
+- Fault detail mai propagato: soltanto categoria tipizzata sanitizzata; un Fault ambiguo non attiva re-login.
 
 ## Synthetic SOAP server
 
 `tools/m6/SyntheticSoapServer` avvia Kestrel su una porta loopback HTTPS dinamica con
 certificati sintetici per-run. Implementa Login, optional challenge completion,
 BusinessOperation, Logout, session expiry/invalid session, typed Fault, malformed XML,
-oversize e timeout, con contatori login/challenge/business/logout. Il client di test usa
+oversize, timeout pre-header e body stalled dopo header flush sincronizzato, con contatori login/challenge/business/logout. Il client di test usa
 trust root e certificate pinning; non disabilita TLS validation.
 
 ## Evidenza locale mirata
 
 | Suite | Casi | Esito |
 |---|---:|---|
-| `SoapAuthenticationTests` | 8 | PASS |
-| `SoapRealHttpIntegrationTests` | 4 | PASS |
+| `SoapAuthenticationTests` | 14 | PASS |
+| `SoapRealHttpIntegrationTests` | 5 | PASS |
 | `SoapAuthBoundaryTests` | 2 | PASS |
-| Totale mirato iniziale | 14 | PASS |
+| Totale mirato dopo remediation | 21 | PASS |
 
 I test coprono Basic/session redaction, stale/fixation, rotate/disable, DTD/XXE/external
 entity, oversize, malformed XML, namespace confusion, SOAPAction/Content-Type mismatch,
 timeout/cancellation, binding manipulation, SSRF, SOAP 1.1/1.2, challenge, logout e
-Fault.
+Fault, cache bounded su 100/1000 interaction, completion concorrente, current generation,
+disable/rotate tramite stamp reale, body stalled dopo header flush e Fault duplicati/misti.
 
-Sul commit candidato locale il gate Release completo ha eseguito 185 casi: 175 PASS,
+Sul candidato di remediation il gate Release completo ha eseguito 192 casi: 182 PASS,
 10 SKIP appartenenti ai gate PostgreSQL 18/dedicati già condizionali e 0 failure. Sono
 inoltre PASS `validate-docs`, secret scan, SBOM SPDX (inclusa immagine container con 162
 package indicizzati), vulnerability scan transitive e `git diff --check`. Il primo run

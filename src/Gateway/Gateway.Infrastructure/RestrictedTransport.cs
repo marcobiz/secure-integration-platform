@@ -81,17 +81,20 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
             handler.SslOptions.ClientCertificates = [clientCertificate];
             handler.SslOptions.LocalCertificateSelectionCallback = (_, _, _, _, _) => clientCertificate;
         }
-        using HttpClient client = new(handler) { Timeout = timeout };
-        using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        using HttpClient client = new(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        using CancellationTokenSource effectiveDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        effectiveDeadline.CancelAfter(timeout);
+        CancellationToken effectiveToken = effectiveDeadline.Token;
+        using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, effectiveToken).ConfigureAwait(false);
         if ((int)response.StatusCode is >= 300 and < 400) throw new GatewayException("BGW-EGRESS-REDIRECT-DENIED", 502);
         if (!preserveSoapFault && ((int)response.StatusCode is < 200 or >= 300)) throw new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502);
         if (response.Content.Headers.ContentLength > maximumResponseBytes) throw new GatewayException("BGW-EGRESS-RESPONSE-TOO-LARGE", 502);
-        await using Stream input = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using Stream input = await response.Content.ReadAsStreamAsync(effectiveToken).ConfigureAwait(false);
         using MemoryStream output = new();
         byte[] buffer = new byte[81920];
         while (true)
         {
-            int read = await input.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            int read = await input.ReadAsync(buffer, effectiveToken).ConfigureAwait(false);
             if (read == 0) break;
             if (output.Length + read > maximumResponseBytes) throw new GatewayException("BGW-EGRESS-RESPONSE-TOO-LARGE", 502);
             output.Write(buffer, 0, read);

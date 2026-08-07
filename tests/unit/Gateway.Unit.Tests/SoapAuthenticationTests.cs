@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -66,26 +67,26 @@ public sealed class SoapAuthenticationTests
     {
         SoapOperationProfile operation = BusinessOperation(SoapEnvelopeVersion.Soap11, maximumResponseBytes: 512);
         string validPayload = $"<op:BusinessOperationResponse xmlns:op=\"{OperationNamespace}\"><op:Result>accepted</op:Result></op:BusinessOperationResponse>";
-        SoapDecodedResponse valid = SoapXmlBoundary.ParseResponse(operation, Response(SoapEnvelopeVersion.Soap11, Envelope(SoapEnvelopeVersion.Soap11, validPayload)), null, null, new Dictionary<(string, string), SoapFaultCategory>());
+        SoapDecodedResponse valid = SoapXmlBoundary.ParseResponse(operation, Response(SoapEnvelopeVersion.Soap11, Envelope(SoapEnvelopeVersion.Soap11, validPayload)), null, null, new Dictionary<(string, string), SoapFaultCategory>(), TestContext.Current.CancellationToken);
         Assert.Equal("accepted", valid.Values["result"]);
 
         AssertCode("SOAP-XML-MALFORMED", () => SoapXmlBoundary.ParseResponse(operation,
-            Response(SoapEnvelopeVersion.Soap11, $"<!DOCTYPE soap:Envelope [<!ENTITY xxe SYSTEM \"file:///sensitive\">]><soap:Envelope xmlns:soap=\"{EnvelopeNamespace(SoapEnvelopeVersion.Soap11)}\"><soap:Body>&xxe;</soap:Body></soap:Envelope>"), null, null, new Dictionary<(string, string), SoapFaultCategory>()));
+            Response(SoapEnvelopeVersion.Soap11, $"<!DOCTYPE soap:Envelope [<!ENTITY xxe SYSTEM \"file:///sensitive\">]><soap:Envelope xmlns:soap=\"{EnvelopeNamespace(SoapEnvelopeVersion.Soap11)}\"><soap:Body>&xxe;</soap:Body></soap:Envelope>"), null, null, new Dictionary<(string, string), SoapFaultCategory>(), TestContext.Current.CancellationToken));
         AssertCode("SOAP-XML-MALFORMED", () => SoapXmlBoundary.ParseResponse(operation,
-            Response(SoapEnvelopeVersion.Soap11, $"<soap:Envelope xmlns:soap=\"{EnvelopeNamespace(SoapEnvelopeVersion.Soap11)}\"><soap:Body><broken></soap:Body></soap:Envelope>"), null, null, new Dictionary<(string, string), SoapFaultCategory>()));
+            Response(SoapEnvelopeVersion.Soap11, $"<soap:Envelope xmlns:soap=\"{EnvelopeNamespace(SoapEnvelopeVersion.Soap11)}\"><soap:Body><broken></soap:Body></soap:Envelope>"), null, null, new Dictionary<(string, string), SoapFaultCategory>(), TestContext.Current.CancellationToken));
         AssertCode("SOAP-RESPONSE-TOO-LARGE", () => SoapXmlBoundary.ParseResponse(operation,
-            Response(SoapEnvelopeVersion.Soap11, new string('x', 513)), null, null, new Dictionary<(string, string), SoapFaultCategory>()));
+            Response(SoapEnvelopeVersion.Soap11, new string('x', 513)), null, null, new Dictionary<(string, string), SoapFaultCategory>(), TestContext.Current.CancellationToken));
         AssertCode("SOAP-RESPONSE-NAMESPACE", () => SoapXmlBoundary.ParseResponse(operation,
-            Response(SoapEnvelopeVersion.Soap11, Envelope(SoapEnvelopeVersion.Soap11, "<op:BusinessOperationResponse xmlns:op=\"urn:attacker\"><op:Result>accepted</op:Result></op:BusinessOperationResponse>")), null, null, new Dictionary<(string, string), SoapFaultCategory>()));
+            Response(SoapEnvelopeVersion.Soap11, Envelope(SoapEnvelopeVersion.Soap11, "<op:BusinessOperationResponse xmlns:op=\"urn:attacker\"><op:Result>accepted</op:Result></op:BusinessOperationResponse>")), null, null, new Dictionary<(string, string), SoapFaultCategory>(), TestContext.Current.CancellationToken));
         AssertCode("SOAP-CONTENT-TYPE", () => SoapXmlBoundary.ParseResponse(operation,
-            Response(SoapEnvelopeVersion.Soap11, Envelope(SoapEnvelopeVersion.Soap11, validPayload), contentType: "application/json"), null, null, new Dictionary<(string, string), SoapFaultCategory>()));
+            Response(SoapEnvelopeVersion.Soap11, Envelope(SoapEnvelopeVersion.Soap11, validPayload), contentType: "application/json"), null, null, new Dictionary<(string, string), SoapFaultCategory>(), TestContext.Current.CancellationToken));
 
         string deep = string.Concat(Enumerable.Repeat("<x>", 40)) + "value" + string.Concat(Enumerable.Repeat("</x>", 40));
         AssertCode("SOAP-XML-COMPLEXITY", () => SoapXmlBoundary.ParseResponse(BusinessOperation(SoapEnvelopeVersion.Soap11, maximumResponseBytes: 4096),
-            Response(SoapEnvelopeVersion.Soap11, Envelope(SoapEnvelopeVersion.Soap11, deep)), null, null, new Dictionary<(string, string), SoapFaultCategory>()));
+            Response(SoapEnvelopeVersion.Soap11, Envelope(SoapEnvelopeVersion.Soap11, deep)), null, null, new Dictionary<(string, string), SoapFaultCategory>(), TestContext.Current.CancellationToken));
         string attributes = string.Join(' ', Enumerable.Range(0, 33).Select(index => $"a{index}=\"x\""));
         AssertCode("SOAP-XML-COMPLEXITY", () => SoapXmlBoundary.ParseResponse(BusinessOperation(SoapEnvelopeVersion.Soap11, maximumResponseBytes: 4096),
-            Response(SoapEnvelopeVersion.Soap11, Envelope(SoapEnvelopeVersion.Soap11, $"<op:BusinessOperationResponse xmlns:op=\"{OperationNamespace}\"><op:Result {attributes}>accepted</op:Result></op:BusinessOperationResponse>")), null, null, new Dictionary<(string, string), SoapFaultCategory>()));
+            Response(SoapEnvelopeVersion.Soap11, Envelope(SoapEnvelopeVersion.Soap11, $"<op:BusinessOperationResponse xmlns:op=\"{OperationNamespace}\"><op:Result {attributes}>accepted</op:Result></op:BusinessOperationResponse>")), null, null, new Dictionary<(string, string), SoapFaultCategory>(), TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -157,13 +158,156 @@ public sealed class SoapAuthenticationTests
         Assert.Equal("SOAP-OPAQUE-REFERENCE-INVALID", fixation.Code);
     }
 
+    [Theory]
+    [InlineData(100)]
+    [InlineData(1000)]
+    public void M6_SEC_Pending_interactions_are_bounded_per_key_and_globally_with_lazy_expiry_eviction(int challengeCount)
+    {
+        DateTimeOffset now = new(2026, 8, 7, 12, 0, 0, TimeSpan.Zero);
+        SoapSessionCache perKey = new();
+        SoapSessionCacheKey oneKey = CacheKey();
+        for (int index = 0; index < challengeCount; index++)
+            _ = perKey.StoreInteraction(oneKey, "challenge-" + index, now, now.AddMinutes(5));
+        Assert.Equal(1, perKey.EntryCount);
+        Assert.Equal(1, perKey.PendingInteractionCount);
+
+        SoapSessionCache global = new();
+        int accepted = 0;
+        int rejected = 0;
+        for (int index = 0; index < challengeCount; index++)
+        {
+            try
+            {
+                _ = global.StoreInteraction(CacheKey(), "challenge-" + index, now, now.AddMinutes(1));
+                accepted++;
+            }
+            catch (SoapAuthException exception)
+            {
+                Assert.Equal("SOAP-CACHE-CAPACITY", exception.Code);
+                rejected++;
+            }
+        }
+        Assert.Equal(Math.Min(challengeCount, SoapSessionCache.MaximumEntries), accepted);
+        Assert.Equal(Math.Max(0, challengeCount - SoapSessionCache.MaximumEntries), rejected);
+        Assert.InRange(global.EntryCount, 0, SoapSessionCache.MaximumEntries);
+        Assert.Equal(global.EntryCount, global.PendingInteractionCount);
+
+        _ = global.StoreInteraction(CacheKey(), "replacement", now.AddMinutes(2), now.AddMinutes(3));
+        Assert.Equal(1, global.EntryCount);
+        Assert.Equal(1, global.PendingInteractionCount);
+    }
+
+    [Fact]
+    public async Task M6_SEC_Concurrent_completion_promotes_one_generation_and_denies_the_old_digest()
+    {
+        DateTimeOffset now = new(2026, 8, 7, 12, 0, 0, TimeSpan.Zero);
+        SoapSessionCache cache = new();
+        SoapSessionCacheKey key = CacheKey();
+        OpaqueSoapSessionReference old = cache.Store(key, "upstream-old", now, now.AddHours(1));
+        SoapInteractiveChallenge challenge = cache.StoreInteraction(key, "upstream-challenge", now, now.AddMinutes(5));
+        TaskCompletionSource<bool> start = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        ConcurrentBag<InteractionCompletion> completions = [];
+        ConcurrentBag<SoapAuthException> denials = [];
+
+        Task[] attempts = Enumerable.Range(0, 2).Select(async _ =>
+        {
+            await start.Task;
+            try { completions.Add(cache.BeginInteractionCompletion(key, challenge.InteractionReference, now)); }
+            catch (SoapAuthException exception) { denials.Add(exception); }
+        }).ToArray();
+        start.SetResult(true);
+        await Task.WhenAll(attempts);
+
+        InteractionCompletion completion = Assert.Single(completions);
+        Assert.Equal("SOAP-INTERACTION-INVALID", Assert.Single(denials).Code);
+        OpaqueSoapSessionReference current = cache.CompleteInteraction(completion, "upstream-current", now, now.AddHours(1));
+        Assert.Null(cache.Resolve(key, old, now));
+        Assert.Equal("upstream-current", cache.Resolve(key, current, now));
+        Assert.Equal(1, cache.CurrentSessionCount);
+        Assert.Equal(0, cache.PendingInteractionCount);
+    }
+
+    [Fact]
+    public async Task M6_SEC_Current_resource_stamp_denies_real_disable_rotate_binding_and_endpoint_changes_before_provider_or_transport_use()
+    {
+        MutableClock clock = new();
+        RecordingSecrets secrets = new("synthetic-user", "synthetic-password");
+        TrackingResolver resolver = new(IPAddress.Parse("8.8.8.8"));
+        StatefulSoapTransport transport = new(SoapEnvelopeVersion.Soap11);
+        MutableStampProvider stamps = new(new(11, SoapCredentialResourceStatus.Active, 5, 7));
+        SoapSessionClient client = new(secrets, resolver, transport, clock, stamps);
+        SoapSessionProfile profile = Profile(SoapEnvelopeVersion.Soap11, retryAfterReacquisition: true);
+        ConnectorAuthExecutionContext context = Context(clock);
+        SoapEndpointBinding endpoint = new(EndpointUri, 7);
+        OpaqueSoapSessionReference session = await client.AcquireSessionAsync(context, endpoint, profile, TestContext.Current.CancellationToken);
+        Assert.Equal(1, transport.LoginCount);
+        Assert.Equal(2, secrets.Calls);
+
+        stamps.Current = stamps.Current with { CredentialStatus = SoapCredentialResourceStatus.Disabled };
+        SoapAuthException disabled = await Assert.ThrowsAsync<SoapAuthException>(() => client.InvokeAsync(context, endpoint, profile, new Dictionary<string, string> { ["payload"] = "request" }, session, TestContext.Current.CancellationToken));
+        Assert.Equal("SOAP-CREDENTIAL-INACTIVE", disabled.Code);
+        Assert.Equal(1, transport.LoginCount);
+        Assert.Equal(0, transport.BusinessCount);
+        Assert.Equal(2, secrets.Calls);
+
+        stamps.Current = new(12, SoapCredentialResourceStatus.Active, 5, 7);
+        SoapAuthException rotated = await Assert.ThrowsAsync<SoapAuthException>(() => client.InvokeAsync(context, endpoint, profile, new Dictionary<string, string> { ["payload"] = "request" }, session, TestContext.Current.CancellationToken));
+        Assert.Equal("SOAP-RESOURCE-STAMP-STALE", rotated.Code);
+        Assert.Equal(0, transport.BusinessCount);
+        Assert.Equal(2, secrets.Calls);
+
+        stamps.Current = stamps.Current with { CredentialResourceRevision = 11, BindingRevision = 6 };
+        Assert.Equal("SOAP-RESOURCE-STAMP-STALE", (await Assert.ThrowsAsync<SoapAuthException>(() => client.InvokeAsync(context, endpoint, profile, new Dictionary<string, string> { ["payload"] = "request" }, session, TestContext.Current.CancellationToken))).Code);
+        stamps.Current = stamps.Current with { BindingRevision = 5, EndpointRevision = 8 };
+        Assert.Equal("SOAP-RESOURCE-STAMP-STALE", (await Assert.ThrowsAsync<SoapAuthException>(() => client.InvokeAsync(context, endpoint, profile, new Dictionary<string, string> { ["payload"] = "request" }, session, TestContext.Current.CancellationToken))).Code);
+        Assert.Equal(0, transport.BusinessCount);
+        Assert.Equal(2, secrets.Calls);
+
+        ConnectorAuthExecutionContext revisionTwo = context with { CredentialRevision = 12, CorrelationId = Guid.NewGuid() };
+        stamps.Current = new(12, SoapCredentialResourceStatus.Active, 5, 7);
+        SoapAuthException oldGeneration = await Assert.ThrowsAsync<SoapAuthException>(() => client.InvokeAsync(revisionTwo, endpoint, profile, new Dictionary<string, string> { ["payload"] = "request" }, session, TestContext.Current.CancellationToken));
+        Assert.Equal("SOAP-SESSION-INVALID", oldGeneration.Code);
+        Assert.Equal(0, transport.BusinessCount);
+    }
+
+    [Theory]
+    [InlineData(SoapEnvelopeVersion.Soap11)]
+    [InlineData(SoapEnvelopeVersion.Soap12)]
+    public void M6_SEC_Ambiguous_duplicate_mixed_and_unexpected_SOAP_Fault_structures_are_sanitized_and_never_classified_for_relogin(SoapEnvelopeVersion version)
+    {
+        SoapOperationProfile operation = BusinessOperation(version, maximumResponseBytes: 16_384);
+        string soapNamespace = EnvelopeNamespace(version);
+        string validBusiness = $"<op:BusinessOperationResponse xmlns:op=\"{OperationNamespace}\"><op:Result>accepted</op:Result></op:BusinessOperationResponse>";
+        string[] ambiguousFaults = version == SoapEnvelopeVersion.Soap11
+            ?
+            [
+                $"<soap:Fault xmlns:soap=\"{soapNamespace}\" xmlns:f=\"{FaultNamespace}\"><faultcode>f:SessionExpired</faultcode><faultcode>f:SessionExpired</faultcode><faultstring>x</faultstring></soap:Fault>",
+                $"<soap:Fault xmlns:soap=\"{soapNamespace}\" xmlns:f=\"{FaultNamespace}\"><faultcode>f:SessionExpired</faultcode><faultstring>x</faultstring><soap:Code><soap:Value>f:SessionExpired</soap:Value></soap:Code></soap:Fault>",
+                $"<soap:Fault xmlns:soap=\"{soapNamespace}\" xmlns:f=\"{FaultNamespace}\"><evil:faultcode xmlns:evil=\"urn:attacker\">f:SessionExpired</evil:faultcode><faultstring>x</faultstring></soap:Fault>"
+            ]
+            :
+            [
+                $"<soap:Fault xmlns:soap=\"{soapNamespace}\" xmlns:f=\"{FaultNamespace}\"><soap:Code><soap:Value>f:SessionExpired</soap:Value></soap:Code><soap:Code><soap:Value>f:SessionExpired</soap:Value></soap:Code><soap:Reason><soap:Text xml:lang=\"en\">x</soap:Text></soap:Reason></soap:Fault>",
+                $"<soap:Fault xmlns:soap=\"{soapNamespace}\" xmlns:f=\"{FaultNamespace}\"><soap:Code><soap:Value>f:SessionExpired</soap:Value><soap:Value>f:SessionExpired</soap:Value></soap:Code><soap:Reason><soap:Text xml:lang=\"en\">x</soap:Text></soap:Reason></soap:Fault>",
+                $"<soap:Fault xmlns:soap=\"{soapNamespace}\" xmlns:f=\"{FaultNamespace}\"><faultcode>f:SessionExpired</faultcode><soap:Reason><soap:Text xml:lang=\"en\">x</soap:Text></soap:Reason></soap:Fault>"
+            ];
+        IReadOnlyDictionary<(string, string), SoapFaultCategory> rules = new Dictionary<(string, string), SoapFaultCategory> { [("SessionExpired", FaultNamespace)] = SoapFaultCategory.SessionExpired };
+        foreach (string fault in ambiguousFaults)
+            AssertCode("SOAP-FAULT-STRUCTURE", () => SoapXmlBoundary.ParseResponse(operation, Response(version, Envelope(version, fault), 500), null, null, rules, TestContext.Current.CancellationToken));
+
+        string duplicateBodies = $"<soap:Envelope xmlns:soap=\"{soapNamespace}\"><soap:Body>{validBusiness}</soap:Body><soap:Body>{validBusiness}</soap:Body></soap:Envelope>";
+        AssertCode("SOAP-ENVELOPE-STRUCTURE", () => SoapXmlBoundary.ParseResponse(operation, Response(version, duplicateBodies), null, null, rules, TestContext.Current.CancellationToken));
+        string faultAndBusiness = Envelope(version, ambiguousFaults[0] + validBusiness);
+        AssertCode("SOAP-BODY-STRUCTURE", () => SoapXmlBoundary.ParseResponse(operation, Response(version, faultAndBusiness, 500), null, null, rules, TestContext.Current.CancellationToken));
+    }
+
     [Fact]
     public async Task M6_SEC_Binding_mismatch_and_SSRF_fail_before_transport_and_caller_has_no_endpoint_override()
     {
         MutableClock clock = new();
         StatefulSoapTransport transport = new(SoapEnvelopeVersion.Soap11);
         TrackingResolver resolver = new(IPAddress.Loopback);
-        SoapSessionClient client = new(new RecordingSecrets("user", "password"), resolver, transport, clock);
+        SoapSessionClient client = new(new RecordingSecrets("user", "password"), resolver, transport, clock, new MatchingStampProvider());
         SoapSessionProfile profile = Profile(SoapEnvelopeVersion.Soap11, retryAfterReacquisition: true);
         SoapEndpointBinding endpoint = new(EndpointUri, 7);
         ConnectorAuthExecutionContext mismatched = Context(clock) with { EndpointRevision = 8 };
@@ -198,10 +342,12 @@ public sealed class SoapAuthenticationTests
     }
 
     private static SoapSessionClient Client(MutableClock clock, IRestrictedTransport transport) =>
-        new(new RecordingSecrets("synthetic-user", "synthetic-password"), new TrackingResolver(IPAddress.Parse("8.8.8.8")), transport, clock);
+        new(new RecordingSecrets("synthetic-user", "synthetic-password"), new TrackingResolver(IPAddress.Parse("8.8.8.8")), transport, clock, new MatchingStampProvider());
 
     private static ConnectorAuthExecutionContext Context(MutableClock clock) => new(
-        Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "synthetic-soap", "1.0.0", "business", 7, 11, "basic-session", Guid.NewGuid(), clock.UtcNow.AddMinutes(2));
+        Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "synthetic-soap", "1.0.0", "business", 5, 7, 11, "basic-session", Guid.NewGuid(), clock.UtcNow.AddMinutes(2));
+
+    private static SoapSessionCacheKey CacheKey() => new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "synthetic-soap", "1.0.0", 5, 7, 11, "basic-session");
 
     private static SoapSessionProfile Profile(SoapEnvelopeVersion version, bool retryAfterReacquisition)
     {
@@ -264,6 +410,18 @@ public sealed class SoapAuthenticationTests
     {
         public int Calls { get; private set; }
         public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) { Calls++; return Task.FromResult(new[] { address }); }
+    }
+
+    private sealed class MatchingStampProvider : ISoapSessionResourceStampProvider
+    {
+        public Task<SoapSessionResourceStamp?> GetCurrentAsync(ConnectorAuthExecutionContext context, CancellationToken cancellationToken) =>
+            Task.FromResult<SoapSessionResourceStamp?>(new(context.CredentialRevision, SoapCredentialResourceStatus.Active, context.BindingRevision, context.EndpointRevision));
+    }
+
+    private sealed class MutableStampProvider(SoapSessionResourceStamp current) : ISoapSessionResourceStampProvider
+    {
+        public SoapSessionResourceStamp Current { get; set; } = current;
+        public Task<SoapSessionResourceStamp?> GetCurrentAsync(ConnectorAuthExecutionContext context, CancellationToken cancellationToken) => Task.FromResult<SoapSessionResourceStamp?>(Current);
     }
 
     private sealed class StatefulSoapTransport(SoapEnvelopeVersion version) : IRestrictedTransport

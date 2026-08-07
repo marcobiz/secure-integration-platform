@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Net;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Providers.Abstractions;
@@ -15,17 +14,19 @@ public sealed class SoapSessionClient
     private readonly IHostResolver resolver;
     private readonly IRestrictedTransport transport;
     private readonly IGatewayClock clock;
+    private readonly ISoapSessionResourceStampProvider resourceStamps;
     private readonly IPrivateDestinationAllowance? privateDestinationAllowance;
     private readonly SoapSessionCache cache = new();
-    private readonly ConcurrentDictionary<SoapSessionCacheKey, SemaphoreSlim> acquisitionLocks = new();
+    private readonly SemaphoreSlim[] acquisitionLocks = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
 
     /// <summary>Creates the session client from provider-neutral secret and restricted-egress capabilities.</summary>
-    public SoapSessionClient(ISecretValueProvider secrets, IHostResolver resolver, IRestrictedTransport transport, IGatewayClock clock, IPrivateDestinationAllowance? privateDestinationAllowance = null)
+    public SoapSessionClient(ISecretValueProvider secrets, IHostResolver resolver, IRestrictedTransport transport, IGatewayClock clock, ISoapSessionResourceStampProvider resourceStamps, IPrivateDestinationAllowance? privateDestinationAllowance = null)
     {
         basicAuthentication = new ServerBoundBasicAuthentication(secrets ?? throw new ArgumentNullException(nameof(secrets)));
         this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         this.transport = transport ?? throw new ArgumentNullException(nameof(transport));
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        this.resourceStamps = resourceStamps ?? throw new ArgumentNullException(nameof(resourceStamps));
         this.privateDestinationAllowance = privateDestinationAllowance;
     }
 
@@ -33,6 +34,7 @@ public sealed class SoapSessionClient
     public async Task<OpaqueSoapSessionReference> AcquireSessionAsync(ConnectorAuthExecutionContext context, SoapEndpointBinding endpoint, SoapSessionProfile profile, CancellationToken cancellationToken)
     {
         SoapSessionCacheKey key = ValidateAndKey(context, endpoint, profile);
+        await ValidateResourceStampAsync(context, cancellationToken).ConfigureAwait(false);
         (OpaqueSoapSessionReference Reference, string UpstreamSession)? current = cache.ResolveCurrent(key, clock.UtcNow);
         if (current is not null) return current.Value.Reference;
         return await AcquireSessionCoreAsync(context, endpoint, profile, key, cancellationToken).ConfigureAwait(false);
@@ -48,18 +50,28 @@ public sealed class SoapSessionClient
         CancellationToken cancellationToken)
     {
         SoapSessionCacheKey key = ValidateAndKey(context, endpoint, profile);
+        await ValidateResourceStampAsync(context, cancellationToken).ConfigureAwait(false);
         SoapOperationProfile operation = profile.ChallengeCompletionOperation ?? throw new SoapAuthException("SOAP-INTERACTION-NOT-SUPPORTED");
         if (string.IsNullOrWhiteSpace(userProvidedArtifact) || userProvidedArtifact.Length > operation.RequestFields[profile.ChallengeArtifactField!].MaximumCharacters)
             throw new SoapAuthException("SOAP-INTERACTION-ARTIFACT-INVALID");
-        string challengeState = cache.ConsumeInteraction(key, interactionReference, clock.UtcNow);
+        InteractionCompletion completion = cache.BeginInteractionCompletion(key, interactionReference, clock.UtcNow);
         Dictionary<string, string> values = new(StringComparer.Ordinal)
         {
-            [profile.ChallengeStateField!] = challengeState,
+            [profile.ChallengeStateField!] = completion.UpstreamChallenge,
             [profile.ChallengeArtifactField!] = userProvidedArtifact
         };
-        SoapDecodedResponse response = await SendAsync(context, endpoint, profile, operation, values, null, includeSessionExtraction: true, includeChallengeExtraction: false, cancellationToken).ConfigureAwait(false);
-        if (response.SessionValue is null) throw new SoapAuthException("SOAP-SESSION-MISSING");
-        return cache.Store(key, response.SessionValue, clock.UtcNow.Add(profile.SessionLifetime));
+        try
+        {
+            SoapDecodedResponse response = await SendAsync(context, endpoint, profile, operation, values, null, includeSessionExtraction: true, includeChallengeExtraction: false, cancellationToken).ConfigureAwait(false);
+            if (response.SessionValue is null) throw new SoapAuthException("SOAP-SESSION-MISSING");
+            DateTimeOffset now = clock.UtcNow;
+            return cache.CompleteInteraction(completion, response.SessionValue, now, now.Add(profile.SessionLifetime));
+        }
+        catch
+        {
+            cache.AbandonInteraction(completion);
+            throw;
+        }
     }
 
     /// <summary>
@@ -75,6 +87,7 @@ public sealed class SoapSessionClient
         CancellationToken cancellationToken)
     {
         SoapSessionCacheKey key = ValidateAndKey(context, endpoint, profile);
+        await ValidateResourceStampAsync(context, cancellationToken).ConfigureAwait(false);
         if (!profile.BusinessOperations.TryGetValue(context.OperationId, out SoapOperationProfile? operation)) throw new SoapAuthException("SOAP-OPERATION-NOT-DECLARED");
         (OpaqueSoapSessionReference Reference, string UpstreamSession) session;
         if (sessionReference is not null)
@@ -114,9 +127,10 @@ public sealed class SoapSessionClient
     public async Task LogoutAsync(ConnectorAuthExecutionContext context, SoapEndpointBinding endpoint, SoapSessionProfile profile, OpaqueSoapSessionReference sessionReference, CancellationToken cancellationToken)
     {
         SoapSessionCacheKey key = ValidateAndKey(context, endpoint, profile);
-        string? session = cache.Resolve(key, sessionReference, clock.UtcNow);
         try
         {
+            await ValidateResourceStampAsync(context, cancellationToken).ConfigureAwait(false);
+            string? session = cache.Resolve(key, sessionReference, clock.UtcNow);
             if (session is not null && profile.LogoutOperation is not null)
                 _ = await SendAsync(context, endpoint, profile, profile.LogoutOperation, new Dictionary<string, string>(StringComparer.Ordinal), session, includeSessionExtraction: false, includeChallengeExtraction: false, cancellationToken).ConfigureAwait(false);
         }
@@ -135,17 +149,23 @@ public sealed class SoapSessionClient
 
     private async Task<OpaqueSoapSessionReference> AcquireSessionCoreAsync(ConnectorAuthExecutionContext context, SoapEndpointBinding endpoint, SoapSessionProfile profile, SoapSessionCacheKey key, CancellationToken cancellationToken)
     {
-        SemaphoreSlim gate = acquisitionLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        SemaphoreSlim gate = acquisitionLocks[(key.GetHashCode() & int.MaxValue) % acquisitionLocks.Length];
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            await ValidateResourceStampAsync(context, cancellationToken).ConfigureAwait(false);
             (OpaqueSoapSessionReference Reference, string UpstreamSession)? current = cache.ResolveCurrent(key, clock.UtcNow);
             if (current is not null) return current.Value.Reference;
             SoapDecodedResponse response = await SendAsync(context, endpoint, profile, profile.LoginOperation, new Dictionary<string, string>(StringComparer.Ordinal), null, includeSessionExtraction: true, includeChallengeExtraction: true, cancellationToken).ConfigureAwait(false);
-            if (response.SessionValue is not null) return cache.Store(key, response.SessionValue, clock.UtcNow.Add(profile.SessionLifetime));
+            if (response.SessionValue is not null)
+            {
+                DateTimeOffset now = clock.UtcNow;
+                return cache.Store(key, response.SessionValue, now, now.Add(profile.SessionLifetime));
+            }
             if (response.ChallengeValue is not null && profile.ChallengeCompletionOperation is not null)
             {
-                SoapInteractiveChallenge challenge = cache.StoreInteraction(key, response.ChallengeValue, clock.UtcNow.Add(profile.InteractionLifetime));
+                DateTimeOffset now = clock.UtcNow;
+                SoapInteractiveChallenge challenge = cache.StoreInteraction(key, response.ChallengeValue, now, now.Add(profile.InteractionLifetime));
                 throw new SoapInteractionRequiredException(challenge);
             }
             throw new SoapAuthException("SOAP-SESSION-MISSING");
@@ -168,6 +188,7 @@ public sealed class SoapSessionClient
         CancellationToken cancellationToken)
     {
         EnsureDeadline(context);
+        await ValidateResourceStampAsync(context, cancellationToken).ConfigureAwait(false);
         byte[] envelope = SoapXmlBoundary.SerializeRequest(operation, values, upstreamSession is null ? null : profile.SessionHeaderElement, upstreamSession);
         using HttpRequestMessage request = new(HttpMethod.Post, endpoint.Endpoint);
         request.Headers.TryAddWithoutValidation("X-Correlation-ID", context.CorrelationId.ToString("D"));
@@ -181,27 +202,32 @@ public sealed class SoapSessionClient
         TimeSpan remaining = context.Deadline - clock.UtcNow;
         if (remaining <= TimeSpan.Zero) throw new SoapAuthException("SOAP-DEADLINE-EXPIRED");
         TimeSpan timeout = remaining < configuredTimeout ? remaining : configuredTimeout;
-        ExternalResponse response;
+        using CancellationTokenSource effectiveDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        effectiveDeadline.CancelAfter(timeout);
         try
         {
-            response = await transport.SendSoapAsync(request, addresses, timeout, operation.MaximumResponseBytes, cancellationToken).ConfigureAwait(false);
+            ExternalResponse response = await transport.SendSoapAsync(request, addresses, timeout, operation.MaximumResponseBytes, effectiveDeadline.Token).ConfigureAwait(false);
+            return SoapXmlBoundary.ParseResponse(operation, response, includeSessionExtraction ? profile.SessionElement : null, includeChallengeExtraction ? profile.ChallengeElement : null, profile.FaultRules, effectiveDeadline.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             throw new SoapAuthException("SOAP-TIMEOUT");
         }
         catch (OperationCanceledException) { throw; }
+        catch (Exception exception) when (effectiveDeadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested && exception is HttpRequestException or IOException)
+        {
+            throw new SoapAuthException("SOAP-TIMEOUT");
+        }
         catch (SoapAuthException) { throw; }
         catch (GatewayException exception) when (string.Equals(exception.Code, "BGW-EGRESS-RESPONSE-TOO-LARGE", StringComparison.Ordinal))
         {
             throw new SoapAuthException("SOAP-RESPONSE-TOO-LARGE");
         }
-        catch (Exception exception) when (exception is HttpRequestException or TimeoutException or GatewayException)
+        catch (Exception exception) when (exception is HttpRequestException or IOException or TimeoutException or GatewayException)
         {
             _ = exception;
             throw new SoapAuthException("SOAP-TRANSPORT-FAILED");
         }
-        return SoapXmlBoundary.ParseResponse(operation, response, includeSessionExtraction ? profile.SessionElement : null, includeChallengeExtraction ? profile.ChallengeElement : null, profile.FaultRules);
     }
 
     private SoapSessionCacheKey ValidateAndKey(ConnectorAuthExecutionContext context, SoapEndpointBinding endpoint, SoapSessionProfile profile)
@@ -211,12 +237,30 @@ public sealed class SoapSessionClient
         ArgumentNullException.ThrowIfNull(profile);
         if (context.TenantId == Guid.Empty || context.InstallationId == Guid.Empty || context.ApplicationId == Guid.Empty || context.EnvironmentId == Guid.Empty || context.CorrelationId == Guid.Empty)
             throw new SoapAuthException("SOAP-CONTEXT-INVALID");
-        if (!IsIdentifier(context.ConnectorId) || !IsIdentifier(context.ConnectorVersion) || !IsIdentifier(context.OperationId) || context.EndpointRevision <= 0 || context.CredentialRevision <= 0)
+        if (!IsIdentifier(context.ConnectorId) || !IsIdentifier(context.ConnectorVersion) || !IsIdentifier(context.OperationId) || context.BindingRevision <= 0 || context.EndpointRevision <= 0 || context.CredentialRevision <= 0)
             throw new SoapAuthException("SOAP-CONTEXT-INVALID");
         if (!string.Equals(context.SessionProfileId, profile.ProfileId, StringComparison.Ordinal) || context.EndpointRevision != endpoint.Revision)
             throw new SoapAuthException("SOAP-CONTEXT-BINDING-MISMATCH");
         EnsureDeadline(context);
-        return new SoapSessionCacheKey(context.TenantId, context.InstallationId, context.ApplicationId, context.EnvironmentId, context.ConnectorId, context.ConnectorVersion, context.EndpointRevision, context.CredentialRevision, context.SessionProfileId);
+        return new SoapSessionCacheKey(context.TenantId, context.InstallationId, context.ApplicationId, context.EnvironmentId, context.ConnectorId, context.ConnectorVersion, context.BindingRevision, context.EndpointRevision, context.CredentialRevision, context.SessionProfileId);
+    }
+
+    private async Task ValidateResourceStampAsync(ConnectorAuthExecutionContext context, CancellationToken cancellationToken)
+    {
+        SoapSessionResourceStamp? current;
+        try
+        {
+            current = await resourceStamps.GetCurrentAsync(context, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception)
+        {
+            throw new SoapAuthException("SOAP-RESOURCE-STAMP-UNAVAILABLE");
+        }
+        if (current is null) throw new SoapAuthException("SOAP-RESOURCE-STAMP-UNAVAILABLE");
+        if (current.CredentialStatus != SoapCredentialResourceStatus.Active) throw new SoapAuthException("SOAP-CREDENTIAL-INACTIVE");
+        if (current.CredentialResourceRevision != context.CredentialRevision || current.BindingRevision != context.BindingRevision || current.EndpointRevision != context.EndpointRevision)
+            throw new SoapAuthException("SOAP-RESOURCE-STAMP-STALE");
     }
 
     private void EnsureDeadline(ConnectorAuthExecutionContext context)
