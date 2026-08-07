@@ -1,0 +1,21 @@
+name: broker-gateway-admin-dev
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: broker_gateway_admin_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${M5_ADMIN_DEV_POSTGRES_PASSWORD:?required}
+    ports:
+      - "127.0.0.1:${M5_ADMIN_DEV_POSTGRES_PORT:-15435}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d broker_gateway_admin_dev"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - admin-dev-postgres:/var/lib/postgresql
+
+volumes:
+  admin-dev-postgres:
