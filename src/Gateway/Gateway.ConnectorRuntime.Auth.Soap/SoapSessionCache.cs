@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
 
 namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 
@@ -203,11 +204,9 @@ internal sealed record SoapSessionCacheKey(
     Guid EnvironmentId,
     string ConnectorId,
     string ConnectorVersion,
-    string OperationId,
     long BindingRevision,
     long EndpointRevision,
     long CredentialRevision,
-    string ResourceStamp,
     string ProfileId);
 
 internal sealed record OpaqueSessionDispatchLease(
@@ -218,4 +217,30 @@ internal sealed record OpaqueSessionDispatchLease(
     DateTimeOffset ExpiresAt)
 {
     public override string ToString() => $"{nameof(OpaqueSessionDispatchLease)}(Generation={Generation}, ExpiresAt={ExpiresAt:O}, Redacted=True)";
+}
+
+internal sealed class SoapOpaqueSessionLeaseProvider(SoapSessionCache cache) : OpaqueSessionLeaseProvider
+{
+    internal override SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions.OpaqueSessionDispatchLease AcquireFinalLease(
+        OpaqueSessionReference reference,
+        OpaqueSessionLifecycleBinding binding,
+        DateTimeOffset now)
+    {
+        SoapSessionCacheKey key = new(binding.TenantId, binding.InstallationId, binding.ApplicationId, binding.EnvironmentId, binding.ConnectorId,
+            binding.ConnectorVersion, binding.BindingRevision, binding.EndpointRevision, binding.CredentialRevision, binding.ProfileId);
+        OpaqueSessionDispatchLease lease;
+        try
+        {
+            lease = cache.ResolveDispatchLease(key, new OpaqueSoapSessionReference(reference.Value), now);
+        }
+        catch (SoapAuthException)
+        {
+            throw OpaqueSessionHttpFailures.SessionInvalid();
+        }
+
+        return new(lease.UpstreamSession, lease.ExpiresAt, currentNow =>
+        {
+            if (!cache.IsCurrent(lease, currentNow)) throw OpaqueSessionHttpFailures.SessionStale();
+        });
+    }
 }

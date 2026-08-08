@@ -133,6 +133,27 @@ public sealed class SoapAuthenticationTests
     }
 
     [Fact]
+    public async Task M6_REG_Session_cache_remains_shared_across_compatible_operations_without_reacquisition()
+    {
+        MutableClock clock = new();
+        StatefulSoapTransport transport = new(SoapEnvelopeVersion.Soap11);
+        SoapSessionClient client = Client(clock, transport);
+        SoapSessionProfile profile = MultiOperationProfile(SoapEnvelopeVersion.Soap11);
+        ConnectorAuthExecutionContext operationA = Context(clock);
+        ConnectorAuthExecutionContext operationB = operationA with { OperationId = "business-b", CorrelationId = Guid.NewGuid() };
+        SoapEndpointBinding endpoint = new(EndpointUri, 7);
+
+        OpaqueSoapSessionReference acquiredByA = await client.AcquireSessionAsync(operationA, endpoint, profile, TestContext.Current.CancellationToken);
+        OpaqueSoapSessionReference reusedByB = await client.AcquireSessionAsync(operationB, endpoint, profile, TestContext.Current.CancellationToken);
+        SoapBusinessResult result = await client.InvokeAsync(operationB, endpoint, profile, new Dictionary<string, string> { ["payload"] = "request" }, reusedByB, TestContext.Current.CancellationToken);
+
+        Assert.Equal(acquiredByA.Value, reusedByB.Value);
+        Assert.Equal("accepted-b", result.Values["result"]);
+        Assert.Equal(1, transport.LoginCount);
+        Assert.Equal(1, transport.BusinessCount);
+    }
+
+    [Fact]
     public async Task M6_SEC_Interactive_challenge_is_opaque_single_use_cross_context_bound_and_fixation_safe()
     {
         MutableClock clock = new();
@@ -347,7 +368,7 @@ public sealed class SoapAuthenticationTests
     private static ConnectorAuthExecutionContext Context(MutableClock clock) => new(
         Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "synthetic-soap", "1.0.0", "business", 5, 7, 11, "basic-session", Guid.NewGuid(), clock.UtcNow.AddMinutes(2));
 
-    private static SoapSessionCacheKey CacheKey() => new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "synthetic-soap", "1.0.0", "business", 5, 7, 11, string.Empty, "basic-session");
+    private static SoapSessionCacheKey CacheKey() => new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "synthetic-soap", "1.0.0", 5, 7, 11, "basic-session");
 
     private static SoapSessionProfile Profile(SoapEnvelopeVersion version, bool retryAfterReacquisition)
     {
@@ -361,6 +382,16 @@ public sealed class SoapAuthenticationTests
             [BusinessOperation(version, retryAfterReacquisition)], TimeSpan.FromHours(16),
             [new(new("SessionExpired", FaultNamespace), SoapFaultCategory.SessionExpired), new(new("InvalidSession", FaultNamespace), SoapFaultCategory.InvalidSession)],
             challenge, complete, "artifact", "challengeState", TimeSpan.FromMinutes(5), logout);
+    }
+
+    private static SoapSessionProfile MultiOperationProfile(SoapEnvelopeVersion version)
+    {
+        SoapSessionProfile original = Profile(version, retryAfterReacquisition: false);
+        SoapOperationProfile operationB = new("business-b", version, "urn:synthetic:BusinessOperationB", new("BusinessOperationB", OperationNamespace), new("BusinessOperationBResponse", OperationNamespace),
+            [new("payload", new("Payload", OperationNamespace), 4096)], [new("result", new("Result", OperationNamespace), 4096)]);
+        return new(original.ProfileId, original.BasicCredential, original.LoginOperation, original.SessionElement, original.SessionHeaderElement,
+            original.BusinessOperations.Values.Append(operationB), original.SessionLifetime, original.FaultRules.Select(value => new SoapFaultRule(new(value.Key.LocalName, value.Key.NamespaceUri), value.Value)),
+            original.ChallengeElement, original.ChallengeCompletionOperation, original.ChallengeArtifactField, original.ChallengeStateField, original.InteractionLifetime, original.LogoutOperation);
     }
 
     private static SoapOperationProfile BusinessOperation(SoapEnvelopeVersion version, bool retryAfterReacquisition = false, long maximumResponseBytes = 1_048_576) =>
@@ -459,6 +490,11 @@ public sealed class SoapAuthenticationTests
                 ChallengeCount++;
                 LastUpstreamSession = "upstream-session-challenge";
                 return Response(version, Envelope(version, $"<op:CompleteChallengeResponse xmlns:op=\"{OperationNamespace}\"><op:SessionId>{LastUpstreamSession}</op:SessionId></op:CompleteChallengeResponse>"));
+            }
+            if (xml.Contains("<op:BusinessOperationB", StringComparison.Ordinal))
+            {
+                BusinessCount++;
+                return Response(version, Envelope(version, $"<op:BusinessOperationBResponse xmlns:op=\"{OperationNamespace}\"><op:Result>accepted-b</op:Result></op:BusinessOperationBResponse>"));
             }
             if (xml.Contains("<op:BusinessOperation", StringComparison.Ordinal))
             {

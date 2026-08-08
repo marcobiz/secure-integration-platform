@@ -1,5 +1,6 @@
 using System.Net;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
 using SecureIntegration.Providers.Abstractions;
 
 namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
@@ -8,7 +9,7 @@ namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 /// Executes the fixed Basic/SOAP/session lifecycle for a compiled connector profile.
 /// Upstream credentials and session values never leave this component.
 /// </summary>
-public sealed partial class SoapSessionClient
+public sealed class SoapSessionClient
 {
     private readonly ServerBoundBasicAuthentication basicAuthentication;
     private readonly IHostResolver resolver;
@@ -17,11 +18,10 @@ public sealed partial class SoapSessionClient
     private readonly ISoapSessionResourceStampProvider resourceStamps;
     private readonly IPrivateDestinationAllowance? privateDestinationAllowance;
     private readonly SoapSessionCache cache = new();
-    private readonly IOpaqueSessionHttpPolicySource? httpProjectionPolicies;
     private readonly SemaphoreSlim[] acquisitionLocks = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
 
     /// <summary>Creates the session client from provider-neutral secret and restricted-egress capabilities.</summary>
-    public SoapSessionClient(ISecretValueProvider secrets, IHostResolver resolver, IRestrictedTransport transport, IGatewayClock clock, ISoapSessionResourceStampProvider resourceStamps, IPrivateDestinationAllowance? privateDestinationAllowance = null, IOpaqueSessionHttpPolicySource? httpProjectionPolicies = null)
+    public SoapSessionClient(ISecretValueProvider secrets, IHostResolver resolver, IRestrictedTransport transport, IGatewayClock clock, ISoapSessionResourceStampProvider resourceStamps, IPrivateDestinationAllowance? privateDestinationAllowance = null)
     {
         basicAuthentication = new ServerBoundBasicAuthentication(secrets ?? throw new ArgumentNullException(nameof(secrets)));
         this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
@@ -29,8 +29,11 @@ public sealed partial class SoapSessionClient
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
         this.resourceStamps = resourceStamps ?? throw new ArgumentNullException(nameof(resourceStamps));
         this.privateDestinationAllowance = privateDestinationAllowance;
-        this.httpProjectionPolicies = httpProjectionPolicies;
+        OpaqueSessionLeases = new SoapOpaqueSessionLeaseProvider(cache);
     }
+
+    /// <summary>Controlled adapter from the qualified SOAP lifecycle to provider-neutral opaque-session capabilities.</summary>
+    public OpaqueSessionLeaseProvider OpaqueSessionLeases { get; }
 
     /// <summary>Returns the current opaque session reference or performs one fixed login acquisition.</summary>
     public async Task<OpaqueSoapSessionReference> AcquireSessionAsync(ConnectorAuthExecutionContext context, SoapEndpointBinding endpoint, SoapSessionProfile profile, CancellationToken cancellationToken)
@@ -244,13 +247,12 @@ public sealed partial class SoapSessionClient
         ArgumentNullException.ThrowIfNull(endpoint);
         if (context.TenantId == Guid.Empty || context.InstallationId == Guid.Empty || context.ApplicationId == Guid.Empty || context.EnvironmentId == Guid.Empty || context.CorrelationId == Guid.Empty)
             throw new SoapAuthException("SOAP-CONTEXT-INVALID");
-        if (!IsIdentifier(context.ConnectorId) || !IsIdentifier(context.ConnectorVersion) || !IsIdentifier(context.OperationId) || context.BindingRevision <= 0 || context.EndpointRevision <= 0 || context.CredentialRevision <= 0 ||
-            context.ResourceStamp.Length > 256 || context.ResourceStamp.Any(char.IsControl))
+        if (!IsIdentifier(context.ConnectorId) || !IsIdentifier(context.ConnectorVersion) || !IsIdentifier(context.OperationId) || context.BindingRevision <= 0 || context.EndpointRevision <= 0 || context.CredentialRevision <= 0)
             throw new SoapAuthException("SOAP-CONTEXT-INVALID");
         if (!string.Equals(context.SessionProfileId, profileId, StringComparison.Ordinal) || context.EndpointRevision != endpoint.Revision)
             throw new SoapAuthException("SOAP-CONTEXT-BINDING-MISMATCH");
         EnsureDeadline(context);
-        return new SoapSessionCacheKey(context.TenantId, context.InstallationId, context.ApplicationId, context.EnvironmentId, context.ConnectorId, context.ConnectorVersion, context.OperationId, context.BindingRevision, context.EndpointRevision, context.CredentialRevision, context.ResourceStamp, context.SessionProfileId);
+        return new SoapSessionCacheKey(context.TenantId, context.InstallationId, context.ApplicationId, context.EnvironmentId, context.ConnectorId, context.ConnectorVersion, context.BindingRevision, context.EndpointRevision, context.CredentialRevision, context.SessionProfileId);
     }
 
     private async Task ValidateResourceStampAsync(ConnectorAuthExecutionContext context, CancellationToken cancellationToken)
@@ -267,8 +269,7 @@ public sealed partial class SoapSessionClient
         }
         if (current is null) throw new SoapAuthException("SOAP-RESOURCE-STAMP-UNAVAILABLE");
         if (current.CredentialStatus != SoapCredentialResourceStatus.Active) throw new SoapAuthException("SOAP-CREDENTIAL-INACTIVE");
-        if (current.CredentialResourceRevision != context.CredentialRevision || current.BindingRevision != context.BindingRevision || current.EndpointRevision != context.EndpointRevision ||
-            (!string.IsNullOrEmpty(context.ResourceStamp) && !string.Equals(current.ResourceStamp, context.ResourceStamp, StringComparison.Ordinal)))
+        if (current.CredentialResourceRevision != context.CredentialRevision || current.BindingRevision != context.BindingRevision || current.EndpointRevision != context.EndpointRevision)
             throw new SoapAuthException("SOAP-RESOURCE-STAMP-STALE");
     }
 

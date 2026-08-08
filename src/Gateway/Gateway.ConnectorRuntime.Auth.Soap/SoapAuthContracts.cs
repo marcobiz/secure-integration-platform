@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
 
 namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 
@@ -27,37 +28,6 @@ public enum SoapFaultCategory
 }
 
 /// <summary>Closed set of placements supported for an opaque authenticated session.</summary>
-public enum OpaqueSessionPlacementKind
-{
-    /// <summary>Existing namespace-qualified SOAP/XML header placement.</summary>
-    SoapXml,
-    /// <summary>One server-owned HTTP request header applied only during restricted dispatch.</summary>
-    HttpRequestHeader
-}
-
-/// <summary>Typed placement policy. It deliberately cannot represent an arbitrary header bag or template.</summary>
-public abstract class OpaqueSessionPlacementPolicy
-{
-    private protected OpaqueSessionPlacementPolicy(OpaqueSessionPlacementKind kind) => Kind = kind;
-
-    /// <summary>Closed placement kind.</summary>
-    public OpaqueSessionPlacementKind Kind { get; }
-
-    /// <inheritdoc />
-    public override string ToString() => $"{nameof(OpaqueSessionPlacementPolicy)}(Kind={Kind})";
-}
-
-/// <summary>Existing namespace-qualified SOAP/XML session placement.</summary>
-public sealed class SoapXmlOpaqueSessionPlacementPolicy : OpaqueSessionPlacementPolicy
-{
-    /// <summary>Creates the compiled SOAP placement used by the existing profile.</summary>
-    public SoapXmlOpaqueSessionPlacementPolicy(SoapElementRule headerElement)
-        : base(OpaqueSessionPlacementKind.SoapXml) => HeaderElement = headerElement ?? throw new ArgumentNullException(nameof(headerElement));
-
-    /// <summary>Exact SOAP header element receiving the opaque upstream value.</summary>
-    public SoapElementRule HeaderElement { get; }
-}
-
 /// <summary>
 /// Immutable server-derived scope for one outbound connector authentication flow.
 /// No value in this context is accepted from a runtime payload.
@@ -75,8 +45,7 @@ public sealed record ConnectorAuthExecutionContext(
     long CredentialRevision,
     string SessionProfileId,
     Guid CorrelationId,
-    DateTimeOffset Deadline,
-    string ResourceStamp = "");
+    DateTimeOffset Deadline);
 
 /// <summary>Status of the exact server-side credential resource used by a SOAP authentication profile.</summary>
 public enum SoapCredentialResourceStatus
@@ -92,8 +61,7 @@ public sealed record SoapSessionResourceStamp(
     long CredentialResourceRevision,
     SoapCredentialResourceStatus CredentialStatus,
     long BindingRevision,
-    long EndpointRevision,
-    string ResourceStamp = "");
+    long EndpointRevision);
 
 /// <summary>
 /// Resolves the authoritative server-side stamp for one published SOAP authentication binding.
@@ -316,7 +284,6 @@ public sealed class SoapSessionProfile
         LoginOperation = loginOperation;
         SessionElement = sessionElement;
         SessionHeaderElement = sessionHeaderElement;
-        PlacementPolicy = new SoapXmlOpaqueSessionPlacementPolicy(sessionHeaderElement);
         BusinessOperations = new ReadOnlyDictionary<string, SoapOperationProfile>(operations);
         SessionLifetime = sessionLifetime;
         FaultRules = new ReadOnlyDictionary<(string LocalName, string NamespaceUri), SoapFaultCategory>(faults);
@@ -338,8 +305,6 @@ public sealed class SoapSessionProfile
     public SoapElementRule SessionElement { get; }
     /// <summary>Exact SOAP header placement element.</summary>
     public SoapElementRule SessionHeaderElement { get; }
-    /// <summary>Typed placement contract; existing profiles remain SOAP/XML placements.</summary>
-    public OpaqueSessionPlacementPolicy PlacementPolicy { get; }
     /// <summary>Fixed business-operation mappings.</summary>
     public IReadOnlyDictionary<string, SoapOperationProfile> BusinessOperations { get; }
     /// <summary>Maximum upstream session lifetime.</summary>
@@ -365,6 +330,8 @@ public sealed class SoapSessionProfile
 /// <summary>Opaque reference to a Gateway-owned upstream session.</summary>
 public sealed record OpaqueSoapSessionReference(string Value)
 {
+    /// <summary>Returns the provider-neutral opaque handle accepted by generic session capabilities.</summary>
+    public OpaqueSessionReference ToOpaqueSessionReference() => new(Value);
     /// <inheritdoc />
     public override string ToString() => nameof(OpaqueSoapSessionReference);
 }
