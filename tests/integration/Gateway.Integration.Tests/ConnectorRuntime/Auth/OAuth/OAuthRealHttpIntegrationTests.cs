@@ -225,6 +225,161 @@ public sealed class OAuthRealHttpIntegrationTests
             Assert.DoesNotContain(sensitive, rendered, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task W1_IT_PKCE_S256_is_server_generated_bound_single_use_and_NONE_remains_compatible()
+    {
+        await using Fixture pkce = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), pkcePolicy: "S256_REQUIRED");
+        OAuthAuthorizationChallenge challenge = await pkce.Client.BeginAuthorizationAsync(pkce.Resolved, TestContext.Current.CancellationToken);
+        Dictionary<string, Microsoft.Extensions.Primitives.StringValues> query = QueryHelpers.ParseQuery(challenge.AuthorizationUri.Query);
+        Assert.Equal("S256", query["code_challenge_method"]);
+        Assert.Matches("^[A-Za-z0-9_-]{43}$", query["code_challenge"].ToString());
+        Assert.DoesNotContain(typeof(OAuthAuthorizationCodeClient).GetMethods().SelectMany(method => method.GetParameters()), parameter => parameter.Name?.Contains("verifier", StringComparison.OrdinalIgnoreCase) == true);
+
+        (OAuthAuthorizationChallenge completed, string code, string state) = await pkce.AuthorizeAsync();
+        OAuthTokenSessionReference session = await pkce.Client.CompleteAuthorizationAsync(pkce.Resolved, completed.OpaqueAttemptReference, code, state, TestContext.Current.CancellationToken);
+        Assert.Equal(200, (await pkce.Client.SendAuthenticatedAsync(pkce.Resolved, session, ReadOnlyMemory<byte>.Empty, TestContext.Current.CancellationToken)).StatusCode);
+        await Assert.ThrowsAsync<GatewayException>(() => pkce.Client.CompleteAuthorizationAsync(pkce.Resolved, completed.OpaqueAttemptReference, code, state, TestContext.Current.CancellationToken));
+
+        await using Fixture compatible = await Fixture.CreateAsync(TimeSpan.FromMinutes(5));
+        (OAuthAuthorizationChallenge legacy, string legacyCode, string legacyState) = await compatible.AuthorizeAsync();
+        Assert.DoesNotContain("code_challenge", legacy.AuthorizationUri.Query, StringComparison.Ordinal);
+        _ = await compatible.Client.CompleteAuthorizationAsync(compatible.Resolved, legacy.OpaqueAttemptReference, legacyCode, legacyState, TestContext.Current.CancellationToken);
+    }
+
+    [Theory]
+    [InlineData("wrong")]
+    [InlineData("missing")]
+    public async Task W1_SEC_PKCE_wrong_or_missing_verifier_is_denied_and_attempt_cannot_be_reused(string mutation)
+    {
+        await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), pkcePolicy: "S256_REQUIRED");
+        TokenFormTransport tampering = new(fixture.RestrictedTransport, mutation);
+        using OAuthAuthorizationCodeClient client = fixture.NewClient(new FixedResolver(IPAddress.Loopback), tampering);
+        (OAuthAuthorizationChallenge challenge, string code, string state) = await fixture.AuthorizeAsync(client);
+
+        await Assert.ThrowsAsync<GatewayException>(() => client.CompleteAuthorizationAsync(fixture.Resolved, challenge.OpaqueAttemptReference, code, state, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<GatewayException>(() => client.CompleteAuthorizationAsync(fixture.Resolved, challenge.OpaqueAttemptReference, code, state, TestContext.Current.CancellationToken));
+        Assert.Equal(1, fixture.Server.TokenRequestCount);
+    }
+
+    [Fact]
+    public async Task W1_SEC_PKCE_plain_invalid_challenge_expiry_state_correlation_and_stale_revision_fail_closed()
+    {
+        await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), pkcePolicy: "S256_REQUIRED");
+        OAuthAuthorizationChallenge invalid = await fixture.Client.BeginAuthorizationAsync(fixture.Resolved, TestContext.Current.CancellationToken);
+        Uri invalidUri = new(invalid.AuthorizationUri.AbsoluteUri.Replace(QueryHelpers.ParseQuery(invalid.AuthorizationUri.Query)["code_challenge"].ToString(), "invalid", StringComparison.Ordinal));
+        Assert.Equal(HttpStatusCode.BadRequest, await fixture.NavigateAsync(invalidUri));
+
+        (OAuthAuthorizationChallenge expired, string expiredCode, string expiredState) = await fixture.AuthorizeAsync();
+        fixture.Clock.Advance(TimeSpan.FromMinutes(6));
+        await Assert.ThrowsAsync<GatewayException>(() => fixture.Client.CompleteAuthorizationAsync(fixture.Resolved, expired.OpaqueAttemptReference, expiredCode, expiredState, TestContext.Current.CancellationToken));
+
+        fixture.SubstituteSnapshot("plain-downgrade");
+        await Assert.ThrowsAsync<GatewayException>(() => fixture.ResolveAsync());
+        Assert.Equal(0, fixture.Secret.Calls);
+    }
+
+    [Fact]
+    public async Task W1_IT_Client_credentials_cache_is_shared_revision_bound_and_single_flight()
+    {
+        await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), grantKind: "oauthClientCredentials", resource: "https://resource.synthetic/");
+        OAuthTokenSessionReference[] acquired = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => fixture.Client.AcquireClientCredentialsAsync(fixture.Resolved, TestContext.Current.CancellationToken)));
+        Assert.Single(acquired.Select(value => value.Value).Distinct(StringComparer.Ordinal));
+        Assert.Equal(1, fixture.Server.TokenRequestCount);
+        Assert.Equal(1, fixture.Client.CachedSessionCount);
+
+        ExternalResponse[] first = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => fixture.Client.SendAuthenticatedAsync(fixture.Resolved, acquired[0], ReadOnlyMemory<byte>.Empty, TestContext.Current.CancellationToken)));
+        Assert.All(first, response => Assert.Equal(200, response.StatusCode));
+        fixture.Clock.Advance(TimeSpan.FromMinutes(6));
+        ExternalResponse[] reacquired = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => fixture.Client.SendAuthenticatedAsync(fixture.Resolved, acquired[0], ReadOnlyMemory<byte>.Empty, TestContext.Current.CancellationToken)));
+        Assert.All(reacquired, response => Assert.Equal(200, response.StatusCode));
+        Assert.Equal(2, fixture.Server.TokenRequestCount);
+        Assert.Single(fixture.Audit.Records, record => record.Action == "oauth.client-credentials.acquire" && record.Outcome == "success");
+        Assert.Single(fixture.Audit.Records, record => record.Action == "oauth.client-credentials.reacquire" && record.Outcome == "success");
+    }
+
+    [Theory]
+    [InlineData("invalid-response", "BGW-EGRESS-AUTHENTICATION")]
+    [InlineData("wrong-content-type", "BGW-EGRESS-AUTHENTICATION")]
+    [InlineData("expired-token", "BGW-EGRESS-AUTHENTICATION")]
+    [InlineData("malicious-redirect", "BGW-EGRESS-REDIRECT-DENIED")]
+    public async Task W1_SEC_Client_credentials_malformed_expired_and_redirect_responses_fail_sanitized(string mode, string expectedCode)
+    {
+        await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2), "oauthClientCredentials", clientCredentialsMode: mode);
+        GatewayException error = await Assert.ThrowsAsync<GatewayException>(() => fixture.Client.AcquireClientCredentialsAsync(fixture.Resolved, TestContext.Current.CancellationToken));
+        Assert.Equal(expectedCode, error.Code);
+        Assert.DoesNotContain(fixture.Options.ClientSecret, error.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, fixture.Client.CachedSessionCount);
+    }
+
+    [Theory]
+    [InlineData("profile")]
+    [InlineData("token-endpoint")]
+    [InlineData("client-secret-reference")]
+    [InlineData("scope")]
+    [InlineData("audience")]
+    [InlineData("resource")]
+    [InlineData("client-auth-method")]
+    public async Task W1_SEC_Client_credentials_profile_endpoint_secret_scope_audience_and_auth_method_substitution_is_denied(string substitution)
+    {
+        await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), grantKind: "oauthClientCredentials", resource: "https://resource.synthetic/");
+        if (substitution == "profile")
+        {
+            await Assert.ThrowsAsync<GatewayException>(() => fixture.ResolveAsync(profileId: "attacker.profile"));
+            Assert.Equal(0, fixture.Secret.Calls);
+            Assert.Equal(0, fixture.Server.TokenRequestCount);
+            return;
+        }
+        OAuthResolvedExecutionContext original = await fixture.ResolveAsync();
+        fixture.SubstituteSnapshot(substitution);
+        await Assert.ThrowsAsync<GatewayException>(() => fixture.Client.AcquireClientCredentialsAsync(original, TestContext.Current.CancellationToken));
+        Assert.Equal(0, fixture.Secret.Calls);
+        Assert.Equal(0, fixture.Server.TokenRequestCount);
+    }
+
+    [Fact]
+    public async Task W1_SEC_Client_credentials_disabled_rotated_stale_cache_and_SSRF_fail_before_dispatch()
+    {
+        await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), grantKind: "oauthClientCredentials");
+        RecordingTransport recording = new();
+        using OAuthAuthorizationCodeClient ssrf = fixture.NewClient(new FixedResolver(IPAddress.Parse("169.254.169.254")), recording);
+        await Assert.ThrowsAsync<GatewayException>(() => ssrf.AcquireClientCredentialsAsync(fixture.Resolved, TestContext.Current.CancellationToken));
+        Assert.Equal(0, recording.Calls);
+
+        fixture.Secret.Throw = true;
+        using OAuthAuthorizationCodeClient disabled = fixture.NewClient(new FixedResolver(IPAddress.Loopback), recording);
+        await Assert.ThrowsAsync<GatewayException>(() => disabled.AcquireClientCredentialsAsync(fixture.Resolved, TestContext.Current.CancellationToken));
+        Assert.Equal(0, recording.Calls);
+        fixture.Secret.Throw = false;
+
+        OAuthTokenSessionReference session = await fixture.Client.AcquireClientCredentialsAsync(fixture.Resolved, TestContext.Current.CancellationToken);
+        fixture.RotateSnapshot();
+        await Assert.ThrowsAsync<GatewayException>(() => fixture.Client.SendAuthenticatedAsync(fixture.Resolved, session, ReadOnlyMemory<byte>.Empty, TestContext.Current.CancellationToken));
+        Assert.Equal(0, fixture.Server.ResourceRequestCount);
+    }
+
+    [Fact]
+    public async Task W1_SEC_Client_credentials_audit_failure_does_not_publish_a_token_session()
+    {
+        await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), grantKind: "oauthClientCredentials");
+        using OAuthAuthorizationCodeClient client = fixture.NewClient(new FixedResolver(IPAddress.Loopback), fixture.RestrictedTransport, new FailingAudit());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.AcquireClientCredentialsAsync(fixture.Resolved, TestContext.Current.CancellationToken));
+        Assert.Equal(0, client.CachedSessionCount);
+    }
+
+    [Fact]
+    public async Task W1_SEC_PKCE_and_client_credentials_diagnostics_redact_verifier_challenge_state_secret_authorization_and_raw_token_response()
+    {
+        await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), pkcePolicy: "S256_REQUIRED");
+        TokenFormTransport capture = new(fixture.RestrictedTransport);
+        using OAuthAuthorizationCodeClient client = fixture.NewClient(new FixedResolver(IPAddress.Loopback), capture);
+        (OAuthAuthorizationChallenge challenge, string code, string state) = await fixture.AuthorizeAsync(client);
+        OAuthTokenSessionReference session = await client.CompleteAuthorizationAsync(fixture.Resolved, challenge.OpaqueAttemptReference, code, state, TestContext.Current.CancellationToken);
+        string challengeValue = QueryHelpers.ParseQuery(challenge.AuthorizationUri.Query)["code_challenge"].ToString();
+        string rendered = string.Join('\n', challenge, JsonSerializer.Serialize(challenge), session, JsonSerializer.Serialize(session), fixture.Resolved, JsonSerializer.Serialize(fixture.Resolved), fixture.Options, JsonSerializer.Serialize(fixture.Options));
+        foreach (string sensitive in new[] { capture.CodeVerifier!, challengeValue, state, fixture.Options.ClientSecret, capture.Authorization!, capture.RawResponse! })
+            Assert.DoesNotContain(sensitive, rendered, StringComparison.Ordinal);
+    }
+
     private sealed class Fixture : IAsyncDisposable
     {
         private readonly X509Certificate2 root;
@@ -236,8 +391,11 @@ public sealed class OAuthRealHttpIntegrationTests
         private readonly Guid connectorId = Guid.NewGuid();
         private readonly Guid versionId = Guid.NewGuid();
         private readonly SystemRestrictedTransport transport;
+        private readonly string grantKind;
+        private readonly string pkcePolicy;
 
-        private Fixture(SyntheticOAuthServerInstance server, SyntheticOAuthServerOptions options, X509Certificate2 root, X509Certificate2 leaf, MutableClock clock, TimeSpan expirySkew, MutableSecretProvider secret)
+        private Fixture(SyntheticOAuthServerInstance server, SyntheticOAuthServerOptions options, X509Certificate2 root, X509Certificate2 leaf, MutableClock clock, TimeSpan expirySkew,
+            MutableSecretProvider secret, string grantKind, string pkcePolicy)
         {
             Server = server;
             Options = options;
@@ -245,6 +403,8 @@ public sealed class OAuthRealHttpIntegrationTests
             this.leaf = leaf;
             Clock = clock;
             Secret = secret;
+            this.grantKind = grantKind;
+            this.pkcePolicy = pkcePolicy;
             Audit = new CapturingAudit();
             transport = new(new X509Certificate2Collection(root));
             Snapshot = CreateSnapshot(expirySkew);
@@ -264,14 +424,16 @@ public sealed class OAuthRealHttpIntegrationTests
         internal OAuthAuthorizationCodeClient Client { get; }
         internal IRestrictedTransport RestrictedTransport => transport;
 
-        internal static async Task<Fixture> CreateAsync(TimeSpan tokenLifetime, TimeSpan? expirySkew = null)
+        internal static async Task<Fixture> CreateAsync(TimeSpan tokenLifetime, TimeSpan? expirySkew = null, string grantKind = "oauthAuthorizationCode", string pkcePolicy = "NONE",
+            string? resource = null, string? clientCredentialsMode = null)
         {
             (X509Certificate2 root, X509Certificate2 leaf) = Certificates();
             string clientId = "synthetic-" + Guid.NewGuid().ToString("N");
             string secret = Convert.ToBase64String(RandomNumberGenerator.GetBytes(48));
-            SyntheticOAuthServerOptions options = new(clientId, secret, new Uri("https://client.invalid/oauth/callback"), "scope.synthetic", "audience.synthetic", TimeSpan.FromMinutes(2), tokenLifetime);
+            SyntheticOAuthServerOptions options = new(clientId, secret, new Uri("https://client.invalid/oauth/callback"), "scope.synthetic", "audience.synthetic", TimeSpan.FromMinutes(2), tokenLifetime,
+                pkcePolicy == "S256_REQUIRED", resource, clientCredentialsMode);
             SyntheticOAuthServerInstance server = await SyntheticOAuthServerHost.StartAsync(options, leaf, TestContext.Current.CancellationToken);
-            return new(server, options, root, leaf, new MutableClock(DateTimeOffset.UtcNow), expirySkew ?? TimeSpan.FromSeconds(30), new MutableSecretProvider(secret));
+            return new(server, options, root, leaf, new MutableClock(DateTimeOffset.UtcNow), expirySkew ?? TimeSpan.FromSeconds(30), new MutableSecretProvider(secret), grantKind, pkcePolicy);
         }
 
         internal OAuthAuthorizationCodeClient NewClient(IHostResolver resolver, IRestrictedTransport selectedTransport, IOutboundAuthAuditSink? audit = null, int tokenCapacity = 2) =>
@@ -285,13 +447,27 @@ public sealed class OAuthRealHttpIntegrationTests
             OAuthAuthorizationChallenge challenge = await (client ?? Client).BeginAuthorizationAsync(context ?? Resolved, TestContext.Current.CancellationToken);
             Uri uri = challenge.AuthorizationUri;
             if (mode is not null) uri = new Uri(uri.AbsoluteUri + "&synthetic_mode=" + Uri.EscapeDataString(mode));
-            using HttpClientHandler handler = new() { AllowAutoRedirect = false, ServerCertificateCustomValidationCallback = (_, certificate, _, _) => certificate is not null && certificate.GetCertHashString(HashAlgorithmName.SHA256) == leaf.GetCertHashString(HashAlgorithmName.SHA256) };
+            using HttpClientHandler handler = BrowserHandler();
             using HttpClient browser = new(handler);
             using HttpResponseMessage response = await browser.GetAsync(uri, TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
             Dictionary<string, Microsoft.Extensions.Primitives.StringValues> callback = QueryHelpers.ParseQuery(response.Headers.Location!.Query);
             return (challenge, callback["code"].ToString(), callback["state"].ToString());
         }
+
+        internal async Task<HttpStatusCode> NavigateAsync(Uri uri)
+        {
+            using HttpClientHandler handler = BrowserHandler();
+            using HttpClient browser = new(handler);
+            using HttpResponseMessage response = await browser.GetAsync(uri, TestContext.Current.CancellationToken);
+            return response.StatusCode;
+        }
+
+        private HttpClientHandler BrowserHandler() => new()
+        {
+            AllowAutoRedirect = false,
+            ServerCertificateCustomValidationCallback = (_, certificate, _, _) => certificate is not null && certificate.GetCertHashString(HashAlgorithmName.SHA256) == leaf.GetCertHashString(HashAlgorithmName.SHA256)
+        };
 
         internal void RotateSnapshot()
         {
@@ -316,11 +492,18 @@ public sealed class OAuthRealHttpIntegrationTests
                 Snapshot = Snapshot with { Bindings = Snapshot.Bindings with { Endpoints = endpoints } };
                 return;
             }
-            if (substitution == "scope-audience")
+            if (substitution is "scope-audience" or "scope")
             {
-                json = json.Replace("scope.synthetic", "scope.attacker", StringComparison.Ordinal).Replace("audience.synthetic", "audience.attacker", StringComparison.Ordinal);
+                json = json.Replace("scope.synthetic", "scope.attacker", StringComparison.Ordinal);
+                if (substitution == "scope-audience") json = json.Replace("audience.synthetic", "audience.attacker", StringComparison.Ordinal);
                 Snapshot = Snapshot with { Version = Snapshot.Version with { CanonicalJson = json } };
+                return;
             }
+            if (substitution == "audience") json = json.Replace("audience.synthetic", "audience.attacker", StringComparison.Ordinal);
+            else if (substitution == "resource") json = json.Replace("https://resource.synthetic/", "https://resource.attacker/", StringComparison.Ordinal);
+            else if (substitution == "plain-downgrade") json = json.Replace("S256_REQUIRED", "PLAIN", StringComparison.Ordinal);
+            else if (substitution == "client-auth-method") json = json.Replace("client_secret_basic", "client_secret_post", StringComparison.Ordinal);
+            Snapshot = Snapshot with { Version = Snapshot.Version with { CanonicalJson = json } };
         }
 
         private GatewayClientPrincipal Principal(Guid correlationId)
@@ -332,6 +515,29 @@ public sealed class OAuthRealHttpIntegrationTests
 
         private PublishedConnectorSnapshot CreateSnapshot(TimeSpan expirySkew)
         {
+            Dictionary<string, object?> authentication = new(StringComparer.Ordinal)
+            {
+                ["kind"] = grantKind,
+                ["profileId"] = "wave1.synthetic",
+                ["tokenEndpointBinding"] = "oauth-token",
+                ["clientId"] = Options.ClientId,
+                ["clientAuthMethod"] = "client_secret_basic",
+                ["secretBinding"] = "oauth-client-secret",
+                ["scopes"] = new[] { "scope.synthetic" },
+                ["audience"] = "audience.synthetic",
+                ["tokenRequestTimeoutMilliseconds"] = 5000,
+                ["maximumTokenResponseBytes"] = 16384,
+                ["expirySkewSeconds"] = (int)expirySkew.TotalSeconds
+            };
+            if (Options.Resource is not null) authentication["resource"] = Options.Resource;
+            if (grantKind == "oauthAuthorizationCode")
+            {
+                authentication["authorizationEndpointBinding"] = "oauth-authorization";
+                authentication["redirectUri"] = Options.RedirectUri.AbsoluteUri;
+                authentication["authorizationLifetimeSeconds"] = 300;
+                authentication["allowRefresh"] = true;
+                authentication["pkcePolicy"] = pkcePolicy;
+            }
             var definition = new
             {
                 connectorId = "synthetic-oauth",
@@ -345,23 +551,7 @@ public sealed class OAuthRealHttpIntegrationTests
                         path = "/resource",
                         method = "GET",
                         timeoutMs = 5000,
-                        authentication = new
-                        {
-                            kind = "oauthAuthorizationCode",
-                            profileId = "wave1.synthetic",
-                            authorizationEndpointBinding = "oauth-authorization",
-                            tokenEndpointBinding = "oauth-token",
-                            clientId = Options.ClientId,
-                            secretBinding = "oauth-client-secret",
-                            scopes = new[] { "scope.synthetic" },
-                            audience = "audience.synthetic",
-                            redirectUri = Options.RedirectUri.AbsoluteUri,
-                            authorizationLifetimeSeconds = 300,
-                            tokenRequestTimeoutMilliseconds = 5000,
-                            maximumTokenResponseBytes = 16384,
-                            expirySkewSeconds = (int)expirySkew.TotalSeconds,
-                            allowRefresh = true
-                        },
+                        authentication,
                         request = new { contentType = "application/json", maximumBytes = 4096 },
                         response = new { maximumBytes = 4096 }
                     }
@@ -385,6 +575,7 @@ public sealed class OAuthRealHttpIntegrationTests
 
         public async ValueTask DisposeAsync()
         {
+            Client.Dispose();
             await Server.DisposeAsync();
             leaf.Dispose();
             root.Dispose();
@@ -430,6 +621,30 @@ public sealed class OAuthRealHttpIntegrationTests
         }
     }
 
+    private sealed class TokenFormTransport(IRestrictedTransport inner, string? mutation = null) : IRestrictedTransport
+    {
+        internal string? CodeVerifier { get; private set; }
+        internal string? Authorization { get; private set; }
+        internal string? RawResponse { get; private set; }
+
+        public async Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
+        {
+            if (request.Content is null) return await inner.SendAsync(request, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, cancellationToken);
+            string encoded = await request.Content.ReadAsStringAsync(cancellationToken);
+            Dictionary<string, string> form = QueryHelpers.ParseQuery("?" + encoded).ToDictionary(value => value.Key, value => value.Value.ToString(), StringComparer.Ordinal);
+            form.TryGetValue("code_verifier", out string? verifier);
+            CodeVerifier = verifier;
+            Authorization = request.Headers.Authorization?.ToString();
+            if (mutation == "wrong" && verifier is not null) form["code_verifier"] = verifier[..^1] + (verifier[^1] == 'A' ? "B" : "A");
+            if (mutation == "missing") form.Remove("code_verifier");
+            using HttpRequestMessage forwarded = new(request.Method, request.RequestUri) { Content = new FormUrlEncodedContent(form) };
+            forwarded.Headers.Authorization = request.Headers.Authorization;
+            ExternalResponse response = await inner.SendAsync(forwarded, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, cancellationToken);
+            RawResponse = System.Text.Encoding.UTF8.GetString(response.Body);
+            return response;
+        }
+    }
+
     private sealed class BlockingTransport(IRestrictedTransport inner) : IRestrictedTransport
     {
         private TaskCompletionSource started = NewSignal();
@@ -455,6 +670,11 @@ public sealed class OAuthRealHttpIntegrationTests
     {
         internal List<OutboundAuthAuditRecord> Records { get; } = [];
         public Task WriteAsync(OutboundAuthAuditRecord record, CancellationToken cancellationToken) { lock (Records) Records.Add(record); return Task.CompletedTask; }
+    }
+
+    private sealed class FailingAudit : IOutboundAuthAuditSink
+    {
+        public Task WriteAsync(OutboundAuthAuditRecord record, CancellationToken cancellationToken) => throw new InvalidOperationException("SYNTHETIC-AUDIT-FAILURE");
     }
 
     private static (X509Certificate2 Root, X509Certificate2 Leaf) Certificates()

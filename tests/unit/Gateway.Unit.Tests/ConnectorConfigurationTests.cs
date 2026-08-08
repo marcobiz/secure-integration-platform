@@ -59,6 +59,38 @@ public sealed class ConnectorConfigurationTests
     }
 
     [Fact]
+    public void W1_CT_Published_OAuth_profiles_validate_and_downgrade_or_endpoint_substitution_is_rejected()
+    {
+        ConnectorDefinitionValidator validator = new();
+        const string json = """
+        {
+          "schemaVersion":"1.0","connectorId":"generic-oauth","version":"1.0.0","displayName":"Generic OAuth",
+          "bindings":{"endpoints":[{"name":"protected-api"},{"name":"oauth-authorize"},{"name":"oauth-token"}],"secrets":[{"name":"oauth-interactive-secret","kind":"opaque"},{"name":"oauth-machine-secret","kind":"opaque"}]},
+          "operations":[
+            {"operationId":"interactive","endpointBinding":"protected-api","method":"GET","path":"/interactive","request":{"contentType":"application/json","maximumBytes":4096},"response":{"maximumBytes":4096},"authentication":{"kind":"oauthAuthorizationCode","profileId":"partner.authorization","authorizationEndpointBinding":"oauth-authorize","tokenEndpointBinding":"oauth-token","clientId":"published-client","clientAuthMethod":"client_secret_basic","secretBinding":"oauth-interactive-secret","scopes":["orders.read"],"audience":"orders-api","redirectUri":"https://gateway.example.test/oauth/callback","pkcePolicy":"S256_REQUIRED"},"timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[]},
+            {"operationId":"machine","endpointBinding":"protected-api","method":"POST","path":"/machine","request":{"contentType":"application/json","maximumBytes":4096},"response":{"maximumBytes":4096},"authentication":{"kind":"oauthClientCredentials","profileId":"partner.machine","tokenEndpointBinding":"oauth-token","clientId":"published-client","clientAuthMethod":"client_secret_basic","secretBinding":"oauth-machine-secret","scopes":["orders.write"],"audience":"orders-api","resource":"https://api.example.test/orders"},"timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[]}
+          ]
+        }
+        """;
+
+        using JsonDocument valid = JsonDocument.Parse(json);
+        Assert.True(validator.Validate(valid.RootElement).Valid);
+
+        AssertInvalid(json.Replace("S256_REQUIRED", "PLAIN", StringComparison.Ordinal));
+        AssertInvalid(json.Replace("client_secret_basic", "client_secret_post", StringComparison.Ordinal));
+        using JsonDocument unknownEndpoint = JsonDocument.Parse(json.Replace("\"oauth-token\",\"clientId\"", "\"missing-token\",\"clientId\"", StringComparison.Ordinal));
+        ConnectorValidationResult endpointResult = validator.Validate(unknownEndpoint.RootElement);
+        Assert.False(endpointResult.Valid);
+        Assert.Contains(endpointResult.Issues, issue => issue.Code == "BGW-CONNECTOR-ENDPOINT-BINDING-UNKNOWN");
+
+        void AssertInvalid(string candidate)
+        {
+            using JsonDocument document = JsonDocument.Parse(candidate);
+            Assert.False(validator.Validate(document.RootElement).Valid);
+        }
+    }
+
+    [Fact]
     public async Task M4_UT_Lifecycle_is_immutable_concurrent_and_rollback_reactivates_prior_publication()
     {
         Fixture fixture = new();

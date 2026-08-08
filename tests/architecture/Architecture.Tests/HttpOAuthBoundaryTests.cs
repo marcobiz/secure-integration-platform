@@ -29,9 +29,10 @@ public sealed class HttpOAuthBoundaryTests
     public void M6_ARCH_cache_identity_covers_frozen_security_dimensions_and_has_no_Redis_dependency()
     {
         string source = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.ConnectorRuntime.Auth.Http", "OAuth", "OAuthAuthorizationCodeClient.cs"));
-        foreach (string dimension in new[] { "TenantId", "InstallationId", "ApplicationId", "EnvironmentId", "ConnectorVersionId", "ConnectorVersion", "AuthBindingRevision", "EndpointRevision", "ClientId", "Scopes", "Audience", "SecretRevision", "ResourceStamp" })
+        foreach (string dimension in new[] { "TenantId", "InstallationId", "ApplicationId", "EnvironmentId", "ConnectorVersionId", "ConnectorVersion", "AuthBindingRevision", "EndpointRevision", "Policy", "TokenEndpoint", "ClientId", "ClientAuthenticationMethod", "Scopes", "Audience", "Resource", "SecretRevision", "ResourceStamp" })
             Assert.Contains(dimension, source, StringComparison.Ordinal);
         Assert.DoesNotContain("Redis", source, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(Regex.Matches(source, @"Dictionary<string, TokenSession>", RegexOptions.CultureInvariant).Cast<Match>());
     }
 
     [Fact]
@@ -44,6 +45,8 @@ public sealed class HttpOAuthBoundaryTests
 
         Assert.Contains("internal sealed class OutboundAuthContext", contracts, StringComparison.Ordinal);
         Assert.Contains("internal sealed class OAuthAuthorizationCodeProfile", contracts, StringComparison.Ordinal);
+        Assert.Contains("internal sealed class OAuthClientCredentialsProfile", contracts, StringComparison.Ordinal);
+        Assert.Contains("OAuthPkcePolicy", contracts, StringComparison.Ordinal);
         Assert.Contains("internal OAuthAuthorizedInvocation(", contracts, StringComparison.Ordinal);
         Assert.Contains("internal OAuthResolvedExecutionContext(", contracts, StringComparison.Ordinal);
         Assert.Contains("PublishedOAuthAuthorityResolver", resolver, StringComparison.Ordinal);
@@ -54,6 +57,29 @@ public sealed class HttpOAuthBoundaryTests
         Assert.DoesNotMatch(new Regex(@"public\s+(?:async\s+)?[^\r\n(]+\([^)]*HttpRequestMessage", RegexOptions.CultureInvariant), client);
         Assert.Contains("external-user-agent-navigation", contracts, StringComparison.Ordinal);
         Assert.DoesNotContain("new HttpClient", client, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void W1_ARCH_PKCE_and_client_credentials_are_server_owned_S256_only_and_share_restricted_token_acquisition()
+    {
+        string directory = Path.Combine(Root, "src", "Gateway", "Gateway.ConnectorRuntime.Auth.Http", "OAuth");
+        string contracts = File.ReadAllText(Path.Combine(directory, "OAuthContracts.cs"));
+        string client = File.ReadAllText(Path.Combine(directory, "OAuthAuthorizationCodeClient.cs"));
+        string resolver = File.ReadAllText(Path.Combine(directory, "PublishedOAuthAuthorityResolver.cs"));
+
+        Assert.Contains("S256_REQUIRED", resolver, StringComparison.Ordinal);
+        Assert.Contains("code_challenge_method", client, StringComparison.Ordinal);
+        Assert.Contains("S256", client, StringComparison.Ordinal);
+        Assert.Contains("AcquireClientCredentialsAsync", client, StringComparison.Ordinal);
+        Assert.Contains("IRestrictedTransport", client, StringComparison.Ordinal);
+        Assert.Contains("ScopedOAuthSecretCapability", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("client_secret_post", contracts + client + resolver, StringComparison.Ordinal);
+        Assert.DoesNotMatch(new Regex(@"public\s+[^\r\n(]+\([^)]*(?:codeVerifier|codeChallenge|clientSecret|tokenEndpoint|secretReference)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), contracts + client + resolver);
+
+        string builtInPipeline = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "OperationServices.cs"));
+        int oauthDenial = builtInPipeline.IndexOf("operation.Authentication is GatewayAuthenticationKind.OAuthAuthorizationCode", StringComparison.Ordinal);
+        int dnsResolution = builtInPipeline.IndexOf("resolver.ResolveAsync(operation.Endpoint.DnsSafeHost", StringComparison.Ordinal);
+        Assert.InRange(oauthDenial, 0, dnsResolution - 1);
     }
 
     [Fact]
