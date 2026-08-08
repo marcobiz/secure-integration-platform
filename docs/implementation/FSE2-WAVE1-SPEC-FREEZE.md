@@ -273,4 +273,5 @@ The documentation-only candidate was verified on 2026-08-08:
 - transitive NuGet vulnerability scan: no vulnerable package reported;
 - `git diff --check` and forbidden-term check: PASS;
 - live official-system or accreditation tests: not run;
-- CI: pending PR execution.
+- PR CI on commit `67338ecae148ade44e8c0132532534c406887520`: 21/21 PASS in
+  runs `31258553284` and `31258553286`.
