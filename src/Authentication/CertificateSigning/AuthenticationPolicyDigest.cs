@@ -13,6 +13,7 @@ internal static class AuthenticationPolicyDigest
         writer.WriteString("audience", policy.Audience);
         writer.WriteString("subjectPolicy", policy.SubjectPolicy.ToString());
         if (policy.FixedSubject is not null) writer.WriteString("fixedSubject", policy.FixedSubject);
+        if (policy.TrustedSubjectSource is not null) writer.WriteString("trustedSubjectSource", policy.TrustedSubjectSource.Value.ToString());
         writer.WriteStartArray("allowedClaims");
         foreach (string claim in policy.AllowedClaims.Order(StringComparer.Ordinal)) writer.WriteStringValue(claim);
         writer.WriteEndArray();

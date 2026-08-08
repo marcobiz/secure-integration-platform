@@ -17,7 +17,7 @@ Aggiornato: 2026-08-08
 | M6 — auth HTTP/OAuth primitives | Remediation mirata dei 7 finding qualificata | PR #9 product commit `9a7db4b`: CI exact-head 21/21 PASS; authority capability da snapshot Published, bearer destination-bound, correlation, refresh tombstone, query hardening, user-agent boundary e diagnostic redaction; nessun connector sanitario production |
 | M6 — SOAP/Basic/Session primitives | Implementato sul branch; remediation PR #10 e CI/review pending | AP-01/AP-02/AP-07 sintetiche, cache/stamp/deadline/Fault hardened, server SOAP HTTPS reale e 21 casi mirati PASS locali |
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
-| Wave 1 - Generic JWT/X.509 extensions | Local product gate PASS; CI exact-head e review indipendente pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 281 ordinary, 75 PostgreSQL, scan/SBOM/vulnerability/Core export PASS |
+| Wave 1 - Generic JWT/X.509 extensions | Remediation mirata local gate PASS; CI exact-head e rereview pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 304 ordinary, 71 PostgreSQL relevant, scan/SBOM/vulnerability/Core export PASS |
 | M3B e milestone/connector production successivi | Non iniziati | nessun cloud reale, connector sanitario production o adapter commerciale |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
@@ -174,14 +174,19 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
   identita approvata usata per verificare la firma RS256 provider-side;
 - `JwtTemporalClaimMode` conserva per default `iat+nbf+exp` e abilita `iat+exp` senza
   `nbf`, riusando lifetime/skew M6;
-- subject Tenant e trusted claim Tenant/Application/Installation derivano soltanto dal
-  runtime context autenticato, restano separati dai business claim allowlisted e non
-  introducono dictionary/espressioni/reflection;
+- subject e trusted claim possono usare Tenant/Application/Installation autenticati o
+  una runtime source tipizzata scelta dalla Published policy e risolta da un resolver
+  registrato server-side; provenance e binding esatti invocation/policy/catalog/resource
+  negano business promotion, source substitution e cross-context reuse senza introdurre
+  principal globale, dictionary/espressioni/reflection o raw subject override;
+- public material usa storage privato bounded (64 KiB per DER, sette issuer, 256 KiB
+  totali), copy-on-read e metadata collection copy-safe; `TrustedClaims` e allowlist
+  restano snapshot strutturalmente immutabili dopo il checksum;
 - policy/binding/catalog/resource sono rivalidati prima della firma e prima del ritorno:
   rotate/disable negano token e `x5c` stale;
-- 68 test certificate/signing e 17 architecture PASS locali; report:
+- 91 test certificate/signing e 17 architecture PASS locali; report:
   `docs/implementation/WAVE1-GENERIC-JWT-X509-EXTENSIONS.md`.
-- build Release, ordinary suite 281 PASS, PostgreSQL 18.4 75 PASS, docs, secret scan,
+- build Release, ordinary suite 304 PASS, PostgreSQL 18.4 relevant 71 PASS, docs, secret scan,
   SBOM, vulnerability inventory e Core export verificato sono PASS locali.
 
 Dual JWT, issuer/CN service-specific, CX/XON/IHE e document hash restano
@@ -229,12 +234,12 @@ Dettagli: `docs/reviews/M3A-SPLIT-HOST-BLOCKED-20260805.md`.
 | `Broker.Integration.Tests` | 28 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction, CNG, handshake Schannel e regressioni harness M3 |
 | `VerticalSlice.Tests` | 1 PASS | vertical slice e negative/security path |
 | `Gateway.Unit.Tests` | 80 PASS | security M2-M6, contract/lifecycle/cache/bounds/corruption, runtime principal, OAuth e SOAP/session |
-| `Authentication.CertificateSigning.Tests` | 68 PASS | RS256/policy/claim/replay, public DER/x5c, fingerprint/SPKI, temporal/trusted source, provider redaction, mTLS e rotate/disable |
+| `Authentication.CertificateSigning.Tests` | 91 PASS | RS256/policy/claim/replay, generic trusted runtime subject, immutable/bounded public DER/x5c and policy snapshot, temporal, provider redaction, mTLS e rotate/disable |
 | `Gateway.Integration.Tests` | 61 PASS, 10 conditional SKIP | API/Admin/OAuth/SOAP/schema; i 10 test PostgreSQL condizionali richiedono il gate dedicato |
 | `Architecture.Tests` | 17 PASS | boundary Core/provider/auth writer, generic JWT/X.509, CI, provisioning e OpenAPI |
-| Totale suite locale ordinaria | 281 PASS, 10 conditional SKIP | 26 Broker Core + 28 Broker integration + 80 Gateway unit + 61 Gateway integration + 68 certificate/signing + 17 architecture + 1 E2E |
+| Totale suite locale ordinaria | 304 PASS, 10 conditional SKIP | 26 Broker Core + 28 Broker integration + 80 Gateway unit + 61 Gateway integration + 91 certificate/signing + 17 architecture + 1 E2E |
 | CI `m3-deterministic-container-slice` | PASS, run `30903757495`, commit `91963ce` | Gateway/PostgreSQL 18/Vault/vendor reali, matrice positiva/negativa, non-root/read-only, redazione, cleanup ed evidence SHA-256 `A52CACB8…FCA30` |
-| PostgreSQL 18.4 effimero locale | 75 PASS | 71 canonical + 4 targeted; fresh apply/no-op, 7 FORCE RLS, pagination/fault/concurrency; container rimosso |
+| PostgreSQL 18.4 effimero locale | 71 PASS | suite relevant completa; fresh apply/no-op; container rimosso |
 | CI `gateway-postgresql-18` | PASS | run `30896803567`: PostgreSQL 18, migration apply/no-op, checksum, ruoli, FORCE RLS, tenant isolation e cleanup |
 | CI `gateway-container` | PASS | run `30896803567`: build/esecuzione, non-root/read-only, live/ready, fail-closed, secret scan, SBOM e shutdown |
 | parsing `tools/live-matrix/*.ps1/*.psm1` | 9 PASS | sintassi PowerShell dell'intero harness |

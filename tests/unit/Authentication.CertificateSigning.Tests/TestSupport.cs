@@ -153,7 +153,8 @@ internal static class AuthenticationTestData
         TimeSpan? lifetime = null,
         JwtCertificateHeaderMode certificateHeaderMode = JwtCertificateHeaderMode.None,
         JwtTemporalClaimMode temporalClaimMode = JwtTemporalClaimMode.IssuedAtNotBeforeExpiration,
-        IReadOnlyList<JwtTrustedClaimBinding>? trustedClaims = null) => ServerOwnedRs256PolicySnapshot.Create(
+        IReadOnlyList<JwtTrustedClaimBinding>? trustedClaims = null,
+        JwtTrustedValueSource? trustedSubjectSource = null) => ServerOwnedRs256PolicySnapshot.Create(
             JwtProfileId,
             revision,
             context.ConnectorVersionId,
@@ -174,7 +175,8 @@ internal static class AuthenticationTestData
             CatalogChecksum(revision),
             certificateHeaderMode: certificateHeaderMode,
             temporalClaimMode: temporalClaimMode,
-            trustedClaims: trustedClaims);
+            trustedClaims: trustedClaims,
+            trustedSubjectSource: trustedSubjectSource);
 
     internal static ServerOwnedMutualTlsPolicySnapshot MutualTlsPolicy(
         AuthenticationExecutionContext context,

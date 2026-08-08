@@ -97,6 +97,10 @@ public sealed class JwtX509ExtensionSecurityTests
             AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, trustedClaims: [new("iss", JwtTrustedValueSource.AuthenticatedTenantId)]),
             AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, trustedClaims: [new("role", JwtTrustedValueSource.AuthenticatedTenantId)]),
             AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, trustedClaims: [new("tenant_ref", (JwtTrustedValueSource)99)]),
+            AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, subjectPolicy: JwtSubjectPolicy.TrustedRuntimeValue),
+            AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, trustedSubjectSource: JwtTrustedValueSource.ExternalActorId),
+            AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, subjectPolicy: JwtSubjectPolicy.TrustedRuntimeValue,
+                trustedSubjectSource: JwtTrustedValueSource.AuthenticatedTenantId),
             AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1,
                 trustedClaims: [new("tenant_ref", JwtTrustedValueSource.AuthenticatedTenantId), new("tenant_ref", JwtTrustedValueSource.AuthenticatedApplicationId)])
         ];

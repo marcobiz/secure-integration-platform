@@ -59,8 +59,10 @@ internal static class BindingPolicy
             policy.AllowedClockSkew < TimeSpan.Zero || policy.AllowedClockSkew > TimeSpan.FromMinutes(5) ||
             policy.MinimumRsaKeySize < 2048 || policy.MinimumRsaKeySize > 16384 || policy.AllowedClaims.Count > 32 ||
             policy.AllowedClaims.Any(name => !ValidClaimName(name) || Rs256JwtSigner.IsReservedClaim(name)) ||
-            policy.SubjectPolicy is not (JwtSubjectPolicy.Installation or JwtSubjectPolicy.Application or JwtSubjectPolicy.Fixed or JwtSubjectPolicy.Tenant) ||
+            policy.SubjectPolicy is not (JwtSubjectPolicy.Installation or JwtSubjectPolicy.Application or JwtSubjectPolicy.Fixed or JwtSubjectPolicy.Tenant or JwtSubjectPolicy.TrustedRuntimeValue) ||
             (policy.SubjectPolicy == JwtSubjectPolicy.Fixed) != !string.IsNullOrWhiteSpace(policy.FixedSubject) ||
+            (policy.SubjectPolicy == JwtSubjectPolicy.TrustedRuntimeValue) != policy.TrustedSubjectSource.HasValue ||
+            (policy.TrustedSubjectSource.HasValue && !IsTrustedRuntimeSource(policy.TrustedSubjectSource.Value)) ||
             policy.CertificateHeaderMode is not (JwtCertificateHeaderMode.None or JwtCertificateHeaderMode.Leaf or JwtCertificateHeaderMode.Chain) ||
             policy.TemporalClaimMode is not (JwtTemporalClaimMode.IssuedAtNotBeforeExpiration or JwtTemporalClaimMode.IssuedAtExpiration) ||
             !ValidTrustedClaims(policy) ||
@@ -109,11 +111,21 @@ internal static class BindingPolicy
         foreach (JwtTrustedClaimBinding claim in policy.TrustedClaims)
         {
             if (!ValidClaimName(claim.Name) || Rs256JwtSigner.IsReservedClaim(claim.Name) || policy.AllowedClaims.Contains(claim.Name) ||
-                !names.Add(claim.Name) || claim.Source is not (JwtTrustedValueSource.AuthenticatedTenantId or JwtTrustedValueSource.AuthenticatedApplicationId or JwtTrustedValueSource.AuthenticatedInstallationId))
+                !names.Add(claim.Name) || !IsTrustedValueSource(claim.Source))
                 return false;
         }
         return true;
     }
+
+    internal static bool IsTrustedRuntimeSource(JwtTrustedValueSource source) => source is
+        JwtTrustedValueSource.ExternalActorId or
+        JwtTrustedValueSource.DelegatedSubjectId or
+        JwtTrustedValueSource.AuthorizedOperatorId;
+
+    private static bool IsTrustedValueSource(JwtTrustedValueSource source) => source is
+        JwtTrustedValueSource.AuthenticatedTenantId or
+        JwtTrustedValueSource.AuthenticatedApplicationId or
+        JwtTrustedValueSource.AuthenticatedInstallationId || IsTrustedRuntimeSource(source);
 
     private static bool FixedHexEquals(string left, string right)
     {

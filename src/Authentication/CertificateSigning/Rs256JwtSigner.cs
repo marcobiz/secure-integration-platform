@@ -14,7 +14,8 @@ public sealed class Rs256JwtSigner(
     IJwtReplayStore replayStore,
     IAuthenticationClock clock,
     IJwtIdentifierSource? identifierSource = null,
-    ICertificatePublicMaterialProvider? certificatePublicMaterial = null)
+    ICertificatePublicMaterialProvider? certificatePublicMaterial = null,
+    ITrustedRuntimeClaimValueResolver? trustedRuntimeClaimValues = null)
 {
     private static readonly HashSet<string> ReservedClaims = new(StringComparer.Ordinal)
     {
@@ -45,6 +46,8 @@ public sealed class Rs256JwtSigner(
         BoundAuthenticationResource resource = await ResolveBindingAsync(context, policy, cancellationToken).ConfigureAwait(false);
         if (policy.CertificateHeaderMode != JwtCertificateHeaderMode.None && certificatePublicMaterial is null)
             throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-CERTIFICATE-CAPABILITY-UNAVAILABLE");
+        IReadOnlyList<ResolvedTrustedRuntimeValue> trustedRuntimeValues =
+            await ResolveTrustedRuntimeValuesAsync(context, policy, resource, cancellationToken).ConfigureAwait(false);
 
         ProviderSigningKeyPublicMetadata metadata;
         try
@@ -101,7 +104,7 @@ public sealed class Rs256JwtSigner(
             throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-REPLAY");
 
         string encodedHeader = Base64Url(BuildProtectedHeader(resolved.Policy.CertificateHeaderMode, certificateHeaderValues));
-        byte[] payload = BuildPayload(context, resolved.Policy, validatedClaims, issuedAt, expiresAt, jwtIdentifier);
+        byte[] payload = BuildPayload(context, resolved.Policy, validatedClaims, trustedRuntimeValues, issuedAt, expiresAt, jwtIdentifier);
         string encodedPayload = Base64Url(payload);
         byte[] signingInput = Encoding.ASCII.GetBytes(encodedHeader + "." + encodedPayload);
         byte[] digest = SHA256.HashData(signingInput);
@@ -143,7 +146,14 @@ public sealed class Rs256JwtSigner(
         return claims;
     }
 
-    private static byte[] BuildPayload(AuthenticationExecutionContext context, ServerOwnedRs256PolicySnapshot policy, IReadOnlyList<JwtBoundClaim> claims, DateTimeOffset issuedAt, DateTimeOffset expiresAt, string jwtIdentifier)
+    private static byte[] BuildPayload(
+        AuthenticationExecutionContext context,
+        ServerOwnedRs256PolicySnapshot policy,
+        IReadOnlyList<JwtBoundClaim> claims,
+        IReadOnlyList<ResolvedTrustedRuntimeValue> trustedRuntimeValues,
+        DateTimeOffset issuedAt,
+        DateTimeOffset expiresAt,
+        string jwtIdentifier)
     {
         using MemoryStream output = new();
         using (Utf8JsonWriter writer = new(output))
@@ -157,6 +167,7 @@ public sealed class Rs256JwtSigner(
                 JwtSubjectPolicy.Application => context.ApplicationId.ToString("D"),
                 JwtSubjectPolicy.Fixed => policy.FixedSubject!,
                 JwtSubjectPolicy.Tenant => context.TenantId.ToString("D"),
+                JwtSubjectPolicy.TrustedRuntimeValue => TrustedValue(context, policy.TrustedSubjectSource!.Value, trustedRuntimeValues),
                 _ => throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-POLICY-DENIED")
             });
             writer.WriteNumber("iat", issuedAt.ToUnixTimeSeconds());
@@ -165,7 +176,7 @@ public sealed class Rs256JwtSigner(
             writer.WriteNumber("exp", expiresAt.ToUnixTimeSeconds());
             writer.WriteString("jti", jwtIdentifier);
             foreach (JwtTrustedClaimBinding claim in policy.TrustedClaims.OrderBy(value => value.Name, StringComparer.Ordinal))
-                writer.WriteString(claim.Name, TrustedValue(context, claim.Source));
+                writer.WriteString(claim.Name, TrustedValue(context, claim.Source, trustedRuntimeValues));
             foreach (JwtBoundClaim claim in claims.OrderBy(value => value.Name, StringComparer.Ordinal))
             {
                 writer.WritePropertyName(claim.Name);
@@ -195,13 +206,98 @@ public sealed class Rs256JwtSigner(
         return output.ToArray();
     }
 
-    private static string TrustedValue(AuthenticationExecutionContext context, JwtTrustedValueSource source) => source switch
+    private static string TrustedValue(
+        AuthenticationExecutionContext context,
+        JwtTrustedValueSource source,
+        IReadOnlyList<ResolvedTrustedRuntimeValue> trustedRuntimeValues)
     {
-        JwtTrustedValueSource.AuthenticatedTenantId => context.TenantId.ToString("D"),
-        JwtTrustedValueSource.AuthenticatedApplicationId => context.ApplicationId.ToString("D"),
-        JwtTrustedValueSource.AuthenticatedInstallationId => context.InstallationId.ToString("D"),
-        _ => throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-POLICY-DENIED")
-    };
+        string? builtIn = source switch
+        {
+            JwtTrustedValueSource.AuthenticatedTenantId => context.TenantId.ToString("D"),
+            JwtTrustedValueSource.AuthenticatedApplicationId => context.ApplicationId.ToString("D"),
+            JwtTrustedValueSource.AuthenticatedInstallationId => context.InstallationId.ToString("D"),
+            _ => null
+        };
+        if (builtIn is not null) return builtIn;
+        ResolvedTrustedRuntimeValue? runtime = trustedRuntimeValues.SingleOrDefault(value => value.Source == source);
+        return runtime?.Value ?? throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-POLICY-DENIED");
+    }
+
+    private async Task<IReadOnlyList<ResolvedTrustedRuntimeValue>> ResolveTrustedRuntimeValuesAsync(
+        AuthenticationExecutionContext context,
+        ServerOwnedRs256PolicySnapshot policy,
+        BoundAuthenticationResource resource,
+        CancellationToken cancellationToken)
+    {
+        HashSet<JwtTrustedValueSource> sources = [];
+        if (policy.TrustedSubjectSource is JwtTrustedValueSource subjectSource) sources.Add(subjectSource);
+        foreach (JwtTrustedClaimBinding claim in policy.TrustedClaims)
+        {
+            if (BindingPolicy.IsTrustedRuntimeSource(claim.Source)) sources.Add(claim.Source);
+        }
+        if (sources.Count == 0) return [];
+        if (trustedRuntimeClaimValues is null)
+            throw new AuthenticationPrimitiveException("BGW-AUTH-TRUSTED-RUNTIME-CAPABILITY-UNAVAILABLE");
+
+        TrustedRuntimeClaimInvocationBinding expectedBinding = new(
+            context.TenantId,
+            context.ApplicationId,
+            context.InstallationId,
+            context.EnvironmentId,
+            context.ConnectorVersionId,
+            context.ConnectorId,
+            context.OperationId,
+            context.ProfileId,
+            context.Endpoint,
+            context.CorrelationId,
+            policy.PolicyId,
+            policy.PolicyRevision,
+            policy.PolicyChecksumSha256,
+            resource.CatalogRevision,
+            resource.CatalogChecksumSha256,
+            resource.PublicMetadata.Version);
+        List<ResolvedTrustedRuntimeValue> resolved = [];
+        foreach (JwtTrustedValueSource source in sources.Order())
+        {
+            TrustedRuntimeClaimValue value;
+            try
+            {
+                TrustedRuntimeClaimResolutionRequest request = new(source, expectedBinding);
+                value = await trustedRuntimeClaimValues.ResolveAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception) { throw new AuthenticationPrimitiveException("BGW-AUTH-TRUSTED-RUNTIME-VALUE-UNAVAILABLE"); }
+
+            if (value is null || value.Source != source || value.Provenance != TrustedRuntimeClaimValueProvenance.RegisteredServerResolver ||
+                string.IsNullOrWhiteSpace(value.Value) || value.Value.Length > 512 || value.Value.Any(char.IsControl) ||
+                !BindingPolicy.IsIdentifier(value.AuthorizationEvidenceReference) ||
+                !SameInvocationBinding(expectedBinding, value.InvocationBinding))
+                throw new AuthenticationPrimitiveException("BGW-AUTH-TRUSTED-RUNTIME-VALUE-DENIED");
+            resolved.Add(new(source, value.Value));
+        }
+        return resolved;
+    }
+
+    private static bool SameInvocationBinding(
+        TrustedRuntimeClaimInvocationBinding expected,
+        TrustedRuntimeClaimInvocationBinding? actual) =>
+        actual is not null &&
+        expected.TenantId == actual.TenantId &&
+        expected.ApplicationId == actual.ApplicationId &&
+        expected.InstallationId == actual.InstallationId &&
+        expected.EnvironmentId == actual.EnvironmentId &&
+        expected.ConnectorVersionId == actual.ConnectorVersionId &&
+        string.Equals(expected.ConnectorId, actual.ConnectorId, StringComparison.Ordinal) &&
+        string.Equals(expected.OperationId, actual.OperationId, StringComparison.Ordinal) &&
+        string.Equals(expected.ProfileId, actual.ProfileId, StringComparison.Ordinal) &&
+        expected.Endpoint == actual.Endpoint &&
+        expected.CorrelationId == actual.CorrelationId &&
+        string.Equals(expected.PolicyId, actual.PolicyId, StringComparison.Ordinal) &&
+        expected.PolicyRevision == actual.PolicyRevision &&
+        FixedHexEquals(expected.PolicyChecksumSha256, actual.PolicyChecksumSha256) &&
+        expected.CatalogRevision == actual.CatalogRevision &&
+        FixedHexEquals(expected.CatalogChecksumSha256, actual.CatalogChecksumSha256) &&
+        string.Equals(expected.ResourceVersion, actual.ResourceVersion, StringComparison.Ordinal);
 
     private static byte[] ValidateKeyMetadata(BoundResourcePublicMetadata expected, ProviderSigningKeyPublicMetadata actual, ServerOwnedRs256PolicySnapshot policy, DateTimeOffset now)
     {
@@ -229,10 +325,12 @@ public sealed class Rs256JwtSigner(
         ServerOwnedRs256PolicySnapshot policy,
         DateTimeOffset now)
     {
-        if (material.LeafCertificateDer.Length is < 256 or > 65_536 || material.CertificateChainDer.Count > 7)
+        if (material.LeafCertificateDer.Length is < 256 or > ProviderCertificatePublicMaterial.MaximumCertificateDerBytes ||
+            material.CertificateChainDer.Count > ProviderCertificatePublicMaterial.MaximumCertificateChainCount)
             throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-CERTIFICATE-DENIED");
         long encodedBytes = material.LeafCertificateDer.Length + material.CertificateChainDer.Sum(value => (long)value.Length);
-        if (encodedBytes > 256 * 1024 || material.CertificateChainDer.Any(value => value.Length is < 256 or > 65_536))
+        if (encodedBytes > ProviderCertificatePublicMaterial.MaximumTotalCertificateDerBytes ||
+            material.CertificateChainDer.Any(value => value.Length is < 256 or > ProviderCertificatePublicMaterial.MaximumCertificateDerBytes))
             throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-CERTIFICATE-DENIED");
 
         byte[] leafDer = material.LeafCertificateDer.ToArray();
@@ -425,3 +523,5 @@ internal sealed class ValidatedCertificateHeader(byte[] verificationSubjectPubli
     internal byte[] VerificationSubjectPublicKeyInfo { get; } = verificationSubjectPublicKeyInfo.ToArray();
     internal IReadOnlyList<byte[]> Certificates { get; } = certificates.Select(value => value.ToArray()).ToArray();
 }
+
+internal sealed record ResolvedTrustedRuntimeValue(JwtTrustedValueSource Source, string Value);

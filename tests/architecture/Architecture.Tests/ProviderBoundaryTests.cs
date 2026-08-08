@@ -82,6 +82,14 @@ public sealed class ProviderBoundaryTests
         Assert.DoesNotContain("Dictionary<string, object>", signer, StringComparison.Ordinal);
         Assert.DoesNotContain("ExpandoObject", signer, StringComparison.Ordinal);
         Assert.DoesNotContain("JsonNode", signer, StringComparison.Ordinal);
+        Assert.DoesNotContain("ClaimsPrincipal", signer, StringComparison.Ordinal);
+
+        string contracts = File.ReadAllText(Path.Combine(Root, "src", "Authentication", "CertificateSigning", "Contracts.cs"));
+        Assert.Contains("ITrustedRuntimeClaimValueResolver", contracts, StringComparison.Ordinal);
+        Assert.Contains("internal TrustedRuntimeClaimResolutionRequest", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("GatewayUser", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("GenericHumanPrincipal", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("Dictionary<string", contracts, StringComparison.Ordinal);
     }
 
     [Fact]

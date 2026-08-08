@@ -1,3 +1,5 @@
+using System.Collections.Frozen;
+using System.Collections.ObjectModel;
 using System.Text.Json;
 
 namespace SecureIntegration.Authentication.CertificateSigning;
@@ -91,6 +93,116 @@ public interface IAuthenticationPolicySource
         CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Resolves a policy-selected runtime security value from a registered server-side boundary.
+/// Connector callers cannot construct the resolution request or supply a value directly.
+/// </summary>
+public interface ITrustedRuntimeClaimValueResolver
+{
+    /// <summary>Resolves one exact typed source for the authenticated invocation and Published policy.</summary>
+    Task<TrustedRuntimeClaimValue> ResolveAsync(
+        TrustedRuntimeClaimResolutionRequest request,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>Closed provenance classification for a runtime security value.</summary>
+public enum TrustedRuntimeClaimValueProvenance
+{
+    /// <summary>The value was produced by a registered server-side runtime resolver.</summary>
+    RegisteredServerResolver,
+    /// <summary>Ordinary caller business data, which is never accepted as trusted runtime material.</summary>
+    CallerBusinessData
+}
+
+/// <summary>Exact immutable invocation and authorization binding for one runtime security value.</summary>
+public sealed record TrustedRuntimeClaimInvocationBinding(
+    Guid TenantId,
+    Guid ApplicationId,
+    Guid InstallationId,
+    Guid EnvironmentId,
+    Guid ConnectorVersionId,
+    string ConnectorId,
+    string OperationId,
+    string ProfileId,
+    Uri Endpoint,
+    Guid CorrelationId,
+    string PolicyId,
+    long PolicyRevision,
+    string PolicyChecksumSha256,
+    long CatalogRevision,
+    string CatalogChecksumSha256,
+    string ResourceVersion);
+
+/// <summary>
+/// Server-created request passed only to the registered resolver selected by runtime composition.
+/// It contains no business request dictionary and cannot be constructed by a Connector consumer.
+/// </summary>
+public sealed class TrustedRuntimeClaimResolutionRequest
+{
+    internal TrustedRuntimeClaimResolutionRequest(
+        JwtTrustedValueSource source,
+        TrustedRuntimeClaimInvocationBinding invocationBinding)
+    {
+        Source = source;
+        InvocationBinding = invocationBinding;
+    }
+
+    /// <summary>Exact typed source selected by the Published policy.</summary>
+    public JwtTrustedValueSource Source { get; }
+    /// <summary>Exact authenticated invocation, policy and resource revision binding.</summary>
+    public TrustedRuntimeClaimInvocationBinding InvocationBinding { get; }
+}
+
+/// <summary>
+/// Immutable runtime security value returned by a registered server-side resolver.
+/// This is not a user principal, business claim or caller claim bag.
+/// </summary>
+public sealed class TrustedRuntimeClaimValue
+{
+    internal TrustedRuntimeClaimValue(
+        JwtTrustedValueSource source,
+        string value,
+        TrustedRuntimeClaimValueProvenance provenance,
+        TrustedRuntimeClaimInvocationBinding invocationBinding,
+        string authorizationEvidenceReference)
+    {
+        Source = source;
+        Value = value;
+        Provenance = provenance;
+        InvocationBinding = invocationBinding;
+        AuthorizationEvidenceReference = authorizationEvidenceReference;
+    }
+
+    /// <summary>
+    /// Creates a value from the exact request delivered to a registered server-side resolver.
+    /// No overload accepts an independently selected source or invocation binding.
+    /// </summary>
+    public static TrustedRuntimeClaimValue FromRegisteredResolver(
+        TrustedRuntimeClaimResolutionRequest request,
+        string value,
+        string authorizationEvidenceReference)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return new(
+            request.Source,
+            value,
+            TrustedRuntimeClaimValueProvenance.RegisteredServerResolver,
+            request.InvocationBinding,
+            authorizationEvidenceReference);
+    }
+
+    /// <summary>Typed source selected by policy.</summary>
+    public JwtTrustedValueSource Source { get; }
+    /// <summary>Validated security value; never written to diagnostics by this contract.</summary>
+    public string Value { get; }
+    /// <summary>Closed provenance classification.</summary>
+    public TrustedRuntimeClaimValueProvenance Provenance { get; }
+    /// <summary>Exact invocation and authorization binding.</summary>
+    public TrustedRuntimeClaimInvocationBinding InvocationBinding { get; }
+    /// <summary>Opaque, non-sensitive authorization evidence reference.</summary>
+    public string AuthorizationEvidenceReference { get; }
+}
+
 /// <summary>UTC clock used by validity and JWT lifetime policy.</summary>
 public interface IAuthenticationClock
 {
@@ -132,7 +244,9 @@ public enum JwtSubjectPolicy
     /// <summary>Use a fixed value compiled into the approved policy.</summary>
     Fixed,
     /// <summary>Use the authenticated Tenant identifier.</summary>
-    Tenant
+    Tenant,
+    /// <summary>Use a typed runtime value selected by Published policy and resolved server-side.</summary>
+    TrustedRuntimeValue
 }
 
 /// <summary>Typed server-owned sources for trusted dynamic JWT values.</summary>
@@ -143,7 +257,13 @@ public enum JwtTrustedValueSource
     /// <summary>Use the authenticated Application identifier.</summary>
     AuthenticatedApplicationId,
     /// <summary>Use the authenticated Installation identifier.</summary>
-    AuthenticatedInstallationId
+    AuthenticatedInstallationId,
+    /// <summary>Use an external actor identifier from a registered trusted runtime resolver.</summary>
+    ExternalActorId,
+    /// <summary>Use a delegated subject identifier from a registered trusted runtime resolver.</summary>
+    DelegatedSubjectId,
+    /// <summary>Use an authorized operator identifier from a registered trusted runtime resolver.</summary>
+    AuthorizedOperatorId
 }
 
 /// <summary>A policy-bound trusted claim whose value is derived from authenticated runtime state.</summary>
@@ -194,7 +314,8 @@ public sealed class ServerOwnedRs256PolicySnapshot
         int minimumRsaKeySize,
         JwtCertificateHeaderMode certificateHeaderMode,
         JwtTemporalClaimMode temporalClaimMode,
-        IReadOnlyList<JwtTrustedClaimBinding>? trustedClaims)
+        IReadOnlyList<JwtTrustedClaimBinding>? trustedClaims,
+        JwtTrustedValueSource? trustedSubjectSource)
     {
         PolicyId = policyId;
         PolicyRevision = policyRevision;
@@ -207,7 +328,7 @@ public sealed class ServerOwnedRs256PolicySnapshot
         Audience = audience;
         SubjectPolicy = subjectPolicy;
         FixedSubject = fixedSubject;
-        AllowedClaims = new HashSet<string>(allowedClaims, StringComparer.Ordinal);
+        AllowedClaims = allowedClaims.ToFrozenSet(StringComparer.Ordinal);
         Lifetime = lifetime;
         AllowedClockSkew = allowedClockSkew;
         LogicalKeyBindingId = logicalKeyBindingId;
@@ -217,7 +338,8 @@ public sealed class ServerOwnedRs256PolicySnapshot
         MinimumRsaKeySize = minimumRsaKeySize;
         CertificateHeaderMode = certificateHeaderMode;
         TemporalClaimMode = temporalClaimMode;
-        TrustedClaims = trustedClaims?.ToArray() ?? [];
+        TrustedClaims = new ReadOnlyCollection<JwtTrustedClaimBinding>(trustedClaims?.ToArray() ?? []);
+        TrustedSubjectSource = trustedSubjectSource;
         PolicyChecksumSha256 = AuthenticationPolicyDigest.Rs256(this);
     }
 
@@ -244,11 +366,12 @@ public sealed class ServerOwnedRs256PolicySnapshot
         int minimumRsaKeySize = 2048,
         JwtCertificateHeaderMode certificateHeaderMode = JwtCertificateHeaderMode.None,
         JwtTemporalClaimMode temporalClaimMode = JwtTemporalClaimMode.IssuedAtNotBeforeExpiration,
-        IReadOnlyList<JwtTrustedClaimBinding>? trustedClaims = null) => new(
+        IReadOnlyList<JwtTrustedClaimBinding>? trustedClaims = null,
+        JwtTrustedValueSource? trustedSubjectSource = null) => new(
             policyId, policyRevision, connectorVersionId, connectorId, operationId, environmentId, endpoint,
             issuer, audience, subjectPolicy, fixedSubject, allowedClaims, lifetime, allowedClockSkew,
             logicalKeyBindingId, resourceVersion, catalogRevision, catalogChecksumSha256, minimumRsaKeySize,
-            certificateHeaderMode, temporalClaimMode, trustedClaims);
+            certificateHeaderMode, temporalClaimMode, trustedClaims, trustedSubjectSource);
 
     /// <summary>Logical approved policy identifier.</summary>
     public string PolicyId { get; }
@@ -296,6 +419,8 @@ public sealed class ServerOwnedRs256PolicySnapshot
     public JwtTemporalClaimMode TemporalClaimMode { get; }
     /// <summary>Policy-bound trusted dynamic claims, separate from caller business claims.</summary>
     public IReadOnlyList<JwtTrustedClaimBinding> TrustedClaims { get; }
+    /// <summary>Typed trusted runtime source selected by policy when it owns the reserved subject.</summary>
+    public JwtTrustedValueSource? TrustedSubjectSource { get; }
 }
 
 /// <summary>Immutable server-owned mTLS policy snapshot for an exact Published operation.</summary>

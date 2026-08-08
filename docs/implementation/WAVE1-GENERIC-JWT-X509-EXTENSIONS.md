@@ -23,6 +23,14 @@ returns a defensively copied `ProviderCertificatePublicMaterial` containing only
 - public certificate metadata and resource version;
 - a SHA-256 SPKI identity derived from the returned leaf DER.
 
+The snapshot validates bounds before copying: leaf DER and each issuer DER are at most
+64 KiB, the chain has at most seven entries, and aggregate leaf-plus-chain material is
+at most 256 KiB. Its private storage is never returned directly. Leaf, chain entries and
+public metadata collections are copied on read, while the chain collection itself is
+read-only and cannot be cast back to the constructor's array. Mutating constructor inputs,
+recovering and mutating a getter's `ReadOnlyMemory` backing array, or mutating an earlier
+metadata getter therefore cannot change the stored snapshot or another getter result.
+
 The contract has no private-key, PFX/PKCS#12, password, secret, provider credential,
 locator-enumeration or arbitrary certificate-enumeration method. The signer calls this
 provider capability only after resolving the exact server-owned JWT signing resource for
@@ -55,8 +63,8 @@ derived from that same verified leaf is then used to verify the provider's RS256
 
 Consequently, approved scalar metadata combined with substituted DER, substituted SPKI
 or signing under the substituted key is denied. An unrelated or reordered chain is also
-denied. Public material is bounded to one leaf, at most seven issuer certificates and
-256 KiB total encoded DER.
+denied. Public material is bounded before allocation to one leaf, at most seven issuer
+certificates, at most 64 KiB per certificate and 256 KiB total encoded DER.
 
 ## Temporal inclusion
 
@@ -72,21 +80,50 @@ lifetime/skew subsystem was introduced.
 
 ## Trusted subject and claim sources
 
-The subject policy now also supports authenticated Tenant identity, alongside the
-existing authenticated Installation, authenticated Application and fixed server value.
-`JwtTrustedClaimBinding` maps a policy-owned claim name to exactly one typed source:
+The subject policy supports authenticated Tenant identity alongside the existing
+authenticated Installation, authenticated Application and fixed server value. It now
+also supports `TrustedRuntimeValue`, for which the Published policy selects exactly one
+closed `JwtTrustedValueSource`. `JwtTrustedClaimBinding` maps a policy-owned claim name to
+the same typed source model. Built-in sources are:
 
 - `AuthenticatedTenantId`;
 - `AuthenticatedApplicationId`;
 - `AuthenticatedInstallationId`.
 
-These values come from `AuthenticationExecutionContext`, which is populated from the
+Generic registered runtime sources are closed enum values such as `ExternalActorId`,
+`DelegatedSubjectId` and `AuthorizedOperatorId`; they are not caller strings, claim names,
+paths or expressions. The signer alone constructs a
+`TrustedRuntimeClaimResolutionRequest` for the exact source selected by policy and passes
+it to the registered `ITrustedRuntimeClaimValueResolver`. The request constructor is not
+public and is bound to Tenant, Application, Installation, Environment, ConnectorVersion,
+Connector, operation, profile, endpoint, correlation, policy ID/revision/checksum,
+catalog revision/checksum and resource version.
+
+The resolver returns an immutable `TrustedRuntimeClaimValue` carrying the exact typed
+source, bounded value, closed `RegisteredServerResolver` provenance, the same invocation
+binding and an opaque bounded authorization-evidence reference. A wrong source,
+caller-business-data provenance, stale policy/catalog/resource revision or any different
+invocation field is denied before signing-provider metadata access. Resolver selection is
+owned by server composition; neither the request caller nor `SignJwtAsync` can select a
+resolver, enumerate sources or pass a trusted subject string.
+
+Built-in values come from `AuthenticationExecutionContext`, which is populated from the
 server-derived `GatewayClientPrincipal` path. There is no runtime dictionary, reflection
 path, expression language, JSONPath or caller-selected context property. Trusted claim
 names cannot be registered/protected fields, cannot overlap the business-claim allowlist
 and cannot be duplicated. Caller business claims remain separately allowlisted and
 cannot override `iss`, `sub`, `aud`, `iat`, `nbf`, `exp`, `jti`, `alg`, `x5c` or other
 reserved JWS fields.
+
+`TrustedRuntimeClaimValue` is not a global user principal, a business claim or a generic
+caller claim bag. It is a server-authorized runtime security value selected by Published
+policy for one exact invocation. `GatewayClientPrincipal` and the separate Admin principal
+remain unchanged.
+
+The policy constructor snapshots trusted bindings into a non-array read-only collection
+before calculating `PolicyChecksumSha256`; the digest, validation and payload writer use
+that same collection. Caller mutation, including a temporary flip and restore during an
+await, cannot alter the signed payload.
 
 ## Rotation, disable and provider failures
 
@@ -97,7 +134,8 @@ SPKI identity must remain unchanged. Rotation or disable therefore prevents stal
 or a stale authenticated token from escaping; a retained revision-one public-material
 capability cannot authenticate revision two.
 
-Unexpected non-cancellation failures at metadata, public-material and sign boundaries
+Unexpected non-cancellation failures at trusted-runtime resolution, metadata,
+public-material and sign boundaries
 become stable `AuthenticationPrimitiveException` codes with no provider message or inner
 exception. Genuine caller cancellation remains `OperationCanceledException`.
 
@@ -108,7 +146,7 @@ The connector-facing call remains:
 `SignJwtAsync(AuthenticationExecutionContext, policyId, allowedBusinessClaims, token)`.
 
 It accepts no DER, certificate handle, `x5c`, protected-header map, provider locator,
-subject override, lifetime, skew or algorithm.
+subject override, trusted value, source selector, lifetime, skew or algorithm.
 
 - Dual JWT orchestration = **CONNECTOR_RESPONSIBILITY**.
 - Service-specific issuer/CN composition = **CONNECTOR_RESPONSIBILITY**.
@@ -121,20 +159,24 @@ business identity from CN in Core.
 
 ## Local automated evidence
 
-- `Authentication.CertificateSigning.Tests`: 68/68 PASS, including 19 new/extended
-  executions for leaf/chain/Base64, injection denial, substituted leaf/chain,
-  fingerprint/SPKI/signature mismatch, stale revision, rotate/disable, exact temporal
-  omission, trusted-source policy, provider redaction and cancellation;
+- `Authentication.CertificateSigning.Tests`: 91/91 PASS, including 23 remediation
+  executions for generic runtime subject, business-promotion/source/invocation/provenance
+  denial, immutable policy flip/restore, public-material input/getter/metadata mutation
+  and leaf/chain/count/total bounds, alongside the complete M6 and Wave 1 regression;
 - `Architecture.Tests`: 17/17 PASS, including the capability/public-API boundary,
   absence of a generic protected-header bag and generic-only source/test guard;
 - full Release build: PASS with zero warnings and zero errors;
-- ordinary repository suite: 281 PASS and 10 expected conditional PostgreSQL skips;
-- PostgreSQL 18.4 isolated qualification: 71/71 canonical plus 4/4 targeted PASS,
-  fresh migration/no-op and seven FORCE RLS tables; temporary container removed;
+- ordinary repository suite: 304 PASS and 10 expected conditional PostgreSQL skips;
+- PostgreSQL 18.4 isolated relevant qualification: 71/71 PASS, fresh migration/no-op;
+  temporary container removed;
 - documentation validation, conservative secret scan, SBOM generation/validation and
   transitive vulnerable-package inventory: PASS, with no vulnerable package reported;
 - verified open-source Core export: PASS, including isolated restore/build/test,
   frontend audit/build/license scan and export manifest generation.
+
+The Core export manifest includes `generatedAtUtc`; its SHA-256 is therefore an
+**artifact/run-specific digest**, not a deterministic exact-head digest. Source commit,
+file count and per-file hashes retain their normal verification meaning.
 
 Exact-head CI and independent review remain pending until the branch is pushed and the
 pull request is opened. They are not inferred from these local gates.

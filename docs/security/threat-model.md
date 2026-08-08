@@ -12,6 +12,8 @@
 - Chiavi di firma provider-side, certificati client outbound e JWT compatti in memoria.
 - Materiale X.509 pubblico e catene `x5c`, la cui integrita deve restare legata alla
   stessa identita di firma approvata.
+- Valori runtime security trusted, validi soltanto per la invocation e policy Published
+  che ne ha autorizzato la source tipizzata.
 
 ## Attori e livelli di fiducia
 
@@ -83,8 +85,10 @@
 | TM-051 | S/T/E | Un certificato di firma viene sostituito al certificato mTLS, oppure una revisione ruotata/disabilitata o un handle trattenuto viene usato verso altro endpoint. | Sender mTLS one-shot senza handle pubblico; purpose e binding esatti; DER fingerprint e SPKI digest; policy/binding/status/revision/endpoint rivalidati subito prima di DNS/dispatch; zero stale-on-error. | Revocation online della CA non è introdotta dal profilo sintetico; la policy autoritativa resta da caratterizzare. |
 | TM-052 | I/E | La primitive esporta una private key/PFX o esegue un fallback automatico al Broker quando manca custody centrale. | `IKeyOperationProvider` espone solo metadata pubblici e `SignDigestAsync`; il certificato mTLS resta interno alla singola chiamata transport-bound ed è disposed dopo dispatch; failure capability esplicito e nessun fallback/local handoff. | Gateway/provider host privilegiati possono osservare o usare handle in memoria; Administrator/SYSTEM resta rischio residuo dichiarato. |
 | TM-053 | I/R | JWT, claim, locator, certificate bytes o dettagli provider compaiono in errori/log/evidence. | Qualunque exception provider non-cancellation a metadata/sign/certificate diventa un codice stabile senza message/inner; cancellazione reale preservata; test canary e secret scan; materiale TLS per-run non persistito. | Dump di processo privilegiato e tracing aggiunto in futuro richiedono nuova review/redaction test. |
-| TM-054 | S/T/E | Un provider o una revisione stale sostituisce leaf/chain `x5c`, SPKI o chiave dopo l'approvazione, producendo un JWT che dichiara un'identita pubblica diversa da quella che firma. | Capability pubblica separata e risolta dalla stessa binding `JwtSigning`; parsing DER; fingerprint e digest SPKI confrontati constant-time con catalogo e signing metadata; stessa SPKI DER verifica la firma; chain bounded e ordinata; policy/catalog/resource rivalidati prima della firma e prima del ritorno. | Provider e Gateway restano nella TCB; trust/revocation del destinatario e qualificazione della CA sono responsabilita del profilo/connector autorizzato. |
-| TM-055 | T/E | Header JWS, temporal claim o trusted identity source scelti dal caller trasformano la primitive in un signing oracle o permettono sostituzione di subject/claim privilegiati. | Header writer tipizzato senza mappe; `alg=RS256` e `typ=JWT` fissi; `x5c` solo da policy; due soli temporal mode validi; source trusted limitate a Tenant/Application/Installation autenticati; digest di policy e exact binding; business allowlist separata e reserved-field denial. | Una policy Published errata richiede review/approval e nuova caratterizzazione; non esiste un expression engine Core. |
+| TM-054 | S/T/E | Un provider o una revisione stale sostituisce leaf/chain `x5c`, SPKI o chiave dopo l'approvazione, producendo un JWT che dichiara un'identita pubblica diversa da quella che firma. | Capability pubblica separata e risolta dalla stessa binding `JwtSigning`; limiti leaf/entry/count/total verificati prima delle copie; snapshot copy-on-read; parsing DER; fingerprint e digest SPKI confrontati constant-time con catalogo e signing metadata; stessa SPKI DER verifica la firma; chain bounded e ordinata; policy/catalog/resource rivalidati prima della firma e prima del ritorno. | Provider e Gateway restano nella TCB; trust/revocation del destinatario e qualificazione della CA sono responsabilita del profilo/connector autorizzato. |
+| TM-055 | T/E | Header JWS, temporal claim o trusted identity source scelti dal caller trasformano la primitive in un signing oracle o permettono sostituzione di subject/claim privilegiati. | Header writer tipizzato senza mappe; `alg=RS256` e `typ=JWT` fissi; `x5c` solo da policy; due soli temporal mode validi; source built-in autenticate o runtime source chiuse selezionate dalla Published policy; business allowlist separata e reserved-field denial. | Una policy Published errata richiede review/approval e nuova caratterizzazione; non esiste un expression engine Core. |
+| TM-056 | S/T/E | Business input viene promosso a `sub`, un resolver/source viene sostituito, oppure un valore trusted di una invocation/revisione viene riusato in un'altra. | Il signing caller non passa subject o trusted value; request del resolver non costruibile dal consumer; source enum policy-owned; resolver registrato server-side; provenance chiusa; exact binding a Tenant/Application/Installation/ConnectorVersion/operation/profile/correlation e revisioni policy/catalog/resource; mismatch negato prima del provider. | Resolver registrato, policy publisher e Gateway restano nella TCB; la validazione domain-specific di una futura source appartiene al pack autorizzato. |
+| TM-057 | T | Array DER/metadata o binding trusted mutabili vengono modificati dopo snapshot/checksum, anche con flip/restore durante un await. | Public material con storage privato bounded e copie non condivise sui getter; metadata collection copy-safe; trusted binding in collezione read-only non-array; checksum, autorizzazione e payload consumano lo stesso snapshot strutturalmente immutabile. | Reflection o memory corruption in-process richiedono compromissione della TCB e non sono mitigazioni dichiarate. |
 
 ## Analisi degli scenari obbligatori
 
@@ -138,6 +142,10 @@ provider exception test per metadata/sign/certificate, oltre al secret scan repo
 `Wave1_retained_revision_one_public_material_cannot_authenticate_revision_two` e sulla
 matrice rotate/disable. `SEC-W1-002` mappa `TM-055` sui test temporal/trusted-source,
 same-ID policy substitution, reserved claim e public-API/arbitrary-header boundary.
+`SEC-W1-003` mappa `TM-056` sui test generic runtime-subject positivo, business
+promotion, source substitution, invocation A/B e matrice provenance/revision/context.
+`SEC-W1-004` mappa `TM-057` sui test di mutazione input/getter/metadata e limiti del
+public material, oltre al flip/restore deterministico di `TrustedClaims` durante la firma.
 
 ## Criteri di revisione
 
