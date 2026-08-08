@@ -44,5 +44,6 @@ No production connector or live external-system qualification is claimed by this
 - Existing session/SOAP regression: 19 targeted cases are included alongside the new tests and remain PASS.
 - Ordinary .NET suite: 283 total, 273 PASS and 10 PostgreSQL-conditional SKIP.
 - PostgreSQL 18.4 isolated gate: 11/11 PASS after fresh migration and verified no-op second apply; container removed.
-- Documentation validation, conservative secret scan, SBOM validation/generation, vulnerable-package scan and `git diff --check`: PASS.
+- Documentation validation, conservative secret scan, Gitleaks 8.28.0, SBOM validation/generation, vulnerable-package scan and `git diff --check`: PASS. The only initial Gitleaks finding was a historical `RSA clientKey` typed fixture parameter and is covered by an exact fingerprint allowlist, not a pattern bypass.
+- Verified Core export: PASS, including clean build/test, frontend audit/build and export-local secret scan; exact final-HEAD lineage is recorded in the PR gate result.
 - CI exact-head and a single independent review remain required before final GO.
