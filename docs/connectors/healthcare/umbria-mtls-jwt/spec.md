@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Provide the regional Umbria FSE pharmacy profile described in the supplied documentation: a fixed REST GET over mTLS using one pharmacy certificate for transport authentication and a separate pharmacy certificate/key for two RS256 JWT profiles.
+Characterize a candidate regional Umbria FSE pharmacy profile: a fixed REST GET over mTLS using one certificate purpose for transport authentication and a separate key purpose for two RS256 JWT profiles. The concrete authority profile remains `NEEDS PUBLIC SOURCE`.
 
 This specification deliberately does not claim conformance with national FSE 2.0/ModI or any other regional profile.
 
@@ -29,7 +29,7 @@ The future Connector/Binding must fix resource endpoint, REST method/path/query 
 
 ## Endpoint binding
 
-One logical `fse-resource-api` binding is sufficient for the characterized operation. Environment, base URI, trust anchors, DNS policy and allowed port are server-owned. The supplied URL is evidence only and is not copied into Connector definition or fixtures.
+One logical `fse-resource-api` binding is sufficient for the candidate operation. Environment, base URI, trust anchors, DNS policy and allowed port are server-owned and require authoritative publication evidence.
 
 ## Required secret and certificate resources
 
@@ -44,18 +44,18 @@ Certificate metadata may be cataloged, but private key/PFX material remains in t
 ## Outbound authentication
 
 1. Derive tenant/pharmacy/operator context from authenticated server-side state and approved metadata.
-2. Prepare the first policy-bound JWT described as `Access Token`; use RS256 with the signing capability as described by the source.
-3. Prepare the second policy-bound JWT described as `FSE-JWT-Signature`; use RS256 with the distinct approved signing resource described by the source.
+2. Prepare the first policy-bound JWT labeled `Access Token` in the synthetic profile; use RS256 with the approved signing capability.
+3. Prepare the second policy-bound JWT labeled `FSE-JWT-Signature` in the synthetic profile; use RS256 with a distinct approved signing resource.
 4. Open the restricted mTLS channel using the distinct authentication certificate.
 5. Apply the first JWT as bearer and the second in `FSE-JWT-Signature`, then invoke the fixed GET operation.
 
-The term “Access Token” in the source describes a locally generated JWT, not an OAuth token exchange. No OAuth primitive is added.
+The synthetic profile treats “Access Token” as a locally generated JWT, not an OAuth token exchange. This naming and the external contract require official confirmation; no OAuth primitive is added.
 
 ## Session/token lifecycle
 
-- **KNOWN:** two JWTs are generated/used before the healthcare API call as described by the supplied source.
+- **NEEDS PUBLIC SOURCE:** whether two JWTs are generated/used before the healthcare API call and their exact roles.
 - **UNKNOWN / NEEDS CHARACTERIZATION:** lifetime, reuse, regeneration frequency, replay semantics, any `jti` or nonce policy, clock skew, and the lifecycle relation between the two JWTs.
-- No refresh/session service is described; absence from the source does not prove per-request generation or prohibit reuse.
+- Refresh/session behavior, per-request generation and reuse are **UNKNOWN**.
 - The committed fixtures use a short lifetime and one pair per synthetic dispatch solely as **SYNTHETIC TEST POLICY**. Those values are not attributed to the real service.
 - Certificate revision, expiry/revocation, publication/binding change or identity mismatch invalidates channel/signing cache immediately.
 
@@ -106,8 +106,7 @@ Record connector/version/operation, derived tenant/installation/application, cer
 
 ## Provenance
 
-- Provided documentation: `SRC-PDF` §8.3, page 18.
-- Corroborating pattern only: sanitized FSE/JWT/mTLS findings in `SRC-HTML`, `SRC-DRC` and `SRC-INF`.
+- Current official REST, JWT-claim and certificate-profile documentation is not recorded; this remains a characterization candidate.
 - Synthetic vectors: `tests/characterization/healthcare/umbria-mtls-jwt`.
 - Execution inference: ADR-0015 and ADR-0019 separate certificate/signing capabilities.
 

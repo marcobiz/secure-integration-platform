@@ -14,7 +14,7 @@ This profile does not cover the simpler veterinary SOGEI Basic-only service, reg
 |---|---|---|
 | `begin-prescription-session` | Ask the fixed MFA SOAP service to initiate the out-of-band session process | **KNOWN** behavior; exact WSDL operation/SOAPAction **NEEDS CHARACTERIZATION** |
 | `complete-prescription-session` | Correlate a bounded user-interaction completion and store an opaque session reference | Completion transport **INFERRED** as a product requirement; acquisition and artifact validation **NEEDS CHARACTERIZATION** |
-| `view-dispensed-prescription` | First candidate business query, based on the supplied service reference | Business intent **KNOWN** at a high level; exact operation, request and response schema **UNKNOWN** |
+| `view-dispensed-prescription` | Candidate business query | Business intent and exact operation/request/response schema **NEEDS PUBLIC SOURCE** |
 
 No business operation may be published until its official WSDL/schema, action, authorization and idempotency are recorded.
 
@@ -44,7 +44,7 @@ None may be overridden by caller headers, XML, query data or runtime metadata.
 
 At least two distinct server-side logical bindings are required: `session-service` and `prescription-service`. SSN and non-SSN services must remain separate profiles unless official documentation proves a safe common contract. Concrete URIs are environment bindings and never appear in a Connector definition, runtime request, export or audit.
 
-The supplied PDF lists destinations but does not classify test versus production or define discovery/rotation. Binding publication remains blocked until environment ownership and TLS trust are established.
+No public endpoint/environment source is recorded. Binding publication remains blocked until environment ownership, discovery/rotation and TLS trust are established from authoritative material.
 
 ## Required secret and certificate resources
 
@@ -118,7 +118,7 @@ Allow only connector/version/operation, environment ID, tenant/installation/appl
 
 ## Provenance
 
-- Provided documentation: `SRC-PDF` §1.2, pages 4-5.
+- Public official evidence confirms the SAC/SAR architecture and MFA requirement, but not the exact candidate SOAP/session profile.
 - Architectural inference: ADR-0010 server-owned binding; the interaction transport is intentionally not inferred from the healthcare source.
 - Synthetic vectors: `tests/characterization/healthcare/sogei-basic-session`.
 - No official WSDL or captured traffic was used.

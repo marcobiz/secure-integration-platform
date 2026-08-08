@@ -51,12 +51,12 @@ Separate logical bindings are required for `desktop-helper`, `authorization-serv
 3. Exchange code at the fixed token endpoint using the documented client-auth profile.
 4. Cache token set server-side and apply the access token as bearer to the fixed resource API.
 
-The supplied PDF states HTTP Basic client authentication with `grant_type=authorization_code`. Sanitized legacy evidence also identifies a separate application `client_credentials` layer and CRS session. These are treated as different unconfirmed profiles; the connector must not combine or auto-negotiate them.
+The candidate profile assumes HTTP Basic client authentication with `grant_type=authorization_code`. No public official profile is currently recorded, and no alternate `client_credentials` layer is part of this specification. The connector must not combine or auto-negotiate unconfirmed flows.
 
 ## Session/token lifecycle
 
 - **KNOWN:** typical access token lifetime is 30 minutes.
-- **KNOWN:** the supplied document describes refresh authorization up to 72 hours for prescriptions and 8 hours for FSE.
+- **NEEDS PUBLIC SOURCE:** access/refresh lifetimes and any difference between prescription and FSE authorization windows.
 - **UNKNOWN:** exact meaning of those windows, refresh-token rotation, reuse detection, clock skew, revocation and logout.
 - Token refresh is single-flight and profile-scoped; failure invalidates the session without stale-token fallback.
 - Authorization code and helper completion are one-time.
@@ -108,8 +108,7 @@ Record connector/profile/operation, opaque attempt/session ID, derived tenant/in
 
 ## Provenance
 
-- Provided documentation: `SRC-PDF` §2.2-2.3, pages 6-7.
-- Observed legacy behavior: separate Lombardia application-token/CRS patterns in sanitized reports.
+- Current official authorization metadata and profile documentation are not recorded; this remains a characterization candidate.
 - Synthetic vectors: `tests/characterization/healthcare/lombardia-oauth-helper`.
 - Architectural inference: server-owned token/resource processing; browser/helper presentation does not imply a Broker dependency.
 
@@ -129,9 +128,9 @@ See [../../provenance.md](../provenance.md).
 
 ## Security constraints
 
-- state, attempt and callback binding are mandatory even though state is not described in the supplied document;
+- state, attempt and callback binding are mandatory product security requirements;
 - PKCE is not assumed for Lombardia until confirmed;
-- no generic browser navigation, callback listener, polling URL or redirect URI supplied by the client;
+- no generic browser navigation, callback listener, polling URL or redirect URI supplied by the caller;
 - token/session is bound to tenant, connector profile, subject and environment;
 - identity/pharmacy/operator values are validated server-side and not accepted as authority from domain payload;
 - authorization occurs before helper/provider/DNS/transport side effects;

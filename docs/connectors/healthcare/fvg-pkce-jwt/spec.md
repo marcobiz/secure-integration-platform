@@ -4,9 +4,9 @@
 
 ## Purpose
 
-Provide the FVG FSE pharmacy profile described by the supplied documentation: local browser authorization with OAuth 2 Authorization Code + PKCE, server-owned token exchange, an access token and ID token, and a software-house RS256 JWT applied to a fixed REST request.
+Characterize a candidate FVG FSE pharmacy profile using local browser authorization, OAuth 2 Authorization Code + PKCE, server-owned token exchange, an access token and ID token, and an RS256 JWT applied to a fixed REST request. The concrete authority profile remains `NEEDS PUBLIC SOURCE`.
 
-This is not a generic FSE connector and does not cover FVG prescriptions, which the source delegates to SOGEI.
+This is not a generic FSE connector and does not claim coverage of FVG prescriptions; delegation and scope require current official evidence.
 
 ## Operations
 
@@ -32,7 +32,7 @@ The Connector/Binding fixes authorization/token/resource endpoints, client ID, r
 
 ## Endpoint binding
 
-Use distinct logical bindings: `authorization-endpoint`, `token-endpoint`, and `fse-resource-api`. Concrete supplied URLs are not copied into the Connector definition. Registered redirect URI ownership, environment taxonomy and whether authorization/token hosts are co-trusted are **NEEDS CHARACTERIZATION**.
+Use distinct logical bindings: `authorization-endpoint`, `token-endpoint`, and `fse-resource-api`. No concrete URL may be published until an official source establishes registered redirect URI ownership, environment taxonomy and authorization/token/resource trust boundaries.
 
 ## Required secret and certificate resources
 
@@ -55,7 +55,7 @@ The raw token set, verifier and compact signed JWT are never returned to the leg
 
 ## Session/token lifecycle
 
-- **KNOWN:** supplied documentation describes access and ID tokens as valid up to 16 hours.
+- **NEEDS PUBLIC SOURCE:** access-token and ID-token lifetime.
 - **UNKNOWN:** refresh token presence, refresh rotation, early revocation, logout, ID-token use rules, clock skew and session concurrency.
 - State, code and verifier are one-time and short-lived.
 - Gateway invalidates on expiry, binding/publication/key revision, operator/tenant mismatch or explicit local invalidation.
@@ -107,7 +107,7 @@ Record derived execution context, connector/version/operation, opaque attempt/se
 
 ## Provenance
 
-- Provided documentation: `SRC-PDF` §9.3, pages 19-20.
+- Current official OAuth metadata, claim profile and API documentation are not recorded; this remains a characterization candidate.
 - Synthetic vectors: `tests/characterization/healthcare/fvg-pkce-jwt`.
 - Execution inference: server-owned token/API processing and ADR-0019 separate signing capability; browser presentation does not imply a Broker dependency.
 - No official OAuth metadata, JWKS, claim profile or packet capture was used.

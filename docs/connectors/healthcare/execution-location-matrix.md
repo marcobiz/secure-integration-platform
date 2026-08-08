@@ -46,15 +46,6 @@ The resulting classes are:
 | HC-21 | Puglia prescriptions and FSE | Local smart-card interaction | Personal key remains on local smart card/USB token | Local signing/session; exact split **NEEDS CHARACTERIZATION** | Installation VPN/local call | Smart card/USB token and installation-only VPN | **BROKER/LOCAL** |
 | HC-22 | Direct VetInfo veterinary prescriptions | Local/direct browser | Gateway client credential and token custody | Gateway authorization-code/token exchange | Gateway REST | None demonstrated | **GATEWAY** |
 
-## Sanitized legacy-only candidates
-
-| Candidate | User interaction | Secret/certificate custody | Token/session exchange | Healthcare API execution | Mandatory local capability/hardware | Location |
-|---|---|---|---|---|---|---|
-| FSE 2.0 national mTLS/JWT family | **UNKNOWN** | Central custody is suggested but unconfirmed | Gateway-capable; official profile absent | Gateway-capable; official profile absent | None demonstrated | **GATEWAY, conditional** |
-| DPC/webDPC, Sistema TS/730, PagoPA, NSO and other named public services | **UNKNOWN** | **UNKNOWN** | **UNKNOWN** | **UNKNOWN** | **UNKNOWN** | **UNKNOWN** |
-| MIR/OSM/Phronesis network | **UNKNOWN** | **UNKNOWN** | Topology and identity model **UNKNOWN** | Local/network behavior known; exact execution split **UNKNOWN** | **UNKNOWN** | **UNKNOWN** |
-| EReg, CBox, Gematik, smart-card readers, fiscal printers and robots | Local/device interaction | Installation-local device capability | Local/device protocol | Local device/network operation | Installation-local hardware or network | **BROKER/LOCAL** |
-
 ## Enforcement implications
 
 - A `GATEWAY` connector accepts domain input and, where required, an opaque user-interaction reference only. It never accepts URI, tenant, scope, client ID, secret reference, certificate reference, issuer, audience or signing profile from the caller.

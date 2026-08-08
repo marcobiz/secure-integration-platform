@@ -2,7 +2,7 @@
 
 ## Reading the matrix
 
-This matrix groups only behavior supported by the supplied sources. A check mark means the primitive is explicitly described (**KNOWN**); `I` means **INFERRED** from the named protocol; `?` means **UNKNOWN** or **NEEDS CHARACTERIZATION**. It does not claim that two authorities use the same profile, claims, namespace, trust chain or lifecycle.
+This matrix preserves historical profile hypotheses for architecture planning. A check mark means a primitive was characterized, not that current official evidence is on file; `I` means **INFERRED** and `?` means **UNKNOWN** or **NEEDS PUBLIC SOURCE**. It does not claim conformance or that two authorities use the same profile, claims, namespace, trust chain or lifecycle.
 
 Abbreviations: `SOGEI-H` = national human prescriptions; `SOGEI-V` = national veterinary alternative; `ER` = Emilia-Romagna; `BZ` = Bolzano; `TN` = Trento; `FVG` = Friuli Venezia Giulia.
 
@@ -12,7 +12,7 @@ Abbreviations: `SOGEI-H` = national human prescriptions; `SOGEI-V` = national ve
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | HTTP Basic | ✓ | ✓ | token endpoint only |  | ✓ | STS username/password, profile ? | ✓ |  | ✓ |  |  |  | token endpoint profile ? |
 | Basic + session reference | ✓ |  | helper session plus OAuth code |  | Rx ✓ |  | ✓ |  | ✓ |  |  |  |  |
-| OAuth 2 client credentials |  |  | conflicting legacy evidence; ? |  |  | Rx ✓ |  |  |  |  |  |  |  |
+| OAuth 2 client credentials |  |  | unverified alternate profile; ? |  |  | Rx ✓ |  |  |  |  |  |  |  |
 | Authorization Code |  |  | ✓ |  |  |  |  |  |  |  | ✓ |  | ✓ |
 | PKCE |  |  | not stated; ? |  |  |  |  |  |  |  | ✓ |  | ✓ |
 | Bearer token |  |  | ✓ |  |  | Rx ✓ |  | ✓ fixed |  | ✓ JWT | ✓ access token |  | ✓ |
@@ -28,7 +28,7 @@ Abbreviations: `SOGEI-H` = national human prescriptions; `SOGEI-V` = national ve
 | Smart card / local certificate |  |  | possible SISS/CNS |  | possible CNS at portal |  |  |  |  |  | possible SISS/CNS at portal | ✓ |  |
 | VPN / local-only dependency |  |  |  |  |  |  |  |  |  |  |  | ✓ |  |
 
-Regional prescription rows that delegate to SOGEI (Liguria, Piemonte, Umbria and FVG in the supplied document) reuse the applicable SOGEI primitive set and are not separate protocol implementations.
+Any regional prescription profile that delegates to the central service should reuse only the applicable public central-service primitive set; delegation and profile equivalence require current official evidence.
 
 ## Primitive families
 
@@ -40,18 +40,17 @@ Reused by SOGEI-H, Emilia-Romagna prescriptions, Trento prescriptions/FSE and Pi
 
 Reused by Lombardia, FVG and VetInfo. The browser/user-auth mechanisms differ and must not be embedded in a generic OAuth client. The reusable core is limited to state/PKCE material, one-time authorization-code handoff, server-owned token exchange, redacted token cache and bearer injection.
 
-The Lombardia sources conflict: the supplied protocol matrix describes Authorization Code through a desktop helper, while sanitized legacy evidence also identifies a separate application `client_credentials` token layer and CRS session. This is **NEEDS CHARACTERIZATION**, not a reason to merge both flows.
+No public official source is currently recorded for an alternate application `client_credentials` layer. It is excluded from the public profile until independently documented; profiles must never be combined or auto-negotiated by assumption.
 
 ### mTLS and signing
 
-Reused by Veneto, Bolzano, Liguria, Umbria and other sanitized FSE evidence. Certificate purpose is not interchangeable: mTLS authentication, JWT signing, XML signing and encryption require separate resource capabilities. Umbria is selected because the supplied document explicitly distinguishes two pharmacy certificates and two JWT profiles.
+Characterized across several regional profile candidates. Certificate purpose is not interchangeable: mTLS authentication, JWT signing, XML signing and encryption require separate resource capabilities. Every concrete certificate role remains `NEEDS PUBLIC SOURCE`.
 
 ### Deferred primitives
 
-- HMAC-SHA256 is confirmed for Trento, but its exact canonical message and request element are missing.
-- SAML/WS-Security is confirmed for Veneto and Bolzano, but assertion profiles, namespaces, canonicalization and trust rules are missing.
-- Smart-card XML-DSig and VPN are confirmed for Puglia and force a Broker/local track.
-- Fixed bearer tokens, HS256 JWT, OAuth 1, WebSocket and device protocols appear in the sanitized legacy corpus but are not needed by the four shortlisted connectors.
+- HMAC-SHA256 is a Trento characterization hypothesis; canonical message, request element and public source are missing.
+- SAML/WS-Security is characterized for Veneto and Bolzano, but public assertion profiles, namespaces, canonicalization and trust rules are missing.
+- Smart-card XML-DSig and VPN are characterized for Puglia and would force a Broker/local track if confirmed by the current authority.
 
 ## Shortlist coverage
 

@@ -1,6 +1,6 @@
 # Healthcare connector characterization
 
-This directory is the decision package for the authorized M6 Healthcare Characterization workstream. It contains specifications and synthetic test guidance only; no production connector or authentication module is implemented.
+This directory contains public-safe characterization hypotheses and synthetic test guidance only; no production connector or authentication module is implemented.
 
 ## Package contents
 
@@ -17,4 +17,4 @@ This directory is the decision package for the authorized M6 Healthcare Characte
   - [Umbria mTLS + dual JWT](umbria-mtls-jwt/spec.md)
 - Synthetic vectors: `tests/characterization/healthcare`
 
-`KNOWN` means explicitly present in supplied authorized material; it does not mean current official or live-verified. Each production profile remains NO-GO until its specification's unresolved questions are closed with provenance.
+`KNOWN` is a historical characterization label, not current official or live-verified evidence. Each production profile remains `NEEDS_PUBLIC_SOURCE` and NO-GO until its unresolved questions are closed with current official provenance.

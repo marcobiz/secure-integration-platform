@@ -2,26 +2,26 @@
 
 ## Scope and evidence labels
 
-This inventory characterizes the healthcare and public-service integrations identifiable in the supplied repository corpus. It is not evidence of live interoperability and does not authorize production implementation.
+This inventory preserves public-safe healthcare characterization hypotheses. It is not evidence of live interoperability and does not authorize production implementation.
 
-- **KNOWN**: explicitly stated by an authorized supplied source. It has not necessarily been verified against a live service or current official specification.
+- **KNOWN**: historical characterization label only; it is not current official evidence.
 - **INFERRED**: an architectural conclusion drawn from one or more known facts.
 - **UNKNOWN**: not present in the available sources.
 - **NEEDS CHARACTERIZATION**: required before an implementation or conformance claim can be made.
+- **NEEDS PUBLIC SOURCE**: requires a current official/public source before production work.
 
-The primary protocol source is the 22-page supplied document `Autenticazione Servizi Pubblici.pdf`. The sanitized legacy reports and their consolidated HTML are behavioral specifications only. No healthcare implementation source was copied into this work.
+Customer-specific and restricted sources are excluded from this public inventory. Historical profile claims without an allowed source are `NEEDS PUBLIC SOURCE` even when older text labels them `KNOWN`.
 
 ## Sources analyzed
 
 | Source class | Material analyzed | Result |
 |---|---|---|
-| Provided protocol documentation | `input-docs/Autenticazione Servizi Pubblici.pdf`, all 22 pages, visually rendered and text-extracted | **KNOWN** protocol summaries for the national and regional services below; no live verification |
-| Sanitized legacy characterization | `input-docs/architettura_sicurezza_gestionali_sanitari.html` and the four Markdown reports in `input-docs` | **KNOWN** integration names, legacy behavior and recurring security failure classes; deliberately excludes operational values |
+| Public official sources | Sources listed in [provenance.md](provenance.md) | **OFFICIAL_CURRENT** or **OFFICIAL_HISTORICAL** only for the facts directly supported there |
 | Repository architecture | ADR-0007, ADR-0009, ADR-0010, ADR-0011, ADR-0015, ADR-0018 and ADR-0019; implementation plan, test strategy, threat model and migration guidance | **KNOWN** product boundaries and security invariants |
 | Existing connector material | Connector Definition v1 documentation and the synthetic Secure Layer and Managed SOAP examples | **KNOWN** server-owned binding and synthetic test conventions; examples are pre-M4 analysis artefacts, not executable real connectors |
 | Samples, fixtures and tools | Repository samples, test fixtures, M3 legacy simulator and diagrams | No real healthcare implementation or reusable proprietary code was found; only synthetic product behavior and architectural seams |
 
-The corpus does not contain authoritative WSDL/OpenAPI packages, XML schemas, current service manuals, certificate onboarding policies, conformance suites, sanitized packet captures, or live test credentials for the listed services.
+The public repository does not contain complete authoritative WSDL/OpenAPI packages, XML schemas, current regional service manuals, certificate onboarding policies or conformance suites for the listed profile candidates.
 
 ## Primary service inventory
 
@@ -76,12 +76,12 @@ The corpus does not contain authoritative WSDL/OpenAPI packages, XML schemas, cu
 | HC-18 | JWT lifetime, reuse, regeneration frequency, clock skew, `jti`/nonce and replay policy **UNKNOWN** | One logical FSE API is listed; environments **UNKNOWN** | No logout stated; certificate revocation behavior **UNKNOWN** | **KNOWN** bearer token and `FSE-JWT-Signature` |
 | HC-19 | See HC-01/HC-02 | Central SOGEI binding selected server-side | See HC-01/HC-02 | See HC-01/HC-02 |
 | HC-20 | **KNOWN** access and ID tokens are described as valid up to 16 hours; refresh behavior **UNKNOWN** | Authorization, token and resource bindings are distinct; environments **UNKNOWN** | **UNKNOWN** | **KNOWN** bearer access token, `ID-TOKEN`, `JWT-SIGNATURE` |
-| HC-21 | VPN/session and smart-card PIN lifecycle **UNKNOWN** | **KNOWN** supplied destination is VPN-only and identified as pre-production; production binding **UNKNOWN** | **UNKNOWN** | WS-Security/XML-DSig placement **NEEDS CHARACTERIZATION** |
-| HC-22 | **KNOWN** access token 30 minutes; supplied source says refresh token has no stated expiry | Authorization, token and resource bindings are distinct; environments **UNKNOWN** | Logout/revocation **UNKNOWN**; indefinite refresh claim **NEEDS CHARACTERIZATION** with current official documentation | Bearer access token |
+| HC-21 | VPN/session and smart-card PIN lifecycle **UNKNOWN** | Destination, environment and production binding **NEEDS PUBLIC SOURCE** | **UNKNOWN** | WS-Security/XML-DSig placement **NEEDS CHARACTERIZATION** |
+| HC-22 | Access/refresh lifetime **NEEDS PUBLIC SOURCE** | Authorization, token and resource bindings are distinct characterization hypotheses; environments **UNKNOWN** | Logout/revocation **UNKNOWN** | Bearer access token candidate |
 
 ### Error, retry and unresolved behavior
 
-The supplied protocol document does not define an error/fault taxonomy, retry policy, idempotency semantics, timeout, rate limit, response size limit, logout protocol, TLS trust profile, XML namespace set or conformance test for any row. Those items are therefore **UNKNOWN** for HC-01 through HC-22 and are **NEEDS CHARACTERIZATION** before production implementation.
+No complete current public source pack defines the error/fault taxonomy, retry policy, idempotency semantics, timeout, rate limit, response size limit, logout protocol, TLS trust profile, XML namespace set or conformance test for these rows. Those items are **UNKNOWN** and **NEEDS PUBLIC SOURCE** before production implementation.
 
 At minimum, each service needs:
 
@@ -92,22 +92,6 @@ At minimum, each service needs:
 - certificate purpose, custody, chain, renewal, revocation and overlap policy;
 - data classification and field-level redaction rules;
 - confirmation that every user, pharmacy, operator and patient attribute is derived or validated server-side.
-
-## Additional integrations identified in the sanitized legacy corpus
-
-These integrations are identifiable but not sufficiently specified for the first connector wave.
-
-| Candidate | Evidence and currently known primitive | Readiness |
-|---|---|---|
-| FSE 2.0 national gateway and other regional FSE variants | **KNOWN** recurring OAuth/PKCE, JWT/client assertion and X.509 patterns across several sanitized reports | **NEEDS CHARACTERIZATION** as separate national and regional profiles; do not create one generic FSE adapter |
-| Sistema TS / MEF and 730 healthcare-expense submission | **KNOWN** service names and legacy credential/log findings; protocol and grant **UNKNOWN** | Discovery only |
-| DPC / webDPC / WgWebcare / WgDPC | **KNOWN** recurring pharmacy integration names; protocol, authority and service equivalence **UNKNOWN** | Discovery only |
-| MIR / OSM-Connector / PhronesisNet clinical network | **KNOWN** local/network XML behavior and weak cross-vendor trust findings | **NEEDS CHARACTERIZATION** for topology, schema, identity, replay and XML security; likely separate from public-service connectors |
-| PagoPA | **KNOWN** destination name in an aggregated TLS finding; all connector details **UNKNOWN** | Hold |
-| NSO / Enerj | **KNOWN** medicine-ordering integration name and vendor-level identity finding; protocol **UNKNOWN** | Hold |
-| INPS/INAIL, SDI and IZS services | **KNOWN** only as named categories or aggregated references; operations and protocols **UNKNOWN** | Hold |
-| CGM/partner cloud services | **KNOWN** proprietary integration/component names in the reports | Outside the public healthcare shortlist until ownership and authorization are established |
-| EReg, CBox, WASP/WASP2, fiscal printers, POS, readers and robots | **KNOWN** local/device services; some REST/JWT/HMAC behavior is stated | Broker/device-adapter track, not the Gateway healthcare pack |
 
 ## Characterization conclusion
 

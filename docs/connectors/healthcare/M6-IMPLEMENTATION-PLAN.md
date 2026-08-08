@@ -15,7 +15,7 @@ The task calls this work “M6 Healthcare Characterization”. The repository ro
 | 3 | `fvg-pkce-jwt` | High for PKCE/code handoff and RS256 | Strong FSE profile and reusable browser flow | Medium: high-level flow clear, claims/API missing | High for PKCE/token/JWT policy negatives | Wave 2 |
 | 4 | `umbria-mtls-jwt` | High for purpose-separated mTLS/signing | Strong FSE/mTLS/JWT coverage | Medium: certificate roles clear, claims/API missing | High with ephemeral certificates/keys | Wave 2, conditional on key custody |
 
-Commercial value is an **INFERRED** prioritization from recurrence and breadth in the supplied corpus; no market or deployment-volume data was supplied.
+The sequence is a technical characterization order only. It is not customer, market, deployment-volume or commercial prioritization.
 
 ### Deferred
 
@@ -23,8 +23,8 @@ Commercial value is an **INFERRED** prioritization from recurrence and breadth i
 - Trento HMAC: canonical message, encoding, timestamp and key roles are ambiguous.
 - Puglia: local VPN, smart card/CNS and XML-DSig require a Broker/local track and hardware lab.
 - Piemonte: session plus citizen-app approval adds an uncharacterized interactive state machine.
-- VetInfo direct: good PKCE alternative, but the supplied authorization host appears inconsistent with token/resource ownership and the indefinite-refresh statement requires confirmation.
-- DPC/webDPC, Sistema TS/730, PagoPA, NSO, MIR/OSM/Phronesis and other legacy-only names remain discovery work.
+- VetInfo direct remains deferred until current public OAuth metadata, token/resource ownership and refresh policy are confirmed.
+- Other healthcare, payment, ordering and device integrations require independent public sources and demand evidence before entering the product roadmap.
 
 ## Required work before production implementation
 
@@ -36,7 +36,7 @@ For each selected connector, obtain or independently characterize:
 4. exact auth profile, lifecycle, logout/revocation and certificate/key custody;
 5. fault/error taxonomy, timeout, throttling, retry and idempotency;
 6. data classification, minimization, audit and redaction;
-7. conformance samples that are authorized, sanitized and recorded in `provenance.md`.
+7. public conformance samples or independently authored synthetic vectors recorded under the rules in `provenance.md`.
 
 Until then, only synthetic primitive writers are GO.
 
