@@ -1,6 +1,8 @@
 # SOGEI Basic + session connector characterization
 
-**Characterization status:** conditional shortlist, not implementation-ready.
+**Characterization status:** superseded for national SAC Wave 1 by the current official
+[Sistema TS ePrescription specification freeze](../sistema-ts-eprescription/spec.md).
+This historical characterization remains non-implementation evidence.
 
 ## Purpose
 

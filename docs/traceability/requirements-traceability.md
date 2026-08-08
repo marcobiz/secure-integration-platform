@@ -299,6 +299,20 @@ was reused without a new subsystem.
 OAuth/SOAP regional integration, callback/session correlation, actual operation/fault mapping,
 accreditation and live conformance remain blocked until current official specifications are
 available. Generic M6 auth tests are regression evidence only, not regional support evidence.
+## Healthcare Wave 1 - Sistema TS ePrescription
+
+| Requirement | Evidence | Status |
+|---|---|---|
+| Official-current registry | `docs/connectors/healthcare/sistema-ts-eprescription/official-source-registry.md` | PASS documentation freeze |
+| National SAC business contracts | Official specification 1.5.1 and 2026-04-28 kit digests; exact WSDL/action/XSD roots recorded | CONFIRMED, not implemented |
+| SAC/SAR server-owned routing | `docs/connectors/healthcare/sistema-ts-eprescription/spec.md` | DOCUMENTED, no regional adapter |
+| Basic and opaque ID-session | Current MFA 1.1 plus ID-session WSDL `create`/`revoke`/`checkToken` | CONFIRMED, not implemented |
+| HTTP `Authorization2F` placement | M6 API inspection: only SOAP Header element placement exists | BLOCKED_BY_GENERIC_PRIMITIVE |
+| Synthetic server and connector security suite | Gate review | NOT STARTED by hard stop |
+| Accreditation and live conformance | Gate review | BLOCKED_BY_ACCREDITATION |
+
+The Wave 1 result is a NO-GO for production code. Existing M6 SOAP tests are generic
+primitive evidence and must not be counted as Sistema TS contract or conformance tests.
 
 ## Security threats
 

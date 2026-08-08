@@ -10,7 +10,7 @@ The task calls this work “M6 Healthcare Characterization”. The repository ro
 
 | Priority | Connector | Reuse | Breadth/value | Specification clarity | Synthetic testability | Decision |
 |---:|---|---|---|---|---|---|
-| 1 | `sogei-basic-session` | High across central and several delegated/regional prescription paths | High national prescription coverage | Medium: auth flow clear, WSDL/faults missing | High for SOAP/Basic/session behavior | Wave 1 |
+| 1 | `sistema-ts-eprescription` | National SAC dispenser contracts confirmed; SAR protocol variants excluded | High national prescription coverage | Official WSDL/XSD and MFA current; blocked by missing server-owned HTTP session-header placement | High for SOAP/Basic/session behavior after prerequisite | Wave 1 hard stop |
 | 2 | `lombardia-oauth-helper` | High for OAuth token/session patterns | High regional prescription + FSE value | Medium-low: helper and source-profile conflict remain | High for helper/OAuth state machine | Wave 1, conditional |
 | 3 | `fvg-pkce-jwt` | High for PKCE/code handoff and RS256 | Strong FSE profile and reusable browser flow | Medium: high-level flow clear, claims/API missing | High for PKCE/token/JWT policy negatives | Wave 2 |
 | 4 | `umbria-mtls-jwt` | High for purpose-separated mTLS/signing | Strong FSE/mTLS/JWT coverage | Medium: certificate roles clear, claims/API missing | High with ephemeral certificates/keys | Wave 2, conditional on key custody |
@@ -80,21 +80,21 @@ Provider access remains capability-specific: secret retrieval, client-certificat
 
 ## Wave 1
 
-### Connector 1 - `sogei-basic-session`
+### Connector 1 - `sistema-ts-eprescription`
 
 | Area | Plan |
 |---|---|
-| Primitives | AP-01 server-bound Basic, AP-02 transport-neutral interactive challenge/opaque session, AP-07 secure SOAP/XML boundary |
-| User interaction | Local/direct out-of-band MFA is possible; acquisition and presentation mechanism **NEEDS CHARACTERIZATION** |
-| Custody | Basic credential and resulting session remain at Gateway; no client certificate is stated |
-| Shared work | XML safety limits, typed fault taxonomy, opaque session lifecycle, mock SOAP service |
-| Complexity | Medium for primitives; high/blocked for real WSDL mapping |
-| Risks | Session artifact binding, incorrect SOAP profile, sensitive XML/fault leakage, accidental generic proxy |
-| External unknowns | Authoritative WSDL/schema, exact `Authorization2F`, session acquisition/lifecycle, faults, idempotency and environment policy |
-| Tests | Synthetic login/accepted/session-expired; missing/expired/cross-context session; Basic redaction; XXE/oversize; grant and endpoint override denial |
-| Execution | **GATEWAY**: session and SOAP/API execution at Gateway; no mandatory local capability demonstrated |
-| Synthetic implementation | Can start after explicit auth-writer milestone authorization |
-| Production blocker | Confirmed WSDL/contracts, lifecycle, faults, environments and MFA acquisition semantics are missing |
+| Primitives | AP-01 server-bound Basic, AP-02 transport-neutral interactive challenge/opaque session, AP-07 secure SOAP/XML boundary, plus a separately authorized server-owned HTTP session-header placement primitive |
+| User interaction | Out-of-band ID-session delivery is official; presentation remains transport-neutral and does not require Broker |
+| Custody | Basic credential and ID-session remain at Gateway; the SAC profile does not introduce a client certificate |
+| Shared work | XML safety limits and opaque session lifecycle exist; HTTP placement is missing |
+| Complexity | Official WSDL/XSD mapping is now available; implementation is blocked before generation |
+| Risks | Raw/caller header injection, session artifact binding, sensitive XML/fault leakage, accidental generic proxy |
+| Official source status | Current SSN dispenser 1.5.1, 2026-04-28 WSDL/XSD kit, MFA 1.1 and 2025-09-02 ID-session kit frozen in the Wave 1 registry |
+| Tests | Not started by hard stop; future suite must cover lifecycle, redaction, XML, routing, replay, substitution and business transitions |
+| Execution | **GATEWAY** for National/SAC; regional execution remains a server-owned profile reference only |
+| Synthetic implementation | Not started because the official authentication profile cannot be expressed by M6 |
+| Production blocker | `BLOCKED_BY_GENERIC_PRIMITIVE`: fixed `Authorization2F` HTTP placement; accreditation remains separate |
 
 ### Connector 2 - `lombardia-oauth-helper`
 
