@@ -82,7 +82,11 @@ public sealed class ConnectorConfigurationTests
         AssertInvalid(json.Replace("S256_REQUIRED", "PLAIN", StringComparison.Ordinal));
         AssertInvalid(json.Replace("client_secret_basic", "client_secret_post", StringComparison.Ordinal));
         AssertInvalid(json.Replace("published-client", "bad\\u000Aid", StringComparison.Ordinal));
+        AssertInvalid(json.Replace("published-client", "   ", StringComparison.Ordinal));
+        AssertInvalid(json.Replace("published-client", "bad\\u0085id", StringComparison.Ordinal));
         AssertInvalid(json.Replace("orders-api", "bad\\u0000audience", StringComparison.Ordinal));
+        AssertInvalid(json.Replace("orders-api", "bad\\u0085audience", StringComparison.Ordinal));
+        AssertInvalid(json.Replace("https://gateway.example.test/oauth/callback", "https://user@gateway.example.test/oauth/callback", StringComparison.Ordinal));
         AssertInvalid(json.Replace("https://gateway.example.test/oauth/callback", "https://gateway.example.test/oauth/callback?override=1", StringComparison.Ordinal));
         AssertInvalid(json.Replace("https://gateway.example.test/oauth/callback", "https://gateway.example.test/oauth/callback#fragment", StringComparison.Ordinal));
         using JsonDocument unknownEndpoint = JsonDocument.Parse(json.Replace("\"oauth-token\",\"clientId\"", "\"missing-token\",\"clientId\"", StringComparison.Ordinal));

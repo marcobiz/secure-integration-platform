@@ -300,6 +300,63 @@ public sealed class OAuthRealHttpIntegrationTests
     }
 
     [Fact]
+    public async Task W1_IT_Client_credentials_expiry_and_explicit_acquisition_share_one_security_key_flight()
+    {
+        await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), grantKind: "oauthClientCredentials");
+        BlockingTransport blocking = new(fixture.RestrictedTransport);
+        using OAuthAuthorizationCodeClient client = fixture.NewClient(new FixedResolver(IPAddress.Loopback), blocking);
+        OAuthTokenSessionReference original = await client.AcquireClientCredentialsAsync(fixture.Resolved, TestContext.Current.CancellationToken);
+        fixture.Clock.Advance(TimeSpan.FromMinutes(6));
+
+        blocking.BlockNextSend();
+        Task<ExternalResponse> expirySend = client.SendAuthenticatedAsync(fixture.Resolved, original, ReadOnlyMemory<byte>.Empty, TestContext.Current.CancellationToken);
+        await blocking.WaitUntilBlockedAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Task<OAuthTokenSessionReference> explicitAcquisition = client.AcquireClientCredentialsAsync(fixture.Resolved, TestContext.Current.CancellationToken);
+        blocking.Release();
+
+        Assert.Equal(200, (await expirySend).StatusCode);
+        OAuthTokenSessionReference reused = await explicitAcquisition;
+        Assert.Equal(original.Value, reused.Value);
+        Assert.Equal(2, fixture.Server.TokenRequestCount);
+        Assert.Equal(1, client.CachedSessionCount);
+    }
+
+    [Fact]
+    public async Task W1_SEC_Explicit_acquisition_winning_expiry_race_replaces_the_old_reference_without_duplicate_dispatch()
+    {
+        await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), grantKind: "oauthClientCredentials");
+        BlockingTransport blocking = new(fixture.RestrictedTransport);
+        using OAuthAuthorizationCodeClient client = fixture.NewClient(new FixedResolver(IPAddress.Loopback), blocking);
+        OAuthTokenSessionReference original = await client.AcquireClientCredentialsAsync(fixture.Resolved, TestContext.Current.CancellationToken);
+        fixture.Clock.Advance(TimeSpan.FromMinutes(6));
+
+        blocking.BlockNextSend();
+        Task<OAuthTokenSessionReference> explicitAcquisition = client.AcquireClientCredentialsAsync(fixture.Resolved, TestContext.Current.CancellationToken);
+        await blocking.WaitUntilBlockedAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        try { await Assert.ThrowsAsync<GatewayException>(() => client.SendAuthenticatedAsync(fixture.Resolved, original, ReadOnlyMemory<byte>.Empty, TestContext.Current.CancellationToken)); }
+        finally { blocking.Release(); }
+
+        OAuthTokenSessionReference replacement = await explicitAcquisition;
+        Assert.NotEqual(original.Value, replacement.Value);
+        Assert.Equal(2, fixture.Server.TokenRequestCount);
+        Assert.Equal(1, client.CachedSessionCount);
+    }
+
+    [Fact]
+    public async Task W1_UT_Attempt_capacity_eviction_cleans_key_and_connector_generation_state()
+    {
+        await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5));
+        using OAuthAuthorizationCodeClient client = fixture.NewClient(new FixedResolver(IPAddress.Loopback), fixture.RestrictedTransport, attemptCapacity: 1);
+
+        for (int index = 0; index < 12; index++)
+        {
+            OAuthResolvedExecutionContext context = CloneWithConnector(await fixture.ResolveAsync(tenantIdOverride: Guid.NewGuid()), $"oauth-{index}");
+            _ = await client.BeginAuthorizationAsync(context, TestContext.Current.CancellationToken);
+            Assert.Equal((1, 1), client.GenerationStateCounts);
+        }
+    }
+
+    [Fact]
     public async Task W1_IT_Client_credentials_single_flight_is_per_security_key_without_cross_tenant_head_of_line_blocking()
     {
         await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), grantKind: "oauthClientCredentials");
@@ -495,8 +552,8 @@ public sealed class OAuthRealHttpIntegrationTests
             return new(server, options, root, leaf, new MutableClock(DateTimeOffset.UtcNow), expirySkew ?? TimeSpan.FromSeconds(30), new MutableSecretProvider(secret), grantKind, pkcePolicy);
         }
 
-        internal OAuthAuthorizationCodeClient NewClient(IHostResolver resolver, IRestrictedTransport selectedTransport, IOutboundAuthAuditSink? audit = null, int tokenCapacity = 2) =>
-            new(8, tokenCapacity, new RestrictedEndpointPolicy(resolver, new LoopbackAllowance()), selectedTransport, Clock, audit);
+        internal OAuthAuthorizationCodeClient NewClient(IHostResolver resolver, IRestrictedTransport selectedTransport, IOutboundAuthAuditSink? audit = null, int tokenCapacity = 2, int attemptCapacity = 8) =>
+            new(attemptCapacity, tokenCapacity, new RestrictedEndpointPolicy(resolver, new LoopbackAllowance()), selectedTransport, Clock, audit);
 
         internal async Task<OAuthResolvedExecutionContext> ResolveAsync(Guid? correlationId = null, string profileId = "wave1.synthetic", Guid? tenantIdOverride = null) =>
             await Resolver.ResolveAsync(new OAuthAuthorizedInvocation(Principal(correlationId ?? Guid.NewGuid(), tenantIdOverride), "synthetic-oauth", "invoke"), new OAuthAuthorityRequest(profileId), TestContext.Current.CancellationToken);
@@ -772,6 +829,16 @@ public sealed class OAuthRealHttpIntegrationTests
     private static OAuthResolvedExecutionContext CloneWithSecret(OAuthResolvedExecutionContext source, ISecretValueProvider provider) =>
         new(source.Authority, source.Profile, new ScopedOAuthSecretCapability(provider, "exact-provider-reference"), source.ProtectedResourceEndpoint,
             source.ProtectedResourceMethod, source.ProtectedResourceContentType, source.ProtectedResourceTimeout, source.MaximumProtectedResourceResponseBytes, source.Revalidate);
+
+    private static OAuthResolvedExecutionContext CloneWithConnector(OAuthResolvedExecutionContext source, string connectorId)
+    {
+        OutboundAuthContext authority = source.Authority;
+        OutboundAuthContext changed = new(authority.TenantId, authority.InstallationId, authority.ApplicationId, authority.EnvironmentId, authority.ConnectorVersionId,
+            connectorId, authority.ConnectorVersion, authority.OperationId, authority.AuthBindingRevision, authority.EndpointRevision, authority.SecretRevision,
+            authority.ResourceStamp, authority.CorrelationId, authority.Deadline);
+        return new(changed, source.Profile, source.ClientSecret, source.ProtectedResourceEndpoint, source.ProtectedResourceMethod, source.ProtectedResourceContentType,
+            source.ProtectedResourceTimeout, source.MaximumProtectedResourceResponseBytes, source.Revalidate);
+    }
 
     private sealed class CapturingAudit : IOutboundAuthAuditSink
     {

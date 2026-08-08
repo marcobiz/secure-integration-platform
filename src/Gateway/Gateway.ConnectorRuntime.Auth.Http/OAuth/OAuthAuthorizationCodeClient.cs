@@ -41,6 +41,9 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
     /// <summary>Number of cached sessions; non-sensitive operational metadata.</summary>
     public int CachedSessionCount { get { lock (sync) return sessions.Count; } }
 
+    /// <summary>Bounded generation bookkeeping exposed only to trusted test assemblies.</summary>
+    internal (int Keys, int Connectors) GenerationStateCounts { get { lock (sync) return (keyGenerations.Count, connectorGenerations.Count); } }
+
     /// <summary>Releases local synchronization primitives after the owning host stops using this client.</summary>
     public void Dispose()
     {
@@ -268,8 +271,15 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
             {
                 if (profile is OAuthClientCredentialsProfile)
                 {
+                    AcquisitionGate acquisitionGate = LeaseAcquisitionGate(stamp.SecurityKey);
+                    bool entered = false;
                     try
                     {
+                        await acquisitionGate.Semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+                        entered = true;
+                        await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
+                        lock (sync)
+                            EnsureCurrentSession(sessionReference.Value, session, stamp);
                         TokenSet reacquired = await RequestTokenAsync(resolvedContext, "client_credentials", null, null, stamp, cancellationToken).ConfigureAwait(false);
                         await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
                         lock (sync)
@@ -287,6 +297,11 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
                         try { await WriteAuditAsync(resolvedContext, "oauth.client-credentials.reacquire", "denied", null, CancellationToken.None).ConfigureAwait(false); }
                         catch { }
                         throw;
+                    }
+                    finally
+                    {
+                        if (entered) acquisitionGate.Semaphore.Release();
+                        ReleaseAcquisitionGate(stamp.SecurityKey, acquisitionGate);
                     }
                 }
                 else if (profile is not OAuthAuthorizationCodeProfile authorizationCode || !authorizationCode.AllowRefresh || string.IsNullOrEmpty(session.Tokens.RefreshToken))
@@ -503,6 +518,7 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
         KeyValuePair<string, AuthorizationAttempt> oldest = attempts.MinBy(value => value.Value.LastAccess);
         oldest.Value.Redact();
         attempts.Remove(oldest.Key);
+        CleanupGenerationStatesCore(oldest.Value.SecurityKey, oldest.Value.ConnectorId);
     }
 
     private void EnsureTokenCapacity()
