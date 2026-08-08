@@ -121,7 +121,21 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | Redaction | `M6_IT_OAuth_diagnostics_ToString_JSON_exceptions_and_assertion_rendering_are_redacted`; AP-02 diagnostics; sanitized provider failures | PASS local |
 | TM-046/TM-047 | All named M6 unit/integration tests above | PASS local + PR #9 CI 21/21; independent review pending |
 
-PKCE, `client_credentials` grant, production profiles, SOAP/session and certificate/signing primitives are not claimed by this branch.
+The M6 foundation branch did not claim PKCE or `client_credentials`. Auth Phase 2 / Wave 1 adds those two generic profiles on its dedicated branch; production connector profiles remain excluded.
+
+## Auth Phase 2 / Wave 1 — OAuth PKCE S256 and Client Credentials
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| PKCE S256-only, server-generated verifier and omitted-policy compatibility | `W1_IT_PKCE_S256_is_server_generated_bound_single_use_and_NONE_remains_compatible`; PKCE negative theory | PASS local |
+| Client Credentials Published authority and restricted egress | `W1_IT_Client_credentials_cache_is_shared_revision_bound_and_single_flight`; substitution, malformed-response and SSRF tests | PASS local |
+| Cache isolation and key-scoped single-flight | `W1_IT_Client_credentials_single_flight_is_per_security_key_without_cross_tenant_head_of_line_blocking`; `W1_SEC_Client_credentials_reacquisition_failure_invalidates_only_its_security_key` | PASS local |
+| Authority endpoints covered by semantic four-eyes approval | `W1_UT_OAuth_authority_endpoints_are_complete_in_approval_dependencies_digest_and_risks` | PASS local |
+| Raw response zeroization on stale post-transport state | `W1_SEC_Token_response_is_zeroed_when_snapshot_revalidation_fails_after_transport_returns` | PASS local |
+| Validation → approval → publication → operation-scoped locator | `W1_IT_DAT_PostgreSQL18_OAuth_validation_approval_publication_and_operation_locator_resolution_when_configured` | PASS PostgreSQL 18 local |
+| Provider-neutral boundaries | `W1_ARCH_PKCE_and_client_credentials_are_server_owned_S256_only_and_share_restricted_token_acquisition`; Core export gate | PASS local; final exact-head gate pending |
+
+Detailed mapping: `docs/traceability/auth-phase2-wave1-oauth.md`. Exact-head CI and the repeated independent review remain release gates for PR #17 and are not implied by the local statuses above.
 
 ## M6 SOAP/Basic/Session primitives
 

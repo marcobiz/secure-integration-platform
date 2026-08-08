@@ -15,6 +15,7 @@ Aggiornato: 2026-08-07
 | M5 — Admin UI MVP | **Done** | baseline `8774c252b233456173c3ab31346fb21390fb8d7d`, tag `m5-admin-ui-baseline-20260807` |
 | M5.5 — Direct Gateway Access | Implementato localmente; CI e review indipendente pending | product candidate `1b3a3b38fa7d01c8c5f96af0324d040e412ac0be`; branch `m55/direct-gateway-access` |
 | M6 — auth HTTP/OAuth primitives | Remediation mirata dei 7 finding qualificata | PR #9 product commit `9a7db4b`: CI exact-head 21/21 PASS; authority capability da snapshot Published, bearer destination-bound, correlation, refresh tombstone, query hardening, user-agent boundary e diagnostic redaction; nessun connector sanitario production |
+| Auth Phase 2 / Wave 1 — OAuth PKCE S256 + Client Credentials | Implementato sul branch dedicato; gate exact-head e review indipendente da ripetere dopo remediation | PR #17; profili provider-neutral, authority endpoints inclusi nel four-eyes digest, cache/single-flight e invalidazione per security key, test HTTPS sintetici e percorso PostgreSQL 18 |
 | M6 — SOAP/Basic/Session primitives | Implementato sul branch; remediation PR #10 e CI/review pending | AP-01/AP-02/AP-07 sintetiche, cache/stamp/deadline/Fault hardened, server SOAP HTTPS reale e 21 casi mirati PASS locali |
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | M3B e milestone/connector production successivi | Non iniziati | nessun cloud reale, connector sanitario production o adapter commerciale |
@@ -130,6 +131,16 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 - sample `samples/DirectGatewayClient` completa enrollment e invoke senza Broker, Named Pipe, DPAPI o vendor secret.
 - candidate prodotto `1b3a3b38fa7d01c8c5f96af0324d040e412ac0be`: build Release PASS, 161 test .NET ordinari PASS, PostgreSQL 18 10/10 PASS, 28 Vitest, browser mock 37/37, `FULLSTACK-01`, scan, SBOM e cleanup Docker PASS. CI e review indipendente restano pending; M5.5 non è ancora dichiarata Done.
 - contratti: `docs/architecture/direct-gateway-access.md`, `docs/architecture/connector-runtime-auth-contract.md`, ADR-0020 e coupling audit M5.5.
+
+### Auth Phase 2 / Wave 1 — OAuth PKCE S256 e Client Credentials
+
+- Authorization Code supporta profili Published legacy senza `pkcePolicy` (`NONE`) e profili `S256_REQUIRED`; non esiste fallback `plain` e verifier/challenge restano server-owned;
+- Client Credentials usa soltanto endpoint, client identity, secret binding, scope, audience/resource e limiti dal Published snapshot, con `client_secret_basic` e restricted transport;
+- authorization endpoint e token endpoint sono dipendenze semantiche esplicite, incluse nell'artefatto/digest four-eyes e nei risk indicator insieme alla destinazione protetta;
+- cache condivisa e bounded per i due grant; initial acquisition single-flight per security key, invalidazione e generation scoped alla security key/Connector, senza invalidazione cross-tenant;
+- schema e runtime rifiutano control characters e redirect URI con query/fragment; ogni raw token response viene azzerata anche quando la revalidation post-transport fallisce;
+- test mirati: 43 casi OAuth real HTTPS, 19 casi Connector Configuration nel gruppo interessato e percorso PostgreSQL 18 `W1_IT_DAT_PostgreSQL18_OAuth_validation_approval_publication_and_operation_locator_resolution_when_configured`;
+- scope ancora escluso: inbound identity, connector production, cache distribuita, provider/cloud adapter e merge in `main`. La chiusura resta subordinata a gate exact-head e nuova review indipendente sul commit pubblicato.
 
 ### M6 — SOAP/Basic/Session Authentication Primitives
 

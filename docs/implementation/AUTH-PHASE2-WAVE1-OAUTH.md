@@ -60,18 +60,20 @@ Only `client_secret_basic` is implemented because it is the confidential-client 
 }
 ```
 
-`AcquireClientCredentialsAsync` returns the same opaque token-session reference used by Authorization Code. Concurrent initial acquisition is single-flight. Concurrent expiry handling uses the existing per-session gate and replaces a token only after current Published state has been revalidated.
+`AcquireClientCredentialsAsync` returns the same opaque token-session reference used by Authorization Code. Concurrent initial acquisition is single-flight per complete security key, so unrelated tenants/profiles do not block one another. Gates are bounded and removed when their final lease ends. Concurrent expiry handling uses the existing per-session gate and replaces a token only after current Published state has been revalidated.
 
 ## Cache, rotation and egress
 
 There is one token-session dictionary for both grants. Its key distinguishes grant/policy/profile; Tenant, Installation, Application and Environment; Connector, Published version and operation; protected endpoint/method and token endpoint; binding, endpoint, secret/catalog and resource-stamp revisions; client identity and client-auth method; and exact scope, audience and resource.
 
-Every authority, DNS, secret and token await is followed by Published-state and invalidation-generation revalidation. Rotation, disable, profile changes, endpoint changes and audit failure deny without stale fallback. Refresh and reacquisition results are tombstoned if invalidation occurs in flight.
+Every authority, DNS, secret and token await is followed by Published-state and key/Connector-scoped generation revalidation. Rotation, disable, profile changes, endpoint changes and audit failure deny without stale fallback. Refresh and reacquisition results are tombstoned if invalidation occurs in flight, without invalidating unrelated tenants or profiles.
+
+The protected-resource endpoint plus every OAuth authorization/token endpoint is an explicit operation dependency. The four-eyes review artifact includes the resolved non-secret scheme, hostname, port, path/query, method role, TLS/redirect policy, classification and binding checksum for each destination; these values participate in the canonical approval digest, semantic diff and risk indicators.
 
 Authorization presentation performs validation and DNS policy but no Gateway HTTP fetch. Token acquisition, refresh/reacquisition and protected-resource dispatch always use `IRestrictedTransport`. Redirects, private/loopback/link-local/metadata destinations and rebinding are denied unless an exact test-only local allowance is supplied.
 
 ## Redaction and verification
 
-Verifier, state, client secret, access/refresh token, Basic authorization and raw token response are absent from public JSON, `ToString()`, audit and stable exceptions. Token response buffers are zeroed after parsing; cached tokens and verifier/state buffers are cleared on invalidation or disposal.
+Verifier, state, client secret, access/refresh token, Basic authorization and raw token response are absent from public JSON, `ToString()`, audit and stable exceptions. Token response buffers are zeroed on every path after transport returns, including stale-state revalidation failure; cached tokens and verifier/state buffers are cleared on invalidation or disposal.
 
 Named automated evidence is mapped in [Auth Phase 2 Wave 1 traceability](../traceability/auth-phase2-wave1-oauth.md).
