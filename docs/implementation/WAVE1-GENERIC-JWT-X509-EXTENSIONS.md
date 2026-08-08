@@ -128,7 +128,13 @@ business identity from CN in Core.
 - `Architecture.Tests`: 17/17 PASS, including the capability/public-API boundary,
   absence of a generic protected-header bag and generic-only source/test guard;
 - full Release build: PASS with zero warnings and zero errors;
-- ordinary repository suite: 281 PASS and 10 expected conditional PostgreSQL skips.
+- ordinary repository suite: 281 PASS and 10 expected conditional PostgreSQL skips;
+- PostgreSQL 18.4 isolated qualification: 71/71 canonical plus 4/4 targeted PASS,
+  fresh migration/no-op and seven FORCE RLS tables; temporary container removed;
+- documentation validation, conservative secret scan, SBOM generation/validation and
+  transitive vulnerable-package inventory: PASS, with no vulnerable package reported;
+- verified open-source Core export: PASS, including isolated restore/build/test,
+  frontend audit/build/license scan and export manifest generation.
 
-The final PostgreSQL qualification, scans, SBOM, Core export and exact-head CI are
-recorded only after their respective gates complete.
+Exact-head CI and independent review remain pending until the branch is pushed and the
+pull request is opened. They are not inferred from these local gates.
