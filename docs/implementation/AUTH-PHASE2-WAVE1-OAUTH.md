@@ -60,7 +60,7 @@ Only `client_secret_basic` is implemented because it is the confidential-client 
 }
 ```
 
-`AcquireClientCredentialsAsync` returns the same opaque token-session reference used by Authorization Code. Concurrent initial acquisition is single-flight per complete security key, so unrelated tenants/profiles do not block one another. Gates are bounded and removed when their final lease ends. Concurrent expiry handling uses the existing per-session gate and replaces a token only after current Published state has been revalidated.
+`AcquireClientCredentialsAsync` returns the same opaque token-session reference used by Authorization Code. Concurrent initial/explicit acquisition and expiry reacquisition share one single-flight gate per complete security key, so unrelated tenants/profiles do not block one another. Gates are bounded and removed when their final lease ends. Expiry handling also retains the per-session gate and replaces a token only after current Published state has been revalidated.
 
 ## Cache, rotation and egress
 

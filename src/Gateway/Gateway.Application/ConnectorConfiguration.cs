@@ -635,6 +635,13 @@ public sealed class ConnectorDefinitionValidator
     private static void ValidateAuthentication(JsonElement auth, Dictionary<string, string> secrets, List<ConnectorValidationIssue> issues, int operationIndex)
     {
         string kind = auth.GetProperty("kind").GetString()!;
+        if (string.Equals(kind, "oauthAuthorizationCode", StringComparison.Ordinal) && auth.TryGetProperty("redirectUri", out JsonElement redirectElement))
+        {
+            string redirectValue = redirectElement.GetString()!;
+            if (!Uri.TryCreate(redirectValue, UriKind.Absolute, out Uri? redirectUri) || !redirectUri.IsAbsoluteUri || redirectUri.Scheme != Uri.UriSchemeHttps ||
+                !string.IsNullOrEmpty(redirectUri.UserInfo) || !string.IsNullOrEmpty(redirectUri.Query) || !string.IsNullOrEmpty(redirectUri.Fragment))
+                issues.Add(new("BGW-CONNECTOR-OAUTH-REDIRECT-URI-INVALID", $"$.operations[{operationIndex}].authentication.redirectUri"));
+        }
         Check("usernameBinding", "username");
         Check("passwordBinding", "password");
         Check("secretBinding", "opaque");

@@ -1,6 +1,6 @@
 # Implementation status
 
-Aggiornato: 2026-08-07
+Aggiornato: 2026-08-08
 
 ## Stato sintetico
 
@@ -137,9 +137,9 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 - Authorization Code supporta profili Published legacy senza `pkcePolicy` (`NONE`) e profili `S256_REQUIRED`; non esiste fallback `plain` e verifier/challenge restano server-owned;
 - Client Credentials usa soltanto endpoint, client identity, secret binding, scope, audience/resource e limiti dal Published snapshot, con `client_secret_basic` e restricted transport;
 - authorization endpoint e token endpoint sono dipendenze semantiche esplicite, incluse nell'artefatto/digest four-eyes e nei risk indicator insieme alla destinazione protetta;
-- cache condivisa e bounded per i due grant; initial acquisition single-flight per security key, invalidazione e generation scoped alla security key/Connector, senza invalidazione cross-tenant;
-- schema e runtime rifiutano control characters e redirect URI con query/fragment; ogni raw token response viene azzerata anche quando la revalidation post-transport fallisce;
-- test mirati: 43 casi OAuth real HTTPS, 19 casi Connector Configuration nel gruppo interessato e percorso PostgreSQL 18 `W1_IT_DAT_PostgreSQL18_OAuth_validation_approval_publication_and_operation_locator_resolution_when_configured`;
+- cache condivisa e bounded per i due grant; acquisizione iniziale/esplicita e reacquisition su scadenza sono single-flight per security key, invalidazione e generation sono scoped alla security key/Connector, senza invalidazione cross-tenant;
+- schema e runtime rifiutano control characters e redirect URI malformate, con user-info, query o fragment; ogni raw token response viene azzerata anche quando la revalidation post-transport fallisce;
+- test mirati: 46 casi OAuth real HTTPS, 19 casi Connector Configuration nel gruppo interessato e percorso PostgreSQL 18 `W1_IT_DAT_PostgreSQL18_OAuth_validation_approval_publication_and_operation_locator_resolution_when_configured`;
 - scope ancora escluso: inbound identity, connector production, cache distribuita, provider/cloud adapter e merge in `main`. La chiusura resta subordinata a gate exact-head e nuova review indipendente sul commit pubblicato.
 
 ### M6 — SOAP/Basic/Session Authentication Primitives

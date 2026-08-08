@@ -87,6 +87,7 @@ public sealed class ConnectorConfigurationTests
         AssertInvalid(json.Replace("orders-api", "bad\\u0000audience", StringComparison.Ordinal));
         AssertInvalid(json.Replace("orders-api", "bad\\u0085audience", StringComparison.Ordinal));
         AssertInvalid(json.Replace("https://gateway.example.test/oauth/callback", "https://user@gateway.example.test/oauth/callback", StringComparison.Ordinal));
+        AssertInvalidRedirect(json.Replace("https://gateway.example.test/oauth/callback", "https:// /callback", StringComparison.Ordinal));
         AssertInvalid(json.Replace("https://gateway.example.test/oauth/callback", "https://gateway.example.test/oauth/callback?override=1", StringComparison.Ordinal));
         AssertInvalid(json.Replace("https://gateway.example.test/oauth/callback", "https://gateway.example.test/oauth/callback#fragment", StringComparison.Ordinal));
         using JsonDocument unknownEndpoint = JsonDocument.Parse(json.Replace("\"oauth-token\",\"clientId\"", "\"missing-token\",\"clientId\"", StringComparison.Ordinal));
@@ -98,6 +99,14 @@ public sealed class ConnectorConfigurationTests
         {
             using JsonDocument document = JsonDocument.Parse(candidate);
             Assert.False(validator.Validate(document.RootElement).Valid);
+        }
+
+        void AssertInvalidRedirect(string candidate)
+        {
+            using JsonDocument document = JsonDocument.Parse(candidate);
+            ConnectorValidationResult result = validator.Validate(document.RootElement);
+            Assert.False(result.Valid);
+            Assert.Contains(result.Issues, issue => issue.Code == "BGW-CONNECTOR-OAUTH-REDIRECT-URI-INVALID");
         }
     }
 
