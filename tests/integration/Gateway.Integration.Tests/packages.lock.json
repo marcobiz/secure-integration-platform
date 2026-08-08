@@ -611,6 +611,9 @@
       "SecureIntegration.M6.SyntheticOAuthServer": {
         "type": "Project"
       },
+      "SecureIntegration.M6.SyntheticOpaqueSessionServer": {
+        "type": "Project"
+      },
       "SecureIntegration.M6.SyntheticSoapServer": {
         "type": "Project"
       },

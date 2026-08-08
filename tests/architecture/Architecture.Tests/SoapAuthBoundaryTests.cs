@@ -38,6 +38,25 @@ public sealed class SoapAuthBoundaryTests
         Assert.DoesNotContain("Script", source, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Wave1_CT_Core_session_projection_is_vertical_neutral_and_has_no_healthcare_pack_dependency()
+    {
+        string sourceRoot = Path.Combine(Root, "src", "Gateway", "Gateway.ConnectorRuntime.Auth.Soap");
+        string source = string.Join('\n', Directory.EnumerateFiles(sourceRoot, "*.cs").Select(File.ReadAllText));
+        string projectionSource = File.ReadAllText(Path.Combine(sourceRoot, "OpaqueSessionHttpProjection.cs"));
+        string project = File.ReadAllText(Path.Combine(sourceRoot, "Gateway.ConnectorRuntime.Auth.Soap.csproj"));
+        foreach (string forbidden in new[] { "SistemaTS", "SOGEI", "FSE", "farmacia", "CGM", "Wingesfar", "drCLOUD" })
+            Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal);
+        Assert.DoesNotContain("healthcare", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ConnectorPacks.Healthcare", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ConnectorPacks.Healthcare", project, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("HttpRequestHeader", source, StringComparison.Ordinal);
+        Assert.Contains("IRestrictedTransport", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Dictionary<string,string>", projectionSource.Replace(" ", string.Empty, StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.DoesNotContain("ApplySession", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("AttachSessionHeader", source, StringComparison.Ordinal);
+    }
+
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? current = new(AppContext.BaseDirectory);

@@ -40,5 +40,6 @@
     <Project Path="tools/m3/LegacySimulator/LegacySimulator.csproj" />
     <Project Path="tools/m3/SecurityDriver/SecurityDriver.csproj" />
     <Project Path="tools/m6/SyntheticSoapServer/SyntheticSoapServer.csproj" />
+    <Project Path="tools/m6/SyntheticOpaqueSessionServer/SyntheticOpaqueSessionServer.csproj" />
   </Folder>
 </Solution>

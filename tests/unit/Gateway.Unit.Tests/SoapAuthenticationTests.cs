@@ -347,7 +347,7 @@ public sealed class SoapAuthenticationTests
     private static ConnectorAuthExecutionContext Context(MutableClock clock) => new(
         Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "synthetic-soap", "1.0.0", "business", 5, 7, 11, "basic-session", Guid.NewGuid(), clock.UtcNow.AddMinutes(2));
 
-    private static SoapSessionCacheKey CacheKey() => new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "synthetic-soap", "1.0.0", 5, 7, 11, "basic-session");
+    private static SoapSessionCacheKey CacheKey() => new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "synthetic-soap", "1.0.0", "business", 5, 7, 11, string.Empty, "basic-session");
 
     private static SoapSessionProfile Profile(SoapEnvelopeVersion version, bool retryAfterReacquisition)
     {

@@ -51,6 +51,34 @@ internal sealed class SoapSessionCache
         }
     }
 
+    internal OpaqueSessionDispatchLease ResolveDispatchLease(SoapSessionCacheKey key, OpaqueSoapSessionReference? reference, DateTimeOffset now)
+    {
+        string? digest = null;
+        if (reference is not null)
+        {
+            ValidateReference(reference.Value);
+            digest = Digest(reference.Value);
+        }
+        lock (sync)
+        {
+            SweepExpired(now);
+            if (!entries.TryGetValue(key, out KeyState? state) || state.Current is not StoredSession stored ||
+                (digest is not null && !string.Equals(stored.Digest, digest, StringComparison.Ordinal)))
+                throw new SoapAuthException("SESSION-HTTP-SESSION-INVALID");
+            return new(key, stored.Generation, stored.Digest, stored.UpstreamSession, stored.ExpiresAt);
+        }
+    }
+
+    internal bool IsCurrent(OpaqueSessionDispatchLease lease, DateTimeOffset now)
+    {
+        lock (sync)
+        {
+            SweepExpired(now);
+            return entries.TryGetValue(lease.Key, out KeyState? state) && state.Current is StoredSession stored &&
+                stored.Generation == lease.Generation && string.Equals(stored.Digest, lease.ReferenceDigest, StringComparison.Ordinal) && stored.ExpiresAt > now;
+        }
+    }
+
     public void Invalidate(SoapSessionCacheKey key, OpaqueSoapSessionReference? reference = null)
     {
         lock (sync)
@@ -175,7 +203,19 @@ internal sealed record SoapSessionCacheKey(
     Guid EnvironmentId,
     string ConnectorId,
     string ConnectorVersion,
+    string OperationId,
     long BindingRevision,
     long EndpointRevision,
     long CredentialRevision,
+    string ResourceStamp,
     string ProfileId);
+
+internal sealed record OpaqueSessionDispatchLease(
+    SoapSessionCacheKey Key,
+    long Generation,
+    string ReferenceDigest,
+    string UpstreamSession,
+    DateTimeOffset ExpiresAt)
+{
+    public override string ToString() => $"{nameof(OpaqueSessionDispatchLease)}(Generation={Generation}, ExpiresAt={ExpiresAt:O}, Redacted=True)";
+}
