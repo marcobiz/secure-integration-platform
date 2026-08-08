@@ -1,5 +1,6 @@
 using System.Net;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
 using SecureIntegration.Providers.Abstractions;
 
 namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
@@ -28,7 +29,11 @@ public sealed class SoapSessionClient
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
         this.resourceStamps = resourceStamps ?? throw new ArgumentNullException(nameof(resourceStamps));
         this.privateDestinationAllowance = privateDestinationAllowance;
+        OpaqueSessionLeases = new SoapOpaqueSessionLeaseProvider(cache);
     }
+
+    /// <summary>Controlled adapter from the qualified SOAP lifecycle to provider-neutral opaque-session capabilities.</summary>
+    public OpaqueSessionLeaseProvider OpaqueSessionLeases { get; }
 
     /// <summary>Returns the current opaque session reference or performs one fixed login acquisition.</summary>
     public async Task<OpaqueSoapSessionReference> AcquireSessionAsync(ConnectorAuthExecutionContext context, SoapEndpointBinding endpoint, SoapSessionProfile profile, CancellationToken cancellationToken)
@@ -232,14 +237,19 @@ public sealed class SoapSessionClient
 
     private SoapSessionCacheKey ValidateAndKey(ConnectorAuthExecutionContext context, SoapEndpointBinding endpoint, SoapSessionProfile profile)
     {
+        ArgumentNullException.ThrowIfNull(profile);
+        return ValidateAndKey(context, endpoint, profile.ProfileId);
+    }
+
+    private SoapSessionCacheKey ValidateAndKey(ConnectorAuthExecutionContext context, SoapEndpointBinding endpoint, string profileId)
+    {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(endpoint);
-        ArgumentNullException.ThrowIfNull(profile);
         if (context.TenantId == Guid.Empty || context.InstallationId == Guid.Empty || context.ApplicationId == Guid.Empty || context.EnvironmentId == Guid.Empty || context.CorrelationId == Guid.Empty)
             throw new SoapAuthException("SOAP-CONTEXT-INVALID");
         if (!IsIdentifier(context.ConnectorId) || !IsIdentifier(context.ConnectorVersion) || !IsIdentifier(context.OperationId) || context.BindingRevision <= 0 || context.EndpointRevision <= 0 || context.CredentialRevision <= 0)
             throw new SoapAuthException("SOAP-CONTEXT-INVALID");
-        if (!string.Equals(context.SessionProfileId, profile.ProfileId, StringComparison.Ordinal) || context.EndpointRevision != endpoint.Revision)
+        if (!string.Equals(context.SessionProfileId, profileId, StringComparison.Ordinal) || context.EndpointRevision != endpoint.Revision)
             throw new SoapAuthException("SOAP-CONTEXT-BINDING-MISMATCH");
         EnsureDeadline(context);
         return new SoapSessionCacheKey(context.TenantId, context.InstallationId, context.ApplicationId, context.EnvironmentId, context.ConnectorId, context.ConnectorVersion, context.BindingRevision, context.EndpointRevision, context.CredentialRevision, context.SessionProfileId);

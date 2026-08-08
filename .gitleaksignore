@@ -6,3 +6,7 @@
 # misclassified as a generic key. Both phrases were rewritten in the next commit.
 33f838226b2aadbf4425ef8e265233f004a0a431:docs/connectors/healthcare/M6-IMPLEMENTATION-PLAN.md:generic-api-key:116
 33f838226b2aadbf4425ef8e265233f004a0a431:docs/connectors/healthcare/M6-IMPLEMENTATION-PLAN.md:generic-api-key:158
+
+# Exact historical false positive: `clientKey` is an RSA-typed synthetic TLS fixture
+# parameter and contains no credential value.
+fc367a9c0011b334effacc7d5221a0a4af559a5b:tests/integration/Gateway.Integration.Tests/AdminApiSecurityTests.cs:generic-api-key:779

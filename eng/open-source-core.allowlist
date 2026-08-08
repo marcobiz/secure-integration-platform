@@ -73,3 +73,4 @@ tools/m4/
 tools/m5/
 tools/m6/SyntheticOAuthServer/
 tools/m6/SyntheticSoapServer/
+tools/m6/SyntheticOpaqueSessionServer/

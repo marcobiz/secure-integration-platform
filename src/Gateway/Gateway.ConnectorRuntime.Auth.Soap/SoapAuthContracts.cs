@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
 
 namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 
@@ -26,6 +27,7 @@ public enum SoapFaultCategory
     Unknown
 }
 
+/// <summary>Closed set of placements supported for an opaque authenticated session.</summary>
 /// <summary>
 /// Immutable server-derived scope for one outbound connector authentication flow.
 /// No value in this context is accepted from a runtime payload.
@@ -328,6 +330,8 @@ public sealed class SoapSessionProfile
 /// <summary>Opaque reference to a Gateway-owned upstream session.</summary>
 public sealed record OpaqueSoapSessionReference(string Value)
 {
+    /// <summary>Returns the provider-neutral opaque handle accepted by generic session capabilities.</summary>
+    public OpaqueSessionReference ToOpaqueSessionReference() => new(Value);
     /// <inheritdoc />
     public override string ToString() => nameof(OpaqueSoapSessionReference);
 }

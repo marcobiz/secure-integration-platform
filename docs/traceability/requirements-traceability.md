@@ -156,6 +156,19 @@ Detailed mapping: `docs/traceability/auth-phase2-wave1-oauth.md`. PR #17 product
 | TM-048 session fixation/stale/replay | AP-02 negative suite, rotation/disable/logout and challenge replay tests | PASS local |
 | TM-049 SOAP/XML parser and fault confusion | XML security corpus and real HTTP fault/malformed/oversize tests | PASS local |
 
+## Wave 1 generic opaque-session HTTP projection
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| Non-forgeable Published authority and generic API ownership | `Wave1_CT_authorized_handoff_and_generic_dispatch_cannot_be_forged_by_public_callers`; Published resolver substitution matrix; architecture dependency direction | PASS local |
+| Header token validation and tracing/forwarding denylist | `Wave1_UT_header_name_normalization_cannot_bypass_infrastructure_denylist` casing, whitespace, control, `traceparent`/`tracestate`/`baggage` and `X-Forwarded-*` matrix | PASS local |
+| One-shot restricted dispatch | `Wave1_UT_published_authority_projects_once_only_during_restricted_dispatch`; `Wave1_IT_published_authority_projects_exactly_one_header_over_real_restricted_HTTPS` | PASS local |
+| Final authority/session TOCTOU | `Wave1_SEC_deterministic_final_dispatch_race_revalidates_after_materialization_and_sends_zero`; real-HTTPS rotate/disable zero-network theory | PASS local |
+| SOAP cache backward compatibility | `M6_REG_Session_cache_remains_shared_across_compatible_operations_without_reacquisition`; complete M6 SOAP regression | PASS local |
+| Stale authority, SSRF, timeout and redaction | stale ConnectorVersion, same-revision endpoint substitution, attacker destination and generation/expiry unit matrix; real HTTPS timeout and attacker zero-network tests | PASS local |
+| Vertical-neutral Core boundary | `Wave1_CT_Core_session_projection_is_vertical_neutral_and_has_no_healthcare_pack_dependency` | PASS local |
+| TM-054 | All named Wave 1 tests above | PASS local; independent review pending |
+
 ## M6 Certificate, Signing and mTLS primitives - Wave 2 synthetic
 
 | Requirement | Automated evidence | Status |

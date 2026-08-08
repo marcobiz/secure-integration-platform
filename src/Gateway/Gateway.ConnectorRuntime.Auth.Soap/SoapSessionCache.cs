@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
 
 namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 
@@ -48,6 +49,34 @@ internal sealed class SoapSessionCache
             SweepExpired(now);
             if (!entries.TryGetValue(key, out KeyState? state) || state.Current is not StoredSession stored || !string.Equals(stored.Digest, digest, StringComparison.Ordinal)) return null;
             return stored.UpstreamSession;
+        }
+    }
+
+    internal OpaqueSessionDispatchLease ResolveDispatchLease(SoapSessionCacheKey key, OpaqueSoapSessionReference? reference, DateTimeOffset now)
+    {
+        string? digest = null;
+        if (reference is not null)
+        {
+            ValidateReference(reference.Value);
+            digest = Digest(reference.Value);
+        }
+        lock (sync)
+        {
+            SweepExpired(now);
+            if (!entries.TryGetValue(key, out KeyState? state) || state.Current is not StoredSession stored ||
+                (digest is not null && !string.Equals(stored.Digest, digest, StringComparison.Ordinal)))
+                throw new SoapAuthException("SESSION-HTTP-SESSION-INVALID");
+            return new(key, stored.Generation, stored.Digest, stored.UpstreamSession, stored.ExpiresAt);
+        }
+    }
+
+    internal bool IsCurrent(OpaqueSessionDispatchLease lease, DateTimeOffset now)
+    {
+        lock (sync)
+        {
+            SweepExpired(now);
+            return entries.TryGetValue(lease.Key, out KeyState? state) && state.Current is StoredSession stored &&
+                stored.Generation == lease.Generation && string.Equals(stored.Digest, lease.ReferenceDigest, StringComparison.Ordinal) && stored.ExpiresAt > now;
         }
     }
 
@@ -179,3 +208,39 @@ internal sealed record SoapSessionCacheKey(
     long EndpointRevision,
     long CredentialRevision,
     string ProfileId);
+
+internal sealed record OpaqueSessionDispatchLease(
+    SoapSessionCacheKey Key,
+    long Generation,
+    string ReferenceDigest,
+    string UpstreamSession,
+    DateTimeOffset ExpiresAt)
+{
+    public override string ToString() => $"{nameof(OpaqueSessionDispatchLease)}(Generation={Generation}, ExpiresAt={ExpiresAt:O}, Redacted=True)";
+}
+
+internal sealed class SoapOpaqueSessionLeaseProvider(SoapSessionCache cache) : OpaqueSessionLeaseProvider
+{
+    internal override SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions.OpaqueSessionDispatchLease AcquireFinalLease(
+        OpaqueSessionReference reference,
+        OpaqueSessionLifecycleBinding binding,
+        DateTimeOffset now)
+    {
+        SoapSessionCacheKey key = new(binding.TenantId, binding.InstallationId, binding.ApplicationId, binding.EnvironmentId, binding.ConnectorId,
+            binding.ConnectorVersion, binding.BindingRevision, binding.EndpointRevision, binding.CredentialRevision, binding.ProfileId);
+        OpaqueSessionDispatchLease lease;
+        try
+        {
+            lease = cache.ResolveDispatchLease(key, new OpaqueSoapSessionReference(reference.Value), now);
+        }
+        catch (SoapAuthException)
+        {
+            throw OpaqueSessionHttpFailures.SessionInvalid();
+        }
+
+        return new(lease.UpstreamSession, lease.ExpiresAt, currentNow =>
+        {
+            if (!cache.IsCurrent(lease, currentNow)) throw OpaqueSessionHttpFailures.SessionStale();
+        });
+    }
+}

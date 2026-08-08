@@ -145,3 +145,27 @@ and allowlisted business claims; the mTLS call owns certificate resolution and o
 transport attachment and never returns an `X509Certificate2` handle.
 The implementation does not inspect the inbound certificate, create another principal,
 branch on `InstallationKind`, or fall back to the Broker when central custody is absent.
+
+## Wave 1 generic opaque-session HTTP projection
+
+The generic capability is owned by `Gateway.ConnectorRuntime.Auth.Http/OpaqueSessions`, not by the
+SOAP API. The SOAP assembly provides only a compatibility adapter from its existing bounded
+lifecycle. A future HTTP/REST lifecycle consumer uses `OpaqueSessionHttpClient`,
+`OpaqueSessionReference`, `OpaqueSessionResolvedExecutionContext` and
+`OpaqueSessionAuthException` without depending on a SOAP-named type.
+
+The connector-facing request contains only a logical policy ID. The authenticated runtime creates
+`OpaqueSessionAuthorizedInvocation` through an internal constructor. Then
+`PublishedOpaqueSessionAuthorityResolver`, whose production constructor requires
+`IConnectorConfigurationStore`, resolves the current Published ConnectorVersion, authorized
+operation, `OperationBindingDependencies`, Environment, endpoint/binding/resource revisions and
+the closed raw/fixed-scheme header placement. Resolved authority types cannot be constructed by
+caller code, and endpoint, method, header, scheme and revision overrides are absent from dispatch.
+
+SOAP cache identity retains the M6 multi-operation semantics and does not include operation ID or
+resource stamp. HTTP dispatch identity is separate and binds operation/profile/resource/endpoint
+in the non-forgeable resolved context and final Published revalidation. Request body copying,
+unauthenticated request construction and DNS resolution occur before that final authorization.
+Session generation/expiry, policy and resource state are then checked adjacent to header
+projection and `IRestrictedTransport.SendAsync`, with no await between final lease acquisition and
+transport invocation. No authenticated `HttpRequestMessage`, raw session or attach helper is returned.

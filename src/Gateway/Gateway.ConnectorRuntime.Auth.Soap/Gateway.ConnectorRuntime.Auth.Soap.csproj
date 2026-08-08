@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Gateway.Application\Gateway.Application.csproj" />
+    <ProjectReference Include="..\Gateway.ConnectorRuntime.Auth.Http\Gateway.ConnectorRuntime.Auth.Http.csproj" />
     <ProjectReference Include="..\..\Providers\Abstractions\Providers.Abstractions.csproj" />
   </ItemGroup>
 </Project>
