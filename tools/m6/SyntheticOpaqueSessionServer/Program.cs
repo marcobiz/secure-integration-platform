@@ -16,6 +16,8 @@ public sealed class SyntheticOpaqueSessionCounters
     private int missing;
     private int wrong;
     private int duplicate;
+    private readonly TaskCompletionSource<bool> requestObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> responseRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>Total requests reaching the synthetic destination.</summary>
     public int Requests => Volatile.Read(ref requests);
@@ -27,12 +29,17 @@ public sealed class SyntheticOpaqueSessionCounters
     public int Wrong => Volatile.Read(ref wrong);
     /// <summary>Requests carrying multiple header values.</summary>
     public int Duplicate => Volatile.Read(ref duplicate);
+    /// <summary>Completes after an accepted request has entered the handler and its session header has been validated.</summary>
+    public Task WaitForRequestObservedAsync(CancellationToken cancellationToken) => requestObserved.Task.WaitAsync(cancellationToken);
 
     internal void CountRequest() => Interlocked.Increment(ref requests);
     internal void CountAccepted() => Interlocked.Increment(ref accepted);
     internal void CountMissing() => Interlocked.Increment(ref missing);
     internal void CountWrong() => Interlocked.Increment(ref wrong);
     internal void CountDuplicate() => Interlocked.Increment(ref duplicate);
+    internal void SignalRequestObserved() => requestObserved.TrySetResult(true);
+    internal Task WaitForResponseReleaseAsync(CancellationToken cancellationToken) => responseRelease.Task.WaitAsync(cancellationToken);
+    internal void ReleaseResponse() => responseRelease.TrySetResult(true);
 }
 
 /// <summary>Running local HTTPS endpoint used by real-transport integration tests.</summary>
@@ -46,6 +53,7 @@ public sealed class SyntheticOpaqueSessionServerInstance(WebApplication applicat
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
+        Counters.ReleaseResponse();
         await application.StopAsync().ConfigureAwait(false);
         await application.DisposeAsync().ConfigureAwait(false);
     }
@@ -74,8 +82,11 @@ public static class SyntheticOpaqueSessionServerHost
             if (values.Count == 0) { counters.CountMissing(); response.StatusCode = StatusCodes.Status401Unauthorized; return; }
             if (values.Count != 1 || values[0]?.Contains(',', StringComparison.Ordinal) == true) { counters.CountDuplicate(); response.StatusCode = StatusCodes.Status400BadRequest; return; }
             if (!string.Equals(values[0], options.ExpectedValue, StringComparison.Ordinal)) { counters.CountWrong(); response.StatusCode = StatusCodes.Status403Forbidden; return; }
-            if (string.Equals(scenario, "delayed", StringComparison.Ordinal)) await Task.Delay(options.DelayedResponse, token).ConfigureAwait(false);
             counters.CountAccepted();
+            counters.SignalRequestObserved();
+            if (string.Equals(scenario, "response-stalled", StringComparison.Ordinal))
+                await counters.WaitForResponseReleaseAsync(token).ConfigureAwait(false);
+            if (string.Equals(scenario, "delayed", StringComparison.Ordinal)) await Task.Delay(options.DelayedResponse, token).ConfigureAwait(false);
             response.StatusCode = StatusCodes.Status200OK;
             response.ContentType = "application/json";
             await response.WriteAsync("{\"status\":\"accepted\"}", token).ConfigureAwait(false);

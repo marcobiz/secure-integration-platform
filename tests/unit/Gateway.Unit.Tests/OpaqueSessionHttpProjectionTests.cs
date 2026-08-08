@@ -170,6 +170,31 @@ public sealed class OpaqueSessionHttpProjectionTests
     }
 
     [Fact]
+    public async Task Wave1_UT_transport_deadline_and_caller_cancellation_remain_distinct()
+    {
+        ProjectionFixture deadline = new();
+        OpaqueSessionReference deadlineSession = await deadline.AcquireAsync("operation-a");
+        OpaqueSessionResolvedExecutionContext deadlineAuthority = await deadline.ResolveAsync("operation-a");
+        deadline.Transport.CancelFromTransportDeadline = true;
+
+        OpaqueSessionAuthException timeout = await Assert.ThrowsAsync<OpaqueSessionAuthException>(() =>
+            deadline.HttpClient.SendAsync(deadlineAuthority, ReadOnlyMemory<byte>.Empty, deadlineSession, TestContext.Current.CancellationToken));
+
+        Assert.Equal("SESSION-HTTP-TIMEOUT", timeout.Code);
+        Assert.Equal(1, deadline.Transport.HttpDispatchCount);
+
+        ProjectionFixture caller = new();
+        OpaqueSessionReference callerSession = await caller.AcquireAsync("operation-a");
+        OpaqueSessionResolvedExecutionContext callerAuthority = await caller.ResolveAsync("operation-a");
+        using CancellationTokenSource cancellation = new();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            caller.HttpClient.SendAsync(callerAuthority, ReadOnlyMemory<byte>.Empty, callerSession, cancellation.Token));
+        Assert.Equal(1, caller.Transport.HttpDispatchCount);
+    }
+
+    [Fact]
     public void Wave1_CT_authorized_handoff_and_generic_dispatch_cannot_be_forged_by_public_callers()
     {
         Assert.Empty(typeof(OpaqueSessionAuthorizedInvocation).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
@@ -339,12 +364,15 @@ public sealed class OpaqueSessionHttpProjectionTests
         public Uri? RequestUri { get; private set; }
         public string SessionValue { get; set; } = "opaque-session-value";
         public bool ThrowCanary { get; set; }
+        public bool CancelFromTransportDeadline { get; set; }
 
         public Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, System.Security.Cryptography.X509Certificates.X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
         {
             HttpDispatchCount++;
             RequestUri = request.RequestUri;
             ProjectedHeader = request.Headers.TryGetValues("X-Session-Reference", out IEnumerable<string>? values) ? Assert.Single(values) : null;
+            if (cancellationToken.IsCancellationRequested) return Task.FromCanceled<ExternalResponse>(cancellationToken);
+            if (CancelFromTransportDeadline) return Task.FromCanceled<ExternalResponse>(new CancellationToken(canceled: true));
             if (ThrowCanary) throw new HttpRequestException("CANARY opaque-session-value");
             return Task.FromResult(new ExternalResponse(200, "text/plain", Encoding.UTF8.GetBytes("accepted")));
         }

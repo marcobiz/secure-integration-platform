@@ -35,8 +35,10 @@ public sealed class OpaqueSessionHttpRealIntegrationTests
     }
 
     [Fact]
-    public async Task Wave1_IT_real_HTTPS_delayed_response_honors_timeout_and_uses_generic_exception()
+    public async Task Wave1_IT_real_HTTPS_deadline_maps_to_generic_timeout_without_claiming_server_observation()
     {
+        // The production deadline covers connect, TLS, request, headers, and body. Reaching the Kestrel
+        // handler is intentionally not part of this contract because the deadline may expire first.
         using CertificateFixture certificates = CertificateFixture.Create();
         await using SyntheticOpaqueSessionServerInstance server = await SyntheticOpaqueSessionServerHost.StartAsync(
             new("X-Session-Reference", UpstreamSession, TimeSpan.FromSeconds(2)), certificates.Server, TestContext.Current.CancellationToken);
@@ -46,7 +48,37 @@ public sealed class OpaqueSessionHttpRealIntegrationTests
 
         Assert.Equal("SESSION-HTTP-TIMEOUT", timeout.Code);
         Assert.DoesNotContain(UpstreamSession, timeout.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, fixture.HttpDispatchCount);
+    }
+
+    [Fact]
+    public async Task Wave1_IT_real_HTTPS_response_stall_after_request_observed_maps_deadline_and_sends_once()
+    {
+        // This phase-specific contract freezes the test-only transport deadline until the real HTTPS
+        // request has entered the handler. Expiry then cancels only the internal deadline token, never
+        // the caller token, while the synthetic response remains gated.
+        using CertificateFixture certificates = CertificateFixture.Create();
+        await using SyntheticOpaqueSessionServerInstance server = await SyntheticOpaqueSessionServerHost.StartAsync(
+            new("X-Session-Reference", UpstreamSession, TimeSpan.FromSeconds(2)), certificates.Server, TestContext.Current.CancellationToken);
+        ResponsePhaseDeadlineController responseDeadline = new();
+        await using RealProjectionFixture fixture = await RealProjectionFixture.CreateAsync(
+            new Uri(server.Endpoint, "/response-stalled"), certificates, new LoopbackAllowance(), responseDeadline: responseDeadline);
+
+        Task<OpaqueSessionHttpResponse> pending = fixture.SendAsync("{}"u8.ToArray());
+        await server.Counters.WaitForRequestObservedAsync(TestContext.Current.CancellationToken);
+
         Assert.Equal(1, server.Counters.Requests);
+        Assert.Equal(1, server.Counters.Accepted);
+        Assert.Equal(1, fixture.HttpDispatchCount);
+        Assert.False(pending.IsCompleted);
+
+        responseDeadline.Expire();
+        OpaqueSessionAuthException timeout = await Assert.ThrowsAsync<OpaqueSessionAuthException>(() => pending);
+
+        Assert.Equal("SESSION-HTTP-TIMEOUT", timeout.Code);
+        Assert.DoesNotContain(UpstreamSession, timeout.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, server.Counters.Requests);
+        Assert.Equal(1, fixture.HttpDispatchCount);
     }
 
     [Theory]
@@ -105,10 +137,11 @@ public sealed class OpaqueSessionHttpRealIntegrationTests
         private readonly PublishedOpaqueSessionAuthorityResolver authority;
         private readonly OpaqueSessionReference session;
 
-        private RealProjectionFixture(Uri endpoint, CertificateFixture certificates, IPrivateDestinationAllowance? allowance, TimeSpan timeout, Func<CancellationToken, Task>? beforeFinalAuthorization)
+        private RealProjectionFixture(Uri endpoint, CertificateFixture certificates, IPrivateDestinationAllowance? allowance, TimeSpan timeout,
+            Func<CancellationToken, Task>? beforeFinalAuthorization, ResponsePhaseDeadlineController? responseDeadline)
         {
             SystemRestrictedTransport restricted = new(new X509Certificate2Collection(certificates.Root), Convert.ToHexString(SHA256.HashData(certificates.Server.RawData)));
-            transport = new(restricted);
+            transport = new(restricted, responseDeadline);
             Snapshots = new(CreateSnapshot(endpoint, timeout));
             soap = new(new FixedSecrets(), new LoopbackResolver(), transport, clock, new MatchingStampProvider(), new LoopbackAllowance());
             http = new(soap.OpaqueSessionLeases, new LoopbackResolver(), transport, clock, allowance, beforeFinalAuthorization);
@@ -119,8 +152,10 @@ public sealed class OpaqueSessionHttpRealIntegrationTests
         internal MutableSnapshotSource Snapshots { get; }
 
         internal static Task<RealProjectionFixture> CreateAsync(Uri endpoint, CertificateFixture certificates, IPrivateDestinationAllowance? allowance,
-            TimeSpan? timeout = null, Func<CancellationToken, Task>? beforeFinalAuthorization = null) =>
-            Task.FromResult(new RealProjectionFixture(endpoint, certificates, allowance, timeout ?? TimeSpan.FromSeconds(2), beforeFinalAuthorization));
+            TimeSpan? timeout = null, Func<CancellationToken, Task>? beforeFinalAuthorization = null, ResponsePhaseDeadlineController? responseDeadline = null) =>
+            Task.FromResult(new RealProjectionFixture(endpoint, certificates, allowance, timeout ?? TimeSpan.FromSeconds(2), beforeFinalAuthorization, responseDeadline));
+
+        internal int HttpDispatchCount => transport.HttpDispatchCount;
 
         internal async Task<OpaqueSessionHttpResponse> SendAsync(byte[] body)
         {
@@ -215,10 +250,51 @@ public sealed class OpaqueSessionHttpRealIntegrationTests
         return new("opaque-session", new("username", "password"), login, new("SessionId", ns), new("Session", ns), [business], TimeSpan.FromHours(1), []);
     }
 
-    private sealed class CompositeTransport(IRestrictedTransport restricted) : IRestrictedTransport
+    private sealed class ResponsePhaseDeadlineController
     {
-        public Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken) =>
-            restricted.SendAsync(request, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, cancellationToken);
+        private readonly TaskCompletionSource<bool> expiration = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal void Expire() => expiration.TrySetResult(true);
+
+        internal async Task<ExternalResponse> SendAsync(IRestrictedTransport restricted, HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses,
+            X509Certificate2? clientCertificate, long maximumResponseBytes, CancellationToken callerCancellation)
+        {
+            using CancellationTokenSource internalDeadline = CancellationTokenSource.CreateLinkedTokenSource(callerCancellation);
+            // Wall-clock expiry is covered by the separate production-deadline test. Infinite here is
+            // test-only and removes the pre-observation race; Expire deterministically represents the
+            // transport's own deadline once the server phase under test has been proven.
+            Task<ExternalResponse> pending = restricted.SendAsync(
+                request, approvedAddresses, clientCertificate, Timeout.InfiniteTimeSpan, maximumResponseBytes, internalDeadline.Token);
+            Task deadline = expiration.Task.WaitAsync(callerCancellation);
+            try
+            {
+                if (await Task.WhenAny(pending, deadline).ConfigureAwait(false) == pending)
+                    return await pending.ConfigureAwait(false);
+
+                await deadline.ConfigureAwait(false);
+                internalDeadline.Cancel();
+                return await pending.ConfigureAwait(false);
+            }
+            finally
+            {
+                await internalDeadline.CancelAsync().ConfigureAwait(false);
+            }
+        }
+    }
+
+    private sealed class CompositeTransport(IRestrictedTransport restricted, ResponsePhaseDeadlineController? responseDeadline) : IRestrictedTransport
+    {
+        private int httpDispatchCount;
+
+        internal int HttpDispatchCount => Volatile.Read(ref httpDispatchCount);
+
+        public Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref httpDispatchCount);
+            return responseDeadline is null
+                ? restricted.SendAsync(request, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, cancellationToken)
+                : responseDeadline.SendAsync(restricted, request, approvedAddresses, clientCertificate, maximumResponseBytes, cancellationToken);
+        }
 
         public Task<ExternalResponse> SendSoapAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
         {
