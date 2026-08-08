@@ -71,3 +71,7 @@ Named tests:
 The stable external failure is an existing redacted Gateway code; token, code, state, callback, authorization header, secret and provider reference are absent from exceptions, JSON, `ToString`, assertion diagnostics, audit and synthetic-server logs. Existing Gateway middleware converts the same `GatewayException` to allowlisted RFC 9457 fields only.
 
 The targeted seven-finding remediation product commit is `9a7db4bcfa328542d1170c7b56c4a73170a3e139`. Full PR CI is PASS (21/21 exact-head jobs, runs `31199544979` and `31199544996`). One independent review remains required. This is not evidence for a production healthcare connector.
+
+## Auth Phase 2 / Wave 1 extension
+
+The historical scope above remains the record of the M6 foundation branch. The generic Phase 2 extension adds PKCE `NONE`/`S256_REQUIRED` policy and Client Credentials on the same capability, cache and restricted-transport boundary. Current behavior, connector-facing examples and named evidence are documented in [Auth Phase 2 / Wave 1: generic OAuth profiles](AUTH-PHASE2-WAVE1-OAUTH.md).

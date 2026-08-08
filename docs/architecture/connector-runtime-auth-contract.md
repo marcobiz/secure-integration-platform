@@ -59,6 +59,13 @@ La capability di secret use e scoped al solo provider reference risolto per quel
 Il client OAuth non riceve un `ISecretValueProvider` generico e non accetta reference dal
 consumer.
 
+Per l'estensione generica Phase 2, la stessa capability risolve Authorization Code oppure
+Client Credentials dal `kind` Published. Authorization Code usa `NONE` solo per compatibilita
+esplicitamente pubblicata; `S256_REQUIRED` genera e conserva il verifier nel tentativo one-time.
+Client Credentials riusa lo stesso token-session store e la stessa reference opaca. Il Connector
+continua a fornire solo il logical profile ID e non puo selezionare grant, modalita PKCE, token
+endpoint, client identity, secret, scope, audience, resource o client-auth method.
+
 ## Contratto minimo stabile
 
 Un writer M6 puo dipendere da:
