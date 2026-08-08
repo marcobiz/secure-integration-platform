@@ -320,6 +320,17 @@ was reused without a new subsystem.
 OAuth/SOAP regional integration, callback/session correlation, actual operation/fault mapping,
 accreditation and live conformance remain blocked until current official specifications are
 available. Generic M6 auth tests are regression evidence only, not regional support evidence.
+## Healthcare Wave 1 - FSE2 National Connector
+
+| Requirement | Evidence | Status |
+|---|---|---|
+| Official source freeze | `docs/implementation/FSE2-WAVE1-SPEC-FREEZE.md`; guide 2.23 and OpenAPI 1.0.0 at official commit `430e6b5d9dde8a35b04ae635c11303db787a977e` with recorded SHA-256 | PASS documentation |
+| Current operation inventory | Paths, methods, request/response, workflow, production availability and retry class frozen from the official sources | PASS documentation |
+| Vertical isolation | No Healthcare code or dependency added; current Core/Auth surface inspected before implementation | PASS |
+| Exact dual-JWT profile | Mandatory `x5c`, trusted context-derived subject, exact registered-claim set and issuer/certificate binding are unavailable in qualified M6 public contracts | BLOCKED / NO-GO |
+| Token lifetime and skew | Not specified by the frozen official source and not inferred from examples | BLOCKED / NO-GO |
+| Connector, synthetic server and security tests | Intentionally not created after mandatory capability-gap stop | NOT STARTED |
+| Production accreditation | Requires official provisioning, certificates, conformance execution and operational evidence | NOT ACCREDITED |
 
 ## Security threats
 
