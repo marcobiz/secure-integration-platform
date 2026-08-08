@@ -18,6 +18,17 @@ internal static class AuthenticationPolicyDigest
         writer.WriteEndArray();
         writer.WriteNumber("lifetimeTicks", policy.Lifetime.Ticks);
         writer.WriteNumber("allowedClockSkewTicks", policy.AllowedClockSkew.Ticks);
+        writer.WriteString("certificateHeaderMode", policy.CertificateHeaderMode.ToString());
+        writer.WriteString("temporalClaimMode", policy.TemporalClaimMode.ToString());
+        writer.WriteStartArray("trustedClaims");
+        foreach (JwtTrustedClaimBinding claim in policy.TrustedClaims.OrderBy(value => value.Name, StringComparer.Ordinal))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("name", claim.Name);
+            writer.WriteString("source", claim.Source.ToString());
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
         writer.WriteString("logicalKeyBindingId", policy.LogicalKeyBindingId);
         writer.WriteString("resourceVersion", policy.ResourceVersion);
         writer.WriteNumber("catalogRevision", policy.CatalogRevision);

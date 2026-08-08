@@ -59,7 +59,11 @@ internal static class BindingPolicy
             policy.AllowedClockSkew < TimeSpan.Zero || policy.AllowedClockSkew > TimeSpan.FromMinutes(5) ||
             policy.MinimumRsaKeySize < 2048 || policy.MinimumRsaKeySize > 16384 || policy.AllowedClaims.Count > 32 ||
             policy.AllowedClaims.Any(name => !ValidClaimName(name) || Rs256JwtSigner.IsReservedClaim(name)) ||
+            policy.SubjectPolicy is not (JwtSubjectPolicy.Installation or JwtSubjectPolicy.Application or JwtSubjectPolicy.Fixed or JwtSubjectPolicy.Tenant) ||
             (policy.SubjectPolicy == JwtSubjectPolicy.Fixed) != !string.IsNullOrWhiteSpace(policy.FixedSubject) ||
+            policy.CertificateHeaderMode is not (JwtCertificateHeaderMode.None or JwtCertificateHeaderMode.Leaf or JwtCertificateHeaderMode.Chain) ||
+            policy.TemporalClaimMode is not (JwtTemporalClaimMode.IssuedAtNotBeforeExpiration or JwtTemporalClaimMode.IssuedAtExpiration) ||
+            !ValidTrustedClaims(policy) ||
             policy.FixedSubject?.Length > 512 || string.IsNullOrWhiteSpace(policy.ResourceVersion) || policy.ResourceVersion.Length > 128 ||
             policy.CatalogRevision <= 0 || !IsSha256(policy.CatalogChecksumSha256))
             throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-POLICY-DENIED");
@@ -97,6 +101,19 @@ internal static class BindingPolicy
     internal static bool IsSha256(string? value) => value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
     internal static bool ValidClaimName(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 64 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
+
+    private static bool ValidTrustedClaims(ServerOwnedRs256PolicySnapshot policy)
+    {
+        if (policy.TrustedClaims.Count > 16 || policy.AllowedClaims.Count + policy.TrustedClaims.Count > 32) return false;
+        HashSet<string> names = new(StringComparer.Ordinal);
+        foreach (JwtTrustedClaimBinding claim in policy.TrustedClaims)
+        {
+            if (!ValidClaimName(claim.Name) || Rs256JwtSigner.IsReservedClaim(claim.Name) || policy.AllowedClaims.Contains(claim.Name) ||
+                !names.Add(claim.Name) || claim.Source is not (JwtTrustedValueSource.AuthenticatedTenantId or JwtTrustedValueSource.AuthenticatedApplicationId or JwtTrustedValueSource.AuthenticatedInstallationId))
+                return false;
+        }
+        return true;
+    }
 
     private static bool FixedHexEquals(string left, string right)
     {

@@ -874,7 +874,7 @@ static ProviderServices CreateProviderServices(GatewayProviderOptions options, I
         string? token = Environment.GetEnvironmentVariable(options.AccessTokenEnvironmentVariable, EnvironmentVariableTarget.Process);
         if (string.IsNullOrWhiteSpace(token)) throw new InvalidOperationException("Synthetic provider access token is required.");
         SyntheticProvider provider = new(endpoint, token);
-        return new ProviderServices(provider, provider, provider, provider, CertificateMetadata: provider);
+        return new ProviderServices(provider, provider, provider, provider, CertificateMetadata: provider, CertificatePublicMaterial: provider);
     }
 
     if (string.Equals(options.Kind, "ExternalPack", StringComparison.Ordinal))
@@ -899,7 +899,7 @@ static ProviderServices CreateProviderServices(GatewayProviderOptions options, I
     if (!environment.IsDevelopment() && !environment.IsEnvironment("Testing"))
         throw new InvalidOperationException("A configured provider pack is required outside Development/Testing.");
     InMemoryProvider inMemory = new(new Dictionary<string, string>());
-    return new ProviderServices(inMemory, inMemory, inMemory, inMemory, CertificateMetadata: inMemory);
+    return new ProviderServices(inMemory, inMemory, inMemory, inMemory, CertificateMetadata: inMemory, CertificatePublicMaterial: inMemory);
 }
 
 static async Task<GatewayClientPrincipal> AuthenticateAsync(HttpContext context, RuntimeIdentityService service, ReadOnlyMemory<byte> body, Guid correlationId, CancellationToken cancellationToken)

@@ -130,7 +130,43 @@ public enum JwtSubjectPolicy
     /// <summary>Use the authenticated Application identifier.</summary>
     Application,
     /// <summary>Use a fixed value compiled into the approved policy.</summary>
-    Fixed
+    Fixed,
+    /// <summary>Use the authenticated Tenant identifier.</summary>
+    Tenant
+}
+
+/// <summary>Typed server-owned sources for trusted dynamic JWT values.</summary>
+public enum JwtTrustedValueSource
+{
+    /// <summary>Use the authenticated Tenant identifier.</summary>
+    AuthenticatedTenantId,
+    /// <summary>Use the authenticated Application identifier.</summary>
+    AuthenticatedApplicationId,
+    /// <summary>Use the authenticated Installation identifier.</summary>
+    AuthenticatedInstallationId
+}
+
+/// <summary>A policy-bound trusted claim whose value is derived from authenticated runtime state.</summary>
+public sealed record JwtTrustedClaimBinding(string Name, JwtTrustedValueSource Source);
+
+/// <summary>Server-owned protected-header policy for public X.509 material.</summary>
+public enum JwtCertificateHeaderMode
+{
+    /// <summary>Do not emit an x5c protected header.</summary>
+    None,
+    /// <summary>Emit only the verified leaf certificate.</summary>
+    Leaf,
+    /// <summary>Emit the verified leaf followed by its verified issuer chain.</summary>
+    Chain
+}
+
+/// <summary>Exact server-owned temporal claim set; lifetime and skew remain separate existing policies.</summary>
+public enum JwtTemporalClaimMode
+{
+    /// <summary>Legacy M6 behavior: emit iat, nbf and exp.</summary>
+    IssuedAtNotBeforeExpiration,
+    /// <summary>Emit iat and exp, omitting nbf exactly.</summary>
+    IssuedAtExpiration
 }
 
 /// <summary>Immutable server-owned RS256 policy snapshot for an exact Published operation.</summary>
@@ -155,7 +191,10 @@ public sealed class ServerOwnedRs256PolicySnapshot
         string resourceVersion,
         long catalogRevision,
         string catalogChecksumSha256,
-        int minimumRsaKeySize)
+        int minimumRsaKeySize,
+        JwtCertificateHeaderMode certificateHeaderMode,
+        JwtTemporalClaimMode temporalClaimMode,
+        IReadOnlyList<JwtTrustedClaimBinding>? trustedClaims)
     {
         PolicyId = policyId;
         PolicyRevision = policyRevision;
@@ -176,6 +215,9 @@ public sealed class ServerOwnedRs256PolicySnapshot
         CatalogRevision = catalogRevision;
         CatalogChecksumSha256 = catalogChecksumSha256;
         MinimumRsaKeySize = minimumRsaKeySize;
+        CertificateHeaderMode = certificateHeaderMode;
+        TemporalClaimMode = temporalClaimMode;
+        TrustedClaims = trustedClaims?.ToArray() ?? [];
         PolicyChecksumSha256 = AuthenticationPolicyDigest.Rs256(this);
     }
 
@@ -199,10 +241,14 @@ public sealed class ServerOwnedRs256PolicySnapshot
         string resourceVersion,
         long catalogRevision,
         string catalogChecksumSha256,
-        int minimumRsaKeySize = 2048) => new(
+        int minimumRsaKeySize = 2048,
+        JwtCertificateHeaderMode certificateHeaderMode = JwtCertificateHeaderMode.None,
+        JwtTemporalClaimMode temporalClaimMode = JwtTemporalClaimMode.IssuedAtNotBeforeExpiration,
+        IReadOnlyList<JwtTrustedClaimBinding>? trustedClaims = null) => new(
             policyId, policyRevision, connectorVersionId, connectorId, operationId, environmentId, endpoint,
             issuer, audience, subjectPolicy, fixedSubject, allowedClaims, lifetime, allowedClockSkew,
-            logicalKeyBindingId, resourceVersion, catalogRevision, catalogChecksumSha256, minimumRsaKeySize);
+            logicalKeyBindingId, resourceVersion, catalogRevision, catalogChecksumSha256, minimumRsaKeySize,
+            certificateHeaderMode, temporalClaimMode, trustedClaims);
 
     /// <summary>Logical approved policy identifier.</summary>
     public string PolicyId { get; }
@@ -244,6 +290,12 @@ public sealed class ServerOwnedRs256PolicySnapshot
     public string CatalogChecksumSha256 { get; }
     /// <summary>Minimum accepted RSA strength.</summary>
     public int MinimumRsaKeySize { get; }
+    /// <summary>Approved typed x5c protected-header mode.</summary>
+    public JwtCertificateHeaderMode CertificateHeaderMode { get; }
+    /// <summary>Approved exact temporal claim set.</summary>
+    public JwtTemporalClaimMode TemporalClaimMode { get; }
+    /// <summary>Policy-bound trusted dynamic claims, separate from caller business claims.</summary>
+    public IReadOnlyList<JwtTrustedClaimBinding> TrustedClaims { get; }
 }
 
 /// <summary>Immutable server-owned mTLS policy snapshot for an exact Published operation.</summary>

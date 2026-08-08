@@ -9,25 +9,30 @@ namespace SecureIntegration.Providers.Synthetic;
 
 /// <summary>In-memory provider for Development and deterministic tests.</summary>
 public sealed class InMemoryProvider :
-    ISecretValueProvider, IClientCertificateProvider, ICertificateMetadataProvider, IKeyOperationProvider, IProviderHealthCheck, IProviderCapabilitySource
+    ISecretValueProvider, IClientCertificateProvider, ICertificateMetadataProvider, ICertificatePublicMaterialProvider,
+    IKeyOperationProvider, IProviderHealthCheck, IProviderCapabilitySource
 {
     private readonly IReadOnlyDictionary<string, string> values;
     private readonly IReadOnlyDictionary<string, byte[]>? encodedCertificates;
     private readonly IReadOnlyDictionary<string, X509Certificate2>? certificateHandles;
     private readonly IReadOnlyDictionary<string, X509Certificate2>? signingKeyHandles;
+    private readonly IReadOnlyDictionary<string, IReadOnlyList<X509Certificate2>>? certificateChains;
 
     /// <summary>Creates a synthetic provider from runtime-only values and certificate handles.</summary>
     public InMemoryProvider(
         IReadOnlyDictionary<string, string> values,
         IReadOnlyDictionary<string, byte[]>? certificates = null,
         IReadOnlyDictionary<string, X509Certificate2>? certificateHandles = null,
-        IReadOnlyDictionary<string, X509Certificate2>? signingKeyHandles = null)
+        IReadOnlyDictionary<string, X509Certificate2>? signingKeyHandles = null,
+        IReadOnlyDictionary<string, IReadOnlyList<X509Certificate2>>? certificateChains = null)
     {
         this.values = values;
         encodedCertificates = certificates;
         this.certificateHandles = certificateHandles;
         this.signingKeyHandles = signingKeyHandles;
-        Capabilities = new(true, certificates is not null || certificateHandles is not null, signingKeyHandles is not null, false);
+        this.certificateChains = certificateChains;
+        bool hasCertificates = certificates is not null || certificateHandles is not null;
+        Capabilities = new(true, hasCertificates, signingKeyHandles is not null, false, hasCertificates || signingKeyHandles is not null);
     }
 
     /// <inheritdoc />
@@ -56,6 +61,43 @@ public sealed class InMemoryProvider :
     {
         using X509Certificate2 certificate = await GetClientCertificateAsync(logicalReference, cancellationToken).ConfigureAwait(false);
         return PublicMetadata(certificate);
+    }
+
+    /// <inheritdoc />
+    public Task<ProviderCertificatePublicMaterial> GetPublicMaterialAsync(string logicalReference, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        X509Certificate2? certificate = null;
+        bool disposeCertificate = false;
+        try
+        {
+            if (signingKeyHandles is not null && signingKeyHandles.TryGetValue(logicalReference, out X509Certificate2? signingCertificate))
+            {
+                certificate = signingCertificate;
+            }
+            else if (certificateHandles is not null && certificateHandles.TryGetValue(logicalReference, out X509Certificate2? clientCertificate))
+            {
+                certificate = clientCertificate;
+            }
+            else if (encodedCertificates is not null && encodedCertificates.TryGetValue(logicalReference, out byte[]? encodedCertificate))
+            {
+                certificate = LoadCertificate(encodedCertificate);
+                disposeCertificate = true;
+            }
+            else
+            {
+                throw new ProviderAccessException("BGW-PROVIDER-CERTIFICATE-NOT-FOUND");
+            }
+
+            ReadOnlyMemory<byte>[] chain = certificateChains is not null && certificateChains.TryGetValue(logicalReference, out IReadOnlyList<X509Certificate2>? configuredChain)
+                ? configuredChain.Select(value => (ReadOnlyMemory<byte>)value.RawData).ToArray()
+                : [];
+            return Task.FromResult(new ProviderCertificatePublicMaterial(certificate.RawData, chain, PublicMetadata(certificate)));
+        }
+        finally
+        {
+            if (disposeCertificate) certificate?.Dispose();
+        }
     }
 
     /// <inheritdoc />
@@ -106,7 +148,8 @@ public sealed class InMemoryProvider :
 }
 
 /// <summary>HTTPS-only deterministic provider used by local and CI environments.</summary>
-public sealed class SyntheticProvider : ISecretValueProvider, IClientCertificateProvider, ICertificateMetadataProvider, IProviderHealthCheck, IProviderCapabilitySource, IDisposable
+public sealed class SyntheticProvider : ISecretValueProvider, IClientCertificateProvider, ICertificateMetadataProvider,
+    ICertificatePublicMaterialProvider, IProviderHealthCheck, IProviderCapabilitySource, IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow };
     private readonly Uri origin;
@@ -128,7 +171,7 @@ public sealed class SyntheticProvider : ISecretValueProvider, IClientCertificate
     }
 
     /// <inheritdoc />
-    public ProviderCapabilities Capabilities { get; } = new(true, true, false, false);
+    public ProviderCapabilities Capabilities { get; } = new(true, true, false, false, true);
 
     /// <inheritdoc />
     public async Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken)
@@ -153,6 +196,13 @@ public sealed class SyntheticProvider : ISecretValueProvider, IClientCertificate
     {
         using X509Certificate2 certificate = await GetClientCertificateAsync(logicalReference, cancellationToken).ConfigureAwait(false);
         return InMemoryProvider.PublicMetadata(certificate);
+    }
+
+    /// <inheritdoc />
+    public async Task<ProviderCertificatePublicMaterial> GetPublicMaterialAsync(string logicalReference, CancellationToken cancellationToken)
+    {
+        using X509Certificate2 certificate = await GetClientCertificateAsync(logicalReference, cancellationToken).ConfigureAwait(false);
+        return new ProviderCertificatePublicMaterial(certificate.RawData, [], InMemoryProvider.PublicMetadata(certificate));
     }
 
     /// <inheritdoc />

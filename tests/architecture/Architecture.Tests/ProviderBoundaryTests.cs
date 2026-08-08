@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace SecureIntegration.Architecture.Tests;
@@ -45,10 +46,42 @@ public sealed class ProviderBoundaryTests
         Assert.Contains("IClientCertificateProvider", contracts, StringComparison.Ordinal);
         Assert.Contains("ISigningKeyProvider", contracts, StringComparison.Ordinal);
         Assert.Contains("IKeyOperationProvider", contracts, StringComparison.Ordinal);
+        Assert.Contains("ICertificatePublicMaterialProvider", contracts, StringComparison.Ordinal);
         Assert.Contains("IMacProvider", contracts, StringComparison.Ordinal);
         Assert.Contains("IProviderHealthCheck", contracts, StringComparison.Ordinal);
         Assert.Contains("IProviderCapabilitySource", contracts, StringComparison.Ordinal);
         Assert.DoesNotContain("IKms", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetPrivateKey", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetPfx", contracts, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("GetSecretLocator", contracts, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generic_certificate_signing_extensions_have_no_vertical_content_or_arbitrary_header_bag()
+    {
+        string[] roots =
+        [
+            Path.Combine(Root, "src", "Authentication", "CertificateSigning"),
+            Path.Combine(Root, "src", "Providers", "Abstractions"),
+            Path.Combine(Root, "src", "Providers", "Synthetic"),
+            Path.Combine(Root, "tests", "unit", "Authentication.CertificateSigning.Tests")
+        ];
+        string[] forbidden =
+        [
+            "F" + "SE", "F" + "SE2", "Sistema" + "TS", "farma" + "cia", "health" + "care",
+            "C" + "GM", "Winges" + "far", "dr" + "CLOUD"
+        ];
+        foreach (string file in roots.SelectMany(path => Directory.EnumerateFiles(path, "*.cs", SearchOption.AllDirectories)).Where(path => !IsGenerated(path)))
+        {
+            string content = File.ReadAllText(file);
+            foreach (string token in forbidden)
+                Assert.DoesNotMatch(new Regex($@"\b{Regex.Escape(token)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), content);
+        }
+
+        string signer = File.ReadAllText(Path.Combine(Root, "src", "Authentication", "CertificateSigning", "Rs256JwtSigner.cs"));
+        Assert.DoesNotContain("Dictionary<string, object>", signer, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExpandoObject", signer, StringComparison.Ordinal);
+        Assert.DoesNotContain("JsonNode", signer, StringComparison.Ordinal);
     }
 
     [Fact]
