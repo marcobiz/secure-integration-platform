@@ -182,6 +182,25 @@ Detailed mapping: `docs/traceability/auth-phase2-wave1-oauth.md`. PR #17 product
 | Redaction and repository material | unexpected exception canaries at metadata/sign/certificate boundaries; runtime-generated certificates only; repository secret scan | Tests PASS; scan pending final gate |
 | Production FVG/Umbria lifecycle | Explicitly excluded pending authoritative characterization and custody approval | NO-GO |
 
+## Wave 1 generic JWT/X.509 extensions
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| Safe immutable/bounded public leaf DER, optional chain and metadata | public API boundary; input/getter/backing-memory/metadata mutation tests; exact/oversize leaf, chain entry/count/total tests; provider capability architecture checks | PASS local |
+| Typed server-owned `x5c`, standard Base64 and leaf-first order | `Wave1_x5c_leaf_and_chain_are_verified_leaf_first_and_standard_base64`; caller `x5c` reserved-claim denial | PASS local |
+| DER fingerprint/SPKI identity and same-key signature verification | `Wave1_substituted_certificate_identity_is_denied_before_sign`; existing wrong-signing-result and SPKI tests | PASS local |
+| Exact temporal inclusion with M6 default compatibility | `Wave1_temporal_mode_omits_nbf_and_trusted_sources_derive_only_authenticated_identity`; existing default positive test; invalid temporal policy denial | PASS local |
+| Typed trusted runtime subject and claim sources | `Wave1_generic_Published_policy_resolves_typed_runtime_subject_without_caller_override`; built-in identity positive; invalid/reserved/duplicate/overlap policy matrix | PASS local |
+| Runtime source authority, provenance and exact invocation binding | business-to-`sub` promotion denial with zero provider calls; source substitution; invocation A to B; wrong provenance and stale policy/catalog/resource/ConnectorVersion/operation/Tenant/Application/Installation matrix | PASS local |
+| TrustedClaims immutable checksum/payload snapshot | `Wave1_trusted_claim_snapshot_cannot_flip_during_provider_await_or_after_checksum`; non-array/read-only collection assertions and deterministic flip/restore | PASS local |
+| Rotation/disable and no stale `x5c` | `Wave1_retained_revision_one_public_material_cannot_authenticate_revision_two`; disable before/final materialization; current revision x5c rotation | PASS local |
+| Provider exception sanitization | public-material canary and cancellation test plus existing metadata/sign boundaries | PASS local |
+| Generic Core boundary | `Generic_certificate_signing_extensions_have_no_vertical_content_or_arbitrary_header_bag` | PASS local |
+
+Dual-JWT orchestration, service-specific issuer/CN composition, CX/XON/IHE identifiers
+and document hash remain Connector responsibilities. Lifetime/skew already exists and
+was reused without a new subsystem.
+
 ## Security threats
 
 La fotografia conclusiva M0/M1, inclusi gli elementi non automatizzati, è in `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md`.

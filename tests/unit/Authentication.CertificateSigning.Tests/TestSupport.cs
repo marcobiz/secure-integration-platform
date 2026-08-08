@@ -67,6 +67,17 @@ internal sealed class TrackingKeyProvider(IKeyOperationProvider inner) : IKeyOpe
     }
 }
 
+internal sealed class TrackingPublicMaterialProvider(ICertificatePublicMaterialProvider inner) : ICertificatePublicMaterialProvider
+{
+    public List<string> References { get; } = [];
+
+    public Task<ProviderCertificatePublicMaterial> GetPublicMaterialAsync(string logicalReference, CancellationToken cancellationToken)
+    {
+        References.Add(logicalReference);
+        return inner.GetPublicMaterialAsync(logicalReference, cancellationToken);
+    }
+}
+
 internal sealed class TrackingCertificateProvider(IClientCertificateProvider certificates, ICertificateMetadataProvider metadata) : IClientCertificateProvider, ICertificateMetadataProvider
 {
     public TrackingCertificateProvider(InMemoryProvider provider) : this(provider, provider) { }
@@ -111,7 +122,7 @@ internal sealed class LoopbackAllowance : IAuthenticationPrivateDestinationAllow
 
 internal static class AuthenticationTestData
 {
-    internal const string ConnectorId = "synthetic-healthcare";
+    internal const string ConnectorId = "synthetic-connector";
     internal const string OperationId = "submit";
     internal const string JwtProfileId = "synthetic-rs256";
     internal const string MutualTlsProfileId = "synthetic-mtls";
@@ -139,7 +150,11 @@ internal static class AuthenticationTestData
         JwtSubjectPolicy subjectPolicy = JwtSubjectPolicy.Installation,
         string? fixedSubject = null,
         IReadOnlySet<string>? allowedClaims = null,
-        TimeSpan? lifetime = null) => ServerOwnedRs256PolicySnapshot.Create(
+        TimeSpan? lifetime = null,
+        JwtCertificateHeaderMode certificateHeaderMode = JwtCertificateHeaderMode.None,
+        JwtTemporalClaimMode temporalClaimMode = JwtTemporalClaimMode.IssuedAtNotBeforeExpiration,
+        IReadOnlyList<JwtTrustedClaimBinding>? trustedClaims = null,
+        JwtTrustedValueSource? trustedSubjectSource = null) => ServerOwnedRs256PolicySnapshot.Create(
             JwtProfileId,
             revision,
             context.ConnectorVersionId,
@@ -157,7 +172,11 @@ internal static class AuthenticationTestData
             JwtBindingId,
             certificate.SerialNumber,
             revision,
-            CatalogChecksum(revision));
+            CatalogChecksum(revision),
+            certificateHeaderMode: certificateHeaderMode,
+            temporalClaimMode: temporalClaimMode,
+            trustedClaims: trustedClaims,
+            trustedSubjectSource: trustedSubjectSource);
 
     internal static ServerOwnedMutualTlsPolicySnapshot MutualTlsPolicy(
         AuthenticationExecutionContext context,
@@ -217,7 +236,14 @@ internal static class AuthenticationTestData
         signingKeyHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
         {
             ["sign-r1"] = material.SigningKeyRevision1,
-            ["sign-r2"] = material.SigningKeyRevision2
+            ["sign-r2"] = material.SigningKeyRevision2,
+            ["sign-expired"] = material.ExpiredSigningCertificate
+        },
+        certificateChains: new Dictionary<string, IReadOnlyList<X509Certificate2>>(StringComparer.Ordinal)
+        {
+            ["sign-r1"] = [material.RootCertificate],
+            ["sign-r2"] = [material.RootCertificate],
+            ["sign-expired"] = [material.RootCertificate]
         });
 
     private static BoundAuthenticationResource Binding(

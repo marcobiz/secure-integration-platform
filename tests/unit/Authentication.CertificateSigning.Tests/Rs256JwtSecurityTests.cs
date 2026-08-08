@@ -25,7 +25,7 @@ public sealed class Rs256JwtSecurityTests
         Rs256JwtSigner signer = new(policies, bindings, tracking, new InMemoryJwtReplayStore(100, clock), clock);
 
         string token = await signer.SignJwtAsync(context, AuthenticationTestData.JwtProfileId,
-            [new("role", JsonSerializer.SerializeToElement("synthetic-pharmacy"))], TestContext.Current.CancellationToken);
+            [new("role", JsonSerializer.SerializeToElement("synthetic-operator"))], TestContext.Current.CancellationToken);
 
         string[] segments = token.Split('.');
         Assert.Equal(3, segments.Length);
@@ -33,11 +33,13 @@ public sealed class Rs256JwtSecurityTests
         using JsonDocument payload = JsonDocument.Parse(Decode(segments[1]));
         Assert.Equal("RS256", header.RootElement.GetProperty("alg").GetString());
         Assert.Equal("JWT", header.RootElement.GetProperty("typ").GetString());
+        Assert.False(header.RootElement.TryGetProperty("x5c", out _));
         Assert.Equal("https://issuer.example.test", payload.RootElement.GetProperty("iss").GetString());
         Assert.Equal("https://audience.example.test", payload.RootElement.GetProperty("aud").GetString());
         Assert.Equal(context.InstallationId.ToString("D"), payload.RootElement.GetProperty("sub").GetString());
         Assert.Equal(300, payload.RootElement.GetProperty("exp").GetInt64() - payload.RootElement.GetProperty("iat").GetInt64());
-        Assert.Equal("synthetic-pharmacy", payload.RootElement.GetProperty("role").GetString());
+        Assert.Equal(payload.RootElement.GetProperty("iat").GetInt64(), payload.RootElement.GetProperty("nbf").GetInt64());
+        Assert.Equal("synthetic-operator", payload.RootElement.GetProperty("role").GetString());
         AssertSignature(material.SigningKeyRevision1, segments);
         Assert.Equal(["sign-r1"], tracking.MetadataReferences);
         Assert.Equal([("sign-r1", "RS256")], tracking.Signatures);
@@ -46,6 +48,7 @@ public sealed class Rs256JwtSecurityTests
     [Theory]
     [InlineData("alg")]
     [InlineData("kid")]
+    [InlineData("x5c")]
     [InlineData("iss")]
     [InlineData("aud")]
     [InlineData("sub")]
@@ -252,6 +255,9 @@ public sealed class Rs256JwtSecurityTests
     [InlineData("subject")]
     [InlineData("lifetime")]
     [InlineData("allowlist")]
+    [InlineData("x5c")]
+    [InlineData("temporal")]
+    [InlineData("trusted-claim")]
     public async Task M6_JWT_policy_substitution_with_same_policy_id_is_denied_before_provider(string substitution)
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
@@ -264,6 +270,10 @@ public sealed class Rs256JwtSecurityTests
             "subject" => AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, subjectPolicy: JwtSubjectPolicy.Application),
             "lifetime" => AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, lifetime: TimeSpan.FromMinutes(10)),
             "allowlist" => AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, allowedClaims: new HashSet<string>(StringComparer.Ordinal) { "attacker" }),
+            "x5c" => AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, certificateHeaderMode: JwtCertificateHeaderMode.Leaf),
+            "temporal" => AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, temporalClaimMode: JwtTemporalClaimMode.IssuedAtExpiration),
+            "trusted-claim" => AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1,
+                trustedClaims: [new("tenant_ref", JwtTrustedValueSource.AuthenticatedTenantId)]),
             _ => throw new ArgumentOutOfRangeException(nameof(substitution))
         };
         MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
@@ -349,6 +359,7 @@ public sealed class Rs256JwtSecurityTests
         Assert.Equal([typeof(AuthenticationExecutionContext), typeof(string), typeof(IReadOnlyList<JwtBoundClaim>), typeof(CancellationToken)], parameters);
         Assert.Null(typeof(Rs256JwtSigner).Assembly.GetType("SecureIntegration.Authentication.CertificateSigning.Rs256JwtProfile"));
         Assert.DoesNotContain(typeof(IKeyOperationProvider).GetMethods(), value => value.Name.Contains("Export", StringComparison.OrdinalIgnoreCase) || value.Name.Contains("Private", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(method.GetParameters(), value => value.ParameterType == typeof(X509Certificate2) || value.ParameterType.Name.Contains("Dictionary", StringComparison.Ordinal));
     }
 
     private static byte[] Decode(string value)

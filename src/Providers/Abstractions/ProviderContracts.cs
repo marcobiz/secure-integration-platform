@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 
 namespace SecureIntegration.Providers.Abstractions;
@@ -21,6 +22,82 @@ public interface ICertificateMetadataProvider
 {
     /// <summary>Returns public metadata without exporting private key material.</summary>
     Task<ProviderCertificatePublicMetadata> GetPublicMetadataAsync(string logicalReference, CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// Retrieves only the public DER certificate material for an allowlisted logical reference.
+/// The capability never returns a private key, PKCS#12 payload, password, credential or locator.
+/// </summary>
+public interface ICertificatePublicMaterialProvider
+{
+    /// <summary>Returns the leaf certificate and its optional issuer chain, leaf first.</summary>
+    Task<ProviderCertificatePublicMaterial> GetPublicMaterialAsync(string logicalReference, CancellationToken cancellationToken);
+}
+
+/// <summary>Defensively copied public X.509 material for one exact provider resource revision.</summary>
+public sealed class ProviderCertificatePublicMaterial
+{
+    /// <summary>Maximum DER size accepted for a leaf or one issuer certificate.</summary>
+    public const int MaximumCertificateDerBytes = 65_536;
+    /// <summary>Maximum issuer certificates accepted in one public chain snapshot.</summary>
+    public const int MaximumCertificateChainCount = 7;
+    /// <summary>Maximum aggregate leaf and issuer DER bytes accepted in one snapshot.</summary>
+    public const int MaximumTotalCertificateDerBytes = 256 * 1024;
+
+    private const int MinimumCertificateDerBytes = 256;
+    private readonly byte[] leafCertificateDer;
+    private readonly byte[][] certificateChainDer;
+    private readonly ProviderCertificatePublicMetadata metadata;
+
+    /// <summary>Creates a public-only leaf and optional issuer chain snapshot.</summary>
+    public ProviderCertificatePublicMaterial(
+        ReadOnlyMemory<byte> leafCertificateDer,
+        IReadOnlyList<ReadOnlyMemory<byte>> certificateChainDer,
+        ProviderCertificatePublicMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(certificateChainDer);
+        ArgumentNullException.ThrowIfNull(metadata);
+        if (leafCertificateDer.Length is < MinimumCertificateDerBytes or > MaximumCertificateDerBytes)
+            throw new ArgumentOutOfRangeException(nameof(leafCertificateDer));
+        if (certificateChainDer.Count > MaximumCertificateChainCount)
+            throw new ArgumentOutOfRangeException(nameof(certificateChainDer));
+        long totalBytes = leafCertificateDer.Length;
+        foreach (ReadOnlyMemory<byte> issuerCertificate in certificateChainDer)
+        {
+            if (issuerCertificate.Length is < MinimumCertificateDerBytes or > MaximumCertificateDerBytes)
+                throw new ArgumentOutOfRangeException(nameof(certificateChainDer));
+            totalBytes += issuerCertificate.Length;
+            if (totalBytes > MaximumTotalCertificateDerBytes)
+                throw new ArgumentOutOfRangeException(nameof(certificateChainDer));
+        }
+
+        this.leafCertificateDer = leafCertificateDer.ToArray();
+        this.certificateChainDer = certificateChainDer.Select(value => value.ToArray()).ToArray();
+        this.metadata = CopyMetadata(metadata);
+        using X509Certificate2 certificate = X509CertificateLoader.LoadCertificate(this.leafCertificateDer);
+        using RSA? rsa = certificate.GetRSAPublicKey();
+        using ECDsa? ecdsa = certificate.GetECDsaPublicKey();
+        byte[] subjectPublicKeyInfo = rsa?.ExportSubjectPublicKeyInfo() ?? ecdsa?.ExportSubjectPublicKeyInfo()
+            ?? throw new CryptographicException("BGW-PROVIDER-CERTIFICATE-PUBLIC-KEY-INVALID");
+        SubjectPublicKeyInfoSha256 = Convert.ToHexString(SHA256.HashData(subjectPublicKeyInfo));
+    }
+
+    /// <summary>DER-encoded leaf certificate.</summary>
+    public ReadOnlyMemory<byte> LeafCertificateDer => leafCertificateDer.ToArray();
+    /// <summary>Optional DER-encoded issuers in certification order, excluding the leaf.</summary>
+    public IReadOnlyList<ReadOnlyMemory<byte>> CertificateChainDer =>
+        Array.AsReadOnly(certificateChainDer.Select(value => (ReadOnlyMemory<byte>)value.ToArray()).ToArray());
+    /// <summary>Public identity metadata for the same leaf and provider resource revision.</summary>
+    public ProviderCertificatePublicMetadata Metadata => CopyMetadata(metadata);
+    /// <summary>SHA-256 of the leaf SubjectPublicKeyInfo, derived from the returned DER.</summary>
+    public string SubjectPublicKeyInfoSha256 { get; }
+
+    private static ProviderCertificatePublicMetadata CopyMetadata(ProviderCertificatePublicMetadata value) => value with
+    {
+        EnhancedKeyUsages = value.EnhancedKeyUsages is null
+            ? null
+            : Array.AsReadOnly(value.EnhancedKeyUsages.ToArray())
+    };
 }
 
 /// <summary>Provider-neutral public certificate metadata.</summary>
@@ -80,7 +157,12 @@ public interface IProviderCapabilitySource
 }
 
 /// <summary>Provider capabilities; absent capabilities are never inferred or emulated.</summary>
-public sealed record ProviderCapabilities(bool SecretValues, bool ClientCertificates, bool SigningKeys, bool Mac);
+public sealed record ProviderCapabilities(
+    bool SecretValues,
+    bool ClientCertificates,
+    bool SigningKeys,
+    bool Mac,
+    bool CertificatePublicMaterial = false);
 
 /// <summary>Provider-neutral configuration passed to an optional deployment pack.</summary>
 public sealed record ProviderPackContext(Uri Endpoint, string? ClientIdentity, IReadOnlyDictionary<string, string> Settings);
@@ -93,7 +175,8 @@ public sealed record ProviderServices(
     IProviderCapabilitySource CapabilitySource,
     IKeyOperationProvider? SigningKeys = null,
     IMacProvider? Mac = null,
-    ICertificateMetadataProvider? CertificateMetadata = null);
+    ICertificateMetadataProvider? CertificateMetadata = null,
+    ICertificatePublicMaterialProvider? CertificatePublicMaterial = null);
 
 /// <summary>Composition seam implemented by deployment-specific packs.</summary>
 public interface IProviderPackFactory

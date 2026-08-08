@@ -12,6 +12,7 @@ public sealed class SyntheticAuthenticationMaterial : IDisposable
         X509Certificate2 serverCertificate,
         X509Certificate2 signingKeyRevision1,
         X509Certificate2 signingKeyRevision2,
+        X509Certificate2 expiredSigningCertificate,
         X509Certificate2 clientCertificateRevision1,
         X509Certificate2 clientCertificateRevision2,
         X509Certificate2 expiredClientCertificate,
@@ -22,6 +23,7 @@ public sealed class SyntheticAuthenticationMaterial : IDisposable
         ServerCertificate = serverCertificate;
         SigningKeyRevision1 = signingKeyRevision1;
         SigningKeyRevision2 = signingKeyRevision2;
+        ExpiredSigningCertificate = expiredSigningCertificate;
         ClientCertificateRevision1 = clientCertificateRevision1;
         ClientCertificateRevision2 = clientCertificateRevision2;
         ExpiredClientCertificate = expiredClientCertificate;
@@ -37,6 +39,8 @@ public sealed class SyntheticAuthenticationMaterial : IDisposable
     public X509Certificate2 SigningKeyRevision1 { get; }
     /// <summary>JWT signing key revision 2.</summary>
     public X509Certificate2 SigningKeyRevision2 { get; }
+    /// <summary>Expired JWT signing certificate for negative tests.</summary>
+    public X509Certificate2 ExpiredSigningCertificate { get; }
     /// <summary>ClientAuth certificate revision 1.</summary>
     public X509Certificate2 ClientCertificateRevision1 { get; }
     /// <summary>ClientAuth certificate revision 2.</summary>
@@ -82,14 +86,14 @@ public sealed class SyntheticAuthenticationMaterial : IDisposable
             finally { CryptographicOperations.ZeroMemory(runtimePkcs12); }
         }
 
-        X509Certificate2 IssueSigning(string subject)
+        X509Certificate2 IssueSigning(string subject, DateTimeOffset? notBefore = null, DateTimeOffset? notAfter = null)
         {
             using RSA key = RSA.Create(2048);
             CertificateRequest request = new(subject, key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
             request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
             request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
             request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
-            using X509Certificate2 publicCertificate = request.Create(root, now.AddDays(-1), now.AddDays(90), RandomNumberGenerator.GetBytes(16));
+            using X509Certificate2 publicCertificate = request.Create(root, notBefore ?? now.AddDays(-1), notAfter ?? now.AddDays(90), RandomNumberGenerator.GetBytes(16));
             return publicCertificate.CopyWithPrivateKey(key);
         }
 
@@ -98,6 +102,7 @@ public sealed class SyntheticAuthenticationMaterial : IDisposable
             Issue("CN=localhost", now.AddDays(-1), now.AddDays(30), "1.3.6.1.5.5.7.3.1", true),
             IssueSigning("CN=M6 Synthetic JWT Signing R1"),
             IssueSigning("CN=M6 Synthetic JWT Signing R2"),
+            IssueSigning("CN=M6 Synthetic Expired JWT Signing", now.AddDays(-10), now.AddDays(-1)),
             Issue("CN=M6 Synthetic Client R1", now.AddDays(-1), now.AddDays(60), "1.3.6.1.5.5.7.3.2"),
             Issue("CN=M6 Synthetic Client R2", now.AddDays(-1), now.AddDays(90), "1.3.6.1.5.5.7.3.2"),
             Issue("CN=M6 Synthetic Expired Client", now.AddDays(-10), now.AddDays(-1), "1.3.6.1.5.5.7.3.2"),
@@ -113,6 +118,7 @@ public sealed class SyntheticAuthenticationMaterial : IDisposable
         ExpiredClientCertificate.Dispose();
         ClientCertificateRevision2.Dispose();
         ClientCertificateRevision1.Dispose();
+        ExpiredSigningCertificate.Dispose();
         SigningKeyRevision2.Dispose();
         SigningKeyRevision1.Dispose();
         ServerCertificate.Dispose();
