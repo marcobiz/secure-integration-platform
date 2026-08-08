@@ -133,9 +133,9 @@ The M6 foundation branch did not claim PKCE or `client_credentials`. Auth Phase 
 | Authority endpoints covered by semantic four-eyes approval | `W1_UT_OAuth_authority_endpoints_are_complete_in_approval_dependencies_digest_and_risks` | PASS local |
 | Raw response zeroization on stale post-transport state | `W1_SEC_Token_response_is_zeroed_when_snapshot_revalidation_fails_after_transport_returns` | PASS local |
 | Validation → approval → publication → operation-scoped locator | `W1_IT_DAT_PostgreSQL18_OAuth_validation_approval_publication_and_operation_locator_resolution_when_configured` | PASS PostgreSQL 18 local |
-| Provider-neutral boundaries | `W1_ARCH_PKCE_and_client_credentials_are_server_owned_S256_only_and_share_restricted_token_acquisition`; Core export gate | PASS local; final exact-head gate pending |
+| Provider-neutral boundaries | `W1_ARCH_PKCE_and_client_credentials_are_server_owned_S256_only_and_share_restricted_token_acquisition`; Core export gate | PASS local + product-candidate CI |
 
-Detailed mapping: `docs/traceability/auth-phase2-wave1-oauth.md`. Exact-head CI and the repeated independent review remain release gates for PR #17 and are not implied by the local statuses above.
+Detailed mapping: `docs/traceability/auth-phase2-wave1-oauth.md`. PR #17 product candidate `857810a04d1be86905bda26156e9660cf82f8bab` completed exact-head CI 21/21 (run `31262148895` and `31262148897`) and repeated independent review with GO. This is a PR product gate, not evidence of merge, public release or production connector qualification.
 
 ## M6 SOAP/Basic/Session primitives
 

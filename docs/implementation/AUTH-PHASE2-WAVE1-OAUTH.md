@@ -77,3 +77,9 @@ Authorization presentation performs validation and DNS policy but no Gateway HTT
 Verifier, state, client secret, access/refresh token, Basic authorization and raw token response are absent from public JSON, `ToString()`, audit and stable exceptions. Token response buffers are zeroed on every path after transport returns, including stale-state revalidation failure; cached tokens and verifier/state buffers are cleared on invalidation or disposal.
 
 Named automated evidence is mapped in [Auth Phase 2 Wave 1 traceability](../traceability/auth-phase2-wave1-oauth.md).
+
+## Product-candidate qualification
+
+PR #17 product candidate `857810a04d1be86905bda26156e9660cf82f8bab` completed the full local product gate, including 46 targeted real-HTTPS OAuth cases, the 19 affected Connector Configuration cases, PostgreSQL 18 with 97/97 integration cases, documentation and secret validation, vulnerability and dependency checks, SBOM generation, and the open-source Core export. The Core export contains 357 files and its manifest SHA-256 is `DFB83BD14B75FEDF9ADA76630F917844144FEE474DDDB631DE384B28B6C8B3FF`.
+
+GitHub exact-head workflows `31262148895` and `31262148897` passed 21/21 checks. The repeated independent security review returned GO with no remaining findings. The verdict applies to this provider-neutral PR candidate only: the branch remains unmerged, and it does not qualify inbound identity, a distributed cache, production connector/cloud packs, or public-release readiness.

@@ -15,7 +15,7 @@ Aggiornato: 2026-08-08
 | M5 — Admin UI MVP | **Done** | baseline `8774c252b233456173c3ab31346fb21390fb8d7d`, tag `m5-admin-ui-baseline-20260807` |
 | M5.5 — Direct Gateway Access | Implementato localmente; CI e review indipendente pending | product candidate `1b3a3b38fa7d01c8c5f96af0324d040e412ac0be`; branch `m55/direct-gateway-access` |
 | M6 — auth HTTP/OAuth primitives | Remediation mirata dei 7 finding qualificata | PR #9 product commit `9a7db4b`: CI exact-head 21/21 PASS; authority capability da snapshot Published, bearer destination-bound, correlation, refresh tombstone, query hardening, user-agent boundary e diagnostic redaction; nessun connector sanitario production |
-| Auth Phase 2 / Wave 1 — OAuth PKCE S256 + Client Credentials | Implementato sul branch dedicato; gate exact-head e review indipendente da ripetere dopo remediation | PR #17; profili provider-neutral, authority endpoints inclusi nel four-eyes digest, cache/single-flight e invalidazione per security key, test HTTPS sintetici e percorso PostgreSQL 18 |
+| Auth Phase 2 / Wave 1 — OAuth PKCE S256 + Client Credentials | **GO sul product candidate; merge non eseguito** | PR #17 product candidate `857810a04d1be86905bda26156e9660cf82f8bab`: CI exact-head 21/21 PASS e review indipendente GO; profili provider-neutral, authority endpoints nel four-eyes digest, cache/single-flight e invalidazione per security key |
 | M6 — SOAP/Basic/Session primitives | Implementato sul branch; remediation PR #10 e CI/review pending | AP-01/AP-02/AP-07 sintetiche, cache/stamp/deadline/Fault hardened, server SOAP HTTPS reale e 21 casi mirati PASS locali |
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | M3B e milestone/connector production successivi | Non iniziati | nessun cloud reale, connector sanitario production o adapter commerciale |
@@ -140,7 +140,7 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 - cache condivisa e bounded per i due grant; acquisizione iniziale/esplicita e reacquisition su scadenza sono single-flight per security key, invalidazione e generation sono scoped alla security key/Connector, senza invalidazione cross-tenant;
 - schema e runtime rifiutano control characters e redirect URI malformate, con user-info, query o fragment; ogni raw token response viene azzerata anche quando la revalidation post-transport fallisce;
 - test mirati: 46 casi OAuth real HTTPS, 19 casi Connector Configuration nel gruppo interessato e percorso PostgreSQL 18 `W1_IT_DAT_PostgreSQL18_OAuth_validation_approval_publication_and_operation_locator_resolution_when_configured`;
-- scope ancora escluso: inbound identity, connector production, cache distribuita, provider/cloud adapter e merge in `main`. La chiusura resta subordinata a gate exact-head e nuova review indipendente sul commit pubblicato.
+- scope ancora escluso: inbound identity, connector production, cache distribuita, provider/cloud adapter e merge in `main`. Il product candidate `857810a04d1be86905bda26156e9660cf82f8bab` ha completato CI exact-head 21/21 (run `31262148895` e `31262148897`) e review indipendente con verdetto GO; un eventuale commit conclusivo solo documentale deve conservare verdi i check PR prima del merge.
 
 ### M6 — SOAP/Basic/Session Authentication Primitives
 

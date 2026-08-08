@@ -19,4 +19,4 @@
 | PostgreSQL validation, approval, publication and scoped locator resolution | `W1_IT_DAT_PostgreSQL18_OAuth_validation_approval_publication_and_operation_locator_resolution_when_configured` | PASS PostgreSQL 18 local |
 | Provider-neutral architecture and one synthetic server | HTTP/OAuth architecture test; extended `SyntheticOAuthServer` integration suite | PASS local |
 
-`PASS local` records deterministic product evidence only. Exact-head CI, PostgreSQL qualification, release scans, SBOM and independent review remain separate final-gate evidence until completed on the branch HEAD.
+`PASS local` records the named deterministic product evidence. PR #17 product candidate `857810a04d1be86905bda26156e9660cf82f8bab` additionally completed PostgreSQL 18 qualification, release scans, SBOM, Core export, exact-head CI 21/21 (run `31262148895` and `31262148897`) and repeated independent review with GO. A later documentation-only closure commit does not change these product results, but must retain green PR checks before any merge.
