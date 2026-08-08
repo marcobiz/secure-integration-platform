@@ -1429,14 +1429,21 @@ export interface components {
             protocol: string;
             bindingDependencies: components["schemas"]["OperationBindingDependencies"];
             endpoint: components["schemas"]["ApprovalEndpointReview"];
+            authorityEndpoints: components["schemas"]["ApprovalAuthorityEndpointReview"][];
             secretBindings: components["schemas"]["ApprovalSecretReview"][];
             certificateBindings: components["schemas"]["ApprovalCertificateReview"][];
         };
         OperationBindingDependencies: {
             operationId: string;
             endpointBindingId: string;
+            authorityEndpointBindingIds: string[];
             secretBindingIds: string[];
             certificateBindingIds: string[];
+        };
+        ApprovalAuthorityEndpointReview: {
+            /** @enum {string} */
+            role: "authorization" | "token";
+            endpoint: components["schemas"]["ApprovalEndpointReview"];
         };
         ApprovalEndpointReview: {
             logicalBindingId: string;
@@ -1446,6 +1453,7 @@ export interface components {
             hostname: string;
             port: number;
             path: string;
+            query: string;
             allowedMethods: string[];
             redirectPolicy: string;
             tlsPolicy: string;

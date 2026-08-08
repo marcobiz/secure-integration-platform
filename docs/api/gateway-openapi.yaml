@@ -860,7 +860,7 @@ components:
       properties: { connectorId: { type: string }, version: { type: string }, displayName: { type: string }, schemaVersion: { type: string }, canonicalDefinitionChecksumSha256: { type: string, pattern: '^[A-F0-9]{64}$' } }
     ApprovalOperationReview:
       type: object
-      required: [operationId, environment, executionStrategy, protocol, bindingDependencies, endpoint, secretBindings, certificateBindings]
+      required: [operationId, environment, executionStrategy, protocol, bindingDependencies, endpoint, authorityEndpoints, secretBindings, certificateBindings]
       properties:
         operationId: { type: string }
         environment: { type: string }
@@ -868,20 +868,28 @@ components:
         protocol: { type: string }
         bindingDependencies: { $ref: '#/components/schemas/OperationBindingDependencies' }
         endpoint: { $ref: '#/components/schemas/ApprovalEndpointReview' }
+        authorityEndpoints: { type: array, items: { $ref: '#/components/schemas/ApprovalAuthorityEndpointReview' } }
         secretBindings: { type: array, items: { $ref: '#/components/schemas/ApprovalSecretReview' } }
         certificateBindings: { type: array, items: { $ref: '#/components/schemas/ApprovalCertificateReview' } }
     OperationBindingDependencies:
       type: object
-      required: [operationId, endpointBindingId, secretBindingIds, certificateBindingIds]
+      required: [operationId, endpointBindingId, authorityEndpointBindingIds, secretBindingIds, certificateBindingIds]
       properties:
         operationId: { type: string }
         endpointBindingId: { type: string }
+        authorityEndpointBindingIds: { type: array, items: { type: string } }
         secretBindingIds: { type: array, items: { type: string } }
         certificateBindingIds: { type: array, items: { type: string } }
+    ApprovalAuthorityEndpointReview:
+      type: object
+      required: [role, endpoint]
+      properties:
+        role: { type: string, enum: [authorization, token] }
+        endpoint: { $ref: '#/components/schemas/ApprovalEndpointReview' }
     ApprovalEndpointReview:
       type: object
-      required: [logicalBindingId, bindingRevision, scheme, hostname, port, path, allowedMethods, redirectPolicy, tlsPolicy, endpointChecksumSha256, bindingChecksumSha256, destinationClassification]
-      properties: { logicalBindingId: { type: string }, bindingRevision: { type: integer, format: int64 }, scheme: { type: string }, hostname: { type: string }, port: { type: integer }, path: { type: string }, allowedMethods: { type: array, items: { type: string } }, redirectPolicy: { type: string }, tlsPolicy: { type: string }, endpointChecksumSha256: { type: string }, bindingChecksumSha256: { type: string }, destinationClassification: { type: string, enum: [loopback, private, publicInternet, other] } }
+      required: [logicalBindingId, bindingRevision, scheme, hostname, port, path, query, allowedMethods, redirectPolicy, tlsPolicy, endpointChecksumSha256, bindingChecksumSha256, destinationClassification]
+      properties: { logicalBindingId: { type: string }, bindingRevision: { type: integer, format: int64 }, scheme: { type: string }, hostname: { type: string }, port: { type: integer }, path: { type: string }, query: { type: string }, allowedMethods: { type: array, items: { type: string } }, redirectPolicy: { type: string }, tlsPolicy: { type: string }, endpointChecksumSha256: { type: string }, bindingChecksumSha256: { type: string }, destinationClassification: { type: string, enum: [loopback, private, publicInternet, other] } }
     ApprovalSecretReview:
       type: object
       required: [logicalBindingId, bindingRevision, providerDisplayName, providerType, providerId, resourceLogicalId, resourceType, catalogRevision, environment, connectorScope, operationScope, catalogChecksumSha256, resourceBindingChecksumSha256, bindingChecksumSha256]

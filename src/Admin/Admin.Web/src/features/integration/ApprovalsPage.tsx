@@ -10,6 +10,10 @@ import { PageTitle } from '../../components/PageTitle';
 import { PaginationControls } from '../../components/PaginationControls';
 import { runtimeLabel } from '../../i18n/runtimeValues';
 
+function endpointDestination(endpoint: { scheme: string; hostname: string; port: number; path: string; query: string }): string {
+  return `${endpoint.scheme}://${endpoint.hostname}:${endpoint.port}${endpoint.path}${endpoint.query}`;
+}
+
 export function ApprovalsPage() {
   const { t } = useTranslation();
   const session = useSession();
@@ -60,7 +64,7 @@ export function ApprovalsPage() {
             <strong>{t(`risk.${risk.code}`)}:</strong> <code>{risk.path}</code>
           </Alert>)}
           {review.data.artifact.operations.map(operation => {
-            const destination = `${operation.endpoint.scheme}://${operation.endpoint.hostname}:${operation.endpoint.port}${operation.endpoint.path}`;
+            const destination = endpointDestination(operation.endpoint);
             const credential = operation.secretBindings[0];
             return <Card variant="outlined" key={`${operation.environment}-${operation.operationId}`} data-testid="approval-operation-review"><CardContent>
               <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}><Chip label={`${t('operation')}: ${operation.operationId}`} /><Chip label={`${t('environment')}: ${operation.environment}`} /><Chip label={t(`destination.${operation.endpoint.destinationClassification}`)} /></Stack>
@@ -68,6 +72,19 @@ export function ApprovalsPage() {
               <Typography><strong>{t('allowedMethods')}:</strong> {operation.endpoint.allowedMethods.join(', ')}</Typography>
               <Typography><strong>{t('redirectPolicy')}:</strong> {operation.endpoint.redirectPolicy}; <strong>{t('tlsPolicy')}:</strong> {operation.endpoint.tlsPolicy}</Typography>
               {credential && <Typography data-testid="approval-semantic-sentence">{t('approvalSemanticSentence', { credential: credential.logicalBindingId, destination, method: operation.endpoint.allowedMethods.join(', ') })}</Typography>}
+              {operation.authorityEndpoints.map(authority => {
+                const authorityDestination = endpointDestination(authority.endpoint);
+                return <Card variant="outlined" key={`${authority.role}-${authority.endpoint.logicalBindingId}`} sx={{ mt: 2 }} data-testid="approval-authority-endpoint-review"><CardContent>
+                  <Typography variant="h3">{t('authorityEndpoint')}: {t(`authorityRole.${authority.role}`)}</Typography>
+                  <Stack direction="row" spacing={1} sx={{ mt: 1, flexWrap: 'wrap' }}><Chip label={t(`destination.${authority.endpoint.destinationClassification}`)} /><Chip label={`${t('allowedMethods')}: ${authority.endpoint.allowedMethods.join(', ')}`} /></Stack>
+                  <Typography><strong>{t('logicalEndpoint')}:</strong> {authority.endpoint.logicalBindingId}</Typography>
+                  <Typography><strong>{t('effectiveDestination')}:</strong> {authorityDestination}</Typography>
+                  <Typography><strong>{t('hostname')}:</strong> {authority.endpoint.hostname}; <strong>{t('port')}:</strong> {authority.endpoint.port}</Typography>
+                  <Typography><strong>{t('path')}:</strong> {authority.endpoint.path}; <strong>{t('query')}:</strong> {authority.endpoint.query || t('none')}</Typography>
+                  <Typography><strong>{t('redirectPolicy')}:</strong> {authority.endpoint.redirectPolicy}; <strong>{t('tlsPolicy')}:</strong> {authority.endpoint.tlsPolicy}</Typography>
+                  <Typography><strong>{t('bindingRevision')}:</strong> {authority.endpoint.bindingRevision}; <strong>{t('endpointChecksum')}:</strong> <code>{authority.endpoint.endpointChecksumSha256}</code>; <strong>{t('bindingChecksum')}:</strong> <code>{authority.endpoint.bindingChecksumSha256}</code></Typography>
+                </CardContent></Card>;
+              })}
               {operation.secretBindings.map(secret => <Stack key={secret.logicalBindingId} sx={{ mt: 1 }}>
                 <Typography><strong>{t('logicalCredential')}:</strong> {secret.logicalBindingId}</Typography>
                 <Typography><strong>{t('provider')}:</strong> {secret.providerDisplayName} ({secret.providerType}:{secret.providerId})</Typography>

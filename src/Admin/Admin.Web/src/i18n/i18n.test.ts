@@ -8,7 +8,7 @@ describe('administrative localization contract', () => {
   });
 
   it('M5_UI_I18N_Italian_has_no_known_English_fallbacks', () => {
-    const critical = ['access', 'reject', 'decisionComment', 'role', 'assignRole', 'approvalArtifacts', 'canonicalDiff', 'pagination', 'unsavedTitle', 'bindingsHelp', 'concurrencyConflict', 'errorSummary', 'health', 'activationCode', 'addGrant'] as const;
+    const critical = ['access', 'reject', 'decisionComment', 'role', 'assignRole', 'approvalArtifacts', 'authorityEndpoint', 'authorityRole.authorization', 'authorityRole.token', 'canonicalDiff', 'pagination', 'unsavedTitle', 'bindingsHelp', 'concurrencyConflict', 'errorSummary', 'health', 'activationCode', 'addGrant'] as const;
     for (const key of critical) expect(itTranslation[key], key).not.toBe(enTranslation[key]);
   });
 });
