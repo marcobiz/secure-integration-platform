@@ -47,6 +47,7 @@ mapping, credential, scope or accreditation claim exists in the product.
 | `./eng/validate-docs.ps1` | PASS |
 | `./eng/scan-secrets.ps1` | PASS |
 | `./eng/generate-sbom.ps1` | PASS; ignored output under `.artifacts/sbom` |
+| `./eng/Export-OpenSourceCore.ps1` | PASS; 360-file Core export, Healthcare Pack and pack-specific tests excluded |
 | Vulnerable transitive packages | PASS, none reported |
 | `git diff --check` | PASS |
 
