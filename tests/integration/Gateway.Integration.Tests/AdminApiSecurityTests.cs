@@ -943,7 +943,7 @@ public sealed class AdminApiSecurityTests
         return directory?.FullName ?? throw new InvalidOperationException("Repository root not found.");
     }
 
-    private sealed class PostgresRuntimeRoleLease : IAsyncDisposable
+    internal sealed class PostgresRuntimeRoleLease : IAsyncDisposable
     {
         private readonly string migrationConnectionString;
         private readonly string roleName;

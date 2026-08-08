@@ -469,9 +469,13 @@ public sealed class PostgresIsolationTests
     {
         string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
         if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        string? migrationConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
+        if (string.IsNullOrWhiteSpace(migrationConnectionString)) Assert.Skip("PostgreSQL migration connection is not configured; the dedicated PostgreSQL gate must provide it.");
         await ApplyMigrationAsync();
         await using AdminPostgresDataSource adminPool = new(connectionString);
-        PostgresConnectorConfigurationStore store = new(adminPool.Value);
+        await using AdminApiSecurityTests.PostgresRuntimeRoleLease runtimeRole = await AdminApiSecurityTests.PostgresRuntimeRoleLease.CreateAsync(connectionString, migrationConnectionString, TestContext.Current.CancellationToken);
+        await using NpgsqlDataSource runtimePool = NpgsqlDataSource.Create(runtimeRole.ConnectionString);
+        RoutingConnectorConfigurationStore store = new(adminPool, runtimePool);
         PostgresGatewayRegistry registry = new(adminPool.Value);
         PostgresAdminSecurityStore security = new(adminPool);
         TestClock clock = new(DateTimeOffset.UtcNow);
