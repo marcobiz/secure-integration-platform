@@ -1,9 +1,13 @@
 # FSE2 National Connector Wave 1 - official specification freeze and capability gap
 
-Date of freeze and access: **2026-08-08**  
-Repository baseline: `m6-auth-foundation-baseline-20260808` / `6e1a7c626e0e24d0a385c611fc03faef51598889`  
-Official source snapshot: `ministero-salute/it-fse-support` commit `430e6b5d9dde8a35b04ae635c11303db787a977e` (commit date 2026-08-07)  
-Wave branch: `wave1/fse2-national`  
+Date of freeze and access: **2026-08-08**
+
+Repository baseline: `m6-auth-foundation-baseline-20260808` / `6e1a7c626e0e24d0a385c611fc03faef51598889`
+
+Official source snapshot: `ministero-salute/it-fse-support` commit `430e6b5d9dde8a35b04ae635c11303db787a977e` (commit date 2026-08-07)
+
+Wave branch: `wave1/fse2-national`
+
 Verdict: **NO-GO before implementation - generic capability gap**
 
 This document is a public-safe freeze produced before connector code. It uses only the
@@ -240,7 +244,8 @@ Deferred because of the mandatory stop:
 - sample configuration and runtime wiring;
 - accreditation testing and any call to official systems.
 
-Current label: **not IMPLEMENTATION_READY**.  
+Current label: **not IMPLEMENTATION_READY**.
+
 Accreditation label: **not ACCREDITED_PRODUCTION_READY**.
 
 Accredited production readiness would additionally require official provisioning,
