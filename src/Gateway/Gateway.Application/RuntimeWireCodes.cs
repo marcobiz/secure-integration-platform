@@ -172,6 +172,7 @@ public static class BackendRuntimeWireCodes
         new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-NOT-PUBLISHED"),
         new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-NUMBER-UNSUPPORTED"),
         new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-OPERATION-DUPLICATE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-OAUTH-REDIRECT-URI-INVALID"),
         new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-PUBLISHED"),
         new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-RETIRED"),
         new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-RETRY-REQUIRES-IDEMPOTENCY"),
