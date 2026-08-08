@@ -20,8 +20,10 @@ Customer-specific reverse engineering, migration assessments, proprietary module
 | PUB-VETINFO | [VetInfo public help](https://www.vetinfo.it/help/farmaco/help/fornitura) | Public veterinary supply workflow only; not credential onboarding |
 | PUB-ADR | Repository ADRs | Product boundaries, execution location and provider separation |
 | PUB-SYNTH | `tests/characterization/healthcare/**` | Synthetic boundary tests only; never evidence of external conformance |
+| PUB-LOM-RX | [SISS Ricetta Elettronica](https://www.siss.regione.lombardia.it/wps/portal/site/siss/il-sistema-informativo-socio-sanitario/principali-servizi-offerti/ricetta-elettronica) and [SISS A2A](https://siss.regione.lombardia.it/wps/portal/site/siss/il-sistema-informativo-socio-sanitario/piattaforma-siss/integrazione-application-to-application) | Current public process/A2A characterization only; insufficient for a production profile |
+| PUB-ER-RX | [Regione Emilia-Romagna Rete SOLE](https://salute.regione.emilia-romagna.it/ssr/organizzazione/aziende-sanitarie-irccs/rete-sole), [Lepida white prescriptions](https://www.lepida.net/news/2022-03/anche-ricette-bianche-disponibili-online-fse) and [historical DGR 930/2013](https://salute.regione.emilia-romagna.it/normativa-e-documentazione/leggi-atti/regionali/delibere/specialistica-ambulatoriale/dgr-930-2013) | Current process plus historical lifecycle characterization; insufficient for a production profile |
 
-The regional profile candidates in this directory do not currently have a complete public official source pack. They remain `NEEDS_PUBLIC_SOURCE` and `NO-GO` for production implementation until the applicable authority specification, onboarding policy and conformance material are reviewed and recorded.
+The regional profile candidates in this directory do not currently have a complete public official source pack. Lombardia and Emilia-Romagna were re-reviewed on 2026-08-08 and remain `BLOCKED_BY_SPEC` and `NO-GO` for production implementation. The applicable current authority specification, onboarding policy and conformance material must be reviewed and recorded before either profile can move to implementation.
 
 ## Evidence labels
 

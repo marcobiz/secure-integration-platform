@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/ConnectorPacks/Healthcare/Healthcare.RegionalEPrescription/Healthcare.RegionalEPrescription.csproj" />
     <Project Path="src/Authentication/CertificateSigning/Authentication.CertificateSigning.csproj" />
     <Project Path="src/Providers/Abstractions/Providers.Abstractions.csproj" />
     <Project Path="src/Providers/Synthetic/Providers.Synthetic.csproj" />
@@ -22,6 +23,7 @@
     <Project Path="samples/DirectGatewayClient/DirectGatewayClient.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/unit/Healthcare.RegionalEPrescription.Tests/Healthcare.RegionalEPrescription.Tests.csproj" />
     <Project Path="tests/unit/Authentication.CertificateSigning.Tests/Authentication.CertificateSigning.Tests.csproj" />
     <Project Path="tests/architecture/Architecture.Tests/Architecture.Tests.csproj" />
     <Project Path="tests/unit/Broker.Core.Tests/Broker.Core.Tests.csproj" />

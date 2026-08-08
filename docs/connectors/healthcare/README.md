@@ -1,6 +1,7 @@
 # Healthcare connector characterization
 
-This directory contains public-safe characterization hypotheses and synthetic test guidance only; no production connector or authentication module is implemented.
+This directory contains public-safe characterization, synthetic guidance and the Wave 1 Regional
+ePrescription foundation. No production regional connector is implemented.
 
 ## Package contents
 
@@ -10,6 +11,7 @@ This directory contains public-safe characterization hypotheses and synthetic te
 - [Minimal authentication primitives](auth-primitives-required.md)
 - [Clean-implementation provenance](provenance.md)
 - [Implementation waves and GO/NO-GO](M6-IMPLEMENTATION-PLAN.md)
+- [Regional ePrescription Wave 1 foundation](regional-eprescription/README.md)
 - Connector specifications:
   - [SOGEI Basic + session](sogei-basic-session/spec.md)
   - [Lombardia OAuth helper](lombardia-oauth-helper/spec.md)

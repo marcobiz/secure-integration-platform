@@ -35,6 +35,13 @@ Il Connector Runtime riceve un caller gia autenticato. M6 non deve reinterpretar
 certificato inbound, fidarsi di Tenant/Application nel payload o creare un principal
 alternativo.
 
+I vertical pack che necessitano una prova esplicita post-auth usano
+`IGatewayInvocationAuthorizer`: il Gateway Core verifica stato attivo e grant esatto per
+Connector/operation e produce `AuthorizedGatewayInvocation`, una capability opaca con costruttore
+non pubblico. Il pack non riceve `IGatewayRegistry`, DER/certificato o metodi di identity lookup e
+non puo costruire autonomamente la prova di autorizzazione. Il controllo grant avviene anche per
+operation senza secret/certificate binding.
+
 ### Outbound: Gateway verso servizio vendor/pubblico
 
 Responsabilita di un auth module Connector:
