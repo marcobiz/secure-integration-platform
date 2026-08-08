@@ -10,6 +10,8 @@
 - Payload applicativi in transito.
 - Artefatti di release e plugin.
 - Chiavi di firma provider-side, certificati client outbound e JWT compatti in memoria.
+- Materiale X.509 pubblico e catene `x5c`, la cui integrita deve restare legata alla
+  stessa identita di firma approvata.
 
 ## Attori e livelli di fiducia
 
@@ -81,6 +83,8 @@
 | TM-051 | S/T/E | Un certificato di firma viene sostituito al certificato mTLS, oppure una revisione ruotata/disabilitata o un handle trattenuto viene usato verso altro endpoint. | Sender mTLS one-shot senza handle pubblico; purpose e binding esatti; DER fingerprint e SPKI digest; policy/binding/status/revision/endpoint rivalidati subito prima di DNS/dispatch; zero stale-on-error. | Revocation online della CA non è introdotta dal profilo sintetico; la policy autoritativa resta da caratterizzare. |
 | TM-052 | I/E | La primitive esporta una private key/PFX o esegue un fallback automatico al Broker quando manca custody centrale. | `IKeyOperationProvider` espone solo metadata pubblici e `SignDigestAsync`; il certificato mTLS resta interno alla singola chiamata transport-bound ed è disposed dopo dispatch; failure capability esplicito e nessun fallback/local handoff. | Gateway/provider host privilegiati possono osservare o usare handle in memoria; Administrator/SYSTEM resta rischio residuo dichiarato. |
 | TM-053 | I/R | JWT, claim, locator, certificate bytes o dettagli provider compaiono in errori/log/evidence. | Qualunque exception provider non-cancellation a metadata/sign/certificate diventa un codice stabile senza message/inner; cancellazione reale preservata; test canary e secret scan; materiale TLS per-run non persistito. | Dump di processo privilegiato e tracing aggiunto in futuro richiedono nuova review/redaction test. |
+| TM-054 | S/T/E | Un provider o una revisione stale sostituisce leaf/chain `x5c`, SPKI o chiave dopo l'approvazione, producendo un JWT che dichiara un'identita pubblica diversa da quella che firma. | Capability pubblica separata e risolta dalla stessa binding `JwtSigning`; parsing DER; fingerprint e digest SPKI confrontati constant-time con catalogo e signing metadata; stessa SPKI DER verifica la firma; chain bounded e ordinata; policy/catalog/resource rivalidati prima della firma e prima del ritorno. | Provider e Gateway restano nella TCB; trust/revocation del destinatario e qualificazione della CA sono responsabilita del profilo/connector autorizzato. |
+| TM-055 | T/E | Header JWS, temporal claim o trusted identity source scelti dal caller trasformano la primitive in un signing oracle o permettono sostituzione di subject/claim privilegiati. | Header writer tipizzato senza mappe; `alg=RS256` e `typ=JWT` fissi; `x5c` solo da policy; due soli temporal mode validi; source trusted limitate a Tenant/Application/Installation autenticati; digest di policy e exact binding; business allowlist separata e reserved-field denial. | Una policy Published errata richiede review/approval e nuova caratterizzazione; non esiste un expression engine Core. |
 
 ## Analisi degli scenari obbligatori
 
@@ -128,6 +132,12 @@ purpose/scope/rotation/disable sui test `M6_MTLS_scope_and_purpose_mismatch_deny
 mappa handshake, hostname e certificate rejection sui test del server mTLS locale.
 `SEC-M6-004` mappa non-exportability e redaction sui test public-API e sugli unexpected
 provider exception test per metadata/sign/certificate, oltre al secret scan repository.
+
+`SEC-W1-001` mappa `TM-054` sui test `Wave1_x5c_leaf_and_chain_are_verified_leaf_first_and_standard_base64`,
+`Wave1_substituted_certificate_identity_is_denied_before_sign`,
+`Wave1_retained_revision_one_public_material_cannot_authenticate_revision_two` e sulla
+matrice rotate/disable. `SEC-W1-002` mappa `TM-055` sui test temporal/trusted-source,
+same-ID policy substitution, reserved claim e public-API/arbitrary-header boundary.
 
 ## Criteri di revisione
 

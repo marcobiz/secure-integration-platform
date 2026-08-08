@@ -1,6 +1,6 @@
 # Implementation status
 
-Aggiornato: 2026-08-07
+Aggiornato: 2026-08-08
 
 ## Stato sintetico
 
@@ -17,6 +17,7 @@ Aggiornato: 2026-08-07
 | M6 — auth HTTP/OAuth primitives | Remediation mirata dei 7 finding qualificata | PR #9 product commit `9a7db4b`: CI exact-head 21/21 PASS; authority capability da snapshot Published, bearer destination-bound, correlation, refresh tombstone, query hardening, user-agent boundary e diagnostic redaction; nessun connector sanitario production |
 | M6 — SOAP/Basic/Session primitives | Implementato sul branch; remediation PR #10 e CI/review pending | AP-01/AP-02/AP-07 sintetiche, cache/stamp/deadline/Fault hardened, server SOAP HTTPS reale e 21 casi mirati PASS locali |
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
+| Wave 1 - Generic JWT/X.509 extensions | Implementato localmente; full gate e CI exact-head pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 68 test certificate/signing e 17 architecture PASS locali |
 | M3B e milestone/connector production successivi | Non iniziati | nessun cloud reale, connector sanitario production o adapter commerciale |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
@@ -163,6 +164,27 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
   substitution, fingerprint/SPKI substitution ed exception provider inattese. Connector FVG/Umbria reali, lifecycle autoritativo,
   OAuth/PKCE e SOAP/session restano esclusi e **NO-GO**.
 
+### Wave 1 - Generic JWT/X.509 extensions
+
+- `ICertificatePublicMaterialProvider` espone soltanto leaf DER, chain pubblica opzionale,
+  metadata e identita SPKI pubblica; nessun export private key/PFX/password/locator;
+- `JwtCertificateHeaderMode` tipizzato (`None`, `Leaf`, `Chain`) e policy-bound; `x5c`
+  usa Base64 standard, leaf-first, senza header bag o input DER dal caller;
+- fingerprint e SPKI sono derivati dal DER reale e legati constant-time alla stessa
+  identita approvata usata per verificare la firma RS256 provider-side;
+- `JwtTemporalClaimMode` conserva per default `iat+nbf+exp` e abilita `iat+exp` senza
+  `nbf`, riusando lifetime/skew M6;
+- subject Tenant e trusted claim Tenant/Application/Installation derivano soltanto dal
+  runtime context autenticato, restano separati dai business claim allowlisted e non
+  introducono dictionary/espressioni/reflection;
+- policy/binding/catalog/resource sono rivalidati prima della firma e prima del ritorno:
+  rotate/disable negano token e `x5c` stale;
+- 68 test certificate/signing e 17 architecture PASS locali; report:
+  `docs/implementation/WAVE1-GENERIC-JWT-X509-EXTENSIONS.md`.
+
+Dual JWT, issuer/CN service-specific, CX/XON/IHE e document hash restano
+`CONNECTOR_RESPONSIBILITY`. Il sistema lifetime/skew e `ALREADY_EXISTS`.
+
 La run split-host `m3a-live-20260804-131718` è stata classificata **BLOCKED — PRE-HANDOFF INFRASTRUCTURE VALIDATION**: live/readiness erano HTTP 200, ma Docker health falliva per SAN incompatibile e i profili Windows Firewall erano disabilitati. Il runner VM non è stato eseguito e P02 non è stato testato. Cleanup PASS ha lasciato zero risorse della run e ha rimosso l'handoff non utilizzato. I fix health/TLS e firewall reversibile sono implementati. Il runner predispone ora un secondo switch Hyper-V Internal e una NIC VM `M3A-Isolated`, senza NAT/gateway/DNS/forwarding, con rollback SYSTEM, isolamento del profilo Private e probe VM→HOST pre-handoff. La run è storica ed è superata dal PASS product gate `m3a-live-20260805-094131`. Dettagli: `docs/reviews/M3A-BLOCKED-RUN-20260804-131718.md`.
 
 La successiva run `m3a-live-20260804-153103` è **BLOCKED — ROLLBACK WINDOW EXPIRED**:
@@ -204,11 +226,11 @@ Dettagli: `docs/reviews/M3A-SPLIT-HOST-BLOCKED-20260805.md`.
 | `Broker.Core.Tests` | 26 PASS | lifecycle/grant, AEAD/nonce/AAD/version, framing e hard limits |
 | `Broker.Integration.Tests` | 28 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction, CNG, handshake Schannel e regressioni harness M3 |
 | `VerticalSlice.Tests` | 1 PASS | vertical slice e negative/security path |
-| `Gateway.Unit.Tests` | 63 PASS | security M2-M5.5, contract/lifecycle/cache/bounds/corruption e runtime principal |
-| `Authentication.CertificateSigning.Tests` | 49 PASS | RS256/policy substitution/claim/replay/wrong-key/SPKI, provider redaction/cancellation, mTLS one-shot/lease, rotation/disable/endpoint e handshake TLS locale |
-| `Gateway.Integration.Tests` | 34 PASS, 10 conditional SKIP | API/Admin/schema; i 10 test PostgreSQL/full-stack condizionali richiedono il gate dedicato |
-| `Architecture.Tests` | 10 PASS | boundary Core/provider, CI, provisioning e OpenAPI |
-| Totale suite locale ordinaria | 211 PASS, 10 conditional SKIP | 26 Broker Core + 28 Broker integration + 63 Gateway unit + 34 Gateway integration + 49 M6 + 10 architecture + 1 E2E |
+| `Gateway.Unit.Tests` | 80 PASS | security M2-M6, contract/lifecycle/cache/bounds/corruption, runtime principal, OAuth e SOAP/session |
+| `Authentication.CertificateSigning.Tests` | 68 PASS | RS256/policy/claim/replay, public DER/x5c, fingerprint/SPKI, temporal/trusted source, provider redaction, mTLS e rotate/disable |
+| `Gateway.Integration.Tests` | 61 PASS, 10 conditional SKIP | API/Admin/OAuth/SOAP/schema; i 10 test PostgreSQL condizionali richiedono il gate dedicato |
+| `Architecture.Tests` | 17 PASS | boundary Core/provider/auth writer, generic JWT/X.509, CI, provisioning e OpenAPI |
+| Totale suite locale ordinaria | 281 PASS, 10 conditional SKIP | 26 Broker Core + 28 Broker integration + 80 Gateway unit + 61 Gateway integration + 68 certificate/signing + 17 architecture + 1 E2E |
 | CI `m3-deterministic-container-slice` | PASS, run `30903757495`, commit `91963ce` | Gateway/PostgreSQL 18/Vault/vendor reali, matrice positiva/negativa, non-root/read-only, redazione, cleanup ed evidence SHA-256 `A52CACB8…FCA30` |
 | PostgreSQL 18 effimero locale | 2 PASS | migration, FORCE RLS, registry enrollment/grant/replay/revoca |
 | CI `gateway-postgresql-18` | PASS | run `30896803567`: PostgreSQL 18, migration apply/no-op, checksum, ruoli, FORCE RLS, tenant isolation e cleanup |

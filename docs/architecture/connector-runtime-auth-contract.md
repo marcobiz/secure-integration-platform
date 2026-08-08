@@ -138,3 +138,20 @@ and allowlisted business claims; the mTLS call owns certificate resolution and o
 transport attachment and never returns an `X509Certificate2` handle.
 The implementation does not inspect the inbound certificate, create another principal,
 branch on `InstallationKind`, or fall back to the Broker when central custody is absent.
+
+## Wave 1 generic JWT/X.509 extension note
+
+The connector-facing signing API remains policy ID plus allowlisted business claims. A
+typed server-owned policy may additionally select no certificate header, the verified
+leaf, or the verified leaf and issuer chain. Public DER is retrieved through the exact
+`JwtSigning` resource binding and never supplied by the connector. The signer derives
+fingerprint and SPKI from the actual leaf, binds them to the approved catalog identity,
+and uses that same SPKI to verify the provider signature before emitting standard-Base64
+`x5c`.
+
+Temporal claim inclusion is a typed policy choice that preserves the M6 default or omits
+`nbf` while retaining `iat` and `exp`; the existing lifetime/skew controls are unchanged.
+Trusted dynamic subject/claim values are limited to authenticated Tenant, Application
+and Installation identifiers already present in the server-derived execution context.
+No expression engine, reflection path, arbitrary runtime dictionary or caller subject
+override is introduced.
