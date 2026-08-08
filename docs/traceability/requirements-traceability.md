@@ -142,6 +142,19 @@ PKCE, `client_credentials` grant, production profiles, SOAP/session and certific
 | TM-048 session fixation/stale/replay | AP-02 negative suite, rotation/disable/logout and challenge replay tests | PASS local |
 | TM-049 SOAP/XML parser and fault confusion | XML security corpus and real HTTP fault/malformed/oversize tests | PASS local |
 
+## Wave 1 generic opaque-session HTTP projection
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| Typed SOAP/XML and HTTP-header placement | `Wave1_CT_public_dispatch_has_no_header_session_value_endpoint_or_authenticated_request_override`; existing SOAP serialization tests | PASS local |
+| Server-owned policy and destination binding | `Wave1_SEC_operation_endpoint_generation_expiry_and_resource_revisions_fail_before_dispatch`; policy checksum/revision revalidation | PASS local |
+| Header token validation and denylist | `Wave1_UT_header_field_name_is_a_valid_token_and_security_owned_headers_are_denied` | PASS local |
+| One-shot restricted dispatch | `Wave1_UT_opaque_session_is_projected_once_only_during_restricted_dispatch`; `Wave1_IT_real_HTTPS_projects_exactly_one_destination_bound_header_through_restricted_transport` | PASS local |
+| Disable/rotate race and current generation | `Wave1_SEC_disable_during_policy_await_applies_no_header_and_dispatches_zero_requests`; stale-generation/resource matrix | PASS local |
+| SSRF, timeout and redaction | attacker destination zero-dispatch unit test; `Wave1_IT_real_HTTPS_delayed_response_honors_timeout_and_remains_sanitized`; JSON/ToString/exception canaries | PASS local |
+| Vertical-neutral Core boundary | `Wave1_CT_Core_session_projection_is_vertical_neutral_and_has_no_healthcare_pack_dependency` | PASS local |
+| TM-054 | All named Wave 1 tests above | PASS local; independent review pending |
+
 ## M6 Certificate, Signing and mTLS primitives - Wave 2 synthetic
 
 | Requirement | Automated evidence | Status |

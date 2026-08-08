@@ -138,3 +138,21 @@ and allowlisted business claims; the mTLS call owns certificate resolution and o
 transport attachment and never returns an `X509Certificate2` handle.
 The implementation does not inspect the inbound certificate, create another principal,
 branch on `InstallationKind`, or fall back to the Broker when central custody is absent.
+
+## Wave 1 generic opaque-session HTTP projection
+
+The existing bounded SOAP session lifecycle also supports a second, typed placement without
+creating another cache or acquisition foundation. `OpaqueSessionPlacementPolicy` is closed to
+`SoapXml` and `HttpRequestHeader`. The HTTP variant carries one validated server-owned field
+name and a closed raw/fixed-scheme formatting mode; it cannot represent an arbitrary header bag.
+
+`SendWithOpaqueSessionAsync` accepts only a logical policy ID, authenticated server-derived
+context, bounded business bytes and an opaque Gateway reference. `IOpaqueSessionHttpPolicySource`
+must combine the current Published ConnectorVersion, invoked operation, auth profile,
+`OperationBindingDependencies` and current Environment/binding/resource configuration. Endpoint,
+method, header, session value and revision overrides are absent from the public dispatch API.
+
+The cache key includes the invoked operation. A generation lease is materialized internally and
+revalidated with credential status, credential/binding/endpoint revisions and the current policy
+after security-sensitive awaits. Header application and `IRestrictedTransport` dispatch are one
+internal operation; no authenticated `HttpRequestMessage` or attach helper is returned.
