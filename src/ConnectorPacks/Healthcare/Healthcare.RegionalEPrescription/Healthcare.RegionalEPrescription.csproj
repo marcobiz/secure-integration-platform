@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>SecureIntegration.ConnectorPacks.Healthcare.RegionalEPrescription</AssemblyName>
+    <RootNamespace>SecureIntegration.ConnectorPacks.Healthcare.RegionalEPrescription</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\Gateway\Gateway.Application\Gateway.Application.csproj" />
+  </ItemGroup>
+</Project>

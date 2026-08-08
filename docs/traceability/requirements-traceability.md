@@ -201,6 +201,24 @@ Dual-JWT orchestration, service-specific issuer/CN composition, CX/XON/IHE ident
 and document hash remain Connector responsibilities. Lifetime/skew already exists and
 was reused without a new subsystem.
 
+## Healthcare Wave 1 — Regional ePrescription foundation
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| Healthcare-only regional domain and inbound-auth boundary | `HC_W1_ARCH_Core_does_not_reference_Healthcare_pack`, `HC_W1_ARCH_regional_domain_concepts_are_absent_from_Gateway_Core_source`, `HC_W1_ARCH_Healthcare_foundation_depends_only_on_public_Core_application_contract`, `HC_W1_ARCH_Healthcare_pack_does_not_reinterpret_inbound_identity` | PASS local |
+| Minimal common model and bounded scalar extension input | `HC_W1_COMMON_model_contains_only_lookup_dispense_and_bounded_scalar_extensions` | PASS local |
+| Caller cannot select region/profile/endpoint/auth/credential/route or extension schema | `HC_W1_SEC_caller_contract_has_no_profile_region_endpoint_auth_or_credential_selector`, `HC_W1_SEC_extension_schema_is_server_owned_and_revalidated_after_profile_resolution`, `HC_W1_SEC_tenant_cannot_select_another_profile_and_authority_mismatch_denies_before_dispatch` | PASS local |
+| Credential-independent authenticated-principal active-state/exact-grant enforcement, cross-profile isolation and real Published lookup | `HC_W1_SEC_profile_A_cannot_use_endpoint_auth_or_credential_B_and_lookup_authority_is_server_derived`, `HC_W1_SEC_real_Published_adapter_and_credential_independent_authorization_fail_closed` | PASS local |
+| Rotate/disable/stale complete binding denial | `HC_W1_SEC_rotation_disable_and_stale_complete_binding_stamp_fail_closed` | PASS local |
+| Redaction, malformed nested values and regional safe-code allowlist | `HC_W1_SEC_normalized_error_preserves_only_allowlisted_safe_code_and_redacts_reference`, `HC_W1_SEC_unexpected_resolver_and_dispatcher_exceptions_are_redacted_without_inner_details`, `HC_W1_SEC_null_nested_command_and_response_values_fail_sanitized` | PASS local |
+| Binding and compiled-profile collection immutability plus unambiguous fingerprint | `HC_W1_SEC_binding_and_compiled_profile_snapshot_mutable_collections` | PASS local |
+| Profile response type/reference/enum-domain integrity | `HC_W1_SEC_profile_response_type_or_reference_mismatch_is_denied` | PASS local |
+| Lombardia and Emilia-Romagna no-invention gate | `HC_W1_BLOCKED_regional_synthetic_HTTPS_sentinels_receive_zero_requests`; current source matrix in `docs/connectors/healthcare/regional-eprescription/README.md` | PASS local; both profiles `BLOCKED_BY_SPEC` |
+
+OAuth/SOAP regional integration, callback/session correlation, actual operation/fault mapping,
+accreditation and live conformance remain blocked until current official specifications are
+available. Generic M6 auth tests are regression evidence only, not regional support evidence.
+
 ## Security threats
 
 La fotografia conclusiva M0/M1, inclusi gli elementi non automatizzati, è in `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md`.

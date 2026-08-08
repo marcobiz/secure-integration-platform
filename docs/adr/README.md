@@ -24,3 +24,4 @@ Formato: contesto, decisione, conseguenze e alternative. Tutti gli ADR elencati 
 | [0018](0018-connector-lifecycle-and-runtime-cache.md) | Lifecycle, pubblicazione e cache dei Connector |
 | [0019](0019-provider-pack-boundaries.md) | Confini fisici dei provider pack |
 | [0020](0020-direct-gateway-client-principal.md) | Direct Gateway Access e principal runtime unificato |
+| [0021](0021-regional-eprescription-commonality.md) | Regional ePrescription commonality and profile boundary |
