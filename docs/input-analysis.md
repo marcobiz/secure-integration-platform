@@ -1,55 +1,39 @@
-# Inventario e analisi sanificata degli input
+# Analisi pubblica degli input architetturali
 
 ## Perimetro
 
-La baseline è stata ricavata dai sei documenti presenti in `input-docs/`. I documenti sono trattati come TLP:AMBER+STRICT o equivalenti. Questa sintesi conserva solo pattern architetturali, categorie di finding, protocolli, seam d'integrazione e requisiti di remediation.
+Le decisioni architetturali pubbliche sono basate sulla documentazione ufficiale dei servizi, su standard pubblici e su fixture sintetiche mantenute nel repository. Valutazioni esterne a questo perimetro non costituiscono input normativi per la specifica pubblica del prodotto.
 
-Non sono riprodotti:
+La documentazione pubblica non deve contenere credenziali, materiale crittografico privato, dati personali o sanitari, endpoint operativi non pubblici o artefatti non necessari alla progettazione.
 
-- password, token, client secret o API key;
-- chiavi private, password di certificati o materiale crittografico;
-- endpoint operativi non necessari alla progettazione;
-- dati personali o sanitari;
-- PoC, istruzioni offensive o codice proprietario decompilato.
+## Input normativi pubblici
 
-## Inventario
+- specifiche ufficiali correnti di FSE 2.0, Sistema TS, VetInfo e dei servizi sanitari regionali pertinenti;
+- standard pubblici per SOAP, REST, OAuth 2.0, mTLS, JWT, PKCE, Basic Authentication e gestione delle sessioni;
+- fixture e caratterizzazioni sintetiche prive di dati reali;
+- requisiti architetturali generici del Connector Runtime, del ciclo di vita dei connector e delle provider abstraction.
 
-| Documento | Contenuto utile alla progettazione |
-|---|---|
-| `CYBERSICUREZZA_WINGESFAR.md` | Segreti vendor e tenant distribuiti, chiavi universali, TLS bypass, log sensibili, updater FTP/HTTP, IPC locali aperti, egress diretto e impersonazione. |
-| `REPORT_INFANTIA_PROFIM_v2.md` | Legacy VB6/.NET Framework/COM, certificati embedded, database locali, IPC e autorizzazione client-trusted, script non fidati e remediation AppSec separata. |
-| `REPORT_DEVICEHUB_WINDOWS_v2.md` | Canale cloud-to-device, plugin e comandi non autorizzati, filesystem/device access, API localhost, repointing, update non verificato e dipendenze EOL. |
-| `REPORT_SICUREZZA_CGM_DRCLOUD.md` | Ecosistema mobile/desktop, Vendor Secret e certificati pubblici, JWT, TLS, API locali, IPC, tenant binding, logging, WebView e supply chain. |
-| `Autenticazione Servizi Pubblici.pdf` | Matrice reale di SOAP/REST, Basic+MFA, OAuth2 authorization code/PKCE, mTLS, HMAC, JWT, SAML/WS-Security, smart card e VPN. |
-| `architettura_sicurezza_gestionali_sanitari.html` | Consolidamento sanificato di 176 finding e separazione fra controlli comuni, mitigazioni parziali e remediation specifiche. |
+## Requisiti architetturali
 
-## Categorie di causa radice
-
-1. **Vendor Secret distribuiti.** Credenziali e certificati comuni alla software house presenti in binari, configurazioni, installer o log.
-2. **Trust client-side.** Tenant, struttura, Installation o Operator accettati come parametri modificabili senza binding server-side.
-3. **Protezione locale universale.** Chiavi hardcoded, algoritmi deterministici, cifratura senza autenticazione e credenziali database comuni.
-4. **IPC e API locali aperti.** HTTP localhost, Named Pipe, TCP e message bus senza caller identity, operation grants o replay protection.
-5. **Comandi remoti eccessivi.** Peer cloud capace di selezionare filesystem, processi, URL, update o periferiche senza capability ristrette.
-6. **Trasporto insicuro.** Trust-all TLS, protocolli legacy in chiaro, hostname non validato e fallback HTTP.
-7. **Logging e release hygiene.** Token, PIN, credenziali, PII e artefatti di test in log o pacchetti.
-8. **Supply chain.** Binari, plugin, script e aggiornamenti senza firma, integrità o anti-rollback.
-9. **AppSec fuori piattaforma.** SQLi, XXE, backdoor, IDOR/BOLA server-side, dipendenze obsolete e directory user-writable.
+1. Credenziali, certificati e token outbound sono risolti e gestiti da componenti server-owned tramite provider distinti per secret, certificati e operazioni con chiavi.
+2. Identità, tenant, installazione e autorizzazioni sono derivati da stato autenticato lato server e non da parametri client considerati autoritativi.
+3. Le operazioni esposte ai client sono limitate da grant espliciti per connector e operation; endpoint e binding delle credenziali restano configurazione server-side.
+4. Le chiavi esportabili possono essere custodite centralmente; le chiavi realmente non esportabili richiedono una capability locale controllata senza esporre il materiale privato.
+5. Token e riferimenti di sessione sono stato runtime opaco, con durata, rinnovo e invalidazione governati dal connector.
+6. Trasporto, egress, logging e audit applicano validazione TLS, minimizzazione dei dati e comportamento fail-closed.
+7. Il ciclo di vita dei connector separa definizione, validazione, approvazione, pubblicazione immutabile ed esecuzione.
 
 ## Protocolli da coprire
 
-- SOAP/XML con Basic Authentication e sessione MFA inserita in header.
-- REST/JSON e SOAP/XML protetti da OAuth2.
-- Authorization code e PKCE con browser/autenticazione locale e token exchange centrale.
-- mTLS con certificato vendor centralizzato o certificato tenant locale/centrale.
-- HMAC-SHA256 su messaggi costruiti dal legacy.
-- JWT RS256 con claim, issuer, audience e durata vincolati dal Connector.
-- SAML 2.0, WS-Security e XML-DSig come moduli compilati.
-- Smart card/CNS/token USB e VPN con esecuzione locale.
+- SOAP/XML con Basic Authentication o riferimenti di sessione quando previsti dalla specifica ufficiale;
+- REST/JSON e SOAP/XML protetti da OAuth 2.0;
+- Authorization Code con PKCE e interazione dell'utente quando richiesta dal servizio;
+- mTLS con certificati risolti tramite provider centrale o capability locale controllata;
+- JWT con algoritmo, claim, issuer, audience e durata vincolati dalla definizione del connector.
 
-## Regole di tracciabilità clean-room
+## Tracciabilità pubblica e caratterizzazione sintetica
 
-- Ogni seam di migrazione registra documento e finding di origine senza includere evidenza sensibile.
-- I test sono comportamentali e usano fixture sintetiche.
-- Le specifiche ricostruite indicano il livello di certezza: osservato staticamente, verificato in laboratorio o da validare lato server.
-- Nessun codice proprietario decompilato viene copiato salvo autorizzazione legale distinta e documentata.
-
+- Ogni specifica pubblica dichiara una provenance tra `OFFICIAL_SPEC`, `PUBLIC_STANDARD` e `SYNTHETIC_CHARACTERIZATION`.
+- Le fixture descrivono esclusivamente forme di request, response, fault e transizioni di stato sintetiche.
+- Una conclusione non sostenuta da una fonte pubblica o da una caratterizzazione sintetica non è normativa per il prodotto pubblico.
+- La caratterizzazione sintetica non include dati reali, identificativi operativi, credenziali o materiale crittografico privato.
