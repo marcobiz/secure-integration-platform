@@ -141,18 +141,24 @@ branch on `InstallationKind`, or fall back to the Broker when central custody is
 
 ## Wave 1 generic opaque-session HTTP projection
 
-The existing bounded SOAP session lifecycle also supports a second, typed placement without
-creating another cache or acquisition foundation. `OpaqueSessionPlacementPolicy` is closed to
-`SoapXml` and `HttpRequestHeader`. The HTTP variant carries one validated server-owned field
-name and a closed raw/fixed-scheme formatting mode; it cannot represent an arbitrary header bag.
+The generic capability is owned by `Gateway.ConnectorRuntime.Auth.Http/OpaqueSessions`, not by the
+SOAP API. The SOAP assembly provides only a compatibility adapter from its existing bounded
+lifecycle. A future HTTP/REST lifecycle consumer uses `OpaqueSessionHttpClient`,
+`OpaqueSessionReference`, `OpaqueSessionResolvedExecutionContext` and
+`OpaqueSessionAuthException` without depending on a SOAP-named type.
 
-`SendWithOpaqueSessionAsync` accepts only a logical policy ID, authenticated server-derived
-context, bounded business bytes and an opaque Gateway reference. `IOpaqueSessionHttpPolicySource`
-must combine the current Published ConnectorVersion, invoked operation, auth profile,
-`OperationBindingDependencies` and current Environment/binding/resource configuration. Endpoint,
-method, header, session value and revision overrides are absent from the public dispatch API.
+The connector-facing request contains only a logical policy ID. The authenticated runtime creates
+`OpaqueSessionAuthorizedInvocation` through an internal constructor. Then
+`PublishedOpaqueSessionAuthorityResolver`, whose production constructor requires
+`IConnectorConfigurationStore`, resolves the current Published ConnectorVersion, authorized
+operation, `OperationBindingDependencies`, Environment, endpoint/binding/resource revisions and
+the closed raw/fixed-scheme header placement. Resolved authority types cannot be constructed by
+caller code, and endpoint, method, header, scheme and revision overrides are absent from dispatch.
 
-The cache key includes the invoked operation. A generation lease is materialized internally and
-revalidated with credential status, credential/binding/endpoint revisions and the current policy
-after security-sensitive awaits. Header application and `IRestrictedTransport` dispatch are one
-internal operation; no authenticated `HttpRequestMessage` or attach helper is returned.
+SOAP cache identity retains the M6 multi-operation semantics and does not include operation ID or
+resource stamp. HTTP dispatch identity is separate and binds operation/profile/resource/endpoint
+in the non-forgeable resolved context and final Published revalidation. Request body copying,
+unauthenticated request construction and DNS resolution occur before that final authorization.
+Session generation/expiry, policy and resource state are then checked adjacent to header
+projection and `IRestrictedTransport.SendAsync`, with no await between final lease acquisition and
+transport invocation. No authenticated `HttpRequestMessage`, raw session or attach helper is returned.
