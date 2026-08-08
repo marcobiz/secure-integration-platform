@@ -192,12 +192,16 @@ public sealed record ApprovalEndpointReview(
     string Hostname,
     int Port,
     string Path,
+    string Query,
     IReadOnlyList<string> AllowedMethods,
     string RedirectPolicy,
     string TlsPolicy,
     string EndpointChecksumSha256,
     string BindingChecksumSha256,
     string DestinationClassification);
+
+/// <summary>OAuth authority destination and its protocol role in one operation.</summary>
+public sealed record ApprovalAuthorityEndpointReview(string Role, ApprovalEndpointReview Endpoint);
 
 /// <summary>Logical secret-provider binding; credential material is absent by construction.</summary>
 public sealed record ApprovalSecretReview(
@@ -253,6 +257,7 @@ public sealed record ApprovalOperationReview(
     string Protocol,
     OperationBindingDependencies BindingDependencies,
     ApprovalEndpointReview Endpoint,
+    IReadOnlyList<ApprovalAuthorityEndpointReview> AuthorityEndpoints,
     IReadOnlyList<ApprovalSecretReview> SecretBindings,
     IReadOnlyList<ApprovalCertificateReview> CertificateBindings);
 
@@ -260,6 +265,7 @@ public sealed record ApprovalOperationReview(
 public sealed record OperationBindingDependencies(
     string OperationId,
     string EndpointBindingId,
+    IReadOnlyList<string> AuthorityEndpointBindingIds,
     IReadOnlyList<string> SecretBindingIds,
     IReadOnlyList<string> CertificateBindingIds);
 
@@ -293,7 +299,11 @@ public static class ConnectorOperationBindings
             if (authentication.TryGetProperty(property, out JsonElement value)) secrets.Add(value.GetString()!);
         List<string> certificates = [];
         if (authentication.TryGetProperty("certificateBinding", out JsonElement certificate)) certificates.Add(certificate.GetString()!);
+        List<string> authorityEndpoints = [];
+        foreach (string property in new[] { "authorizationEndpointBinding", "tokenEndpointBinding" })
+            if (authentication.TryGetProperty(property, out JsonElement value)) authorityEndpoints.Add(value.GetString()!);
         return new(operationId, operation.GetProperty("endpointBinding").GetString()!,
+            authorityEndpoints.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             secrets.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             certificates.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
     }
@@ -358,9 +368,20 @@ public static class ConnectorApprovalArtifacts
         Uri effective = new(baseUri, path);
         string method = operation.GetProperty("method").GetString()!;
         string redirect = operation.TryGetProperty("redirectPolicy", out JsonElement redirectElement) ? redirectElement.GetString() ?? "deny" : "deny";
-        ApprovalEndpointReview endpoint = new(endpointName, binding.Revision, effective.Scheme, effective.DnsSafeHost, effective.IsDefaultPort ? DefaultPort(effective.Scheme) : effective.Port,
-            effective.AbsolutePath, [method], redirect, "validate-system-trust-and-hostname", Component(endpointName, effective.AbsoluteUri), binding.ChecksumSha256, Classify(effective));
+        ApprovalEndpointReview endpoint = ReviewEndpoint(endpointName, binding, effective, [method], redirect);
         JsonElement authentication = operation.GetProperty("authentication");
+        List<ApprovalAuthorityEndpointReview> authorityEndpoints = [];
+        foreach ((string property, string role, string authorityMethod) in new[]
+        {
+            ("authorizationEndpointBinding", "authorization", "GET"),
+            ("tokenEndpointBinding", "token", "POST")
+        })
+        {
+            if (!authentication.TryGetProperty(property, out JsonElement logicalElement)) continue;
+            string logical = logicalElement.GetString()!;
+            if (!binding.Endpoints.TryGetValue(logical, out Uri? authorityEndpoint)) throw new GatewayException("BGW-CONNECTOR-ENDPOINT-BINDING-MISSING", 503);
+            authorityEndpoints.Add(new(role, ReviewEndpoint(logical, binding, authorityEndpoint, [authorityMethod], "deny")));
+        }
         List<ApprovalSecretReview> secrets = [];
         foreach (string property in new[] { "usernameBinding", "passwordBinding", "secretBinding" })
         {
@@ -384,8 +405,12 @@ public static class ConnectorApprovalArtifacts
                 binding.EnvironmentId.ToString("D"), resource.ConnectorScope, resource.OperationScope, resource.CatalogChecksumSha256,
                 Component(logical, resource), binding.ChecksumSha256));
         }
-        return new(operationId, binding.EnvironmentId.ToString("D"), "gateway-server-side", effective.Scheme.ToUpperInvariant(), dependencies, endpoint, secrets, certificates);
+        return new(operationId, binding.EnvironmentId.ToString("D"), "gateway-server-side", effective.Scheme.ToUpperInvariant(), dependencies, endpoint, authorityEndpoints, secrets, certificates);
     }
+
+    private static ApprovalEndpointReview ReviewEndpoint(string logicalId, ConnectorBindingSet binding, Uri endpoint, IReadOnlyList<string> methods, string redirectPolicy) =>
+        new(logicalId, binding.Revision, endpoint.Scheme, endpoint.DnsSafeHost, endpoint.IsDefaultPort ? DefaultPort(endpoint.Scheme) : endpoint.Port,
+            endpoint.AbsolutePath, endpoint.Query, methods, redirectPolicy, "validate-system-trust-and-hostname", Component(logicalId, endpoint.AbsoluteUri), binding.ChecksumSha256, Classify(endpoint));
 
     private static string Canonical(ApprovalReviewArtifact artifact)
     {
@@ -457,7 +482,8 @@ public static class ConnectorApprovalArtifacts
     private static List<ApprovalRiskIndicator> Risks(ApprovalReviewArtifact? previous, ApprovalReviewArtifact current, IReadOnlyList<ApprovalSemanticDiff> diff)
     {
         List<ApprovalRiskIndicator> result = [];
-        if (current.Operations.Any(value => value.Endpoint.DestinationClassification == "publicInternet")) result.Add(new("PUBLIC_INTERNET_DESTINATION", "high", "/operations"));
+        if (current.Operations.Any(value => value.Endpoint.DestinationClassification == "publicInternet" || value.AuthorityEndpoints.Any(authority => authority.Endpoint.DestinationClassification == "publicInternet")))
+            result.Add(new("PUBLIC_INTERNET_DESTINATION", "high", "/operations"));
         if (previous is null)
         {
             foreach (int index in Enumerable.Range(0, current.Operations.Count))
@@ -465,6 +491,11 @@ public static class ConnectorApprovalArtifacts
                 result.Add(new("BINDING_PREVIOUSLY_UNUSED", "warning", $"/operations/{index}"));
                 result.Add(new("NEW_HOSTNAME", "warning", $"/operations/{index}/endpoint/hostname"));
                 result.Add(new("NEW_PORT", "warning", $"/operations/{index}/endpoint/port"));
+                foreach (int authorityIndex in Enumerable.Range(0, current.Operations[index].AuthorityEndpoints.Count))
+                {
+                    result.Add(new("NEW_HOSTNAME", "warning", $"/operations/{index}/authorityEndpoints/{authorityIndex}/endpoint/hostname"));
+                    result.Add(new("NEW_PORT", "warning", $"/operations/{index}/authorityEndpoints/{authorityIndex}/endpoint/port"));
+                }
             }
         }
         foreach ((ApprovalOperationReview operation, int operationIndex) in current.Operations.Select((value, index) => (value, index)))

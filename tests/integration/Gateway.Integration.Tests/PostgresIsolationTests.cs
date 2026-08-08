@@ -4,8 +4,10 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Npgsql;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OAuth;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
+using SecureIntegration.Providers.Abstractions;
 using Xunit;
 
 namespace SecureIntegration.Gateway.Integration.Tests;
@@ -463,6 +465,80 @@ public sealed class PostgresIsolationTests
     }
 
     [Fact]
+    public async Task W1_IT_DAT_PostgreSQL18_OAuth_validation_approval_publication_and_operation_locator_resolution_when_configured()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        await ApplyMigrationAsync();
+        await using AdminPostgresDataSource adminPool = new(connectionString);
+        PostgresConnectorConfigurationStore store = new(adminPool.Value);
+        PostgresGatewayRegistry registry = new(adminPool.Value);
+        PostgresAdminSecurityStore security = new(adminPool);
+        TestClock clock = new(DateTimeOffset.UtcNow);
+        ConnectorDefinitionValidator validator = new();
+        PublishedConnectorCatalog catalog = new(store, validator, clock, TimeSpan.FromMinutes(5));
+        ConnectorAdministrationService admin = new(store, validator, catalog, registry, clock, new FourEyesConnectorApprovalPolicy(security));
+        string suffix = Guid.NewGuid().ToString("N");
+        string connectorId = "oauth-pg-" + suffix;
+        Guid tenantId = Guid.NewGuid();
+        Guid applicationId = Guid.NewGuid();
+        Guid environmentId = Guid.NewGuid();
+        Guid installationId = Guid.NewGuid();
+        await registry.AddTenantAsync(new(tenantId, "ow1-t-" + suffix, "OAuth tenant", TenantStatus.Active, clock.UtcNow), TestContext.Current.CancellationToken);
+        await registry.AddApplicationAsync(new(applicationId, "ow1-a-" + suffix, "OAuth application", ApplicationStatus.Active, "1.0.0", null, clock.UtcNow), TestContext.Current.CancellationToken);
+        await registry.AddEnvironmentAsync(new(environmentId, "ow1-e-" + suffix[..20], "OAuth environment", false), TestContext.Current.CancellationToken);
+        await registry.AddInstallationAsync(new(installationId, tenantId, applicationId, environmentId, InstallationStatus.Active, "3.0.0", clock.UtcNow), TestContext.Current.CancellationToken);
+        await registry.AddGrantAsync(new(Guid.NewGuid(), installationId, tenantId, connectorId, "invoke", true, clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
+
+        ProviderResourceCatalogRecord registered = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic", "oauth-secret-" + suffix,
+            ProviderResourceType.Secret, "OAuth client secret", environmentId, connectorId, "invoke", "synthetic://oauth-controlled-" + suffix,
+            ProviderResourceStatus.Active, null, 0, null, null, string.Empty, clock.UtcNow), TestContext.Current.CancellationToken);
+        using JsonDocument definition = JsonDocument.Parse($$"""
+        {
+          "schemaVersion":"1.0","connectorId":"{{connectorId}}","version":"1.0.0","displayName":"OAuth PostgreSQL path",
+          "bindings":{"endpoints":[{"name":"protected-api"},{"name":"oauth-authorize"},{"name":"oauth-token"}],"secrets":[{"name":"oauth-client-secret","kind":"opaque"}]},
+          "operations":[
+            {"operationId":"invoke","endpointBinding":"protected-api","method":"GET","path":"/resource","request":{"contentType":"application/json","maximumBytes":4096},"response":{"maximumBytes":4096},"authentication":{"kind":"oauthAuthorizationCode","profileId":"postgres.oauth","authorizationEndpointBinding":"oauth-authorize","tokenEndpointBinding":"oauth-token","clientId":"postgres-client","clientAuthMethod":"client_secret_basic","secretBinding":"oauth-client-secret","scopes":["read"],"redirectUri":"https://gateway.example.test/callback","pkcePolicy":"S256_REQUIRED"},"timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[]}
+          ]
+        }
+        """);
+        AdminPrincipalRecord editor = await security.EnsurePrincipalAsync(new("https://oauth-pg.invalid", "editor-" + suffix, "Editor", null), TestContext.Current.CancellationToken);
+        AdminPrincipalRecord approver = await security.EnsurePrincipalAsync(new("https://oauth-pg.invalid", "approver-" + suffix, "Approver", null), TestContext.Current.CancellationToken);
+        ConnectorVersionResource imported = await admin.ImportAsync(definition.RootElement, null, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionResource validated = await admin.ValidateStoredAsync(connectorId, "1.0.0", imported.RowVersion, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await admin.PutBindingsAsync(connectorId, new(environmentId,
+            new Dictionary<string, string>
+            {
+                ["protected-api"] = "https://api.example.test/",
+                ["oauth-authorize"] = "https://identity.example.test/authorize",
+                ["oauth-token"] = "https://identity.example.test/token"
+            },
+            new Dictionary<string, ProviderResourceReference> { ["oauth-client-secret"] = new(registered.ProviderId, registered.ResourceId, registered.ResourceType) }, null, null, "1.0.0"),
+            editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord stored = await store.GetVersionAsync(connectorId, "1.0.0", TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("OAuth version missing.");
+        ConnectorBindingSet binding = Assert.Single((await store.ListBindingsPageAsync(stored.Id, 0, 10, environmentId, TestContext.Current.CancellationToken)).Items);
+        ApprovalReviewResult review = ConnectorApprovalArtifacts.Create(stored, [binding]);
+        Assert.Equal(["oauth-authorize", "oauth-token"], Assert.Single(review.Artifact.Operations).BindingDependencies.AuthorityEndpointBindingIds);
+        byte[] digest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
+        Assert.Equal(review.DigestSha256, Convert.ToHexString(digest));
+        ConnectorApprovalRecord request = await security.RequestApprovalAsync(stored, digest, editor.Id, Guid.NewGuid(), clock.UtcNow, TestContext.Current.CancellationToken);
+        _ = await store.ApproveCanonicalAsync(security, request.Id, stored.Id, review.DigestSha256, stored.CreatedBy, approver.Id, null, Guid.NewGuid(), clock.UtcNow.AddMilliseconds(1), TestContext.Current.CancellationToken);
+        _ = await admin.PublishAsync(connectorId, "1.0.0", validated.RowVersion, 0, approver.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        PublishedConnectorAccessContext access = new(installationId, tenantId, applicationId, "invoke");
+        PublishedConnectorSnapshot snapshot = await store.GetPublishedSnapshotAsync(connectorId, environmentId, access, TestContext.Current.CancellationToken)
+            ?? throw new InvalidOperationException("Published OAuth snapshot missing.");
+        Assert.Equal("synthetic://oauth-controlled-" + suffix, Assert.Single(snapshot.SecretProviderReferences).Value);
+        RegisteredInstallationIdentity identity = new(installationId, tenantId, applicationId, environmentId, TenantStatus.Active, ApplicationStatus.Active, InstallationStatus.Active,
+            Guid.NewGuid(), CredentialStatus.Active, [1, 2, 3], clock.UtcNow.AddMinutes(-1), clock.UtcNow.AddHours(1), "3.0.0", null);
+        PublishedOAuthAuthorityResolver resolver = new(store, new NeverReadSecretProvider(), clock);
+        OAuthResolvedExecutionContext resolved = await resolver.ResolveAsync(new OAuthAuthorizedInvocation(new GatewayClientPrincipal(identity, Guid.NewGuid()), connectorId, "invoke"),
+            new OAuthAuthorityRequest("postgres.oauth"), TestContext.Current.CancellationToken);
+        Assert.Equal("postgres.oauth", resolved.ProfileId);
+        Assert.Equal(connectorId, resolved.ConnectorId);
+    }
+
+    [Fact]
     public async Task M5_IT_DAT_Approved_binding_digest_and_publication_are_atomic_under_concurrent_mutation_when_configured()
     {
         string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
@@ -851,6 +927,11 @@ public sealed class PostgresIsolationTests
     private static ProviderResourceBinding Binding(ProviderResourceCatalogRecord value) => new(value.ProviderId, value.ProviderDisplayName, value.ProviderType, value.ResourceId, value.ResourceType, value.DisplayName, value.EnvironmentId, value.ConnectorScope, value.OperationScope, value.Version, value.Revision, value.PublicMetadataRevision, value.CertificateMetadata, value.ChecksumSha256);
 
     private sealed record TestProviderResources(ProviderResourceReference SecretReference, ProviderResourceReference CertificateReference, ProviderResourceBinding SecretBinding, ProviderResourceBinding CertificateBinding);
+
+    private sealed class NeverReadSecretProvider : ISecretValueProvider
+    {
+        public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken) => throw new InvalidOperationException("Resolution must not dereference the secret value.");
+    }
 
     private static async Task ExecuteAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string sql, params object[] values)
     {

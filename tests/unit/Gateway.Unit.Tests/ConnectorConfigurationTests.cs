@@ -76,8 +76,15 @@ public sealed class ConnectorConfigurationTests
         using JsonDocument valid = JsonDocument.Parse(json);
         Assert.True(validator.Validate(valid.RootElement).Valid);
 
+        using JsonDocument legacy = JsonDocument.Parse(json.Replace(",\"pkcePolicy\":\"S256_REQUIRED\"", string.Empty, StringComparison.Ordinal));
+        Assert.True(validator.Validate(legacy.RootElement).Valid);
+
         AssertInvalid(json.Replace("S256_REQUIRED", "PLAIN", StringComparison.Ordinal));
         AssertInvalid(json.Replace("client_secret_basic", "client_secret_post", StringComparison.Ordinal));
+        AssertInvalid(json.Replace("published-client", "bad\\u000Aid", StringComparison.Ordinal));
+        AssertInvalid(json.Replace("orders-api", "bad\\u0000audience", StringComparison.Ordinal));
+        AssertInvalid(json.Replace("https://gateway.example.test/oauth/callback", "https://gateway.example.test/oauth/callback?override=1", StringComparison.Ordinal));
+        AssertInvalid(json.Replace("https://gateway.example.test/oauth/callback", "https://gateway.example.test/oauth/callback#fragment", StringComparison.Ordinal));
         using JsonDocument unknownEndpoint = JsonDocument.Parse(json.Replace("\"oauth-token\",\"clientId\"", "\"missing-token\",\"clientId\"", StringComparison.Ordinal));
         ConnectorValidationResult endpointResult = validator.Validate(unknownEndpoint.RootElement);
         Assert.False(endpointResult.Valid);
@@ -88,6 +95,53 @@ public sealed class ConnectorConfigurationTests
             using JsonDocument document = JsonDocument.Parse(candidate);
             Assert.False(validator.Validate(document.RootElement).Valid);
         }
+    }
+
+    [Fact]
+    public void W1_UT_OAuth_authority_endpoints_are_complete_in_approval_dependencies_digest_and_risks()
+    {
+        ConnectorDefinitionValidator validator = new();
+        using JsonDocument document = JsonDocument.Parse("""
+        {
+          "schemaVersion":"1.0","connectorId":"generic-oauth","version":"1.0.0","displayName":"Generic OAuth",
+          "bindings":{"endpoints":[{"name":"protected-api"},{"name":"oauth-authorize"},{"name":"oauth-token"}],"secrets":[{"name":"oauth-secret","kind":"opaque"}]},
+          "operations":[
+            {"operationId":"interactive","endpointBinding":"protected-api","method":"GET","path":"/resource","request":{"contentType":"application/json","maximumBytes":4096},"response":{"maximumBytes":4096},"authentication":{"kind":"oauthAuthorizationCode","profileId":"oauth.profile","authorizationEndpointBinding":"oauth-authorize","tokenEndpointBinding":"oauth-token","clientId":"client","clientAuthMethod":"client_secret_basic","secretBinding":"oauth-secret","scopes":["read"],"redirectUri":"https://gateway.example.test/callback","pkcePolicy":"S256_REQUIRED"},"timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[]}
+          ]
+        }
+        """);
+        ValidatedConnectorDefinition validated = validator.ValidateRequired(document.RootElement);
+        Guid connectorId = Guid.NewGuid();
+        Guid versionId = Guid.NewGuid();
+        Guid environmentId = Guid.NewGuid();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        ConnectorVersionRecord version = new(versionId, connectorId, "generic-oauth", "1.0.0", "1.0", ConnectorVersionState.Published,
+            validated.CanonicalJson, Convert.FromHexString(validated.ChecksumSha256), "test", now, 1, now, now);
+        ProviderResourceBinding secret = new("synthetic", "Synthetic", "synthetic", "oauth-client-secret", ProviderResourceType.Secret, "OAuth secret",
+            environmentId, "generic-oauth", "interactive", null, 1, null, null, new string('A', 64));
+        ConnectorBindingSet binding = new(Guid.NewGuid(), connectorId, versionId, environmentId,
+            new Dictionary<string, Uri>(StringComparer.Ordinal)
+            {
+                ["protected-api"] = new("https://api.example.test/base/"),
+                ["oauth-authorize"] = new("https://identity.example.test/authorize?safe=1"),
+                ["oauth-token"] = new("https://identity.example.test/token")
+            },
+            new Dictionary<string, ProviderResourceBinding>(StringComparer.Ordinal) { ["oauth-secret"] = secret },
+            new Dictionary<string, ProviderResourceBinding>(StringComparer.Ordinal), 3, "binding-checksum", ConnectorBindingState.Active, now, "test");
+
+        ApprovalReviewResult review = ConnectorApprovalArtifacts.Create(version, [binding]);
+        ApprovalOperationReview operation = Assert.Single(review.Artifact.Operations);
+        Assert.Equal(["oauth-authorize", "oauth-token"], operation.BindingDependencies.AuthorityEndpointBindingIds);
+        Assert.Collection(operation.AuthorityEndpoints.OrderBy(value => value.Role, StringComparer.Ordinal),
+            authorization => { Assert.Equal("authorization", authorization.Role); Assert.Equal("identity.example.test", authorization.Endpoint.Hostname); Assert.Equal("?safe=1", authorization.Endpoint.Query); Assert.Equal("GET", Assert.Single(authorization.Endpoint.AllowedMethods)); },
+            token => { Assert.Equal("token", token.Role); Assert.Equal("/token", token.Endpoint.Path); Assert.Equal("POST", Assert.Single(token.Endpoint.AllowedMethods)); });
+        Assert.Contains(review.RiskIndicators, value => value.Code == "PUBLIC_INTERNET_DESTINATION");
+
+        Dictionary<string, Uri> changedEndpoints = binding.Endpoints.ToDictionary(value => value.Key, value => value.Value, StringComparer.Ordinal);
+        changedEndpoints["oauth-token"] = new("https://rotated.example.test/token");
+        ApprovalReviewResult changed = ConnectorApprovalArtifacts.Create(version, [binding with { Endpoints = changedEndpoints }], review.Artifact);
+        Assert.NotEqual(review.DigestSha256, changed.DigestSha256);
+        Assert.Contains(changed.RiskIndicators, value => value.Code == "HOSTNAME_CHANGED" && value.Path.Contains("authorityEndpoints", StringComparison.Ordinal));
     }
 
     [Fact]

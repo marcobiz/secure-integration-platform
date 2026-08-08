@@ -14,14 +14,15 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
     private readonly object sync = new();
     private readonly Dictionary<string, AuthorizationAttempt> attempts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TokenSession> sessions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, AcquisitionGate> acquisitionGates = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, GenerationState> keyGenerations = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, GenerationState> connectorGenerations = new(StringComparer.Ordinal);
     private readonly int attemptCapacity;
     private readonly int tokenCapacity;
     private readonly RestrictedEndpointPolicy endpoints;
     private readonly IRestrictedTransport transport;
     private readonly IGatewayClock clock;
     private readonly IOutboundAuthAuditSink audit;
-    private readonly SemaphoreSlim clientCredentialsAcquisitionGate = new(1, 1);
-    private long invalidationGeneration;
     private int disposed;
 
     /// <summary>Creates bounded stores. Secret use is available only through a resolved authority capability.</summary>
@@ -54,19 +55,22 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
                 session.RefreshGate.Dispose();
             }
             sessions.Clear();
+            foreach (AcquisitionGate gate in acquisitionGates.Values) gate.Semaphore.Dispose();
+            acquisitionGates.Clear();
+            keyGenerations.Clear();
+            connectorGenerations.Clear();
         }
-        clientCredentialsAcquisitionGate.Dispose();
     }
 
     /// <summary>Starts user-agent presentation without dereferencing the authorization URL server-side.</summary>
     public async Task<OAuthAuthorizationChallenge> BeginAuthorizationAsync(OAuthResolvedExecutionContext resolvedContext, CancellationToken cancellationToken)
     {
         Validate(resolvedContext);
-        long generation = CurrentGeneration;
-        await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+        using WorkStamp stamp = CaptureStamp(resolvedContext);
+        await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
         OAuthAuthorizationCodeProfile profile = RequiredAuthorizationCodeProfile(resolvedContext);
         _ = await endpoints.ResolveAsync(profile.AuthorizationEndpoint, cancellationToken).ConfigureAwait(false);
-        await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+        await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
 
         OutboundAuthContext context = resolvedContext.Authority;
         string attemptReference = OpaqueValue();
@@ -77,10 +81,10 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
         string key = SecurityKey(resolvedContext);
         lock (sync)
         {
-            EnsureGeneration(generation);
+            EnsureStamp(stamp);
             Prune();
             EnsureAttemptCapacity();
-            attempts.Add(attemptReference, new(key, profile.Fingerprint, Hash(state), codeVerifier, expiresAt, context.CorrelationId, OAuthAuthorizationState.Pending, clock.UtcNow));
+            attempts.Add(attemptReference, new(key, context.ConnectorId, stamp.KeyGeneration, stamp.ConnectorGeneration, profile.Fingerprint, Hash(state), codeVerifier, expiresAt, context.CorrelationId, OAuthAuthorizationState.Pending, clock.UtcNow));
         }
         Uri authorizationUri = AuthorizationUri(profile, state, codeChallenge);
         try { await WriteAuditAsync(resolvedContext, "oauth.authorization.begin", "pending", expiresAt, cancellationToken).ConfigureAwait(false); }
@@ -123,10 +127,11 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
         OAuthAuthorizationCodeProfile profile = RequiredAuthorizationCodeProfile(resolvedContext);
         AuthorizationAttempt attempt;
         string? codeVerifier = null;
-        long generation = CurrentGeneration;
+        using WorkStamp stamp = CaptureStamp(resolvedContext);
         lock (sync)
         {
-            if (!attempts.TryGetValue(opaqueAttemptReference, out attempt!) || attempt.SecurityKey != SecurityKey(resolvedContext) || attempt.ProfileFingerprint != profile.Fingerprint ||
+            if (!attempts.TryGetValue(opaqueAttemptReference, out attempt!) || attempt.SecurityKey != stamp.SecurityKey || attempt.ProfileFingerprint != profile.Fingerprint ||
+                attempt.KeyGeneration != stamp.KeyGeneration || attempt.ConnectorGeneration != stamp.ConnectorGeneration ||
                 attempt.CorrelationId != context.CorrelationId || attempt.State != OAuthAuthorizationState.Pending)
                 throw OAuthFailures.Rejected();
             if (attempt.ExpiresAt <= clock.UtcNow)
@@ -160,14 +165,14 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
         string? createdSessionReference = null;
         try
         {
-            TokenSet tokens = await RequestTokenAsync(resolvedContext, "authorization_code", code, codeVerifier, generation, cancellationToken).ConfigureAwait(false);
-            await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+            TokenSet tokens = await RequestTokenAsync(resolvedContext, "authorization_code", code, codeVerifier, stamp, cancellationToken).ConfigureAwait(false);
+            await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
             string sessionReference = OpaqueValue();
             createdSessionReference = sessionReference;
-            TokenSession session = new(SecurityKey(resolvedContext), profile.Fingerprint, context.ConnectorId, profile.Policy, tokens, clock.UtcNow, generation);
+            TokenSession session = new(stamp.SecurityKey, profile.Fingerprint, context.ConnectorId, profile.Policy, tokens, clock.UtcNow, stamp.KeyGeneration, stamp.ConnectorGeneration);
             lock (sync)
             {
-                EnsureGeneration(generation);
+                EnsureStamp(stamp);
                 Prune();
                 EnsureTokenCapacity();
                 sessions.Add(sessionReference, session);
@@ -196,17 +201,19 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
     {
         Validate(resolvedContext);
         OAuthClientCredentialsProfile profile = RequiredClientCredentialsProfile(resolvedContext);
-        long generation = CurrentGeneration;
+        using WorkStamp stamp = CaptureStamp(resolvedContext);
         string? createdSessionReference = null;
-        await clientCredentialsAcquisitionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        AcquisitionGate acquisitionGate = LeaseAcquisitionGate(stamp.SecurityKey);
+        bool entered = false;
         try
         {
-            await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
-            string securityKey = SecurityKey(resolvedContext);
+            await acquisitionGate.Semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            entered = true;
+            await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
             lock (sync)
             {
                 Prune();
-                KeyValuePair<string, TokenSession>? cached = FindClientCredentialsSession(securityKey, profile.Fingerprint, generation);
+                KeyValuePair<string, TokenSession>? cached = FindClientCredentialsSession(stamp.SecurityKey, profile.Fingerprint, stamp);
                 if (cached is not null && cached.Value.Value.Tokens.ExpiresAt > clock.UtcNow + profile.ExpirySkew)
                 {
                     cached.Value.Value.LastAccess = clock.UtcNow;
@@ -215,14 +222,14 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
                 if (cached is not null) RemoveSessionCore(cached.Value.Key);
             }
 
-            TokenSet tokens = await RequestTokenAsync(resolvedContext, "client_credentials", null, null, generation, cancellationToken).ConfigureAwait(false);
-            await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+            TokenSet tokens = await RequestTokenAsync(resolvedContext, "client_credentials", null, null, stamp, cancellationToken).ConfigureAwait(false);
+            await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
             string sessionReference = OpaqueValue();
             createdSessionReference = sessionReference;
-            TokenSession session = new(securityKey, profile.Fingerprint, resolvedContext.ConnectorId, profile.Policy, tokens, clock.UtcNow, generation);
+            TokenSession session = new(stamp.SecurityKey, profile.Fingerprint, resolvedContext.ConnectorId, profile.Policy, tokens, clock.UtcNow, stamp.KeyGeneration, stamp.ConnectorGeneration);
             lock (sync)
             {
-                EnsureGeneration(generation);
+                EnsureStamp(stamp);
                 Prune();
                 EnsureTokenCapacity();
                 sessions.Add(sessionReference, session);
@@ -238,20 +245,24 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
             catch { }
             throw;
         }
-        finally { clientCredentialsAcquisitionGate.Release(); }
+        finally
+        {
+            if (entered) acquisitionGate.Semaphore.Release();
+            ReleaseAcquisitionGate(stamp.SecurityKey, acquisitionGate);
+        }
     }
 
     /// <summary>Builds, authenticates and dispatches exactly one request to the Published protected-resource endpoint.</summary>
     public async Task<ExternalResponse> SendAuthenticatedAsync(OAuthResolvedExecutionContext resolvedContext, OAuthTokenSessionReference sessionReference, ReadOnlyMemory<byte> requestPayload, CancellationToken cancellationToken)
     {
         Validate(resolvedContext);
-        long generation = CurrentGeneration;
-        TokenSession session = RequiredSession(resolvedContext, sessionReference, generation);
+        using WorkStamp stamp = CaptureStamp(resolvedContext);
+        TokenSession session = RequiredSession(resolvedContext, sessionReference, stamp);
         await session.RefreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            session = RequiredSession(resolvedContext, sessionReference, generation);
-            await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+            session = RequiredSession(resolvedContext, sessionReference, stamp);
+            await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
             IOAuthProfile profile = resolvedContext.Profile;
             if (session.Tokens.ExpiresAt <= clock.UtcNow + profile.ExpirySkew)
             {
@@ -259,11 +270,11 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
                 {
                     try
                     {
-                        TokenSet reacquired = await RequestTokenAsync(resolvedContext, "client_credentials", null, null, generation, cancellationToken).ConfigureAwait(false);
-                        await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+                        TokenSet reacquired = await RequestTokenAsync(resolvedContext, "client_credentials", null, null, stamp, cancellationToken).ConfigureAwait(false);
+                        await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
                         lock (sync)
                         {
-                            EnsureCurrentSession(sessionReference.Value, session, generation);
+                            EnsureCurrentSession(sessionReference.Value, session, stamp);
                             session.Tokens.Redact();
                             session.Tokens = reacquired;
                             session.LastAccess = clock.UtcNow;
@@ -285,12 +296,13 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
                 }
                 else try
                 {
-                    TokenSet refreshed = await RequestTokenAsync(resolvedContext, "refresh_token", session.Tokens.RefreshToken, null, generation, cancellationToken).ConfigureAwait(false);
+                    TokenSet refreshed = await RequestTokenAsync(resolvedContext, "refresh_token", session.Tokens.RefreshToken, null, stamp, cancellationToken).ConfigureAwait(false);
                     if (string.IsNullOrEmpty(refreshed.RefreshToken)) refreshed = refreshed.WithRefreshToken(session.Tokens.RefreshToken);
-                    await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+                    await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
                     lock (sync)
                     {
-                        EnsureCurrentSession(sessionReference.Value, session, generation);
+                        EnsureCurrentSession(sessionReference.Value, session, stamp);
+                        session.Tokens.Redact();
                         session.Tokens = refreshed;
                         session.LastAccess = clock.UtcNow;
                     }
@@ -306,11 +318,11 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
             }
 
             IReadOnlyList<System.Net.IPAddress> addresses = await endpoints.ResolveAsync(resolvedContext.ProtectedResourceEndpoint, cancellationToken).ConfigureAwait(false);
-            await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+            await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
             string accessToken;
             lock (sync)
             {
-                EnsureCurrentSession(sessionReference.Value, session, generation);
+                EnsureCurrentSession(sessionReference.Value, session, stamp);
                 accessToken = session.Tokens.AccessToken;
                 session.LastAccess = clock.UtcNow;
             }
@@ -321,7 +333,7 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
                 if (!string.IsNullOrWhiteSpace(resolvedContext.ProtectedResourceContentType)) request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(resolvedContext.ProtectedResourceContentType);
             }
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-            EnsureGeneration(generation);
+            EnsureStamp(stamp);
             return await transport.SendAsync(request, addresses, null, resolvedContext.ProtectedResourceTimeout, resolvedContext.MaximumProtectedResourceResponseBytes, cancellationToken).ConfigureAwait(false);
         }
         finally { session.RefreshGate.Release(); }
@@ -331,28 +343,42 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
     public void Invalidate(OAuthTokenSessionReference sessionReference)
     {
         ArgumentNullException.ThrowIfNull(sessionReference);
-        Interlocked.Increment(ref invalidationGeneration);
-        lock (sync) RemoveSessionCore(sessionReference.Value);
+        lock (sync)
+        {
+            if (!sessions.TryGetValue(sessionReference.Value, out TokenSession? session)) return;
+            RequiredGenerationState(keyGenerations, session.SecurityKey).Generation++;
+            foreach (string key in sessions.Where(value => value.Value.SecurityKey == session.SecurityKey).Select(value => value.Key).ToArray()) RemoveSessionCore(key);
+            CleanupGenerationStatesCore(session.SecurityKey, session.ConnectorId);
+        }
     }
 
     /// <summary>Invalidates matching sessions and tombstones in-flight acquisition/refresh work.</summary>
     public void InvalidateConnector(string connectorId)
     {
-        Interlocked.Increment(ref invalidationGeneration);
+        if (!OAuthValidation.Identifier(connectorId)) throw OAuthFailures.Configuration();
         lock (sync)
+        {
+            RequiredGenerationState(connectorGenerations, connectorId).Generation++;
             foreach (string key in sessions.Where(value => string.Equals(value.Value.ConnectorId, connectorId, StringComparison.Ordinal)).Select(value => value.Key).ToArray()) RemoveSessionCore(key);
+            foreach (string key in attempts.Where(value => string.Equals(value.Value.ConnectorId, connectorId, StringComparison.Ordinal)).Select(value => value.Key).ToArray())
+            {
+                attempts[key].Redact();
+                attempts.Remove(key);
+            }
+            CleanupGenerationStatesCore(null, connectorId);
+        }
     }
 
-    private async Task<TokenSet> RequestTokenAsync(OAuthResolvedExecutionContext resolvedContext, string grantType, string? sensitiveValue, string? codeVerifier, long generation, CancellationToken cancellationToken)
+    private async Task<TokenSet> RequestTokenAsync(OAuthResolvedExecutionContext resolvedContext, string grantType, string? sensitiveValue, string? codeVerifier, WorkStamp stamp, CancellationToken cancellationToken)
     {
         IOAuthProfile profile = resolvedContext.Profile;
-        await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+        await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<System.Net.IPAddress> addresses = await endpoints.ResolveAsync(profile.TokenEndpoint, cancellationToken).ConfigureAwait(false);
-        await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+        await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
         string clientSecret;
         try { clientSecret = await resolvedContext.ClientSecret.UseAsync(cancellationToken).ConfigureAwait(false); }
         catch (Exception exception) when (exception is not OperationCanceledException) { throw OAuthFailures.Rejected(); }
-        await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
+        await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
         if (!BoundedSecret(clientSecret, 4096)) throw OAuthFailures.Rejected();
         Dictionary<string, string> form = new(StringComparer.Ordinal) { ["grant_type"] = grantType, ["client_id"] = profile.ClientId };
         bool allowRefreshToken;
@@ -388,9 +414,9 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
         try { response = await transport.SendAsync(request, addresses, null, profile.TokenRequestTimeout, profile.MaximumTokenResponseBytes, cancellationToken).ConfigureAwait(false); }
         catch (GatewayException) { throw; }
         catch (Exception exception) when (exception is not OperationCanceledException) { throw OAuthFailures.Rejected(); }
-        await RevalidateAsync(resolvedContext, generation, cancellationToken).ConfigureAwait(false);
         try
         {
+            await RevalidateAsync(resolvedContext, stamp, cancellationToken).ConfigureAwait(false);
             if (response.StatusCode is < 200 or >= 300) throw OAuthFailures.Rejected();
             return ParseToken(response, profile, allowRefreshToken);
         }
@@ -423,14 +449,15 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
         catch (JsonException) { throw OAuthFailures.Rejected(); }
     }
 
-    private TokenSession RequiredSession(OAuthResolvedExecutionContext resolvedContext, OAuthTokenSessionReference reference, long generation)
+    private TokenSession RequiredSession(OAuthResolvedExecutionContext resolvedContext, OAuthTokenSessionReference reference, WorkStamp stamp)
     {
         ArgumentNullException.ThrowIfNull(reference);
         IOAuthProfile profile = resolvedContext.Profile;
         lock (sync)
         {
-            if (!sessions.TryGetValue(reference.Value, out TokenSession? session) || session.SecurityKey != SecurityKey(resolvedContext) || session.ProfileFingerprint != profile.Fingerprint ||
-                session.Policy != profile.Policy || session.Generation != generation)
+            EnsureStampCore(stamp);
+            if (!sessions.TryGetValue(reference.Value, out TokenSession? session) || session.SecurityKey != stamp.SecurityKey || session.ProfileFingerprint != profile.Fingerprint ||
+                session.Policy != profile.Policy || session.KeyGeneration != stamp.KeyGeneration || session.ConnectorGeneration != stamp.ConnectorGeneration)
             {
                 if (session is not null) RemoveSessionCore(reference.Value);
                 throw OAuthFailures.ReacquisitionRequired();
@@ -446,11 +473,11 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
             throw OAuthFailures.Rejected();
     }
 
-    private async Task RevalidateAsync(OAuthResolvedExecutionContext resolvedContext, long generation, CancellationToken cancellationToken)
+    private async Task RevalidateAsync(OAuthResolvedExecutionContext resolvedContext, WorkStamp stamp, CancellationToken cancellationToken)
     {
-        EnsureGeneration(generation);
+        EnsureStamp(stamp);
         await resolvedContext.Revalidate(cancellationToken).ConfigureAwait(false);
-        EnsureGeneration(generation);
+        EnsureStamp(stamp);
     }
 
     private async Task WriteAuditAsync(OAuthResolvedExecutionContext resolvedContext, string action, string outcome, DateTimeOffset? expiresAt, CancellationToken cancellationToken)
@@ -465,6 +492,7 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
         {
             attempt.Redact();
             attempts.Remove(key);
+            CleanupGenerationStatesCore(attempt.SecurityKey, attempt.ConnectorId);
         }
         foreach (string key in sessions.Where(value => value.Value.Tokens.ExpiresAt <= clock.UtcNow && string.IsNullOrEmpty(value.Value.Tokens.RefreshToken)).Select(value => value.Key).ToArray()) RemoveSessionCore(key);
     }
@@ -483,10 +511,11 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
         RemoveSessionCore(sessions.MinBy(value => value.Value.LastAccess).Key);
     }
 
-    private void EnsureCurrentSession(string reference, TokenSession expected, long generation)
+    private void EnsureCurrentSession(string reference, TokenSession expected, WorkStamp stamp)
     {
-        EnsureGeneration(generation);
-        if (!sessions.TryGetValue(reference, out TokenSession? current) || !ReferenceEquals(current, expected) || current.Generation != generation) throw OAuthFailures.ReacquisitionRequired();
+        EnsureStampCore(stamp);
+        if (!sessions.TryGetValue(reference, out TokenSession? current) || !ReferenceEquals(current, expected) ||
+            current.KeyGeneration != stamp.KeyGeneration || current.ConnectorGeneration != stamp.ConnectorGeneration) throw OAuthFailures.ReacquisitionRequired();
     }
 
     private void RemoveSessionCore(string key)
@@ -494,10 +523,87 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
         if (!sessions.Remove(key, out TokenSession? removed)) return;
         removed.Tokens.Redact();
         removed.Disabled = true;
+        CleanupGenerationStatesCore(removed.SecurityKey, removed.ConnectorId);
     }
 
-    private long CurrentGeneration => Interlocked.Read(ref invalidationGeneration);
-    private void EnsureGeneration(long generation) { if (CurrentGeneration != generation) throw OAuthFailures.ReacquisitionRequired(); }
+    private WorkStamp CaptureStamp(OAuthResolvedExecutionContext resolvedContext)
+    {
+        string securityKey = SecurityKey(resolvedContext);
+        string connectorId = resolvedContext.ConnectorId;
+        lock (sync)
+        {
+            GenerationState keyState = RequiredGenerationState(keyGenerations, securityKey);
+            GenerationState connectorState = RequiredGenerationState(connectorGenerations, connectorId);
+            keyState.Leases++;
+            connectorState.Leases++;
+            return new(this, securityKey, connectorId, keyState.Generation, connectorState.Generation);
+        }
+    }
+
+    private void EnsureStamp(WorkStamp stamp) { lock (sync) EnsureStampCore(stamp); }
+    private void EnsureStampCore(WorkStamp stamp)
+    {
+        if (CurrentKeyGenerationCore(stamp.SecurityKey) != stamp.KeyGeneration || CurrentConnectorGenerationCore(stamp.ConnectorId) != stamp.ConnectorGeneration)
+            throw OAuthFailures.ReacquisitionRequired();
+    }
+
+    private long CurrentKeyGenerationCore(string securityKey) => keyGenerations.TryGetValue(securityKey, out GenerationState? value) ? value.Generation : 0;
+    private long CurrentConnectorGenerationCore(string connectorId) => connectorGenerations.TryGetValue(connectorId, out GenerationState? value) ? value.Generation : 0;
+
+    private static GenerationState RequiredGenerationState(Dictionary<string, GenerationState> values, string key)
+    {
+        if (!values.TryGetValue(key, out GenerationState? state))
+        {
+            state = new();
+            values.Add(key, state);
+        }
+        return state;
+    }
+
+    private void ReleaseStamp(WorkStamp stamp)
+    {
+        lock (sync)
+        {
+            if (keyGenerations.TryGetValue(stamp.SecurityKey, out GenerationState? keyState)) keyState.Leases--;
+            if (connectorGenerations.TryGetValue(stamp.ConnectorId, out GenerationState? connectorState)) connectorState.Leases--;
+            CleanupGenerationStatesCore(stamp.SecurityKey, stamp.ConnectorId);
+        }
+    }
+
+    private void CleanupGenerationStatesCore(string? securityKey, string connectorId)
+    {
+        if (securityKey is not null && keyGenerations.TryGetValue(securityKey, out GenerationState? keyState) && keyState.Leases == 0 &&
+            !sessions.Values.Any(value => value.SecurityKey == securityKey) && !attempts.Values.Any(value => value.SecurityKey == securityKey))
+            keyGenerations.Remove(securityKey);
+        if (connectorGenerations.TryGetValue(connectorId, out GenerationState? connectorState) && connectorState.Leases == 0 &&
+            !sessions.Values.Any(value => value.ConnectorId == connectorId) && !attempts.Values.Any(value => value.ConnectorId == connectorId))
+            connectorGenerations.Remove(connectorId);
+    }
+
+    private AcquisitionGate LeaseAcquisitionGate(string securityKey)
+    {
+        lock (sync)
+        {
+            ObjectDisposedException.ThrowIf(disposed != 0, this);
+            if (!acquisitionGates.TryGetValue(securityKey, out AcquisitionGate? gate))
+            {
+                if (acquisitionGates.Count >= tokenCapacity) throw OAuthFailures.Rejected();
+                gate = new();
+                acquisitionGates.Add(securityKey, gate);
+            }
+            gate.Leases++;
+            return gate;
+        }
+    }
+
+    private void ReleaseAcquisitionGate(string securityKey, AcquisitionGate gate)
+    {
+        lock (sync)
+        {
+            gate.Leases--;
+            if (gate.Leases == 0 && acquisitionGates.Remove(securityKey, out AcquisitionGate? removed)) removed.Semaphore.Dispose();
+        }
+    }
 
     private static Uri AuthorizationUri(OAuthAuthorizationCodeProfile profile, string state, string? codeChallenge)
     {
@@ -553,17 +659,21 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
     private static OAuthClientCredentialsProfile RequiredClientCredentialsProfile(OAuthResolvedExecutionContext resolvedContext) =>
         resolvedContext.Profile as OAuthClientCredentialsProfile ?? throw OAuthFailures.Rejected();
 
-    private KeyValuePair<string, TokenSession>? FindClientCredentialsSession(string securityKey, string profileFingerprint, long generation)
+    private KeyValuePair<string, TokenSession>? FindClientCredentialsSession(string securityKey, string profileFingerprint, WorkStamp stamp)
     {
         foreach (KeyValuePair<string, TokenSession> candidate in sessions)
             if (candidate.Value.Policy == HttpAuthenticationPolicy.OAuthClientCredentials && candidate.Value.SecurityKey == securityKey &&
-                candidate.Value.ProfileFingerprint == profileFingerprint && candidate.Value.Generation == generation) return candidate;
+                candidate.Value.ProfileFingerprint == profileFingerprint && candidate.Value.KeyGeneration == stamp.KeyGeneration &&
+                candidate.Value.ConnectorGeneration == stamp.ConnectorGeneration) return candidate;
         return null;
     }
 
-    private sealed class AuthorizationAttempt(string securityKey, string profileFingerprint, byte[] stateHash, byte[]? codeVerifier, DateTimeOffset expiresAt, Guid correlationId, OAuthAuthorizationState state, DateTimeOffset lastAccess)
+    private sealed class AuthorizationAttempt(string securityKey, string connectorId, long keyGeneration, long connectorGeneration, string profileFingerprint, byte[] stateHash, byte[]? codeVerifier, DateTimeOffset expiresAt, Guid correlationId, OAuthAuthorizationState state, DateTimeOffset lastAccess)
     {
         internal string SecurityKey { get; } = securityKey;
+        internal string ConnectorId { get; } = connectorId;
+        internal long KeyGeneration { get; } = keyGeneration;
+        internal long ConnectorGeneration { get; } = connectorGeneration;
         internal string ProfileFingerprint { get; } = profileFingerprint;
         internal byte[] StateHash { get; } = stateHash;
         [JsonIgnore] internal byte[]? CodeVerifier { get; } = codeVerifier;
@@ -579,7 +689,7 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
         public override string ToString() => $"AuthorizationAttempt(State={State}, ExpiresAt={ExpiresAt:O})";
     }
 
-    private sealed class TokenSession(string securityKey, string profileFingerprint, string connectorId, HttpAuthenticationPolicy policy, TokenSet tokens, DateTimeOffset lastAccess, long generation)
+    private sealed class TokenSession(string securityKey, string profileFingerprint, string connectorId, HttpAuthenticationPolicy policy, TokenSet tokens, DateTimeOffset lastAccess, long keyGeneration, long connectorGeneration)
     {
         internal string SecurityKey { get; } = securityKey;
         internal string ProfileFingerprint { get; } = profileFingerprint;
@@ -587,10 +697,36 @@ public sealed class OAuthAuthorizationCodeClient : IDisposable
         internal HttpAuthenticationPolicy Policy { get; } = policy;
         internal TokenSet Tokens { get; set; } = tokens;
         internal DateTimeOffset LastAccess { get; set; } = lastAccess;
-        internal long Generation { get; } = generation;
+        internal long KeyGeneration { get; } = keyGeneration;
+        internal long ConnectorGeneration { get; } = connectorGeneration;
         internal bool Disabled { get; set; }
         internal SemaphoreSlim RefreshGate { get; } = new(1, 1);
         public override string ToString() => $"TokenSession(ConnectorId={ConnectorId}, Disabled={Disabled})";
+    }
+
+    private sealed class AcquisitionGate
+    {
+        internal SemaphoreSlim Semaphore { get; } = new(1, 1);
+        internal int Leases { get; set; }
+    }
+
+    private sealed class GenerationState
+    {
+        internal long Generation { get; set; }
+        internal int Leases { get; set; }
+    }
+
+    private sealed class WorkStamp(OAuthAuthorizationCodeClient owner, string securityKey, string connectorId, long keyGeneration, long connectorGeneration) : IDisposable
+    {
+        private int disposed;
+        internal string SecurityKey { get; } = securityKey;
+        internal string ConnectorId { get; } = connectorId;
+        internal long KeyGeneration { get; } = keyGeneration;
+        internal long ConnectorGeneration { get; } = connectorGeneration;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0) owner.ReleaseStamp(this);
+        }
     }
 
     private sealed class TokenSet(string accessToken, string? refreshToken, DateTimeOffset expiresAt)

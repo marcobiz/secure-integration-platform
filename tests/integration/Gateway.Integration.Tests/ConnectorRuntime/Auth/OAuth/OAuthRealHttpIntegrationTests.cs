@@ -241,9 +241,11 @@ public sealed class OAuthRealHttpIntegrationTests
         await Assert.ThrowsAsync<GatewayException>(() => pkce.Client.CompleteAuthorizationAsync(pkce.Resolved, completed.OpaqueAttemptReference, code, state, TestContext.Current.CancellationToken));
 
         await using Fixture compatible = await Fixture.CreateAsync(TimeSpan.FromMinutes(5));
-        (OAuthAuthorizationChallenge legacy, string legacyCode, string legacyState) = await compatible.AuthorizeAsync();
+        compatible.OmitLegacyPkcePolicy();
+        OAuthResolvedExecutionContext legacyContext = await compatible.ResolveAsync();
+        (OAuthAuthorizationChallenge legacy, string legacyCode, string legacyState) = await compatible.AuthorizeAsync(context: legacyContext);
         Assert.DoesNotContain("code_challenge", legacy.AuthorizationUri.Query, StringComparison.Ordinal);
-        _ = await compatible.Client.CompleteAuthorizationAsync(compatible.Resolved, legacy.OpaqueAttemptReference, legacyCode, legacyState, TestContext.Current.CancellationToken);
+        _ = await compatible.Client.CompleteAuthorizationAsync(legacyContext, legacy.OpaqueAttemptReference, legacyCode, legacyState, TestContext.Current.CancellationToken);
     }
 
     [Theory]
@@ -295,6 +297,63 @@ public sealed class OAuthRealHttpIntegrationTests
         Assert.Equal(2, fixture.Server.TokenRequestCount);
         Assert.Single(fixture.Audit.Records, record => record.Action == "oauth.client-credentials.acquire" && record.Outcome == "success");
         Assert.Single(fixture.Audit.Records, record => record.Action == "oauth.client-credentials.reacquire" && record.Outcome == "success");
+    }
+
+    [Fact]
+    public async Task W1_IT_Client_credentials_single_flight_is_per_security_key_without_cross_tenant_head_of_line_blocking()
+    {
+        await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), grantKind: "oauthClientCredentials");
+        ConcurrentBlockingTransport blocking = new(fixture.RestrictedTransport, 2);
+        using OAuthAuthorizationCodeClient client = fixture.NewClient(new FixedResolver(IPAddress.Loopback), blocking, tokenCapacity: 4);
+        OAuthResolvedExecutionContext tenantA = await fixture.ResolveAsync(tenantIdOverride: Guid.NewGuid());
+        OAuthResolvedExecutionContext tenantB = await fixture.ResolveAsync(tenantIdOverride: Guid.NewGuid());
+
+        Task<OAuthTokenSessionReference> a1 = client.AcquireClientCredentialsAsync(tenantA, TestContext.Current.CancellationToken);
+        Task<OAuthTokenSessionReference> a2 = client.AcquireClientCredentialsAsync(tenantA, TestContext.Current.CancellationToken);
+        Task<OAuthTokenSessionReference> b = client.AcquireClientCredentialsAsync(tenantB, TestContext.Current.CancellationToken);
+        await blocking.WaitForExpectedConcurrencyAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        blocking.Release();
+
+        OAuthTokenSessionReference[] sessions = await Task.WhenAll(a1, a2, b);
+        Assert.Equal(sessions[0].Value, sessions[1].Value);
+        Assert.NotEqual(sessions[0].Value, sessions[2].Value);
+        Assert.Equal(2, fixture.Server.TokenRequestCount);
+    }
+
+    [Fact]
+    public async Task W1_SEC_Client_credentials_reacquisition_failure_invalidates_only_its_security_key()
+    {
+        await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), grantKind: "oauthClientCredentials");
+        using OAuthAuthorizationCodeClient client = fixture.NewClient(new FixedResolver(IPAddress.Loopback), fixture.RestrictedTransport, tokenCapacity: 4);
+        OAuthResolvedExecutionContext tenantA = await fixture.ResolveAsync(tenantIdOverride: Guid.NewGuid());
+        OAuthResolvedExecutionContext tenantB = await fixture.ResolveAsync(tenantIdOverride: Guid.NewGuid());
+        OAuthTokenSessionReference sessionA = await client.AcquireClientCredentialsAsync(tenantA, TestContext.Current.CancellationToken);
+        OAuthTokenSessionReference sessionB = await client.AcquireClientCredentialsAsync(tenantB, TestContext.Current.CancellationToken);
+        fixture.Clock.Advance(TimeSpan.FromMinutes(6));
+
+        OAuthResolvedExecutionContext failingA = CloneWithSecret(tenantA, new AlwaysFailingSecretProvider());
+        await Assert.ThrowsAsync<GatewayException>(() => client.SendAuthenticatedAsync(failingA, sessionA, ReadOnlyMemory<byte>.Empty, TestContext.Current.CancellationToken));
+        ExternalResponse unaffected = await client.SendAuthenticatedAsync(tenantB, sessionB, ReadOnlyMemory<byte>.Empty, TestContext.Current.CancellationToken);
+
+        Assert.Equal(200, unaffected.StatusCode);
+        Assert.Equal(1, client.CachedSessionCount);
+    }
+
+    [Fact]
+    public async Task W1_SEC_Token_response_is_zeroed_when_snapshot_revalidation_fails_after_transport_returns()
+    {
+        await using Fixture fixture = await Fixture.CreateAsync(TimeSpan.FromMinutes(5), grantKind: "oauthClientCredentials");
+        BlockingResponseTransport blocking = new(fixture.RestrictedTransport);
+        using OAuthAuthorizationCodeClient client = fixture.NewClient(new FixedResolver(IPAddress.Loopback), blocking);
+        Task<OAuthTokenSessionReference> acquisition = client.AcquireClientCredentialsAsync(fixture.Resolved, TestContext.Current.CancellationToken);
+        await blocking.WaitForResponseAsync().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        fixture.RotateSnapshot();
+        blocking.Release();
+
+        await Assert.ThrowsAsync<GatewayException>(() => acquisition);
+        Assert.NotNull(blocking.Body);
+        Assert.All(blocking.Body!, value => Assert.Equal(0, value));
+        Assert.Equal(0, client.CachedSessionCount);
     }
 
     [Theory]
@@ -439,8 +498,8 @@ public sealed class OAuthRealHttpIntegrationTests
         internal OAuthAuthorizationCodeClient NewClient(IHostResolver resolver, IRestrictedTransport selectedTransport, IOutboundAuthAuditSink? audit = null, int tokenCapacity = 2) =>
             new(8, tokenCapacity, new RestrictedEndpointPolicy(resolver, new LoopbackAllowance()), selectedTransport, Clock, audit);
 
-        internal async Task<OAuthResolvedExecutionContext> ResolveAsync(Guid? correlationId = null, string profileId = "wave1.synthetic") =>
-            await Resolver.ResolveAsync(new OAuthAuthorizedInvocation(Principal(correlationId ?? Guid.NewGuid()), "synthetic-oauth", "invoke"), new OAuthAuthorityRequest(profileId), TestContext.Current.CancellationToken);
+        internal async Task<OAuthResolvedExecutionContext> ResolveAsync(Guid? correlationId = null, string profileId = "wave1.synthetic", Guid? tenantIdOverride = null) =>
+            await Resolver.ResolveAsync(new OAuthAuthorizedInvocation(Principal(correlationId ?? Guid.NewGuid(), tenantIdOverride), "synthetic-oauth", "invoke"), new OAuthAuthorityRequest(profileId), TestContext.Current.CancellationToken);
 
         internal async Task<(OAuthAuthorizationChallenge Challenge, string Code, string State)> AuthorizeAsync(OAuthAuthorizationCodeClient? client = null, OAuthResolvedExecutionContext? context = null, string? mode = null)
         {
@@ -475,6 +534,13 @@ public sealed class OAuthRealHttpIntegrationTests
             Snapshot = Snapshot with { Bindings = bindings, Stamp = Snapshot.Stamp with { BindingRevision = bindings.Revision, BindingChecksumSha256 = bindings.ChecksumSha256, ResourceStampSha256 = "resource-rotated" } };
         }
 
+        internal void OmitLegacyPkcePolicy()
+        {
+            string json = Snapshot.Version.CanonicalJson.Replace(",\"pkcePolicy\":\"NONE\"", string.Empty, StringComparison.Ordinal);
+            Assert.DoesNotContain("pkcePolicy", json, StringComparison.Ordinal);
+            Snapshot = Snapshot with { Version = Snapshot.Version with { CanonicalJson = json } };
+        }
+
         internal void SubstituteSnapshot(string substitution)
         {
             if (substitution == "client-secret-reference")
@@ -506,9 +572,9 @@ public sealed class OAuthRealHttpIntegrationTests
             Snapshot = Snapshot with { Version = Snapshot.Version with { CanonicalJson = json } };
         }
 
-        private GatewayClientPrincipal Principal(Guid correlationId)
+        private GatewayClientPrincipal Principal(Guid correlationId, Guid? tenantIdOverride = null)
         {
-            RegisteredInstallationIdentity identity = new(installationId, tenantId, applicationId, environmentId, TenantStatus.Active, ApplicationStatus.Active, InstallationStatus.Active,
+            RegisteredInstallationIdentity identity = new(installationId, tenantIdOverride ?? tenantId, applicationId, environmentId, TenantStatus.Active, ApplicationStatus.Active, InstallationStatus.Active,
                 Guid.NewGuid(), CredentialStatus.Active, [1, 2, 3], Clock.UtcNow.AddMinutes(-1), Clock.UtcNow.AddHours(1), "1.0.0", null);
             return new(identity, correlationId);
         }
@@ -665,6 +731,47 @@ public sealed class OAuthRealHttpIntegrationTests
         }
         private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
+
+    private sealed class ConcurrentBlockingTransport(IRestrictedTransport inner, int expectedConcurrency) : IRestrictedTransport
+    {
+        private readonly TaskCompletionSource expected = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int entered;
+        internal Task WaitForExpectedConcurrencyAsync() => expected.Task;
+        internal void Release() => release.TrySetResult();
+        public async Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref entered) >= expectedConcurrency) expected.TrySetResult();
+            await release.Task.WaitAsync(cancellationToken);
+            return await inner.SendAsync(request, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, cancellationToken);
+        }
+    }
+
+    private sealed class BlockingResponseTransport(IRestrictedTransport inner) : IRestrictedTransport
+    {
+        private readonly TaskCompletionSource returned = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal byte[]? Body { get; private set; }
+        internal Task WaitForResponseAsync() => returned.Task;
+        internal void Release() => release.TrySetResult();
+        public async Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
+        {
+            ExternalResponse response = await inner.SendAsync(request, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, cancellationToken);
+            Body = response.Body;
+            returned.TrySetResult();
+            await release.Task.WaitAsync(cancellationToken);
+            return response;
+        }
+    }
+
+    private sealed class AlwaysFailingSecretProvider : ISecretValueProvider
+    {
+        public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken) => throw new ProviderAccessException("SYNTHETIC-DISABLED");
+    }
+
+    private static OAuthResolvedExecutionContext CloneWithSecret(OAuthResolvedExecutionContext source, ISecretValueProvider provider) =>
+        new(source.Authority, source.Profile, new ScopedOAuthSecretCapability(provider, "exact-provider-reference"), source.ProtectedResourceEndpoint,
+            source.ProtectedResourceMethod, source.ProtectedResourceContentType, source.ProtectedResourceTimeout, source.MaximumProtectedResourceResponseBytes, source.Revalidate);
 
     private sealed class CapturingAudit : IOutboundAuthAuditSink
     {
