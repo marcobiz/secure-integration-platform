@@ -569,6 +569,10 @@ public sealed class ConnectorDefinitionValidator
             if (!operations.Add(operationId)) issues.Add(new("BGW-CONNECTOR-OPERATION-DUPLICATE", $"$.operations[{index}].operationId"));
             string endpoint = operation.GetProperty("endpointBinding").GetString()!;
             if (!endpoints.ContainsKey(endpoint)) issues.Add(new("BGW-CONNECTOR-ENDPOINT-BINDING-UNKNOWN", $"$.operations[{index}].endpointBinding"));
+            JsonElement authentication = operation.GetProperty("authentication");
+            foreach (string property in new[] { "authorizationEndpointBinding", "tokenEndpointBinding" })
+                if (authentication.TryGetProperty(property, out JsonElement oauthEndpoint) && !endpoints.ContainsKey(oauthEndpoint.GetString()!))
+                    issues.Add(new("BGW-CONNECTOR-ENDPOINT-BINDING-UNKNOWN", $"$.operations[{index}].authentication.{property}"));
             bool idempotent = operation.TryGetProperty("idempotent", out JsonElement idempotentElement) && idempotentElement.GetBoolean();
             int retries = operation.TryGetProperty("maximumRetries", out JsonElement retriesElement) ? retriesElement.GetInt32() : 0;
             if (retries > 0 && !idempotent) issues.Add(new("BGW-CONNECTOR-RETRY-REQUIRES-IDEMPOTENCY", $"$.operations[{index}].maximumRetries"));
@@ -578,7 +582,7 @@ public sealed class ConnectorDefinitionValidator
                 if (ForbiddenHeaders.Contains(header) || header.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase) || header.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase))
                     issues.Add(new("BGW-CONNECTOR-HEADER-FORBIDDEN", $"$.operations[{index}].allowedClientHeaders"));
             }
-            ValidateAuthentication(operation.GetProperty("authentication"), secrets, issues, index);
+            ValidateAuthentication(authentication, secrets, issues, index);
             index++;
         }
     }
@@ -871,6 +875,8 @@ public sealed class PublishedConnectorCatalog(
         "apiKey" => GatewayAuthenticationKind.ApiKey,
         "mtls" => GatewayAuthenticationKind.MutualTls,
         "apiKeyAndMtls" => GatewayAuthenticationKind.ApiKeyAndMutualTls,
+        "oauthAuthorizationCode" => GatewayAuthenticationKind.OAuthAuthorizationCode,
+        "oauthClientCredentials" => GatewayAuthenticationKind.OAuthClientCredentials,
         _ => throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-CORRUPT", 503)
     };
 

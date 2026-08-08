@@ -58,6 +58,8 @@ public sealed class GatewayOperationCatalog : IGatewayOperationCatalog
             throw new InvalidOperationException("mTLS authentication requires a server-side certificate reference.");
         if (value.Authentication == GatewayAuthenticationKind.ApiKeyAndMutualTls && (string.IsNullOrWhiteSpace(value.ApiKeySecretReference) || !IsHeaderName(value.ApiKeyHeaderName) || string.IsNullOrWhiteSpace(value.ClientCertificateReference)))
             throw new InvalidOperationException("Combined API key and mTLS authentication requires server-side secret references and a safe header.");
+        if ((value.Authentication is GatewayAuthenticationKind.OAuthAuthorizationCode or GatewayAuthenticationKind.OAuthClientCredentials) && string.IsNullOrWhiteSpace(value.ApiKeySecretReference))
+            throw new InvalidOperationException("OAuth authentication requires a server-side secret reference.");
     }
 
     private static bool IsIdentifier(string value) => value.Length is > 0 and <= 100 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
@@ -89,6 +91,8 @@ public sealed class RestrictedEgressService(
             throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403);
         GatewayOperationDefinition operation = await catalog.GetRequiredAsync(connectorId, operationId, identity.EnvironmentId,
             new(identity.InstallationId, identity.TenantId, identity.ApplicationId, operationId), cancellationToken).ConfigureAwait(false);
+        if (operation.Authentication is GatewayAuthenticationKind.OAuthAuthorizationCode or GatewayAuthenticationKind.OAuthClientCredentials)
+            throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
 
         if (request.Metadata?.Count > 32 || request.Extensions?.Count > 16 || request.Metadata?.Values.Any(value => value.ValueKind is JsonValueKind.Array or JsonValueKind.Object) == true)
             throw new GatewayException("BGW-PROTOCOL-METADATA", 400);

@@ -151,9 +151,59 @@
             "headerName": { "$ref": "#/$defs/safeHeader" },
             "certificateBinding": { "$ref": "#/$defs/identifier" }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "profileId", "authorizationEndpointBinding", "tokenEndpointBinding", "clientId", "clientAuthMethod", "secretBinding", "scopes", "redirectUri", "pkcePolicy"],
+          "properties": {
+            "kind": { "const": "oauthAuthorizationCode" },
+            "profileId": { "$ref": "#/$defs/identifier" },
+            "authorizationEndpointBinding": { "$ref": "#/$defs/identifier" },
+            "tokenEndpointBinding": { "$ref": "#/$defs/identifier" },
+            "clientId": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "clientAuthMethod": { "const": "client_secret_basic" },
+            "secretBinding": { "$ref": "#/$defs/identifier" },
+            "scopes": { "$ref": "#/$defs/oauthScopes" },
+            "audience": { "$ref": "#/$defs/oauthParameter" },
+            "redirectUri": { "type": "string", "pattern": "^https://", "maxLength": 2048 },
+            "pkcePolicy": { "enum": ["NONE", "S256_REQUIRED"] },
+            "authorizationLifetimeSeconds": { "type": "integer", "minimum": 60, "maximum": 1800 },
+            "tokenRequestTimeoutMilliseconds": { "type": "integer", "minimum": 100, "maximum": 30000 },
+            "maximumTokenResponseBytes": { "type": "integer", "minimum": 256, "maximum": 65536 },
+            "expirySkewSeconds": { "type": "integer", "minimum": 0, "maximum": 300 },
+            "allowRefresh": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "profileId", "tokenEndpointBinding", "clientId", "clientAuthMethod", "secretBinding", "scopes"],
+          "properties": {
+            "kind": { "const": "oauthClientCredentials" },
+            "profileId": { "$ref": "#/$defs/identifier" },
+            "tokenEndpointBinding": { "$ref": "#/$defs/identifier" },
+            "clientId": { "type": "string", "minLength": 1, "maxLength": 256 },
+            "clientAuthMethod": { "const": "client_secret_basic" },
+            "secretBinding": { "$ref": "#/$defs/identifier" },
+            "scopes": { "$ref": "#/$defs/oauthScopes" },
+            "audience": { "$ref": "#/$defs/oauthParameter" },
+            "resource": { "$ref": "#/$defs/oauthParameter" },
+            "tokenRequestTimeoutMilliseconds": { "type": "integer", "minimum": 100, "maximum": 30000 },
+            "maximumTokenResponseBytes": { "type": "integer", "minimum": 256, "maximum": 65536 },
+            "expirySkewSeconds": { "type": "integer", "minimum": 0, "maximum": 300 }
+          }
         }
       ]
     },
+    "oauthScopes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[!#-\\[\\]-~]+$" }
+    },
+    "oauthParameter": { "type": "string", "minLength": 1, "maxLength": 256 },
     "safeHeader": {
       "type": "string",
       "pattern": "^(?!Authorization$|Cookie$|Host$|Forwarded$|X-Forwarded-|Proxy-)[A-Za-z0-9-]+$",

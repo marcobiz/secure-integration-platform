@@ -14,7 +14,8 @@ namespace SecureIntegration.M6.SyntheticOAuthServer;
 public sealed class SyntheticOAuthServerOptions
 {
     /// <summary>Creates synthetic per-run server settings.</summary>
-    public SyntheticOAuthServerOptions(string clientId, string clientSecret, Uri redirectUri, string scope, string? audience, TimeSpan codeLifetime, TimeSpan tokenLifetime)
+    public SyntheticOAuthServerOptions(string clientId, string clientSecret, Uri redirectUri, string scope, string? audience, TimeSpan codeLifetime, TimeSpan tokenLifetime,
+        bool requirePkceS256 = false, string? resource = null, string? clientCredentialsMode = null)
     {
         ClientId = clientId;
         ClientSecret = clientSecret;
@@ -23,6 +24,9 @@ public sealed class SyntheticOAuthServerOptions
         Audience = audience;
         CodeLifetime = codeLifetime;
         TokenLifetime = tokenLifetime;
+        RequirePkceS256 = requirePkceS256;
+        Resource = resource;
+        ClientCredentialsMode = clientCredentialsMode;
     }
     /// <summary>Synthetic client identifier.</summary>
     public string ClientId { get; }
@@ -38,8 +42,14 @@ public sealed class SyntheticOAuthServerOptions
     public TimeSpan CodeLifetime { get; }
     /// <summary>Access token lifetime.</summary>
     public TimeSpan TokenLifetime { get; }
+    /// <summary>Requires RFC 7636 S256 for authorization-code issue and exchange.</summary>
+    public bool RequirePkceS256 { get; }
+    /// <summary>Optional expected RFC 8707 resource parameter.</summary>
+    public string? Resource { get; }
+    /// <summary>Test-only response behavior for Client Credentials.</summary>
+    [JsonIgnore] public string? ClientCredentialsMode { get; }
     /// <inheritdoc />
-    public override string ToString() => $"SyntheticOAuthServerOptions(ClientId={ClientId}, RedirectUri={RedirectUri}, Scope={Scope}, Audience={Audience}, ClientSecret=Redacted)";
+    public override string ToString() => $"SyntheticOAuthServerOptions(ClientId={ClientId}, RedirectUri={RedirectUri}, Scope={Scope}, Audience={Audience}, Resource={Resource}, RequirePkceS256={RequirePkceS256}, ClientSecret=Redacted)";
 }
 
 /// <summary>Running local HTTPS server used by real-HTTP integration tests.</summary>
@@ -84,10 +94,17 @@ public static class SyntheticOAuthServerHost
                 !Fixed(request.Query["response_type"].ToString(), "code") || options.Audience is not null && !Fixed(request.Query["audience"].ToString(), options.Audience)) return Results.BadRequest();
             string state = request.Query["state"].ToString();
             if (state.Length is < 16 or > 1024) return Results.BadRequest();
+            string? codeChallenge = null;
+            if (options.RequirePkceS256)
+            {
+                codeChallenge = request.Query["code_challenge"].ToString();
+                if (!Fixed(request.Query["code_challenge_method"].ToString(), "S256") || !ValidChallenge(codeChallenge)) return Results.BadRequest();
+            }
+            else if (!string.IsNullOrEmpty(request.Query["code_challenge"].ToString()) || !string.IsNullOrEmpty(request.Query["code_challenge_method"].ToString())) return Results.BadRequest();
             string mode = request.Query["synthetic_mode"].ToString();
             string code = Opaque();
             DateTimeOffset expiry = mode == "expired-code" ? DateTimeOffset.UtcNow.AddSeconds(-1) : DateTimeOffset.UtcNow + options.CodeLifetime;
-            codes[code] = new(expiry, mode, false);
+            codes[code] = new(expiry, mode, false, codeChallenge);
             UriBuilder callback = new(options.RedirectUri) { Query = "code=" + Uri.EscapeDataString(code) + "&state=" + Uri.EscapeDataString(state) };
             return Results.Redirect(callback.Uri.AbsoluteUri);
         });
@@ -106,12 +123,22 @@ public static class SyntheticOAuthServerHost
                 if (!Fixed(form["redirect_uri"].ToString(), options.RedirectUri.AbsoluteUri) || !codes.TryGetValue(code, out CodeRecord? entry) || entry.Used || entry.ExpiresAt <= DateTimeOffset.UtcNow)
                     return Results.Json(new { error = "invalid_grant" }, statusCode: 400);
                 codes[code] = entry with { Used = true };
+                string verifier = form["code_verifier"].ToString();
+                if (options.RequirePkceS256 && (!ValidVerifier(verifier) || !Fixed(S256(verifier), entry.CodeChallenge!)) || !options.RequirePkceS256 && !string.IsNullOrEmpty(verifier))
+                    return Results.Json(new { error = "invalid_grant" }, statusCode: 400);
                 mode = entry.Mode;
             }
             else if (grant == "refresh_token")
             {
                 string refresh = form["refresh_token"].ToString();
                 if (!refreshTokens.TryRemove(refresh, out _)) return Results.Json(new { error = "invalid_grant" }, statusCode: 400);
+            }
+            else if (grant == "client_credentials")
+            {
+                if (!Fixed(form["scope"].ToString(), options.Scope) || options.Audience is not null && !Fixed(form["audience"].ToString(), options.Audience) ||
+                    options.Resource is not null && !Fixed(form["resource"].ToString(), options.Resource))
+                    return Results.Json(new { error = "invalid_scope" }, statusCode: 400);
+                mode = options.ClientCredentialsMode ?? string.Empty;
             }
             else return Results.Json(new { error = "unsupported_grant_type" }, statusCode: 400);
 
@@ -122,6 +149,7 @@ public static class SyntheticOAuthServerHost
             string refreshToken = Opaque();
             long expiresIn = mode == "expired-token" ? 1 : checked((long)options.TokenLifetime.TotalSeconds);
             accessTokens[access] = new(DateTimeOffset.UtcNow.AddSeconds(expiresIn));
+            if (grant == "client_credentials") return Results.Json(new { access_token = access, token_type = "Bearer", expires_in = expiresIn });
             refreshTokens[refreshToken] = true;
             return Results.Json(new { access_token = access, token_type = "Bearer", expires_in = expiresIn, refresh_token = refreshToken });
         });
@@ -144,7 +172,8 @@ public static class SyntheticOAuthServerHost
     private static void Validate(SyntheticOAuthServerOptions options)
     {
         if (string.IsNullOrWhiteSpace(options.ClientId) || options.ClientId.Length > 256 || string.IsNullOrWhiteSpace(options.ClientSecret) || options.ClientSecret.Length > 4096 ||
-            !options.RedirectUri.IsAbsoluteUri || options.RedirectUri.Scheme != Uri.UriSchemeHttps || string.IsNullOrWhiteSpace(options.Scope) || options.CodeLifetime <= TimeSpan.Zero || options.TokenLifetime <= TimeSpan.Zero)
+            !options.RedirectUri.IsAbsoluteUri || options.RedirectUri.Scheme != Uri.UriSchemeHttps || string.IsNullOrWhiteSpace(options.Scope) || options.CodeLifetime <= TimeSpan.Zero || options.TokenLifetime <= TimeSpan.Zero ||
+            options.Resource is { Length: > 256 } || options.ClientCredentialsMode is not (null or "invalid-response" or "wrong-content-type" or "expired-token" or "malicious-redirect"))
             throw new ArgumentException("Invalid synthetic OAuth server configuration.", nameof(options));
     }
 
@@ -154,8 +183,14 @@ public static class SyntheticOAuthServerHost
         byte[] decoded;
         try { decoded = Convert.FromBase64String(value[6..]); }
         catch (FormatException) { return false; }
-        return Fixed(Encoding.UTF8.GetString(decoded), clientId + ":" + clientSecret);
+        string credentials = Encoding.UTF8.GetString(decoded);
+        int separator = credentials.IndexOf(':', StringComparison.Ordinal);
+        if (separator < 0) return false;
+        try { return Fixed(FormDecode(credentials[..separator]), clientId) && Fixed(FormDecode(credentials[(separator + 1)..]), clientSecret); }
+        catch (UriFormatException) { return false; }
     }
+
+    private static string FormDecode(string value) => Uri.UnescapeDataString(value.Replace('+', ' '));
 
     private static bool Fixed(string left, string right)
     {
@@ -165,7 +200,10 @@ public static class SyntheticOAuthServerHost
     }
 
     private static string Opaque() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
-    private sealed record CodeRecord(DateTimeOffset ExpiresAt, string Mode, bool Used);
+    private static bool ValidVerifier(string value) => value.Length is >= 43 and <= 128 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '.' or '_' or '~');
+    private static bool ValidChallenge(string value) => value.Length == 43 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
+    private static string S256(string verifier) => Convert.ToBase64String(SHA256.HashData(Encoding.ASCII.GetBytes(verifier))).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    private sealed record CodeRecord(DateTimeOffset ExpiresAt, string Mode, bool Used, string? CodeChallenge);
     private sealed record TokenRecord(DateTimeOffset ExpiresAt);
 }
 

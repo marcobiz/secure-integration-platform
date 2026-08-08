@@ -54,7 +54,11 @@ public sealed class PublishedOAuthAuthorityResolver
             if (!string.Equals(currentProfile.Profile.Fingerprint, resolved.Profile.Fingerprint, StringComparison.Ordinal) ||
                 currentProfile.SecretResource.CatalogRevision != resolved.SecretResource.CatalogRevision ||
                 !string.Equals(currentProfile.SecretProviderReference, resolved.SecretProviderReference, StringComparison.Ordinal) ||
-                currentProfile.ProtectedResourceEndpoint != resolved.ProtectedResourceEndpoint)
+                currentProfile.ProtectedResourceEndpoint != resolved.ProtectedResourceEndpoint ||
+                currentProfile.ProtectedResourceMethod != resolved.ProtectedResourceMethod ||
+                !string.Equals(currentProfile.ProtectedResourceContentType, resolved.ProtectedResourceContentType, StringComparison.Ordinal) ||
+                currentProfile.ProtectedResourceTimeout != resolved.ProtectedResourceTimeout ||
+                currentProfile.MaximumProtectedResourceResponseBytes != resolved.MaximumProtectedResourceResponseBytes)
                 throw OAuthFailures.ReacquisitionRequired();
         }
 
@@ -87,16 +91,15 @@ public sealed class PublishedOAuthAuthorityResolver
             using JsonDocument document = JsonDocument.Parse(snapshot.Version.CanonicalJson, new JsonDocumentOptions { MaxDepth = 32 });
             JsonElement operation = document.RootElement.GetProperty("operations").EnumerateArray().Single(value => string.Equals(value.GetProperty("operationId").GetString(), invocation.OperationId, StringComparison.Ordinal));
             JsonElement authentication = operation.GetProperty("authentication");
-            if (!string.Equals(authentication.GetProperty("kind").GetString(), "oauthAuthorizationCode", StringComparison.Ordinal) ||
-                !string.Equals(authentication.GetProperty("profileId").GetString(), request.ProfileId, StringComparison.Ordinal))
+            string kind = authentication.GetProperty("kind").GetString()!;
+            if (!string.Equals(authentication.GetProperty("profileId").GetString(), request.ProfileId, StringComparison.Ordinal) ||
+                kind is not ("oauthAuthorizationCode" or "oauthClientCredentials"))
                 throw OAuthFailures.Rejected();
 
             string protectedEndpointBinding = dependencies.EndpointBindingId;
-            string authorizationEndpointBinding = authentication.GetProperty("authorizationEndpointBinding").GetString()!;
             string tokenEndpointBinding = authentication.GetProperty("tokenEndpointBinding").GetString()!;
             string secretBinding = authentication.GetProperty("secretBinding").GetString()!;
             if (!dependencies.SecretBindingIds.Contains(secretBinding, StringComparer.Ordinal) || dependencies.SecretBindingIds.Count != 1 ||
-                !snapshot.Bindings.Endpoints.TryGetValue(authorizationEndpointBinding, out Uri? authorizationEndpoint) ||
                 !snapshot.Bindings.Endpoints.TryGetValue(tokenEndpointBinding, out Uri? tokenEndpoint) ||
                 !snapshot.Bindings.Endpoints.TryGetValue(protectedEndpointBinding, out Uri? protectedBaseEndpoint) ||
                 !snapshot.Bindings.SecretResources.TryGetValue(secretBinding, out ProviderResourceBinding? secretResource) ||
@@ -109,13 +112,29 @@ public sealed class PublishedOAuthAuthorityResolver
 
             string[] scopes = authentication.GetProperty("scopes").EnumerateArray().Select(value => value.GetString()!).ToArray();
             string? audience = authentication.TryGetProperty("audience", out JsonElement audienceElement) ? audienceElement.GetString() : null;
-            OAuthAuthorizationCodeProfile profile = new(request.ProfileId, authorizationEndpoint, tokenEndpoint, new Uri(authentication.GetProperty("redirectUri").GetString()!, UriKind.Absolute),
-                authentication.GetProperty("clientId").GetString()!, scopes, audience,
-                TimeSpan.FromSeconds(OptionalInt(authentication, "authorizationLifetimeSeconds", 300)),
-                TimeSpan.FromMilliseconds(OptionalInt(authentication, "tokenRequestTimeoutMilliseconds", 5000)),
-                OptionalLong(authentication, "maximumTokenResponseBytes", 16 * 1024),
-                TimeSpan.FromSeconds(OptionalInt(authentication, "expirySkewSeconds", 30)),
-                !authentication.TryGetProperty("allowRefresh", out JsonElement allowRefresh) || allowRefresh.GetBoolean());
+            string? resource = authentication.TryGetProperty("resource", out JsonElement resourceElement) ? resourceElement.GetString() : null;
+            OAuthClientAuthenticationMethod clientAuthenticationMethod = ParseClientAuthenticationMethod(authentication);
+            IOAuthProfile profile;
+            if (kind == "oauthAuthorizationCode")
+            {
+                string authorizationEndpointBinding = authentication.GetProperty("authorizationEndpointBinding").GetString()!;
+                if (!snapshot.Bindings.Endpoints.TryGetValue(authorizationEndpointBinding, out Uri? authorizationEndpoint)) throw OAuthFailures.Rejected();
+                profile = new OAuthAuthorizationCodeProfile(request.ProfileId, authorizationEndpoint, tokenEndpoint, new Uri(authentication.GetProperty("redirectUri").GetString()!, UriKind.Absolute),
+                    authentication.GetProperty("clientId").GetString()!, scopes, audience,
+                    TimeSpan.FromSeconds(OptionalInt(authentication, "authorizationLifetimeSeconds", 300)),
+                    TimeSpan.FromMilliseconds(OptionalInt(authentication, "tokenRequestTimeoutMilliseconds", 5000)),
+                    OptionalLong(authentication, "maximumTokenResponseBytes", 16 * 1024),
+                    TimeSpan.FromSeconds(OptionalInt(authentication, "expirySkewSeconds", 30)),
+                    !authentication.TryGetProperty("allowRefresh", out JsonElement allowRefresh) || allowRefresh.GetBoolean(),
+                    ParsePkcePolicy(authentication), clientAuthenticationMethod);
+            }
+            else
+            {
+                profile = new OAuthClientCredentialsProfile(request.ProfileId, tokenEndpoint, authentication.GetProperty("clientId").GetString()!, scopes, audience, resource,
+                    TimeSpan.FromMilliseconds(OptionalInt(authentication, "tokenRequestTimeoutMilliseconds", 5000)),
+                    OptionalLong(authentication, "maximumTokenResponseBytes", 16 * 1024),
+                    TimeSpan.FromSeconds(OptionalInt(authentication, "expirySkewSeconds", 30)), clientAuthenticationMethod);
+            }
 
             Uri protectedEndpoint = new(protectedBaseEndpoint, operation.GetProperty("path").GetString()!);
             if (!OAuthValidation.HttpsEndpoint(protectedEndpoint)) throw OAuthFailures.Rejected();
@@ -138,10 +157,31 @@ public sealed class PublishedOAuthAuthorityResolver
     private static int OptionalInt(JsonElement value, string property, int fallback) => value.TryGetProperty(property, out JsonElement element) ? element.GetInt32() : fallback;
     private static long OptionalLong(JsonElement value, string property, long fallback) => value.TryGetProperty(property, out JsonElement element) ? element.GetInt64() : fallback;
 
-    private sealed class ResolvedPublishedProfile(OAuthAuthorizationCodeProfile profile, ProviderResourceBinding secretResource, string secretProviderReference, Uri protectedResourceEndpoint,
+    private static OAuthPkcePolicy ParsePkcePolicy(JsonElement authentication)
+    {
+        string value = authentication.TryGetProperty("pkcePolicy", out JsonElement element) ? element.GetString()! : "NONE";
+        return value switch
+        {
+            "NONE" => OAuthPkcePolicy.None,
+            "S256_REQUIRED" => OAuthPkcePolicy.S256Required,
+            _ => throw OAuthFailures.Rejected()
+        };
+    }
+
+    private static OAuthClientAuthenticationMethod ParseClientAuthenticationMethod(JsonElement authentication)
+    {
+        string value = authentication.TryGetProperty("clientAuthMethod", out JsonElement element) ? element.GetString()! : "client_secret_basic";
+        return value switch
+        {
+            "client_secret_basic" => OAuthClientAuthenticationMethod.ClientSecretBasic,
+            _ => throw OAuthFailures.Rejected()
+        };
+    }
+
+    private sealed class ResolvedPublishedProfile(IOAuthProfile profile, ProviderResourceBinding secretResource, string secretProviderReference, Uri protectedResourceEndpoint,
         HttpMethod protectedResourceMethod, string? protectedResourceContentType, TimeSpan protectedResourceTimeout, long maximumProtectedResourceResponseBytes)
     {
-        internal OAuthAuthorizationCodeProfile Profile { get; } = profile;
+        internal IOAuthProfile Profile { get; } = profile;
         internal ProviderResourceBinding SecretResource { get; } = secretResource;
         internal string SecretProviderReference { get; } = secretProviderReference;
         internal Uri ProtectedResourceEndpoint { get; } = protectedResourceEndpoint;

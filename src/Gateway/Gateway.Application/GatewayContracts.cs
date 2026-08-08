@@ -69,7 +69,11 @@ public enum GatewayAuthenticationKind
     /// <summary>TLS client certificate populated from a server-side secret.</summary>
     MutualTls,
     /// <summary>Header API key and TLS client certificate, both resolved server-side.</summary>
-    ApiKeyAndMutualTls
+    ApiKeyAndMutualTls,
+    /// <summary>OAuth Authorization Code is executed only by the capability-based outbound auth module.</summary>
+    OAuthAuthorizationCode,
+    /// <summary>OAuth Client Credentials is executed only by the capability-based outbound auth module.</summary>
+    OAuthClientCredentials
 }
 
 /// <summary>Server-owned operation definition. No field is copied from an invoke request.</summary>

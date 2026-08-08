@@ -9,7 +9,22 @@ namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OAuth;
 public enum HttpAuthenticationPolicy
 {
     /// <summary>OAuth 2.0 Authorization Code with a server-owned confidential client.</summary>
-    OAuthAuthorizationCode
+    OAuthAuthorizationCode,
+    /// <summary>OAuth 2.0 Client Credentials with a server-owned confidential client.</summary>
+    OAuthClientCredentials
+}
+
+/// <summary>Server-owned PKCE policy. Callers cannot supply a verifier or select a downgrade.</summary>
+internal enum OAuthPkcePolicy
+{
+    None,
+    S256Required
+}
+
+/// <summary>Allowlisted client authentication selected by the Published profile.</summary>
+internal enum OAuthClientAuthenticationMethod
+{
+    ClientSecretBasic
 }
 
 /// <summary>Unforgeable handoff created by the authenticated and authorized Gateway runtime.</summary>
@@ -57,7 +72,7 @@ public sealed class OAuthResolvedExecutionContext
 {
     internal OAuthResolvedExecutionContext(
         OutboundAuthContext authority,
-        OAuthAuthorizationCodeProfile profile,
+        IOAuthProfile profile,
         ScopedOAuthSecretCapability clientSecret,
         Uri protectedResourceEndpoint,
         HttpMethod protectedResourceMethod,
@@ -87,7 +102,7 @@ public sealed class OAuthResolvedExecutionContext
     public string ProfileId => Profile.ProfileId;
 
     [JsonIgnore] internal OutboundAuthContext Authority { get; }
-    [JsonIgnore] internal OAuthAuthorizationCodeProfile Profile { get; }
+    [JsonIgnore] internal IOAuthProfile Profile { get; }
     [JsonIgnore] internal ScopedOAuthSecretCapability ClientSecret { get; }
     [JsonIgnore] internal Uri ProtectedResourceEndpoint { get; }
     [JsonIgnore] internal HttpMethod ProtectedResourceMethod { get; }
@@ -98,6 +113,23 @@ public sealed class OAuthResolvedExecutionContext
 
     /// <inheritdoc />
     public override string ToString() => $"OAuthResolvedExecutionContext(ConnectorId={ConnectorId}, OperationId={OperationId}, ProfileId={ProfileId}, CorrelationId={CorrelationId:D})";
+}
+
+/// <summary>Common immutable profile surface compiled from Published state only.</summary>
+internal interface IOAuthProfile
+{
+    HttpAuthenticationPolicy Policy { get; }
+    string ProfileId { get; }
+    Uri TokenEndpoint { get; }
+    string ClientId { get; }
+    IReadOnlyList<string> Scopes { get; }
+    string? Audience { get; }
+    string? Resource { get; }
+    TimeSpan TokenRequestTimeout { get; }
+    long MaximumTokenResponseBytes { get; }
+    TimeSpan ExpirySkew { get; }
+    OAuthClientAuthenticationMethod ClientAuthenticationMethod { get; }
+    string Fingerprint { get; }
 }
 
 /// <summary>Immutable server-derived security identity. It is never constructible by Connector code.</summary>
@@ -150,7 +182,7 @@ internal sealed class OutboundAuthContext
 }
 
 /// <summary>Raw profile compiled only inside the authority resolver from a Published snapshot.</summary>
-internal sealed class OAuthAuthorizationCodeProfile
+internal sealed class OAuthAuthorizationCodeProfile : IOAuthProfile
 {
     private static readonly HashSet<string> ReservedAuthorizationParameters = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -159,14 +191,16 @@ internal sealed class OAuthAuthorizationCodeProfile
     private readonly ReadOnlyCollection<string> scopes;
 
     internal OAuthAuthorizationCodeProfile(string profileId, Uri authorizationEndpoint, Uri tokenEndpoint, Uri redirectUri, string clientId, IEnumerable<string> scopes, string? audience,
-        TimeSpan authorizationLifetime, TimeSpan tokenRequestTimeout, long maximumTokenResponseBytes, TimeSpan expirySkew, bool allowRefresh)
+        TimeSpan authorizationLifetime, TimeSpan tokenRequestTimeout, long maximumTokenResponseBytes, TimeSpan expirySkew, bool allowRefresh,
+        OAuthPkcePolicy pkcePolicy = OAuthPkcePolicy.None, OAuthClientAuthenticationMethod clientAuthenticationMethod = OAuthClientAuthenticationMethod.ClientSecretBasic)
     {
         string[] scopeValues = scopes?.ToArray() ?? [];
         if (!OAuthValidation.Identifier(profileId) || !OAuthValidation.HttpsEndpoint(authorizationEndpoint) || ContainsReservedAuthorizationParameter(authorizationEndpoint) || !OAuthValidation.HttpsEndpoint(tokenEndpoint) ||
-            !OAuthValidation.HttpsRedirect(redirectUri) || string.IsNullOrWhiteSpace(clientId) || clientId.Length > 256 || scopeValues.Length is < 1 or > 32 ||
-            scopeValues.Any(value => !OAuthValidation.Scope(value)) || scopeValues.Distinct(StringComparer.Ordinal).Count() != scopeValues.Length || audience is { Length: > 256 } || audience?.Any(char.IsControl) == true ||
+            !OAuthValidation.HttpsRedirect(redirectUri) || !OAuthValidation.ClientId(clientId) || scopeValues.Length is < 1 or > 32 ||
+            scopeValues.Any(value => !OAuthValidation.Scope(value)) || scopeValues.Distinct(StringComparer.Ordinal).Count() != scopeValues.Length || !OAuthValidation.OptionalParameter(audience) ||
             authorizationLifetime < TimeSpan.FromMinutes(1) || authorizationLifetime > TimeSpan.FromMinutes(30) || tokenRequestTimeout < TimeSpan.FromMilliseconds(100) || tokenRequestTimeout > TimeSpan.FromSeconds(30) ||
-            maximumTokenResponseBytes is < 256 or > 64 * 1024 || expirySkew < TimeSpan.Zero || expirySkew > TimeSpan.FromMinutes(5))
+            maximumTokenResponseBytes is < 256 or > 64 * 1024 || expirySkew < TimeSpan.Zero || expirySkew > TimeSpan.FromMinutes(5) ||
+            clientAuthenticationMethod != OAuthClientAuthenticationMethod.ClientSecretBasic)
             throw OAuthFailures.Configuration();
 
         ProfileId = profileId;
@@ -181,6 +215,8 @@ internal sealed class OAuthAuthorizationCodeProfile
         MaximumTokenResponseBytes = maximumTokenResponseBytes;
         ExpirySkew = expirySkew;
         AllowRefresh = allowRefresh;
+        PkcePolicy = pkcePolicy;
+        ClientAuthenticationMethod = clientAuthenticationMethod;
     }
 
     internal HttpAuthenticationPolicy Policy { get; } = HttpAuthenticationPolicy.OAuthAuthorizationCode;
@@ -191,12 +227,28 @@ internal sealed class OAuthAuthorizationCodeProfile
     [JsonIgnore] internal string ClientId { get; }
     [JsonIgnore] internal IReadOnlyList<string> Scopes => scopes;
     [JsonIgnore] internal string? Audience { get; }
+    [JsonIgnore] public string? Resource => null;
     internal TimeSpan AuthorizationLifetime { get; }
     internal TimeSpan TokenRequestTimeout { get; }
     internal long MaximumTokenResponseBytes { get; }
     internal TimeSpan ExpirySkew { get; }
     internal bool AllowRefresh { get; }
-    internal string Fingerprint => string.Join('\n', [ProfileId, AuthorizationEndpoint.AbsoluteUri, TokenEndpoint.AbsoluteUri, RedirectUri.AbsoluteUri, ClientId, string.Join(' ', scopes), Audience ?? string.Empty, AllowRefresh ? "refresh" : "reacquire"]);
+    internal OAuthPkcePolicy PkcePolicy { get; }
+    public OAuthClientAuthenticationMethod ClientAuthenticationMethod { get; }
+    internal string Fingerprint => string.Join('\n', [Policy.ToString(), ProfileId, AuthorizationEndpoint.AbsoluteUri, TokenEndpoint.AbsoluteUri, RedirectUri.AbsoluteUri, ClientId,
+        ClientAuthenticationMethod.ToString(), string.Join(' ', scopes), Audience ?? string.Empty, Resource ?? string.Empty, AllowRefresh ? "refresh" : "reacquire", PkcePolicy.ToString(),
+        AuthorizationLifetime.Ticks, TokenRequestTimeout.Ticks, MaximumTokenResponseBytes, ExpirySkew.Ticks]);
+
+    HttpAuthenticationPolicy IOAuthProfile.Policy => Policy;
+    string IOAuthProfile.ProfileId => ProfileId;
+    Uri IOAuthProfile.TokenEndpoint => TokenEndpoint;
+    string IOAuthProfile.ClientId => ClientId;
+    IReadOnlyList<string> IOAuthProfile.Scopes => Scopes;
+    string? IOAuthProfile.Audience => Audience;
+    TimeSpan IOAuthProfile.TokenRequestTimeout => TokenRequestTimeout;
+    long IOAuthProfile.MaximumTokenResponseBytes => MaximumTokenResponseBytes;
+    TimeSpan IOAuthProfile.ExpirySkew => ExpirySkew;
+    string IOAuthProfile.Fingerprint => Fingerprint;
 
     public override string ToString() => $"OAuthAuthorizationCodeProfile(ProfileId={ProfileId}, Policy={Policy})";
 
@@ -213,6 +265,51 @@ internal sealed class OAuthAuthorizationCodeProfile
         }
         return false;
     }
+}
+
+/// <summary>Raw Client Credentials profile compiled only inside the authority resolver.</summary>
+internal sealed class OAuthClientCredentialsProfile : IOAuthProfile
+{
+    private readonly ReadOnlyCollection<string> scopes;
+
+    internal OAuthClientCredentialsProfile(string profileId, Uri tokenEndpoint, string clientId, IEnumerable<string> scopes, string? audience, string? resource,
+        TimeSpan tokenRequestTimeout, long maximumTokenResponseBytes, TimeSpan expirySkew,
+        OAuthClientAuthenticationMethod clientAuthenticationMethod = OAuthClientAuthenticationMethod.ClientSecretBasic)
+    {
+        string[] scopeValues = scopes?.ToArray() ?? [];
+        if (!OAuthValidation.Identifier(profileId) || !OAuthValidation.HttpsEndpoint(tokenEndpoint) || !OAuthValidation.ClientId(clientId) ||
+            scopeValues.Length is < 1 or > 32 || scopeValues.Any(value => !OAuthValidation.Scope(value)) || scopeValues.Distinct(StringComparer.Ordinal).Count() != scopeValues.Length ||
+            !OAuthValidation.OptionalParameter(audience) || !OAuthValidation.OptionalParameter(resource) ||
+            tokenRequestTimeout < TimeSpan.FromMilliseconds(100) || tokenRequestTimeout > TimeSpan.FromSeconds(30) || maximumTokenResponseBytes is < 256 or > 64 * 1024 ||
+            expirySkew < TimeSpan.Zero || expirySkew > TimeSpan.FromMinutes(5) || clientAuthenticationMethod != OAuthClientAuthenticationMethod.ClientSecretBasic)
+            throw OAuthFailures.Configuration();
+
+        ProfileId = profileId;
+        TokenEndpoint = tokenEndpoint;
+        ClientId = clientId;
+        this.scopes = Array.AsReadOnly(scopeValues);
+        Audience = audience;
+        Resource = resource;
+        TokenRequestTimeout = tokenRequestTimeout;
+        MaximumTokenResponseBytes = maximumTokenResponseBytes;
+        ExpirySkew = expirySkew;
+        ClientAuthenticationMethod = clientAuthenticationMethod;
+    }
+
+    public HttpAuthenticationPolicy Policy { get; } = HttpAuthenticationPolicy.OAuthClientCredentials;
+    public string ProfileId { get; }
+    [JsonIgnore] public Uri TokenEndpoint { get; }
+    [JsonIgnore] public string ClientId { get; }
+    [JsonIgnore] public IReadOnlyList<string> Scopes => scopes;
+    [JsonIgnore] public string? Audience { get; }
+    [JsonIgnore] public string? Resource { get; }
+    public TimeSpan TokenRequestTimeout { get; }
+    public long MaximumTokenResponseBytes { get; }
+    public TimeSpan ExpirySkew { get; }
+    public OAuthClientAuthenticationMethod ClientAuthenticationMethod { get; }
+    public string Fingerprint => string.Join('\n', [Policy.ToString(), ProfileId, TokenEndpoint.AbsoluteUri, ClientId, ClientAuthenticationMethod.ToString(),
+        string.Join(' ', scopes), Audience ?? string.Empty, Resource ?? string.Empty, TokenRequestTimeout.Ticks, MaximumTokenResponseBytes, ExpirySkew.Ticks]);
+    public override string ToString() => $"OAuthClientCredentialsProfile(ProfileId={ProfileId}, Policy={Policy})";
 }
 
 /// <summary>Capability scoped to the exact provider locator resolved for the Published secret binding.</summary>
@@ -289,6 +386,12 @@ internal static class OAuthValidation
 {
     internal static bool Identifier(string value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 100 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
     internal static bool Scope(string value) => value.Length is > 0 and <= 128 && value.All(character => character is >= '!' and <= '~' && character is not '"' and not '\\');
+    internal static bool ClientId(string value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 256 && !value.Any(character => char.IsControl(character) || character is '\r' or '\n' or '\0');
     internal static bool HttpsEndpoint(Uri value) => value.IsAbsoluteUri && value.Scheme == Uri.UriSchemeHttps && string.IsNullOrEmpty(value.UserInfo) && string.IsNullOrEmpty(value.Fragment);
     internal static bool HttpsRedirect(Uri value) => HttpsEndpoint(value) && string.IsNullOrEmpty(value.Query);
+    internal static bool OptionalParameter(string? value) => value is null || value.Length is > 0 and <= 256 && !value.Any(character => char.IsControl(character) || character is '\r' or '\n' or '\0');
+    internal static bool PkceVerifier(string? value) => value is not null && value.Length is >= 43 and <= 128 && value.All(IsPkceCharacter);
+    internal static bool PkceVerifier(byte[]? value) => value is not null && value.Length is >= 43 and <= 128 && value.All(character => character <= 0x7f && IsPkceCharacter((char)character));
+    internal static bool PkceChallenge(string? value) => value is { Length: 43 } && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
+    private static bool IsPkceCharacter(char character) => char.IsAsciiLetterOrDigit(character) || character is '-' or '.' or '_' or '~';
 }
