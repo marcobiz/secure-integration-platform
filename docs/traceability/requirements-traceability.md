@@ -327,11 +327,16 @@ available. Generic M6 auth tests are regression evidence only, not regional supp
 | Official source freeze | `docs/implementation/FSE2-WAVE1-SPEC-FREEZE.md`; guide 2.23 and OpenAPI 1.0.0 at official commit `430e6b5d9dde8a35b04ae635c11303db787a977e` with recorded SHA-256 | PASS documentation |
 | Freeze currency on resume | Official `main` and `HEAD` still resolve to `430e6b5d9dde8a35b04ae635c11303db787a977e`; GitHub compare is identical with zero later commits | FROZEN_SPEC_ACCEPTED |
 | Current operation inventory | Paths, methods, request/response, workflow, production availability and retry class frozen from the official sources | PASS documentation |
-| Vertical isolation | No Healthcare code or dependency added; current Core/Auth surface inspected before implementation | PASS |
+| Vertical isolation | `HC_W1_ARCH_FSE2_domain_and_dual_JWT_concepts_are_absent_from_Core_source_and_export`; pack dependency boundary tests; `BrokerGateway.Core.slnx` excludes Healthcare | PASS local |
 | Generic JWT/X.509 composition | RS256, public X.509 material, typed `x5c`, exact `iat+exp`, trusted runtime claim binding and mTLS are present on baseline `705e9d4bd203ca7b902ad0aeedc9d4402f9f4452` | CLOSED / regression only |
 | Token lifetime and skew | Not specified by the official source; the existing validated server-owned policy must be explicitly approved for a production profile and remains caller-inaccessible | COMPOSABLE / deployment approval required |
-| Authoritative FSE actor | `GatewayClientPrincipal` carries only server-derived platform Tenant/Application/Installation identity; repository search finds no production `ITrustedRuntimeClaimValueResolver` or healthcare actor authority | BLOCKED_BY_TRUSTED_ACTOR_SOURCE |
-| Connector, synthetic server and security tests | Not created because the explicit trusted-actor stop was reached before connector implementation; provider and network invocation counts remain zero | NOT STARTED / fail before use |
+| Authoritative organization subject | `FSE2_PROFILE_organization_subject_is_fixed_CX_checksum_bound_and_four_eyes_approved`; P.IVA + authority -> canonical CX -> `JwtSubjectPolicy.Fixed`; exact Tenant/Application/Installation/Environment/ConnectorVersion/operation/profile authority and checksum | PASS local / independent review pending |
+| Claim authority and role coherence | `FSE2_CLAIMS_authority_is_explicit_and_wrong_role_purpose_action_or_unknown_claim_fail_closed`; frozen operation theory; workflow stored-context tamper test | PASS local |
+| Dual JWT, x5c and certificate separation | `FSE2_E2E_real_HTTPS_mTLS_dual_RS256_JWT_x5c_fixed_organization_subject_and_exact_hash_pass`; cross-use, wrong x5c and substituted signing certificate matrix | PASS local |
+| CX/XON, exact hash, workflow/retry and RFC7807 | Dedicated formatter/hash, status-context, timeout and redaction tests in `Healthcare.FSE2.Tests` | PASS local |
+| Restricted destination and authority | Wrong grant/test-only/wrong endpoint/stale/disable/rotation tests assert zero provider, DNS or network at the earliest enforceable boundary | PASS local |
+| Synthetic HTTPS/mTLS conformance | Per-run CA/server/signing/mTLS certificates; real mTLS, RS256 verification, both headers, leaf x5c, issuer/CN, fixed sub, iat+exp/no nbf, audience, claims and exact file hash | PASS local; no official call |
+| Human actor profile | No dynamic human subject, OIDC/Keycloak, client attestation or global principal in this PR | DEFERRED_PENDING_TRUSTED_ACTOR_SOURCE |
 | Production accreditation | Requires official provisioning, certificates, conformance execution and operational evidence | NOT ACCREDITED |
 
 ## Security threats

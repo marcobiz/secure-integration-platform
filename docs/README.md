@@ -36,7 +36,7 @@ Questa directory è la fonte di verità architetturale del prodotto. Le decision
 24. [Architettura implementata M2](architecture/m2-gateway-architecture.md)
 25. [Piano M2](implementation/M2-IMPLEMENTATION-PLAN.md), [runbook M2](operations/M2-GATEWAY-RUNBOOK.md), [report M2](testing/M2-IMPLEMENTATION-REPORT.md) e [Gate Review M2](reviews/M2-GATE-REVIEW.md)
 26. [Wave 1 typed composed SOAP authenticated dispatch](implementation/WAVE1-TYPED-COMPOSED-SOAP-DISPATCH.md)
-27. [FSE2 Wave 1 - freeze ufficiale e capability gap](implementation/FSE2-WAVE1-SPEC-FREEZE.md)
+27. [FSE2 Wave 1 - freeze ufficiale e gate risolto](implementation/FSE2-WAVE1-SPEC-FREEZE.md), [profilo organizzativo](connectors/healthcare/fse2/README.md) e [report di implementazione](testing/FSE2-IMPLEMENTATION-REPORT.md)
 
 ## Deliverable coperti
 
@@ -56,7 +56,7 @@ Questa directory è la fonte di verità architetturale del prodotto. Le decision
 | Gate Review prima di M2 | `reviews/` |
 | Harness live M0/M1 e runbook VM | `../tools/live-matrix/`, `operations/M0-M1-LIVE-MATRIX-RUNBOOK.md` |
 | Gateway minimo M2 | `architecture/m2-gateway-architecture.md`, `implementation/M2-IMPLEMENTATION-PLAN.md`, `operations/M2-GATEWAY-RUNBOOK.md`, `testing/M2-IMPLEMENTATION-REPORT.md`, `reviews/M2-GATE-REVIEW.md` |
-| FSE2 Wave 1 | `implementation/FSE2-WAVE1-SPEC-FREEZE.md` (freeze pubblico; implementazione NO-GO su capability gap generico) |
+| FSE2 Wave 1 | `implementation/FSE2-WAVE1-SPEC-FREEZE.md`, `connectors/healthcare/fse2/README.md`, `testing/FSE2-IMPLEMENTATION-REPORT.md` (profilo iniziale organizzativo; profilo human actor differito; accreditamento non dichiarato) |
 
 ## Regole di manutenzione
 
