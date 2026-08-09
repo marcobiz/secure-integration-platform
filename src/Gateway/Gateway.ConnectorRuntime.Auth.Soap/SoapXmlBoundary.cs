@@ -152,7 +152,43 @@ internal static class SoapXmlBoundary
         return new SoapDecodedResponse(new ReadOnlyDictionary<string, string>(mapped), session, challenge);
     }
 
-    private static XDocument LoadHardened(byte[] body, long maximumCharacters, CancellationToken cancellationToken)
+    /// <summary>
+    /// Applies the hardened outer SOAP boundary and returns exactly one expected typed payload.
+    /// Nested protocol semantics are evaluated only afterwards by the registered compiled adapter.
+    /// </summary>
+    internal static XElement ParseTypedPayload(
+        SoapOperationProfile operation,
+        ExternalResponse response,
+        IReadOnlyDictionary<(string LocalName, string NamespaceUri), SoapFaultCategory> faultRules,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        ArgumentNullException.ThrowIfNull(response);
+        if (response.Body.LongLength > operation.MaximumResponseBytes) throw new SoapAuthException("SOAP-RESPONSE-TOO-LARGE");
+        ValidateContentType(operation.Version, response.ContentType);
+        cancellationToken.ThrowIfCancellationRequested();
+        XDocument document = LoadHardened(response.Body, operation.MaximumResponseBytes, cancellationToken);
+        string envelopeNamespace = EnvelopeNamespace(operation.Version);
+        XElement envelope = document.Root ?? throw new SoapAuthException("SOAP-XML-MALFORMED");
+        if (envelope.Name != XName.Get("Envelope", envelopeNamespace)) throw new SoapAuthException("SOAP-ENVELOPE-NAMESPACE");
+        if (envelope.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration) || HasSignificantText(envelope)) throw new SoapAuthException("SOAP-ENVELOPE-STRUCTURE");
+        XElement[] structural = envelope.Elements().ToArray();
+        if (structural.Length is < 1 or > 2 || structural.Count(element => element.Name == XName.Get("Body", envelopeNamespace)) != 1 ||
+            structural.Any(element => element.Name != XName.Get("Body", envelopeNamespace) && element.Name != XName.Get("Header", envelopeNamespace)))
+            throw new SoapAuthException("SOAP-ENVELOPE-STRUCTURE");
+        if (structural.Length == 2 && structural[0].Name != XName.Get("Header", envelopeNamespace)) throw new SoapAuthException("SOAP-ENVELOPE-STRUCTURE");
+        XElement body = structural.Single(element => element.Name == XName.Get("Body", envelopeNamespace));
+        if (body.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration) || HasSignificantText(body)) throw new SoapAuthException("SOAP-BODY-STRUCTURE");
+        XElement[] payloads = body.Elements().ToArray();
+        if (payloads.Length != 1) throw new SoapAuthException("SOAP-BODY-STRUCTURE");
+        XElement payload = payloads[0];
+        if (payload.Name == XName.Get("Fault", envelopeNamespace)) throw ParseFault(payload, operation.Version, faultRules, cancellationToken);
+        if (response.StatusCode is < 200 or >= 300) throw new SoapAuthException("SOAP-UPSTREAM-HTTP");
+        if (payload.Name != XName.Get(operation.ResponseElement.LocalName, operation.ResponseElement.NamespaceUri)) throw new SoapAuthException("SOAP-RESPONSE-NAMESPACE");
+        return payload;
+    }
+
+    internal static XDocument LoadHardened(byte[] body, long maximumCharacters, CancellationToken cancellationToken)
     {
         XmlReaderSettings settings = new()
         {

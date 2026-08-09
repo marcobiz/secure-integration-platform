@@ -40,6 +40,16 @@ internal sealed class SoapSessionCache
         }
     }
 
+    public (OpaqueSoapSessionReference Reference, DateTimeOffset ExpiresAt)? ResolveCurrentMetadata(SoapSessionCacheKey key, DateTimeOffset now)
+    {
+        lock (sync)
+        {
+            SweepExpired(now);
+            if (!entries.TryGetValue(key, out KeyState? state) || state.Current is not StoredSession stored) return null;
+            return (new OpaqueSoapSessionReference(stored.Reference), stored.ExpiresAt);
+        }
+    }
+
     public string? Resolve(SoapSessionCacheKey key, OpaqueSoapSessionReference reference, DateTimeOffset now)
     {
         ValidateReference(reference.Value);
@@ -104,7 +114,8 @@ internal sealed class SoapSessionCache
             SweepExpired(now);
             KeyState state = GetOrCreate(key);
             state.InteractionGeneration = checked(state.InteractionGeneration + 1);
-            state.Interaction = new StoredInteraction(state.InteractionGeneration, Digest(reference), upstreamChallenge, expiresAt, null);
+            state.Interaction = new StoredInteraction(state.InteractionGeneration, Digest(reference), InteractionKind.Challenge,
+                upstreamChallenge, null, null, state.Generation, expiresAt, null);
         }
         return new SoapInteractiveChallenge(reference, upstreamChallenge, expiresAt);
     }
@@ -116,11 +127,13 @@ internal sealed class SoapSessionCache
         lock (sync)
         {
             SweepExpired(now);
-            if (!entries.TryGetValue(key, out KeyState? state) || state.Interaction is not StoredInteraction interaction || interaction.CompletionId is not null || !string.Equals(interaction.Digest, digest, StringComparison.Ordinal))
+            if (!entries.TryGetValue(key, out KeyState? state) || state.Interaction is not StoredInteraction interaction ||
+                interaction.Kind != InteractionKind.Challenge || interaction.CompletionId is not null || !string.Equals(interaction.Digest, digest, StringComparison.Ordinal))
                 throw new SoapAuthException("SOAP-INTERACTION-INVALID");
             Guid completionId = Guid.NewGuid();
             state.Interaction = interaction with { CompletionId = completionId };
-            return new InteractionCompletion(key, interaction.Generation, completionId, interaction.UpstreamChallenge);
+            return new InteractionCompletion(key, interaction.Generation, completionId,
+                interaction.SensitiveState ?? throw new SoapAuthException("SOAP-INTERACTION-INVALID"));
         }
     }
 
@@ -131,7 +144,8 @@ internal sealed class SoapSessionCache
         lock (sync)
         {
             SweepExpired(now);
-            if (!entries.TryGetValue(completion.Key, out KeyState? state) || state.Interaction is not StoredInteraction interaction || interaction.Generation != completion.InteractionGeneration || interaction.CompletionId != completion.CompletionId)
+            if (!entries.TryGetValue(completion.Key, out KeyState? state) || state.Interaction is not StoredInteraction interaction ||
+                interaction.Kind != InteractionKind.Challenge || interaction.Generation != completion.InteractionGeneration || interaction.CompletionId != completion.CompletionId)
                 throw new SoapAuthException("SOAP-INTERACTION-INVALID");
             state.Generation = checked(state.Generation + 1);
             state.Current = new StoredSession(state.Generation, reference, digest, upstreamSession, expiresAt);
@@ -144,7 +158,93 @@ internal sealed class SoapSessionCache
     {
         lock (sync)
         {
-            if (!entries.TryGetValue(completion.Key, out KeyState? state) || state.Interaction is not StoredInteraction interaction || interaction.Generation != completion.InteractionGeneration || interaction.CompletionId != completion.CompletionId) return;
+            if (!entries.TryGetValue(completion.Key, out KeyState? state) || state.Interaction is not StoredInteraction interaction ||
+                interaction.Kind != InteractionKind.Challenge || interaction.Generation != completion.InteractionGeneration || interaction.CompletionId != completion.CompletionId) return;
+            state.Interaction = null;
+            RemoveIfEmpty(completion.Key, state);
+        }
+    }
+
+    public ExternalSessionAdmissionIntent StoreAdmissionIntent(
+        SoapSessionCacheKey key,
+        string authorityFingerprint,
+        string profileId,
+        ExternalSessionProvenance provenance,
+        DateTimeOffset now,
+        DateTimeOffset expiresAt)
+    {
+        if (string.IsNullOrWhiteSpace(authorityFingerprint)) throw TypedSessionHandshakeFailures.Configuration();
+        string reference = NewReference();
+        lock (sync)
+        {
+            SweepExpired(now);
+            KeyState state = GetOrCreate(key);
+            if (state.Current is not null) throw TypedSessionHandshakeFailures.AdmissionIntentInvalid();
+            state.InteractionGeneration = checked(state.InteractionGeneration + 1);
+            state.Interaction = new StoredInteraction(state.InteractionGeneration, Digest(reference), InteractionKind.ExternalAdmission,
+                null, authorityFingerprint, provenance, state.Generation, expiresAt, null);
+        }
+        return new(reference, profileId, provenance, expiresAt, authorityFingerprint);
+    }
+
+    public AdmissionCompletion BeginAdmission(
+        SoapSessionCacheKey key,
+        ExternalSessionAdmissionIntent intent,
+        string authorityFingerprint,
+        DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(intent);
+        ValidateReference(intent.Reference);
+        string digest = Digest(intent.Reference);
+        lock (sync)
+        {
+            SweepExpired(now);
+            if (!entries.TryGetValue(key, out KeyState? state) || state.Interaction is not StoredInteraction interaction ||
+                interaction.Kind != InteractionKind.ExternalAdmission || interaction.CompletionId is not null ||
+                !string.Equals(interaction.Digest, digest, StringComparison.Ordinal) ||
+                !string.Equals(interaction.AuthorityFingerprint, authorityFingerprint, StringComparison.Ordinal) ||
+                !string.Equals(intent.AuthorityFingerprint, authorityFingerprint, StringComparison.Ordinal) ||
+                !string.Equals(intent.ProfileId, key.ProfileId, StringComparison.Ordinal) ||
+                interaction.Provenance != intent.Provenance || interaction.SessionGeneration != state.Generation)
+                throw TypedSessionHandshakeFailures.AdmissionIntentInvalid();
+            Guid completionId = Guid.NewGuid();
+            state.Interaction = interaction with { CompletionId = completionId };
+            return new(key, interaction.Generation, completionId, interaction.SessionGeneration, intent.Provenance, authorityFingerprint);
+        }
+    }
+
+    public OpaqueSoapSessionReference CompleteAdmission(
+        AdmissionCompletion completion,
+        string upstreamSession,
+        DateTimeOffset now,
+        DateTimeOffset expiresAt)
+    {
+        if (!TypedSessionHandshakeValidation.SessionValue(upstreamSession)) throw TypedSessionHandshakeFailures.CandidateInvalid();
+        string reference = NewReference();
+        string digest = Digest(reference);
+        lock (sync)
+        {
+            SweepExpired(now);
+            if (!entries.TryGetValue(completion.Key, out KeyState? state) || state.Interaction is not StoredInteraction interaction ||
+                interaction.Kind != InteractionKind.ExternalAdmission || interaction.Generation != completion.InteractionGeneration ||
+                interaction.CompletionId != completion.CompletionId || state.Generation != completion.SessionGeneration ||
+                !string.Equals(interaction.AuthorityFingerprint, completion.AuthorityFingerprint, StringComparison.Ordinal) ||
+                interaction.Provenance != completion.Provenance)
+                throw TypedSessionHandshakeFailures.AdmissionIntentInvalid();
+            state.Generation = checked(state.Generation + 1);
+            state.Current = new StoredSession(state.Generation, reference, digest, upstreamSession, expiresAt);
+            state.Interaction = null;
+        }
+        return new(reference);
+    }
+
+    public void AbandonAdmission(AdmissionCompletion completion)
+    {
+        lock (sync)
+        {
+            if (!entries.TryGetValue(completion.Key, out KeyState? state) || state.Interaction is not StoredInteraction interaction ||
+                interaction.Kind != InteractionKind.ExternalAdmission || interaction.Generation != completion.InteractionGeneration ||
+                interaction.CompletionId != completion.CompletionId) return;
             state.Interaction = null;
             RemoveIfEmpty(completion.Key, state);
         }
@@ -192,10 +292,33 @@ internal sealed class SoapSessionCache
     }
 
     private sealed record StoredSession(long Generation, string Reference, string Digest, string UpstreamSession, DateTimeOffset ExpiresAt);
-    private sealed record StoredInteraction(long Generation, string Digest, string UpstreamChallenge, DateTimeOffset ExpiresAt, Guid? CompletionId);
+    private enum InteractionKind
+    {
+        Challenge,
+        ExternalAdmission
+    }
+
+    private sealed record StoredInteraction(
+        long Generation,
+        string Digest,
+        InteractionKind Kind,
+        string? SensitiveState,
+        string? AuthorityFingerprint,
+        ExternalSessionProvenance? Provenance,
+        long SessionGeneration,
+        DateTimeOffset ExpiresAt,
+        Guid? CompletionId);
 }
 
 internal sealed record InteractionCompletion(SoapSessionCacheKey Key, long InteractionGeneration, Guid CompletionId, string UpstreamChallenge);
+
+internal sealed record AdmissionCompletion(
+    SoapSessionCacheKey Key,
+    long InteractionGeneration,
+    Guid CompletionId,
+    long SessionGeneration,
+    ExternalSessionProvenance Provenance,
+    string AuthorityFingerprint);
 
 internal sealed record SoapSessionCacheKey(
     Guid TenantId,

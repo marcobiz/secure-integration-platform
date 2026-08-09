@@ -77,6 +77,7 @@
         "request": { "$ref": "#/$defs/messagePolicy" },
         "response": { "$ref": "#/$defs/responsePolicy" },
         "authentication": { "$ref": "#/$defs/authentication" },
+        "typedSessionHandshake": { "$ref": "#/$defs/typedSessionHandshake" },
         "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 },
         "redirectPolicy": { "const": "deny" },
         "allowedClientHeaders": {
@@ -226,6 +227,57 @@
           }
         }
       ]
+    },
+    "typedSessionHandshake": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileId", "soapVersion", "action", "requestElement", "responseElement", "requestAdapter", "responseAdapter", "sessionLifetimeSeconds"],
+      "properties": {
+        "profileId": { "$ref": "#/$defs/identifier" },
+        "soapVersion": { "enum": ["1.1", "1.2"] },
+        "action": { "type": "string", "format": "uri", "maxLength": 2048 },
+        "requestElement": { "$ref": "#/$defs/xmlQualifiedName" },
+        "responseElement": { "$ref": "#/$defs/xmlQualifiedName" },
+        "requestAdapter": { "$ref": "#/$defs/compiledAdapter" },
+        "responseAdapter": { "$ref": "#/$defs/compiledAdapter" },
+        "sessionLifetimeSeconds": { "type": "integer", "minimum": 60, "maximum": 604800 },
+        "externalAdmission": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["validator", "endpointBinding", "path", "intentLifetimeSeconds", "timeoutMs", "maximumResponseBytes"],
+          "properties": {
+            "validator": { "$ref": "#/$defs/compiledAdapter" },
+            "endpointBinding": { "$ref": "#/$defs/identifier" },
+            "path": {
+              "type": "string",
+              "pattern": "^/",
+              "maxLength": 1024,
+              "not": { "pattern": "(^|/)\\.\\.(/|$)|[?#]" }
+            },
+            "intentLifetimeSeconds": { "type": "integer", "minimum": 30, "maximum": 1800 },
+            "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 },
+            "maximumResponseBytes": { "type": "integer", "minimum": 256, "maximum": 16777216 }
+          }
+        }
+      }
+    },
+    "compiledAdapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "type": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "xmlQualifiedName": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["localName", "namespaceUri"],
+      "properties": {
+        "localName": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,99}$" },
+        "namespaceUri": { "type": "string", "format": "uri", "minLength": 1, "maxLength": 2048 }
+      }
     },
     "oauthScopes": {
       "type": "array",

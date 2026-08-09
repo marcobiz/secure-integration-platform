@@ -1,0 +1,497 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json.Serialization;
+using System.Xml;
+using SecureIntegration.Gateway.Application;
+
+namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
+
+/// <summary>Logical selector for one handshake profile in an already-authorized Published operation.</summary>
+public sealed class TypedSessionHandshakeAuthorityRequest
+{
+    /// <summary>Creates the only caller-visible selector. Adapter, endpoint and XML choices remain server-owned.</summary>
+    public TypedSessionHandshakeAuthorityRequest(string profileId)
+    {
+        if (!TypedSessionHandshakeValidation.Identifier(profileId)) throw TypedSessionHandshakeFailures.Configuration();
+        ProfileId = profileId;
+    }
+
+    /// <summary>Logical Published profile identifier.</summary>
+    public string ProfileId { get; }
+
+    /// <inheritdoc />
+    public override string ToString() => $"TypedSessionHandshakeAuthorityRequest(ProfileId={ProfileId})";
+}
+
+/// <summary>Compiled request adapter registered by trusted server composition.</summary>
+public interface ITypedSessionHandshakeRequestAdapter
+{
+    /// <summary>Logical adapter identifier selected by the Published profile.</summary>
+    string AdapterId { get; }
+    /// <summary>Closed logical adapter type selected by the Published profile. This is not a CLR reflection type.</summary>
+    string AdapterType { get; }
+    /// <summary>Writes only the structured children of the exact request element opened by hardened Core.</summary>
+    void WriteRequest(XmlWriter writer, TypedSessionHandshakeRequestContext context);
+}
+
+/// <summary>Compiled response adapter registered by trusted server composition.</summary>
+public interface ITypedSessionHandshakeResponseAdapter
+{
+    /// <summary>Logical adapter identifier selected by the Published profile.</summary>
+    string AdapterId { get; }
+    /// <summary>Closed logical adapter type selected by the Published profile. This is not a CLR reflection type.</summary>
+    string AdapterType { get; }
+    /// <summary>Strictly interprets the already bounded, exact response payload.</summary>
+    TypedSessionHandshakeAdapterOutcome ReadResponse(XmlReader payload, TypedSessionHandshakeResponseContext context);
+}
+
+/// <summary>Compiled external-session validator registered by trusted server composition.</summary>
+public interface IAuthorizedExternalSessionValidator
+{
+    /// <summary>Logical validator identifier selected by the Published profile.</summary>
+    string ValidatorId { get; }
+    /// <summary>Closed logical validator type selected by the Published profile. This is not a CLR reflection type.</summary>
+    string ValidatorType { get; }
+    /// <summary>Validates one sensitive presentation candidate. Validators cannot access the session cache.</summary>
+    Task<ExternalSessionValidationResult> ValidateAsync(
+        ExternalSessionValidationContext context,
+        ExternalSessionCandidate candidate,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>Immutable, resolved request inputs derived only from authenticated and Published server state.</summary>
+public sealed class TypedSessionHandshakeRequestContext
+{
+    internal TypedSessionHandshakeRequestContext(TypedSessionHandshakeAuthorityState state) => State = state;
+
+    internal TypedSessionHandshakeAuthorityState State { get; }
+    /// <summary>Authenticated Tenant identity.</summary>
+    public Guid TenantId => State.ExecutionContext.TenantId;
+    /// <summary>Authenticated Installation identity.</summary>
+    public Guid InstallationId => State.ExecutionContext.InstallationId;
+    /// <summary>Authenticated Application identity.</summary>
+    public Guid ApplicationId => State.ExecutionContext.ApplicationId;
+    /// <summary>Published Connector identifier.</summary>
+    public string ConnectorId => State.ExecutionContext.ConnectorId;
+    /// <summary>Published Connector version.</summary>
+    public string ConnectorVersion => State.ExecutionContext.ConnectorVersion;
+    /// <summary>Authorized operation.</summary>
+    public string OperationId => State.ExecutionContext.OperationId;
+    /// <summary>Published handshake profile.</summary>
+    public string ProfileId => State.ProfileId;
+    /// <summary>Authenticated correlation identifier.</summary>
+    public Guid CorrelationId => State.ExecutionContext.CorrelationId;
+    /// <summary>Checksum of the immutable Published Connector definition.</summary>
+    public string PublishedPolicyChecksum => State.PublishedPolicyChecksum;
+
+    /// <inheritdoc />
+    public override string ToString() => $"TypedSessionHandshakeRequestContext(ConnectorId={ConnectorId}, OperationId={OperationId}, ProfileId={ProfileId}, CorrelationId={CorrelationId:D})";
+}
+
+/// <summary>Immutable metadata supplied after Core validates the SOAP envelope and exact payload QName.</summary>
+public sealed class TypedSessionHandshakeResponseContext
+{
+    internal TypedSessionHandshakeResponseContext(TypedSessionHandshakeAuthorityState state) => State = state;
+
+    internal TypedSessionHandshakeAuthorityState State { get; }
+    /// <summary>Published Connector identifier.</summary>
+    public string ConnectorId => State.ExecutionContext.ConnectorId;
+    /// <summary>Authorized operation.</summary>
+    public string OperationId => State.ExecutionContext.OperationId;
+    /// <summary>Published handshake profile.</summary>
+    public string ProfileId => State.ProfileId;
+    /// <summary>Authenticated correlation identifier.</summary>
+    public Guid CorrelationId => State.ExecutionContext.CorrelationId;
+
+    /// <inheritdoc />
+    public override string ToString() => $"TypedSessionHandshakeResponseContext(ConnectorId={ConnectorId}, OperationId={OperationId}, ProfileId={ProfileId}, CorrelationId={CorrelationId:D})";
+}
+
+/// <summary>Closed response-adapter outcome understood by the provider-neutral session lifecycle.</summary>
+public abstract class TypedSessionHandshakeAdapterOutcome
+{
+    private protected TypedSessionHandshakeAdapterOutcome() { }
+
+    /// <summary>Creates an issued-session outcome. The sensitive value is never publicly readable or serialized.</summary>
+    public static TypedSessionHandshakeAdapterOutcome Issued(string sensitiveSessionValue, DateTimeOffset? remoteExpiry = null) =>
+        new TypedSessionIssuedAdapterOutcome(sensitiveSessionValue, remoteExpiry);
+
+    /// <summary>Requests the dedicated external-admission presentation boundary.</summary>
+    public static TypedSessionHandshakeAdapterOutcome ExternalAdmissionRequired(ExternalSessionProvenance provenance = ExternalSessionProvenance.InteractiveHandoff) =>
+        new TypedExternalAdmissionRequiredAdapterOutcome(provenance);
+
+    /// <summary>Creates a closed, sanitized rejection outcome.</summary>
+    public static TypedSessionHandshakeAdapterOutcome Rejected(TypedSessionHandshakeRejection rejection) => new TypedSessionRejectedAdapterOutcome(rejection);
+}
+
+internal sealed class TypedSessionIssuedAdapterOutcome : TypedSessionHandshakeAdapterOutcome
+{
+    internal TypedSessionIssuedAdapterOutcome(string sensitiveSessionValue, DateTimeOffset? remoteExpiry)
+    {
+        if (!TypedSessionHandshakeValidation.SessionValue(sensitiveSessionValue)) throw TypedSessionHandshakeFailures.AdapterRejected();
+        SensitiveSessionValue = sensitiveSessionValue;
+        RemoteExpiry = remoteExpiry;
+    }
+
+    [JsonIgnore] internal string SensitiveSessionValue { get; }
+    internal DateTimeOffset? RemoteExpiry { get; }
+    public override string ToString() => "TypedSessionIssuedAdapterOutcome(Redacted=True)";
+}
+
+internal sealed class TypedExternalAdmissionRequiredAdapterOutcome(ExternalSessionProvenance provenance) : TypedSessionHandshakeAdapterOutcome
+{
+    internal ExternalSessionProvenance Provenance { get; } = provenance;
+    public override string ToString() => $"TypedExternalAdmissionRequiredAdapterOutcome(Provenance={Provenance})";
+}
+
+internal sealed class TypedSessionRejectedAdapterOutcome(TypedSessionHandshakeRejection rejection) : TypedSessionHandshakeAdapterOutcome
+{
+    internal TypedSessionHandshakeRejection Rejection { get; } = rejection;
+    public override string ToString() => $"TypedSessionRejectedAdapterOutcome(Rejection={Rejection})";
+}
+
+/// <summary>Closed sanitized rejection categories returned by a typed handshake adapter.</summary>
+public enum TypedSessionHandshakeRejection
+{
+    /// <summary>The upstream authority rejected the handshake.</summary>
+    Rejected,
+    /// <summary>The authenticated installation is not eligible for a session.</summary>
+    NotEligible,
+    /// <summary>The Published profile is not accepted by the upstream authority.</summary>
+    ProfileDenied
+}
+
+/// <summary>Closed provenance for an externally presented opaque session candidate.</summary>
+public enum ExternalSessionProvenance
+{
+    /// <summary>A dedicated interactive presentation handoff supplied the candidate.</summary>
+    InteractiveHandoff
+}
+
+/// <summary>Closed public lifecycle outcomes. Raw session material is never included.</summary>
+public enum TypedSessionHandshakeResultKind
+{
+    /// <summary>A current opaque session reference was issued.</summary>
+    Issued,
+    /// <summary>A dedicated external-admission intent must be completed.</summary>
+    ExternalAdmissionRequired,
+    /// <summary>The typed handshake was rejected.</summary>
+    Rejected
+}
+
+/// <summary>Public result of the typed session lifecycle, containing only opaque handles and safe metadata.</summary>
+public sealed class TypedSessionHandshakeResult
+{
+    internal TypedSessionHandshakeResult(
+        TypedSessionHandshakeResultKind kind,
+        OpaqueSoapSessionReference? session,
+        ExternalSessionAdmissionIntent? admissionIntent,
+        TypedSessionHandshakeRejection? rejection,
+        DateTimeOffset? expiresAt,
+        ExternalSessionProvenance? provenance)
+    {
+        Kind = kind;
+        Session = session;
+        AdmissionIntent = admissionIntent;
+        Rejection = rejection;
+        ExpiresAt = expiresAt;
+        Provenance = provenance;
+    }
+
+    /// <summary>Closed lifecycle result.</summary>
+    public TypedSessionHandshakeResultKind Kind { get; }
+    /// <summary>Opaque reference when <see cref="Kind"/> is <see cref="TypedSessionHandshakeResultKind.Issued"/>.</summary>
+    public OpaqueSoapSessionReference? Session { get; }
+    /// <summary>Opaque presentation intent when external admission is required.</summary>
+    public ExternalSessionAdmissionIntent? AdmissionIntent { get; }
+    /// <summary>Sanitized rejection category.</summary>
+    public TypedSessionHandshakeRejection? Rejection { get; }
+    /// <summary>Server-computed expiry for the issued session or admission intent.</summary>
+    public DateTimeOffset? ExpiresAt { get; }
+    /// <summary>External provenance safe for metadata-only audit.</summary>
+    public ExternalSessionProvenance? Provenance { get; }
+
+    /// <inheritdoc />
+    public override string ToString() => $"TypedSessionHandshakeResult(Kind={Kind}, ExpiresAt={ExpiresAt:O}, Provenance={Provenance}, Redacted=True)";
+}
+
+/// <summary>Opaque, bounded, single-use intent created only by the authorized session lifecycle.</summary>
+public sealed class ExternalSessionAdmissionIntent
+{
+    internal ExternalSessionAdmissionIntent(string reference, string profileId, ExternalSessionProvenance provenance, DateTimeOffset expiresAt, string authorityFingerprint)
+    {
+        Reference = reference;
+        ProfileId = profileId;
+        Provenance = provenance;
+        ExpiresAt = expiresAt;
+        AuthorityFingerprint = authorityFingerprint;
+    }
+
+    /// <summary>Opaque presentation reference. It carries no cache key or profile authority.</summary>
+    public string Reference { get; }
+    /// <summary>Safe logical profile metadata.</summary>
+    public string ProfileId { get; }
+    /// <summary>Closed presentation provenance.</summary>
+    public ExternalSessionProvenance Provenance { get; }
+    /// <summary>Absolute single-use intent expiry.</summary>
+    public DateTimeOffset ExpiresAt { get; }
+    [JsonIgnore] internal string AuthorityFingerprint { get; }
+
+    /// <inheritdoc />
+    public override string ToString() => $"ExternalSessionAdmissionIntent(ProfileId={ProfileId}, Provenance={Provenance}, ExpiresAt={ExpiresAt:O}, Redacted=True)";
+}
+
+/// <summary>Sensitive candidate accepted only by the dedicated external-admission presentation boundary.</summary>
+public sealed class ExternalSessionCandidate : IDisposable
+{
+    private byte[] value;
+    private bool disposed;
+
+    private ExternalSessionCandidate(byte[] value) => this.value = value;
+
+    /// <summary>Copies a bounded UTF-8 opaque value into an owned buffer. The lifecycle consumes and clears it.</summary>
+    public static ExternalSessionCandidate FromPresentation(ReadOnlySpan<byte> candidate)
+    {
+        if (candidate.Length is < 1 or > 16_384) throw TypedSessionHandshakeFailures.CandidateInvalid();
+        byte[] copy = candidate.ToArray();
+        try
+        {
+            string decoded = new UTF8Encoding(false, true).GetString(copy);
+            if (!TypedSessionHandshakeValidation.SessionValue(decoded)) throw TypedSessionHandshakeFailures.CandidateInvalid();
+            return new(copy);
+        }
+        catch (DecoderFallbackException)
+        {
+            CryptographicOperations.ZeroMemory(copy);
+            throw TypedSessionHandshakeFailures.CandidateInvalid();
+        }
+        catch
+        {
+            CryptographicOperations.ZeroMemory(copy);
+            throw;
+        }
+    }
+
+    /// <summary>Sensitive read-only view for the registered validator. Never log or retain it.</summary>
+    [JsonIgnore]
+    public ReadOnlyMemory<byte> SensitiveValue => !disposed ? value : throw new ObjectDisposedException(nameof(ExternalSessionCandidate));
+
+    internal string DecodeForPromotion() => !disposed
+        ? new UTF8Encoding(false, true).GetString(value)
+        : throw TypedSessionHandshakeFailures.CandidateInvalid();
+
+    /// <summary>Clears the owned candidate buffer.</summary>
+    public void Dispose()
+    {
+        if (disposed) return;
+        CryptographicOperations.ZeroMemory(value);
+        value = [];
+        disposed = true;
+    }
+
+    /// <inheritdoc />
+    public override string ToString() => "ExternalSessionCandidate(Redacted=True)";
+}
+
+/// <summary>Immutable exact validation authority supplied only to the registered validator.</summary>
+public sealed class ExternalSessionValidationContext
+{
+    internal ExternalSessionValidationContext(TypedSessionHandshakeAuthorityState state)
+    {
+        Endpoint = state.AdmissionEndpoint ?? throw TypedSessionHandshakeFailures.AdmissionNotSupported();
+        TenantId = state.ExecutionContext.TenantId;
+        InstallationId = state.ExecutionContext.InstallationId;
+        ApplicationId = state.ExecutionContext.ApplicationId;
+        ConnectorId = state.ExecutionContext.ConnectorId;
+        ConnectorVersion = state.ExecutionContext.ConnectorVersion;
+        OperationId = state.ExecutionContext.OperationId;
+        ProfileId = state.ProfileId;
+        CorrelationId = state.ExecutionContext.CorrelationId;
+        Timeout = state.AdmissionTimeout;
+        MaximumResponseBytes = state.AdmissionMaximumResponseBytes;
+        PublishedPolicyChecksum = state.PublishedPolicyChecksum;
+    }
+
+    /// <summary>Published restricted HTTPS validation endpoint.</summary>
+    public Uri Endpoint { get; }
+    /// <summary>Authenticated Tenant identity.</summary>
+    public Guid TenantId { get; }
+    /// <summary>Authenticated Installation identity.</summary>
+    public Guid InstallationId { get; }
+    /// <summary>Authenticated Application identity.</summary>
+    public Guid ApplicationId { get; }
+    /// <summary>Published Connector identity.</summary>
+    public string ConnectorId { get; }
+    /// <summary>Published Connector version.</summary>
+    public string ConnectorVersion { get; }
+    /// <summary>Authorized operation.</summary>
+    public string OperationId { get; }
+    /// <summary>Published handshake profile.</summary>
+    public string ProfileId { get; }
+    /// <summary>Authenticated correlation identifier.</summary>
+    public Guid CorrelationId { get; }
+    /// <summary>Server-owned validation timeout.</summary>
+    public TimeSpan Timeout { get; }
+    /// <summary>Server-owned response bound.</summary>
+    public long MaximumResponseBytes { get; }
+    /// <summary>Published immutable definition checksum.</summary>
+    public string PublishedPolicyChecksum { get; }
+
+    /// <inheritdoc />
+    public override string ToString() => $"ExternalSessionValidationContext(ConnectorId={ConnectorId}, OperationId={OperationId}, ProfileId={ProfileId}, CorrelationId={CorrelationId:D})";
+}
+
+/// <summary>Closed typed validity returned by a registered external-session validator.</summary>
+public enum ExternalSessionValidationStatus
+{
+    /// <summary>The remote authority accepted the candidate.</summary>
+    Valid,
+    /// <summary>The remote authority rejected the candidate.</summary>
+    Rejected,
+    /// <summary>The bounded remote response was malformed or outside the registered protocol.</summary>
+    MalformedResponse,
+    /// <summary>The remote validation authority was unavailable.</summary>
+    Unavailable
+}
+
+/// <summary>Sanitized validator result. It contains no response body or remote diagnostic.</summary>
+public sealed class ExternalSessionValidationResult
+{
+    private ExternalSessionValidationResult(ExternalSessionValidationStatus status, DateTimeOffset? remoteExpiry)
+    {
+        Status = status;
+        RemoteExpiry = remoteExpiry;
+    }
+
+    /// <summary>Creates a valid result with mandatory remote expiry.</summary>
+    public static ExternalSessionValidationResult Valid(DateTimeOffset remoteExpiry) => new(ExternalSessionValidationStatus.Valid, remoteExpiry);
+    /// <summary>Creates a closed non-valid result.</summary>
+    public static ExternalSessionValidationResult Invalid(ExternalSessionValidationStatus status) => status == ExternalSessionValidationStatus.Valid
+        ? throw new ArgumentOutOfRangeException(nameof(status))
+        : new(status, null);
+
+    /// <summary>Closed remote validation status.</summary>
+    public ExternalSessionValidationStatus Status { get; }
+    /// <summary>Remote expiry used only when valid and capped by the Published local maximum.</summary>
+    public DateTimeOffset? RemoteExpiry { get; }
+
+    /// <inheritdoc />
+    public override string ToString() => $"ExternalSessionValidationResult(Status={Status}, RemoteExpiry={RemoteExpiry:O}, Redacted=True)";
+}
+
+/// <summary>Immutable non-forgeable authority resolved from an authorized Published operation.</summary>
+public sealed class ResolvedTypedSessionHandshake
+{
+    internal ResolvedTypedSessionHandshake(TypedSessionHandshakeAuthorityState state, Func<CancellationToken, Task<TypedSessionHandshakeAuthorityState>> revalidate)
+    {
+        State = state;
+        Revalidate = revalidate;
+    }
+
+    /// <summary>Published Connector identifier.</summary>
+    public string ConnectorId => State.ExecutionContext.ConnectorId;
+    /// <summary>Authorized operation.</summary>
+    public string OperationId => State.ExecutionContext.OperationId;
+    /// <summary>Published typed handshake profile.</summary>
+    public string ProfileId => State.ProfileId;
+    /// <summary>Authenticated correlation identifier.</summary>
+    public Guid CorrelationId => State.ExecutionContext.CorrelationId;
+
+    [JsonIgnore] internal TypedSessionHandshakeAuthorityState State { get; }
+    [JsonIgnore] internal Func<CancellationToken, Task<TypedSessionHandshakeAuthorityState>> Revalidate { get; }
+
+    /// <inheritdoc />
+    public override string ToString() => $"ResolvedTypedSessionHandshake(ConnectorId={ConnectorId}, OperationId={OperationId}, ProfileId={ProfileId}, CorrelationId={CorrelationId:D})";
+}
+
+/// <summary>Server-side registry for compiled adapters. Published profiles select exact ID/type pairs.</summary>
+public sealed class TypedSessionHandshakeAdapterRegistry
+{
+    private readonly Dictionary<(string Id, string Type), ITypedSessionHandshakeRequestAdapter> requests;
+    private readonly Dictionary<(string Id, string Type), ITypedSessionHandshakeResponseAdapter> responses;
+    private readonly Dictionary<(string Id, string Type), IAuthorizedExternalSessionValidator> validators;
+
+    /// <summary>Creates an immutable bounded registry during trusted server composition.</summary>
+    public TypedSessionHandshakeAdapterRegistry(
+        IEnumerable<ITypedSessionHandshakeRequestAdapter> requestAdapters,
+        IEnumerable<ITypedSessionHandshakeResponseAdapter> responseAdapters,
+        IEnumerable<IAuthorizedExternalSessionValidator>? admissionValidators = null)
+    {
+        requests = Index(requestAdapters, value => value.AdapterId, value => value.AdapterType, "request");
+        responses = Index(responseAdapters, value => value.AdapterId, value => value.AdapterType, "response");
+        validators = Index(admissionValidators ?? [], value => value.ValidatorId, value => value.ValidatorType, "validator");
+        if (requests.Count > 256 || responses.Count > 256 || validators.Count > 256) throw TypedSessionHandshakeFailures.Configuration();
+    }
+
+    internal ITypedSessionHandshakeRequestAdapter Request(string id, string type) => requests.TryGetValue((id, type), out ITypedSessionHandshakeRequestAdapter? value)
+        ? value : throw TypedSessionHandshakeFailures.AdapterUnavailable();
+    internal ITypedSessionHandshakeResponseAdapter Response(string id, string type) => responses.TryGetValue((id, type), out ITypedSessionHandshakeResponseAdapter? value)
+        ? value : throw TypedSessionHandshakeFailures.AdapterUnavailable();
+    internal IAuthorizedExternalSessionValidator? Validator(string? id, string? type) => id is null && type is null
+        ? null
+        : id is not null && type is not null && validators.TryGetValue((id, type), out IAuthorizedExternalSessionValidator? value)
+            ? value : throw TypedSessionHandshakeFailures.AdapterUnavailable();
+
+    private static Dictionary<(string Id, string Type), T> Index<T>(IEnumerable<T> values, Func<T, string> id, Func<T, string> type, string parameter)
+    {
+        Dictionary<(string Id, string Type), T> result = [];
+        foreach (T value in values ?? throw new ArgumentNullException(parameter))
+        {
+            string adapterId = id(value);
+            string adapterType = type(value);
+            if (!TypedSessionHandshakeValidation.Identifier(adapterId) || !TypedSessionHandshakeValidation.Identifier(adapterType) ||
+                !result.TryAdd((adapterId, adapterType), value))
+                throw TypedSessionHandshakeFailures.Configuration();
+        }
+        return result;
+    }
+}
+
+internal sealed class TypedSessionHandshakeAuthorityState
+{
+    internal required ConnectorAuthExecutionContext ExecutionContext { get; init; }
+    internal required Guid ConnectorVersionId { get; init; }
+    internal required string ProfileId { get; init; }
+    internal required SoapEndpointBinding Endpoint { get; init; }
+    internal required SoapOperationProfile Operation { get; init; }
+    internal required ResolvedBasicCredentialBinding? BasicCredential { get; init; }
+    internal required ITypedSessionHandshakeRequestAdapter RequestAdapter { get; init; }
+    internal required ITypedSessionHandshakeResponseAdapter ResponseAdapter { get; init; }
+    internal required TimeSpan LocalMaximumSessionLifetime { get; init; }
+    internal required string PublishedPolicyChecksum { get; init; }
+    internal required string ResourceStamp { get; init; }
+    internal required string SecurityFingerprint { get; init; }
+    internal IAuthorizedExternalSessionValidator? AdmissionValidator { get; init; }
+    internal Uri? AdmissionEndpoint { get; init; }
+    internal TimeSpan AdmissionIntentLifetime { get; init; }
+    internal TimeSpan AdmissionTimeout { get; init; }
+    internal long AdmissionMaximumResponseBytes { get; init; }
+
+    internal SoapSessionCacheKey CacheKey => new(ExecutionContext.TenantId, ExecutionContext.InstallationId, ExecutionContext.ApplicationId,
+        ExecutionContext.EnvironmentId, ExecutionContext.ConnectorId, ExecutionContext.ConnectorVersion, ExecutionContext.BindingRevision,
+        ExecutionContext.EndpointRevision, ExecutionContext.CredentialRevision, ProfileId);
+}
+
+internal static class TypedSessionHandshakeValidation
+{
+    internal static bool Identifier(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 100 &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
+
+    internal static bool SessionValue(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 16_384 &&
+        !value.Any(character => character is '\r' or '\n' or '\0' || char.IsControl(character));
+}
+
+internal static class TypedSessionHandshakeFailures
+{
+    internal static SoapAuthException Configuration() => new("SOAP-TYPED-CONFIGURATION-INVALID");
+    internal static SoapAuthException AuthorityRejected() => new("SOAP-TYPED-AUTHORITY-REJECTED");
+    internal static SoapAuthException AuthorityStale() => new("SOAP-TYPED-AUTHORITY-STALE");
+    internal static SoapAuthException AdapterUnavailable() => new("SOAP-TYPED-ADAPTER-UNAVAILABLE");
+    internal static SoapAuthException AdapterRejected() => new("SOAP-TYPED-ADAPTER-REJECTED");
+    internal static SoapAuthException AdmissionNotSupported() => new("SOAP-ADMISSION-NOT-SUPPORTED");
+    internal static SoapAuthException AdmissionIntentInvalid() => new("SOAP-ADMISSION-INTENT-INVALID");
+    internal static SoapAuthException CandidateInvalid() => new("SOAP-ADMISSION-CANDIDATE-INVALID");
+    internal static SoapAuthException ValidationRejected() => new("SOAP-ADMISSION-VALIDATION-REJECTED");
+    internal static SoapAuthException ValidationFailed() => new("SOAP-ADMISSION-VALIDATION-FAILED");
+    internal static SoapAuthException RemoteExpiryInvalid() => new("SOAP-ADMISSION-REMOTE-EXPIRY-INVALID");
+}

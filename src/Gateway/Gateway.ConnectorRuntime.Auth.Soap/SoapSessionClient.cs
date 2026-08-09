@@ -17,6 +17,7 @@ public sealed class SoapSessionClient
     private readonly IGatewayClock clock;
     private readonly ISoapSessionResourceStampProvider resourceStamps;
     private readonly IPrivateDestinationAllowance? privateDestinationAllowance;
+    private readonly Func<CancellationToken, Task>? beforeAdmissionPromotion;
     private readonly SoapSessionCache cache = new();
     private readonly SemaphoreSlim[] acquisitionLocks = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
 
@@ -29,11 +30,146 @@ public sealed class SoapSessionClient
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
         this.resourceStamps = resourceStamps ?? throw new ArgumentNullException(nameof(resourceStamps));
         this.privateDestinationAllowance = privateDestinationAllowance;
+        beforeAdmissionPromotion = null;
         OpaqueSessionLeases = new SoapOpaqueSessionLeaseProvider(cache);
+    }
+
+    internal SoapSessionClient(
+        ISecretValueProvider secrets,
+        IHostResolver resolver,
+        IRestrictedTransport transport,
+        IGatewayClock clock,
+        ISoapSessionResourceStampProvider resourceStamps,
+        IPrivateDestinationAllowance? privateDestinationAllowance,
+        Func<CancellationToken, Task>? beforeAdmissionPromotion)
+        : this(secrets, resolver, transport, clock, resourceStamps, privateDestinationAllowance)
+    {
+        this.beforeAdmissionPromotion = beforeAdmissionPromotion;
     }
 
     /// <summary>Controlled adapter from the qualified SOAP lifecycle to provider-neutral opaque-session capabilities.</summary>
     public OpaqueSessionLeaseProvider OpaqueSessionLeases { get; }
+
+    /// <summary>
+    /// Runs one server-resolved typed handshake. The request/response adapters and all wire authority are selected
+    /// by the Published profile; caller business fields are not accepted by this boundary.
+    /// </summary>
+    public async Task<TypedSessionHandshakeResult> AcquireTypedSessionAsync(
+        ResolvedTypedSessionHandshake resolvedHandshake,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resolvedHandshake);
+        TypedSessionHandshakeAuthorityState expected = resolvedHandshake.State;
+        TypedSessionHandshakeAuthorityState current = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+        await ValidateResourceStampAsync(current.ExecutionContext, cancellationToken).ConfigureAwait(false);
+        (OpaqueSoapSessionReference Reference, DateTimeOffset ExpiresAt)? cached = cache.ResolveCurrentMetadata(current.CacheKey, clock.UtcNow);
+        if (cached is not null)
+            return new(TypedSessionHandshakeResultKind.Issued, cached.Value.Reference, null, null, cached.Value.ExpiresAt, null);
+
+        SemaphoreSlim gate = AcquisitionLock(current.CacheKey);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            current = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+            await ValidateResourceStampAsync(current.ExecutionContext, cancellationToken).ConfigureAwait(false);
+            cached = cache.ResolveCurrentMetadata(current.CacheKey, clock.UtcNow);
+            if (cached is not null)
+                return new(TypedSessionHandshakeResultKind.Issued, cached.Value.Reference, null, null, cached.Value.ExpiresAt, null);
+
+            TypedSessionHandshakeAdapterOutcome outcome = await SendTypedHandshakeAsync(current, cancellationToken).ConfigureAwait(false);
+            current = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+            await ValidateResourceStampAsync(current.ExecutionContext, cancellationToken).ConfigureAwait(false);
+            DateTimeOffset now = clock.UtcNow;
+            if (outcome is TypedSessionIssuedAdapterOutcome issued)
+            {
+                DateTimeOffset expiresAt = ComputeExpiry(now, current.LocalMaximumSessionLifetime, issued.RemoteExpiry);
+                OpaqueSoapSessionReference session = cache.Store(current.CacheKey, issued.SensitiveSessionValue, now, expiresAt);
+                return new(TypedSessionHandshakeResultKind.Issued, session, null, null, expiresAt, null);
+            }
+            if (outcome is TypedExternalAdmissionRequiredAdapterOutcome admission)
+            {
+                if (current.AdmissionValidator is null || current.AdmissionEndpoint is null)
+                    throw TypedSessionHandshakeFailures.AdmissionNotSupported();
+                DateTimeOffset expiresAt = now.Add(current.AdmissionIntentLifetime);
+                ExternalSessionAdmissionIntent intent = cache.StoreAdmissionIntent(current.CacheKey, current.SecurityFingerprint,
+                    current.ProfileId, admission.Provenance, now, expiresAt);
+                return new(TypedSessionHandshakeResultKind.ExternalAdmissionRequired, null, intent, null, expiresAt, admission.Provenance);
+            }
+            if (outcome is TypedSessionRejectedAdapterOutcome rejected)
+                return new(TypedSessionHandshakeResultKind.Rejected, null, null, rejected.Rejection, null, null);
+            throw TypedSessionHandshakeFailures.AdapterRejected();
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Consumes one single-use admission intent and sensitive presentation candidate, validates it through the
+    /// Published typed validator, revalidates all authority, then atomically promotes it into the existing cache.
+    /// </summary>
+    public async Task<TypedSessionHandshakeResult> CompleteExternalAdmissionAsync(
+        ResolvedTypedSessionHandshake resolvedHandshake,
+        ExternalSessionAdmissionIntent admissionIntent,
+        ExternalSessionCandidate candidate,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(resolvedHandshake);
+        ArgumentNullException.ThrowIfNull(admissionIntent);
+        ArgumentNullException.ThrowIfNull(candidate);
+        TypedSessionHandshakeAuthorityState expected = resolvedHandshake.State;
+        AdmissionCompletion? completion = null;
+        bool promoted = false;
+        try
+        {
+            TypedSessionHandshakeAuthorityState current = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+            await ValidateResourceStampAsync(current.ExecutionContext, cancellationToken).ConfigureAwait(false);
+            IAuthorizedExternalSessionValidator validator = current.AdmissionValidator ?? throw TypedSessionHandshakeFailures.AdmissionNotSupported();
+            AdmissionCompletion reserved = cache.BeginAdmission(current.CacheKey, admissionIntent, current.SecurityFingerprint, clock.UtcNow);
+            completion = reserved;
+
+            ExternalSessionValidationResult validation;
+            try
+            {
+                validation = await validator.ValidateAsync(new(current), candidate, cancellationToken).ConfigureAwait(false)
+                    ?? throw TypedSessionHandshakeFailures.ValidationFailed();
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception) { throw TypedSessionHandshakeFailures.ValidationFailed(); }
+            if (validation.Status != ExternalSessionValidationStatus.Valid)
+                throw validation.Status == ExternalSessionValidationStatus.Rejected
+                    ? TypedSessionHandshakeFailures.ValidationRejected()
+                    : TypedSessionHandshakeFailures.ValidationFailed();
+
+            DateTimeOffset remoteExpiry = validation.RemoteExpiry ?? throw TypedSessionHandshakeFailures.RemoteExpiryInvalid();
+            if (beforeAdmissionPromotion is not null)
+                await beforeAdmissionPromotion(cancellationToken).ConfigureAwait(false);
+
+            SemaphoreSlim gate = AcquisitionLock(current.CacheKey);
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                // Final authorization after remote validation and immediately before the synchronous cache promotion.
+                current = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+                await ValidateResourceStampAsync(current.ExecutionContext, cancellationToken).ConfigureAwait(false);
+                DateTimeOffset now = clock.UtcNow;
+                DateTimeOffset expiresAt = ComputeExpiry(now, current.LocalMaximumSessionLifetime, remoteExpiry);
+                OpaqueSoapSessionReference session = cache.CompleteAdmission(reserved, candidate.DecodeForPromotion(), now, expiresAt);
+                promoted = true;
+                return new(TypedSessionHandshakeResultKind.Issued, session, null, null, expiresAt, reserved.Provenance);
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+        finally
+        {
+            if (!promoted && completion is not null) cache.AbandonAdmission(completion);
+            candidate.Dispose();
+        }
+    }
 
     /// <summary>Returns the current opaque session reference or performs one fixed login acquisition.</summary>
     public async Task<OpaqueSoapSessionReference> AcquireSessionAsync(ConnectorAuthExecutionContext context, SoapEndpointBinding endpoint, SoapSessionProfile profile, CancellationToken cancellationToken)
@@ -154,7 +290,7 @@ public sealed class SoapSessionClient
 
     private async Task<OpaqueSoapSessionReference> AcquireSessionCoreAsync(ConnectorAuthExecutionContext context, SoapEndpointBinding endpoint, SoapSessionProfile profile, SoapSessionCacheKey key, CancellationToken cancellationToken)
     {
-        SemaphoreSlim gate = acquisitionLocks[(key.GetHashCode() & int.MaxValue) % acquisitionLocks.Length];
+        SemaphoreSlim gate = AcquisitionLock(key);
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -234,6 +370,84 @@ public sealed class SoapSessionClient
             throw new SoapAuthException("SOAP-TRANSPORT-FAILED");
         }
     }
+
+    private async Task<TypedSessionHandshakeAdapterOutcome> SendTypedHandshakeAsync(
+        TypedSessionHandshakeAuthorityState state,
+        CancellationToken cancellationToken)
+    {
+        ConnectorAuthExecutionContext context = state.ExecutionContext;
+        SoapOperationProfile operation = state.Operation;
+        EnsureDeadline(context);
+        await ValidateResourceStampAsync(context, cancellationToken).ConfigureAwait(false);
+        byte[] envelope = TypedSessionHandshakeXmlBoundary.SerializeRequest(state);
+        using HttpRequestMessage request = new(HttpMethod.Post, state.Endpoint.Endpoint);
+        request.Headers.TryAddWithoutValidation("X-Correlation-ID", context.CorrelationId.ToString("D"));
+        TypedSessionHandshakeXmlBoundary.ApplyHttpHeaders(request, operation, envelope);
+        if (state.BasicCredential is not null)
+            await basicAuthentication.ApplyAsync(request, state.BasicCredential, cancellationToken).ConfigureAwait(false);
+        IPAddress[] addresses;
+        try { addresses = await resolver.ResolveAsync(state.Endpoint.Endpoint.DnsSafeHost, cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception) { throw new SoapAuthException("SOAP-EGRESS-DESTINATION-DENIED"); }
+        if (addresses.Length == 0 || addresses.Any(address => RestrictedEgressService.IsForbiddenAddress(address) && privateDestinationAllowance?.IsAllowed(state.Endpoint.Endpoint.DnsSafeHost, address) != true))
+            throw new SoapAuthException("SOAP-EGRESS-DESTINATION-DENIED");
+
+        TimeSpan configuredTimeout = TimeSpan.FromMilliseconds(operation.TimeoutMilliseconds);
+        TimeSpan remaining = context.Deadline - clock.UtcNow;
+        if (remaining <= TimeSpan.Zero) throw new SoapAuthException("SOAP-DEADLINE-EXPIRED");
+        TimeSpan timeout = remaining < configuredTimeout ? remaining : configuredTimeout;
+        using CancellationTokenSource effectiveDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        effectiveDeadline.CancelAfter(timeout);
+        try
+        {
+            ExternalResponse response = await transport.SendSoapAsync(request, addresses, timeout, operation.MaximumResponseBytes, effectiveDeadline.Token).ConfigureAwait(false);
+            return TypedSessionHandshakeXmlBoundary.ParseResponse(state, response, effectiveDeadline.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { throw new SoapAuthException("SOAP-TIMEOUT"); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception exception) when (effectiveDeadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested && exception is HttpRequestException or IOException)
+        {
+            throw new SoapAuthException("SOAP-TIMEOUT");
+        }
+        catch (SoapAuthException) { throw; }
+        catch (GatewayException exception) when (string.Equals(exception.Code, "BGW-EGRESS-RESPONSE-TOO-LARGE", StringComparison.Ordinal))
+        {
+            throw new SoapAuthException("SOAP-RESPONSE-TOO-LARGE");
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException or TimeoutException or GatewayException)
+        {
+            _ = exception;
+            throw new SoapAuthException("SOAP-TRANSPORT-FAILED");
+        }
+    }
+
+    private static async Task<TypedSessionHandshakeAuthorityState> RevalidateTypedAsync(
+        ResolvedTypedSessionHandshake resolvedHandshake,
+        TypedSessionHandshakeAuthorityState expected,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            TypedSessionHandshakeAuthorityState current = await resolvedHandshake.Revalidate(cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(current.SecurityFingerprint, expected.SecurityFingerprint, StringComparison.Ordinal))
+                throw TypedSessionHandshakeFailures.AuthorityStale();
+            return current;
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (SoapAuthException) { throw; }
+        catch (Exception) { throw TypedSessionHandshakeFailures.AuthorityRejected(); }
+    }
+
+    private static DateTimeOffset ComputeExpiry(DateTimeOffset now, TimeSpan localMaximum, DateTimeOffset? remoteExpiry)
+    {
+        DateTimeOffset localExpiry = now.Add(localMaximum);
+        if (remoteExpiry is null) return localExpiry;
+        DateTimeOffset remote = remoteExpiry.Value;
+        if (remote <= now) throw TypedSessionHandshakeFailures.RemoteExpiryInvalid();
+        return remote < localExpiry ? remote : localExpiry;
+    }
+
+    private SemaphoreSlim AcquisitionLock(SoapSessionCacheKey key) => acquisitionLocks[(key.GetHashCode() & int.MaxValue) % acquisitionLocks.Length];
 
     private SoapSessionCacheKey ValidateAndKey(ConnectorAuthExecutionContext context, SoapEndpointBinding endpoint, SoapSessionProfile profile)
     {

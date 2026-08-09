@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
+using System.Net.Http.Headers;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -302,6 +303,9 @@ public static class ConnectorOperationBindings
         List<string> authorityEndpoints = [];
         foreach (string property in new[] { "authorizationEndpointBinding", "tokenEndpointBinding" })
             if (authentication.TryGetProperty(property, out JsonElement value)) authorityEndpoints.Add(value.GetString()!);
+        if (operation.TryGetProperty("typedSessionHandshake", out JsonElement handshake) &&
+            handshake.TryGetProperty("externalAdmission", out JsonElement admission))
+            authorityEndpoints.Add(admission.GetProperty("endpointBinding").GetString()!);
         return new(operationId, operation.GetProperty("endpointBinding").GetString()!,
             authorityEndpoints.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             secrets.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
@@ -381,6 +385,14 @@ public static class ConnectorApprovalArtifacts
             string logical = logicalElement.GetString()!;
             if (!binding.Endpoints.TryGetValue(logical, out Uri? authorityEndpoint)) throw new GatewayException("BGW-CONNECTOR-ENDPOINT-BINDING-MISSING", 503);
             authorityEndpoints.Add(new(role, ReviewEndpoint(logical, binding, authorityEndpoint, [authorityMethod], "deny")));
+        }
+        if (operation.TryGetProperty("typedSessionHandshake", out JsonElement handshake) &&
+            handshake.TryGetProperty("externalAdmission", out JsonElement admission))
+        {
+            string logical = admission.GetProperty("endpointBinding").GetString()!;
+            if (!binding.Endpoints.TryGetValue(logical, out Uri? admissionBase)) throw new GatewayException("BGW-CONNECTOR-ENDPOINT-BINDING-MISSING", 503);
+            Uri admissionEndpoint = new(admissionBase, admission.GetProperty("path").GetString()!);
+            authorityEndpoints.Add(new("session-admission-validation", ReviewEndpoint(logical, binding, admissionEndpoint, ["POST"], "deny")));
         }
         List<ApprovalSecretReview> secrets = [];
         foreach (string property in new[] { "usernameBinding", "passwordBinding", "secretBinding" })
@@ -609,6 +621,25 @@ public sealed class ConnectorDefinitionValidator
             foreach (string property in new[] { "authorizationEndpointBinding", "tokenEndpointBinding" })
                 if (authentication.TryGetProperty(property, out JsonElement oauthEndpoint) && !endpoints.ContainsKey(oauthEndpoint.GetString()!))
                     issues.Add(new("BGW-CONNECTOR-ENDPOINT-BINDING-UNKNOWN", $"$.operations[{index}].authentication.{property}"));
+            if (operation.TryGetProperty("typedSessionHandshake", out JsonElement handshake) &&
+                handshake.TryGetProperty("externalAdmission", out JsonElement admission) &&
+                !endpoints.ContainsKey(admission.GetProperty("endpointBinding").GetString()!))
+                issues.Add(new("BGW-CONNECTOR-ENDPOINT-BINDING-UNKNOWN", $"$.operations[{index}].typedSessionHandshake.externalAdmission.endpointBinding"));
+            if (operation.TryGetProperty("typedSessionHandshake", out handshake))
+            {
+                string method = operation.GetProperty("method").GetString()!;
+                string authenticationKind = authentication.GetProperty("kind").GetString()!;
+                string version = handshake.GetProperty("soapVersion").GetString()!;
+                string contentType = operation.GetProperty("request").GetProperty("contentType").GetString()!;
+                string expectedMediaType = string.Equals(version, "1.1", StringComparison.Ordinal) ? "text/xml" : "application/soap+xml";
+                if (!string.Equals(method, "POST", StringComparison.Ordinal))
+                    issues.Add(new("BGW-CONNECTOR-TYPED-HANDSHAKE-METHOD", $"$.operations[{index}].method"));
+                if (authenticationKind is not ("none" or "basic"))
+                    issues.Add(new("BGW-CONNECTOR-TYPED-HANDSHAKE-AUTH", $"$.operations[{index}].authentication.kind"));
+                if (!MediaTypeHeaderValue.TryParse(contentType, out MediaTypeHeaderValue? parsedContentType) ||
+                    !string.Equals(parsedContentType.MediaType, expectedMediaType, StringComparison.OrdinalIgnoreCase))
+                    issues.Add(new("BGW-CONNECTOR-TYPED-HANDSHAKE-CONTENT-TYPE", $"$.operations[{index}].request.contentType"));
+            }
             bool idempotent = operation.TryGetProperty("idempotent", out JsonElement idempotentElement) && idempotentElement.GetBoolean();
             int retries = operation.TryGetProperty("maximumRetries", out JsonElement retriesElement) ? retriesElement.GetInt32() : 0;
             if (retries > 0 && !idempotent) issues.Add(new("BGW-CONNECTOR-RETRY-REQUIRES-IDEMPOTENCY", $"$.operations[{index}].maximumRetries"));
