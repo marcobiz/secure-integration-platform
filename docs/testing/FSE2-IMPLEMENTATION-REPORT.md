@@ -54,7 +54,7 @@ required before any production-readiness claim.
 
 ## Local qualification candidate
 
-The pre-commit product candidate completed:
+The local product candidate completed:
 
 - full Release restore/build: PASS, 38 projects, zero warnings/errors;
 - FSE2 pack: 46/46 PASS, including real HTTPS/mTLS, dual JWT/x5c, negative matrix,
@@ -63,7 +63,7 @@ The pre-commit product candidate completed:
 - architecture: 26/26 PASS, including seven Healthcare boundary tests;
 - certificate-signing/X.509 regression: 91/91 PASS;
 - documentation validation and conservative secret scan: PASS;
-- Gitleaks 8.30.0 on the new FSE2 source, tests and connector documentation: PASS;
+- Gitleaks 8.30.0 on the complete FSE2 commit range: PASS;
 - transitive NuGet vulnerability audit: no vulnerable packages reported;
 - Windows SBOM generation/validation with explicit `-SkipContainer` and the SBOM
   fail-closed mode regression: PASS;
@@ -77,4 +77,5 @@ Windows-mode rerun passed. No database, migration, Admin Web or container surfac
 in this PR. The exact-head CI PostgreSQL/Gitleaks/SBOM results remain mandatory and are
 recorded after push; this report does not convert the local skips into PASS.
 
-Exact-head CI, final SHA, PR check state and clean-worktree result are appended after push.
+Exact-head CI, final SHA, PR check state and clean-worktree result are recorded in the
+final PR handoff after push, so this committed report does not contain a self-referential SHA.
