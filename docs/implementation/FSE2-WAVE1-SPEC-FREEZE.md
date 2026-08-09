@@ -11,8 +11,11 @@ Wave branch: `wave1/fse2-national`
 Original freeze verdict: **NO-GO before implementation - generic capability gap**
 
 Resume verdict on baseline `705e9d4bd203ca7b902ad0aeedc9d4402f9f4452`:
-**FROZEN_SPEC_ACCEPTED / BLOCKED_BY_TRUSTED_ACTOR_SOURCE**. The generic gaps recorded
-below are retained as historical freeze evidence and are closed on the resumed baseline.
+**FROZEN_SPEC_ACCEPTED**. The first resume audit concluded
+`BLOCKED_BY_TRUSTED_ACTOR_SOURCE`; an independent gate later resolved that conclusion as
+`ORGANIZATION_PROFILE = IMPLEMENTABLE` and
+`HUMAN_ACTOR_PROFILE = DEFERRED_PENDING_TRUSTED_ACTOR_SOURCE`. The generic and actor-gap
+analysis below is retained as historical evidence rather than deleted.
 
 This document is a public-safe freeze produced before connector code. It uses only the
 official public sources listed below. No production endpoint was contacted and no real
@@ -292,7 +295,10 @@ Deferred because of the original generic stop and, on resume, the trusted-actor 
 - sample configuration and runtime wiring;
 - accreditation testing and any call to official systems.
 
-Current label: **not IMPLEMENTATION_READY — BLOCKED_BY_TRUSTED_ACTOR_SOURCE**.
+Historical label at freeze time: **not IMPLEMENTATION_READY — BLOCKED_BY_TRUSTED_ACTOR_SOURCE**.
+
+Resolved current label: **ORGANIZATION_PROFILE = IMPLEMENTATION_READY pending independent
+review**. **HUMAN_ACTOR_PROFILE = NOT_IMPLEMENTED / DEFERRED_PENDING_TRUSTED_ACTOR_SOURCE**.
 
 Accreditation label: **not ACCREDITED_PRODUCTION_READY**.
 
@@ -303,9 +309,10 @@ evidence from the official process. None of that is claimed by this freeze.
 
 ## Independent review gate
 
-**BLOCKED_BY_TRUSTED_ACTOR_SOURCE** for connector implementation on the resumed baseline.
-Independent review may verify the currency check and the stop decision; it cannot turn a
-synthetic or caller-supplied actor into an authoritative production identity.
+Historical first verdict: **BLOCKED_BY_TRUSTED_ACTOR_SOURCE**. Independent resolution:
+the stop continues to apply to human actors, but not to the server-owned organization
+profile. No synthetic or caller-supplied actor is treated as authoritative: the supported
+subject is the exact four-eyes Published organization CX.
 
 ## Historical verification on the original freeze branch
 

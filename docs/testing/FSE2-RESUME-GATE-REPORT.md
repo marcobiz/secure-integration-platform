@@ -105,6 +105,9 @@ evidence remain separate accreditation blockers.
 
 Final status: **FSE2_IMPLEMENTATION = BLOCKED_BY_TRUSTED_ACTOR_SOURCE**.
 
+The status above is the preserved conclusion of the first resume audit. It is historical
+evidence and was not deleted or rewritten after the independent architecture decision.
+
 ## Local resume verification
 
 - documentation validation: PASS;
@@ -116,3 +119,26 @@ Final status: **FSE2_IMPLEMENTATION = BLOCKED_BY_TRUSTED_ACTOR_SOURCE**.
 - build, ordinary, PostgreSQL, SBOM, vulnerability, Gitleaks and Core-export results for
   the pushed exact HEAD: delegated to the unchanged repository CI gate and reported only
   if that exact-head workflow completes successfully.
+
+## Independent gate resolution — 2026-08-09
+
+An independent architecture gate subsequently narrowed the initial profile and issued
+`RESUME_FSE2_WITH_EXISTING_CORE`. The prior stop was valid for a dynamic human actor, but
+it was over-broad for a four-eyes-approved organization identity already held in immutable
+Published server-owned state.
+
+The resulting split is authoritative for the current PR:
+
+- `ORGANIZATION_PROFILE = IMPLEMENTABLE`: the approved organization P.IVA and assigning
+  authority are canonicalized as Healthcare CX, checksum/revision/ConnectorVersion and
+  exact grant/operation bound, and supplied to the existing signer through
+  `JwtSubjectPolicy.Fixed`/`FixedSubject`;
+- `HUMAN_ACTOR_PROFILE = DEFERRED_PENDING_TRUSTED_ACTOR_SOURCE`: no human subject, OIDC,
+  Keycloak, client attestation, global principal or new Core capability is added;
+- clinical `person_id` remains business-allowlisted assistito/genitore/tutore identity and
+  never becomes the authenticated actor;
+- official provisioning/accreditation remains outside this synthetic implementation gate.
+
+Implementation and qualification evidence after this resolution is recorded in
+`docs/testing/FSE2-IMPLEMENTATION-REPORT.md`. The original zero-provider/zero-network
+blocking evidence remains applicable to unsupported human-actor requests.
