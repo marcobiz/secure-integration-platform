@@ -104,9 +104,19 @@ public static partial class Fse2Validation
     public static string ValidateOid(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
-        if (value.Length > 128 || !OidRegex().IsMatch(value)) throw new ArgumentException("FSE2_OID_INVALID", nameof(value));
-        foreach (string component in value.Split('.'))
-            if (component.Length > 1 && component[0] == '0') throw new ArgumentException("FSE2_OID_NON_CANONICAL", nameof(value));
+        if (value.Length > 128) throw new ArgumentException("FSE2_OID_INVALID", nameof(value));
+        string[] arcs = value.Split('.', StringSplitOptions.None);
+        if (arcs.Length < 2) throw new ArgumentException("FSE2_OID_INVALID", nameof(value));
+        foreach (string arc in arcs)
+        {
+            if (arc.Length is 0 or > 39 || arc.Any(character => character is < '0' or > '9'))
+                throw new ArgumentException("FSE2_OID_INVALID", nameof(value));
+            if (arc.Length > 1 && arc[0] == '0') throw new ArgumentException("FSE2_OID_NON_CANONICAL", nameof(value));
+        }
+        if (arcs[0].Length != 1 || arcs[0][0] is < '0' or > '2')
+            throw new ArgumentException("FSE2_OID_INVALID", nameof(value));
+        if (arcs[0][0] is '0' or '1' && (arcs[1].Length > 2 || !int.TryParse(arcs[1], out int second) || second > 39))
+            throw new ArgumentException("FSE2_OID_INVALID", nameof(value));
         return value;
     }
 

@@ -127,8 +127,12 @@ public sealed class HealthcarePackBoundaryTests
             Assert.DoesNotContain(forbidden, requestBlock, StringComparison.OrdinalIgnoreCase);
 
         string connector = File.ReadAllText(Path.Combine(packRoot, "Fse2Connector.cs"));
-        Assert.Contains("Authorization", connector, StringComparison.Ordinal);
-        Assert.Contains("FSE-JWT-Signature", connector, StringComparison.Ordinal);
+        string finalAuthority = File.ReadAllText(Path.Combine(packRoot, "Fse2DispatchAuthority.cs"));
+        Assert.DoesNotContain("Headers.Authorization =", connector, StringComparison.Ordinal);
+        Assert.Contains("Authorization", finalAuthority, StringComparison.Ordinal);
+        Assert.Contains("FSE-JWT-Signature", finalAuthority, StringComparison.Ordinal);
+        Assert.Contains("resolver.RevalidateAsync", finalAuthority, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetSecretAsync", string.Join(Environment.NewLine, Directory.GetFiles(packRoot, "*.cs").Select(File.ReadAllText)), StringComparison.Ordinal);
         Assert.DoesNotContain("use_subject_as_author", connector, StringComparison.Ordinal);
         Assert.DoesNotContain("new HttpClient", connector, StringComparison.Ordinal);
     }
