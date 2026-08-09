@@ -116,7 +116,7 @@ public sealed class OpaqueSessionAuthException : Exception
 /// </summary>
 public abstract class OpaqueSessionLeaseProvider
 {
-    internal abstract OpaqueSessionDispatchLease AcquireFinalLease(OpaqueSessionReference reference, OpaqueSessionLifecycleBinding binding, DateTimeOffset now);
+    internal abstract OpaqueSessionDispatchLease AcquireFinalLease(OpaqueSessionReference? reference, OpaqueSessionLifecycleBinding binding, DateTimeOffset now);
 }
 
 internal sealed record OpaqueSessionLifecycleBinding(

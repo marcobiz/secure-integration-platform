@@ -98,7 +98,12 @@ public sealed record GatewayOperationDefinition(
     long MaximumRequestBytes,
     long MaximumResponseBytes,
     bool Idempotent,
-    int MaximumRetries = 0);
+    int MaximumRetries = 0,
+    string? AuthenticationPolicyId = null,
+    string? SessionProfileId = null);
+
+/// <summary>Bounded result returned by one server-selected qualified execution strategy.</summary>
+public sealed record QualifiedGatewayExecutionResult(int StatusCode, string ContentType, byte[] Body);
 
 /// <summary>Runtime headers covered by the Installation signature.</summary>
 public sealed record RuntimeSignatureHeaders(string Timestamp, string Nonce, string ContentSha256, string Signature);

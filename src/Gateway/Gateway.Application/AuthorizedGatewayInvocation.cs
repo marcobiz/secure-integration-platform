@@ -20,6 +20,42 @@ public sealed class AuthorizedGatewayInvocation
     public string OperationId { get; }
 }
 
+/// <summary>
+/// Opaque proof that Core resolved an exact Published operation and decoded its bounded payload
+/// after authenticating the principal and checking the grant. Only Core can construct it.
+/// </summary>
+public sealed class AuthorizedGatewayOperationExecution
+{
+    internal AuthorizedGatewayOperationExecution(AuthorizedGatewayInvocation invocation, GatewayOperationDefinition operation, byte[] payload)
+    {
+        Invocation = invocation;
+        Operation = operation;
+        Payload = payload;
+    }
+
+    /// <summary>Authorized Connector identifier.</summary>
+    public string ConnectorId => Invocation.ConnectorId;
+    /// <summary>Authorized operation identifier.</summary>
+    public string OperationId => Invocation.OperationId;
+    /// <summary>Published Connector version selected by Core.</summary>
+    public string ConnectorVersion => Operation.Version;
+    /// <summary>Authenticated correlation identifier.</summary>
+    public Guid CorrelationId => Invocation.Principal.CorrelationId;
+
+    internal AuthorizedGatewayInvocation Invocation { get; }
+    internal GatewayOperationDefinition Operation { get; }
+    internal ReadOnlyMemory<byte> Payload { get; }
+}
+
+/// <summary>One exact server-selected execution strategy for a qualified outbound authentication mode.</summary>
+public interface IGatewayOperationExecutionStrategy
+{
+    /// <summary>Authentication mode owned exclusively by this strategy.</summary>
+    GatewayAuthenticationKind AuthenticationKind { get; }
+    /// <summary>Executes only the non-forgeable Core handoff.</summary>
+    Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedGatewayOperationExecution execution, CancellationToken cancellationToken);
+}
+
 /// <summary>Provider-neutral Core boundary that produces an opaque authorized invocation.</summary>
 public interface IGatewayInvocationAuthorizer
 {

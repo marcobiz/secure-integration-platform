@@ -6,14 +6,14 @@ using SecureIntegration.Providers.Abstractions;
 
 namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 
-/// <summary>Applies HTTP Basic only from an exact server-resolved credential binding.</summary>
-public sealed class ServerBoundBasicAuthentication(ISecretValueProvider secrets)
+/// <summary>Applies HTTP Basic only inside an authority-bound one-shot dispatch.</summary>
+internal sealed class ServerBoundBasicAuthentication(ISecretValueProvider secrets)
 {
     /// <summary>
     /// Resolves username and password at the moment of use and applies exactly one Authorization header.
     /// Plaintext and encoded credential buffers are not retained after this call.
     /// </summary>
-    public async Task ApplyAsync(HttpRequestMessage request, ResolvedBasicCredentialBinding binding, CancellationToken cancellationToken)
+    internal async Task ApplyAsync(HttpRequestMessage request, ResolvedBasicCredentialBinding binding, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(binding);

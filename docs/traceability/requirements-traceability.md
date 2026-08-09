@@ -173,13 +173,18 @@ Detailed mapping: `docs/traceability/auth-phase2-wave1-oauth.md`. PR #17 product
 
 | Requirement | Automated evidence | Status |
 |---|---|---|
+| Production runtime strategy selected only after installation/grant/Published resolution | `Wave1_UT_runtime_selects_the_exact_qualified_strategy_only_after_principal_grant_and_operation_resolution`; missing/duplicate/wrong-strategy zero-network theories; `ProductionComposedSoapRuntimeIntegrationTests` | PASS local |
 | Single Published authority for Basic + SOAP + opaque session | `Wave1_UT_composed_authority_applies_Basic_typed_SOAP_and_opaque_session_once`; `Wave1_IT_composed_Basic_session_SOAPAction_and_body_use_one_real_restricted_HTTPS_dispatch` | PASS local |
 | Typed SOAP 1.1/1.2 metadata and operation-owned action | positive version theory; schema action checksum test; wrong version/content type/action/policy negatives | PASS local |
 | Authorization/custom-header ownership and no header bag | `Wave1_SEC_composed_session_header_cannot_collide_or_inject`; `Wave1_CT_composed_public_surface_has_no_authority_or_header_override`; composed architecture boundary | PASS local |
 | Existing Basic and opaque-session handoff reuse | Basic header cardinality/provider resolution assertions; `OpaqueSessionLeaseProvider` architecture assertion; complete M6/opaque regression gates | PASS local |
+| No supported public Basic apply or caller-constructible credential binding | reflection assertions in `Wave1_CT_composed_public_surface_has_no_authority_or_header_override`; `Wave1_CT_composed_SOAP_dispatch_is_closed_typed_Published_and_fault_preserving` | PASS local |
 | Final Published/resource/session TOCTOU | unit and real-HTTPS Basic/session/endpoint/revision/action/disable race theories with zero transport/server requests | PASS local |
 | SOAP-aware one-shot transport and strict Fault preservation | `Wave1_UT_SendSoapAsync_preserves_HTTP500_for_strict_Fault_parser`; `Wave1_IT_HTTP500_SOAP_Fault_reaches_hardened_parser_and_malformed_Fault_is_denied` | PASS local |
 | Connector schema/catalog/four-eyes checksum publishability | `Wave1_CT_opaque_and_composed_SOAP_profiles_are_schema_catalog_and_checksum_publishable`; `opaqueSessionHttp` and `soapBasicOpaqueSession` production parser enums | PASS local |
+| Real store → validation → distinct approval → atomic publication → runtime → pinned TLS dispatch | 11/11 `ProductionComposedSoapRuntimeIntegrationTests`; real PostgreSQL roles/store/catalog/runtime, no `MutableSnapshots` | PASS local |
+| Required production denial matrix produces zero SOAP and generic network calls | invalid grant, disabled/rotated Basic, stale session, policy update, endpoint substitution, wrong action/mode, SSRF and final-window rotation cases in `ProductionComposedSoapRuntimeIntegrationTests` | PASS local |
+| Connector Definition v1 legacy compatibility | `Wave1_UT_previously_valid_v1_allowed_client_header_still_loads_and_executes_while_new_auth_placement_denies_it` | PASS local |
 | SSRF, timeout, cancellation and redaction | unit closed-failure test; real HTTPS timeout/cancellation test; intended-destination wrong-Basic counter | PASS local |
 | TM-063/TM-064 | all named composed unit, real-HTTPS and architecture tests above | PASS local; independent review pending |
 

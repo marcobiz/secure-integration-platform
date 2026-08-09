@@ -71,6 +71,10 @@ public sealed class SoapAuthBoundaryTests
         string client = File.ReadAllText(Path.Combine(soapRoot, "ComposedSoapAuthenticatedClient.cs"));
         string resolver = File.ReadAllText(Path.Combine(soapRoot, "PublishedComposedSoapAuthorityResolver.cs"));
         string contracts = File.ReadAllText(Path.Combine(soapRoot, "ComposedSoapDispatchContracts.cs"));
+        string basic = File.ReadAllText(Path.Combine(soapRoot, "ServerBoundBasicAuthentication.cs"));
+        string strategy = File.ReadAllText(Path.Combine(soapRoot, "ComposedSoapExecutionStrategy.cs"));
+        string host = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "Program.cs"));
+        string operationServices = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "OperationServices.cs"));
         string schema = File.ReadAllText(Path.Combine(Root, "docs", "connectors", "connector-definition.schema.json"));
 
         Assert.Contains("transport.SendSoapAsync", client, StringComparison.Ordinal);
@@ -78,6 +82,8 @@ public sealed class SoapAuthBoundaryTests
         Assert.Contains("OpaqueSessionLeaseProvider", client, StringComparison.Ordinal);
         Assert.Contains("AcquireFinalLease", client, StringComparison.Ordinal);
         Assert.Contains("ServerBoundBasicAuthentication", client, StringComparison.Ordinal);
+        Assert.Contains("internal sealed class ServerBoundBasicAuthentication", basic, StringComparison.Ordinal);
+        Assert.Contains("internal async Task ApplyAsync", basic, StringComparison.Ordinal);
         Assert.Contains("PublishedConnectorSnapshot", resolver, StringComparison.Ordinal);
         Assert.Contains("OperationBindingDependencies", resolver, StringComparison.Ordinal);
         Assert.Contains("SoapHttpRequestMetadata", contracts, StringComparison.Ordinal);
@@ -86,6 +92,11 @@ public sealed class SoapAuthBoundaryTests
         Assert.Contains("\"soapBasicOpaqueSession\"", schema, StringComparison.Ordinal);
         Assert.Contains("\"opaqueSessionHttp\"", schema, StringComparison.Ordinal);
         Assert.DoesNotContain("\"headers\"", schema, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ComposedSoapExecutionStrategy", host, StringComparison.Ordinal);
+        Assert.Contains("OpaqueSessionHttpExecutionStrategy", host, StringComparison.Ordinal);
+        Assert.Contains("IGatewayOperationExecutionStrategy", operationServices, StringComparison.Ordinal);
+        Assert.Contains("client.SendAuthorizedAsync", strategy, StringComparison.Ordinal);
+        Assert.DoesNotContain("transport.SendAsync", strategy, StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()

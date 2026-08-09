@@ -1104,7 +1104,7 @@ public sealed class PostgresIsolationTests
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task ApplyMigrationAsync()
+    internal static async Task ApplyMigrationAsync()
     {
         string connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION")
             ?? Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION")

@@ -105,6 +105,21 @@
           "SecureIntegration.Providers.Abstractions": "[1.0.0, )"
         }
       },
+      "SecureIntegration.Gateway.ConnectorRuntime.Auth.Http": {
+        "type": "Project",
+        "dependencies": {
+          "SecureIntegration.Gateway.Application": "[1.0.0, )",
+          "SecureIntegration.Providers.Abstractions": "[1.0.0, )"
+        }
+      },
+      "SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap": {
+        "type": "Project",
+        "dependencies": {
+          "SecureIntegration.Gateway.Application": "[1.0.0, )",
+          "SecureIntegration.Gateway.ConnectorRuntime.Auth.Http": "[1.0.0, )",
+          "SecureIntegration.Providers.Abstractions": "[1.0.0, )"
+        }
+      },
       "SecureIntegration.Gateway.Domain": {
         "type": "Project"
       },

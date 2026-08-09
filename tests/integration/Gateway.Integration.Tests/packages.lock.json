@@ -569,6 +569,8 @@
         "dependencies": {
           "Microsoft.AspNetCore.Authentication.OpenIdConnect": "[10.0.10, )",
           "SecureIntegration.Gateway.Application": "[1.0.0, )",
+          "SecureIntegration.Gateway.ConnectorRuntime.Auth.Http": "[1.0.0, )",
+          "SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap": "[1.0.0, )",
           "SecureIntegration.Gateway.Infrastructure": "[1.0.0, )",
           "SecureIntegration.Providers.Synthetic": "[1.0.0, )"
         }

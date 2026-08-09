@@ -535,7 +535,11 @@ public sealed class ConnectorDefinitionValidator
 {
     private static readonly JsonSchema Schema = LoadSchema();
     private readonly JsonSchema schema = Schema;
-    private static readonly HashSet<string> ForbiddenHeaders = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> LegacyAllowedClientHeadersForbidden = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Authorization", "Cookie", "Host", "Forwarded", "Proxy-Authorization", "Connection", "Transfer-Encoding", "Upgrade"
+    };
+    private static readonly HashSet<string> AuthenticationPlacementHeadersForbidden = new(StringComparer.OrdinalIgnoreCase)
     {
         "Authorization", "SOAPAction", "Content-Type", "Cookie", "Set-Cookie", "Host", "Content-Length", "Forwarded", "Via", "Expect", "TE", "Trailer",
         "Proxy-Authorization", "Proxy-Authenticate", "Connection", "Transfer-Encoding", "Upgrade", "X-Correlation-ID", "traceparent", "tracestate", "baggage"
@@ -611,7 +615,7 @@ public sealed class ConnectorDefinitionValidator
             foreach (JsonElement headerElement in operation.GetProperty("allowedClientHeaders").EnumerateArray())
             {
                 string header = headerElement.GetString()!;
-                if (ForbiddenHeaders.Contains(header) || header.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase) || header.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase))
+                if (LegacyAllowedClientHeadersForbidden.Contains(header) || header.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase) || header.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase))
                     issues.Add(new("BGW-CONNECTOR-HEADER-FORBIDDEN", $"$.operations[{index}].allowedClientHeaders"));
             }
             ValidateAuthentication(operation, authentication, secrets, issues, index);
@@ -646,7 +650,7 @@ public sealed class ConnectorDefinitionValidator
         if (kind is "opaqueSessionHttp" or "soapBasicOpaqueSession")
         {
             string headerName = auth.GetProperty("headerName").GetString()!;
-            if (!IsHttpToken(headerName) || ForbiddenHeaders.Contains(headerName) || headerName.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase) || headerName.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase))
+            if (!IsHttpToken(headerName) || AuthenticationPlacementHeadersForbidden.Contains(headerName) || headerName.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase) || headerName.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase))
                 issues.Add(new("BGW-CONNECTOR-HEADER-FORBIDDEN", $"$.operations[{operationIndex}].authentication.headerName"));
             string valueFormat = auth.GetProperty("valueFormat").GetString()!;
             bool hasScheme = auth.TryGetProperty("fixedScheme", out JsonElement schemeElement);
@@ -926,7 +930,9 @@ public sealed class PublishedConnectorCatalog(
             GatewayOperationDefinition definition = new(parsed.ConnectorId, operationId, parsed.Version, endpoint, new HttpMethod(operation.GetProperty("method").GetString()!), request.GetProperty("contentType").GetString()!, authKind,
                 Resolve("usernameBinding"), Resolve("passwordBinding"), Resolve("secretBinding"), auth.TryGetProperty("headerName", out JsonElement header) ? header.GetString() : null, Resolve("certificateBinding"),
                 operation.GetProperty("timeoutMs").GetInt32(), request.GetProperty("maximumBytes").GetInt64(), response.GetProperty("maximumBytes").GetInt64(),
-                operation.TryGetProperty("idempotent", out JsonElement idempotent) && idempotent.GetBoolean(), operation.TryGetProperty("maximumRetries", out JsonElement retries) ? retries.GetInt32() : 0);
+                operation.TryGetProperty("idempotent", out JsonElement idempotent) && idempotent.GetBoolean(), operation.TryGetProperty("maximumRetries", out JsonElement retries) ? retries.GetInt32() : 0,
+                auth.TryGetProperty("policyId", out JsonElement policyId) ? policyId.GetString() : null,
+                auth.TryGetProperty("sessionProfileId", out JsonElement sessionProfileId) ? sessionProfileId.GetString() : null);
             _ = new GatewayOperationCatalog([definition]);
             operations.Add(operationId, definition);
         }

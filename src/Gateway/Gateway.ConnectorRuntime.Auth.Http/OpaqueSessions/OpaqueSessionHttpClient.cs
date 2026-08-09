@@ -39,10 +39,21 @@ public sealed class OpaqueSessionHttpClient
         OpaqueSessionResolvedExecutionContext resolvedContext,
         ReadOnlyMemory<byte> businessBody,
         OpaqueSessionReference sessionReference,
+        CancellationToken cancellationToken) =>
+        await SendCoreAsync(resolvedContext, businessBody, sessionReference ?? throw new ArgumentNullException(nameof(sessionReference)), cancellationToken).ConfigureAwait(false);
+
+    internal Task<OpaqueSessionHttpResponse> SendAuthorizedAsync(
+        OpaqueSessionResolvedExecutionContext resolvedContext,
+        ReadOnlyMemory<byte> businessBody,
+        CancellationToken cancellationToken) => SendCoreAsync(resolvedContext, businessBody, null, cancellationToken);
+
+    private async Task<OpaqueSessionHttpResponse> SendCoreAsync(
+        OpaqueSessionResolvedExecutionContext resolvedContext,
+        ReadOnlyMemory<byte> businessBody,
+        OpaqueSessionReference? sessionReference,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(resolvedContext);
-        ArgumentNullException.ThrowIfNull(sessionReference);
         OpaqueSessionHttpAuthorityState expected = resolvedContext.State;
         EnsureDeadline(expected);
         if (businessBody.Length > expected.MaximumRequestBytes || (expected.Method == HttpMethod.Get && !businessBody.IsEmpty))

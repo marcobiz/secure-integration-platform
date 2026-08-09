@@ -54,10 +54,21 @@ public sealed class ComposedSoapAuthenticatedClient
         ComposedSoapResolvedExecutionContext resolvedContext,
         ReadOnlyMemory<byte> soapEnvelope,
         OpaqueSessionReference sessionReference,
+        CancellationToken cancellationToken) =>
+        await SendCoreAsync(resolvedContext, soapEnvelope, sessionReference ?? throw new ArgumentNullException(nameof(sessionReference)), cancellationToken).ConfigureAwait(false);
+
+    internal Task<ComposedSoapHttpResponse> SendAuthorizedAsync(
+        ComposedSoapResolvedExecutionContext resolvedContext,
+        ReadOnlyMemory<byte> soapEnvelope,
+        CancellationToken cancellationToken) => SendCoreAsync(resolvedContext, soapEnvelope, null, cancellationToken);
+
+    private async Task<ComposedSoapHttpResponse> SendCoreAsync(
+        ComposedSoapResolvedExecutionContext resolvedContext,
+        ReadOnlyMemory<byte> soapEnvelope,
+        OpaqueSessionReference? sessionReference,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(resolvedContext);
-        ArgumentNullException.ThrowIfNull(sessionReference);
         ComposedSoapAuthorityState expected = resolvedContext.State;
         EnsureDeadline(expected);
 

@@ -73,20 +73,17 @@ public interface ISoapSessionResourceStampProvider
     Task<SoapSessionResourceStamp?> GetCurrentAsync(ConnectorAuthExecutionContext context, CancellationToken cancellationToken);
 }
 
-/// <summary>Resolved server-side Basic binding. Provider references are deliberately excluded from <see cref="ToString"/>.</summary>
-public sealed class ResolvedBasicCredentialBinding
+/// <summary>Internal resolved Basic binding. Provider references never enter the supported public surface.</summary>
+internal sealed class ResolvedBasicCredentialBinding
 {
-    /// <summary>Creates an exact pair of provider references resolved from a Published binding.</summary>
-    public ResolvedBasicCredentialBinding(string usernameProviderReference, string passwordProviderReference)
+    internal ResolvedBasicCredentialBinding(string usernameProviderReference, string passwordProviderReference)
     {
         UsernameProviderReference = RequireReference(usernameProviderReference);
         PasswordProviderReference = RequireReference(passwordProviderReference);
     }
 
-    /// <summary>Provider reference for the username. Runtime-only and never audit metadata.</summary>
-    public string UsernameProviderReference { get; }
-    /// <summary>Provider reference for the password. Runtime-only and never audit metadata.</summary>
-    public string PasswordProviderReference { get; }
+    internal string UsernameProviderReference { get; }
+    internal string PasswordProviderReference { get; }
 
     /// <inheritdoc />
     public override string ToString() => nameof(ResolvedBasicCredentialBinding);
@@ -244,8 +241,8 @@ public sealed class SoapOperationProfile
 /// <summary>Declarative Basic/session lifecycle profile compiled by a connector pack.</summary>
 public sealed class SoapSessionProfile
 {
-    /// <summary>Creates a fixed session acquisition, placement, expiry and logout profile.</summary>
-    public SoapSessionProfile(
+    /// <summary>Creates a fixed server-resolved session acquisition, placement, expiry and logout profile.</summary>
+    internal SoapSessionProfile(
         string profileId,
         ResolvedBasicCredentialBinding basicCredential,
         SoapOperationProfile loginOperation,
@@ -297,8 +294,7 @@ public sealed class SoapSessionProfile
 
     /// <summary>Profile identifier included in the session cache key.</summary>
     public string ProfileId { get; }
-    /// <summary>Resolved server-owned Basic binding.</summary>
-    public ResolvedBasicCredentialBinding BasicCredential { get; }
+    internal ResolvedBasicCredentialBinding BasicCredential { get; }
     /// <summary>Fixed login operation.</summary>
     public SoapOperationProfile LoginOperation { get; }
     /// <summary>Exact session extraction element under the login response.</summary>

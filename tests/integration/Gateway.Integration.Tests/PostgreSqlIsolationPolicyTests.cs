@@ -1,4 +1,5 @@
 using System.Reflection;
+using SecureIntegration.Gateway.Integration.Tests.ConnectorRuntime.Auth.Soap;
 using Xunit;
 
 namespace SecureIntegration.Gateway.Integration.Tests;
@@ -17,7 +18,8 @@ public sealed class PostgreSqlIsolationPolicyTests
         string[] expected =
         [
             nameof(AdminApiPostgreSqlSecurityTests),
-            nameof(PostgresIsolationTests)
+            nameof(PostgresIsolationTests),
+            nameof(ProductionComposedSoapRuntimeIntegrationTests)
         ];
 
         Assert.Equal(expected, actual);

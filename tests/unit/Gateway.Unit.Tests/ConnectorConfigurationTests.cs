@@ -620,6 +620,44 @@ public sealed class ConnectorConfigurationTests
         Assert.Equal("BGW-CONNECTOR-CONFIGURATION-CORRUPT", corrupted.Code);
     }
 
+    [Fact]
+    public async Task Wave1_UT_previously_valid_v1_allowed_client_header_still_loads_and_executes_while_new_auth_placement_denies_it()
+    {
+        Fixture fixture = new();
+        using JsonDocument sample = Sample();
+        using JsonDocument legacy = JsonDocument.Parse(sample.RootElement.GetRawText().Replace("\"allowedClientHeaders\": []", "\"allowedClientHeaders\": [\"SOAPAction\"]", StringComparison.Ordinal));
+        ValidatedConnectorDefinition validatedLegacy = fixture.Validator.ValidateRequired(legacy.RootElement);
+        _ = fixture.Validator.ParseStored(validatedLegacy.CanonicalJson, Convert.FromHexString(validatedLegacy.ChecksumSha256));
+
+        ConnectorVersionResource version = await fixture.ImportAsync(legacy);
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PutBindingsAsync(version.ConnectorId, BindingRequest(fixture.EnvironmentId, "https://vendor.example.test/"), "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "approver", Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        DateTimeOffset now = fixture.Clock.UtcNow;
+        Guid tenantId = Guid.NewGuid(); Guid applicationId = Guid.NewGuid(); Guid installationId = Guid.NewGuid();
+        await fixture.Registry.AddTenantAsync(new(tenantId, "legacy-v1", "Legacy v1", TenantStatus.Active, now), TestContext.Current.CancellationToken);
+        await fixture.Registry.AddApplicationAsync(new(applicationId, "legacy-v1", "Legacy v1", ApplicationStatus.Active, "3.0.0", null, now), TestContext.Current.CancellationToken);
+        await fixture.Registry.AddEnvironmentAsync(new(fixture.EnvironmentId, "legacy-v1", "Legacy v1", false), TestContext.Current.CancellationToken);
+        await fixture.Registry.AddInstallationAsync(new(installationId, tenantId, applicationId, fixture.EnvironmentId, InstallationStatus.Active, "3.0.0", now), TestContext.Current.CancellationToken);
+        await fixture.Registry.AddGrantAsync(new(Guid.NewGuid(), installationId, tenantId, version.ConnectorId, "submit", true, now.AddMinutes(-1)), TestContext.Current.CancellationToken);
+        CountingProvider provider = new(); CountingTransport transport = new();
+        RestrictedEgressService runtime = new(fixture.Registry, fixture.Catalog, provider, provider, new PublicResolver(), transport, fixture.Clock);
+        RegisteredInstallationIdentity identity = new(installationId, tenantId, applicationId, fixture.EnvironmentId, TenantStatus.Active, ApplicationStatus.Active, InstallationStatus.Active,
+            Guid.NewGuid(), CredentialStatus.Active, [1, 2, 3], now.AddMinutes(-1), now.AddHours(1), "3.0.0", null);
+        GatewayInvokeRequest invocation = new("1.0", new("application/json", "utf8", "{}"), Guid.NewGuid());
+        _ = await runtime.InvokeAsync(new(identity, invocation.CorrelationId), version.ConnectorId, "submit", invocation, TestContext.Current.CancellationToken);
+        Assert.Equal(1, transport.CallCount);
+
+        using JsonDocument composed = ComposedConnector();
+        using JsonDocument forbiddenPlacement = JsonDocument.Parse(composed.RootElement.GetRawText().Replace(
+            "\"usernameBinding\":\"basic-username\",\"passwordBinding\":\"basic-password\",\"secretBinding\":\"session-secret\",\"headerName\":\"X-Session-Reference\"",
+            "\"usernameBinding\":\"basic-username\",\"passwordBinding\":\"basic-password\",\"secretBinding\":\"session-secret\",\"headerName\":\"SOAPAction\"", StringComparison.Ordinal));
+        ConnectorValidationResult denied = fixture.Validator.Validate(forbiddenPlacement.RootElement);
+        Assert.False(denied.Valid);
+        Assert.Contains(denied.Issues, issue => issue.Code == "BGW-CONNECTOR-HEADER-FORBIDDEN" && issue.Location.Contains("authentication.headerName", StringComparison.Ordinal));
+    }
+
     private static JsonDocument Sample() => JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Samples", "sample-secure-service.connector.json")));
 
     private static JsonDocument CrossOperationSample() => JsonDocument.Parse("""
@@ -696,8 +734,15 @@ public sealed class ConnectorConfigurationTests
 
     private sealed class CountingTransport : IRestrictedTransport
     {
+        public int CallCount { get; private set; }
         public Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken) =>
-            Task.FromResult(new ExternalResponse(200, "application/json", "{}"u8.ToArray()));
+            Task.FromResult(Count());
+
+        private ExternalResponse Count()
+        {
+            CallCount++;
+            return new(200, "application/json", "{}"u8.ToArray());
+        }
     }
 
     private sealed class CountingProvider : ISecretValueProvider, IClientCertificateProvider

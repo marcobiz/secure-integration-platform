@@ -205,6 +205,10 @@ public sealed class ComposedSoapDispatchTests
     [Fact]
     public void Wave1_CT_composed_public_surface_has_no_authority_or_header_override()
     {
+        Assert.False(typeof(ServerBoundBasicAuthentication).IsPublic);
+        Assert.False(typeof(ResolvedBasicCredentialBinding).IsPublic);
+        Assert.Empty(typeof(ResolvedBasicCredentialBinding).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+        Assert.DoesNotContain(typeof(ComposedSoapAuthenticatedClient).Assembly.GetExportedTypes(), type => type.Name.Contains("BasicAuthentication", StringComparison.Ordinal));
         Assert.Empty(typeof(SoapHttpRequestMetadata).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
         Assert.Empty(typeof(ComposedSoapResolvedExecutionContext).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
         MethodInfo dispatch = Assert.Single(typeof(ComposedSoapAuthenticatedClient).GetMethods(), method => method.Name == nameof(ComposedSoapAuthenticatedClient.SendAsync));

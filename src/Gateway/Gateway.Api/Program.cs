@@ -17,6 +17,8 @@ using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Npgsql;
 using SecureIntegration.Gateway.Api;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 using SecureIntegration.Gateway.Infrastructure;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Providers.Abstractions;
@@ -141,6 +143,17 @@ builder.Services.AddSingleton(providerServices.CapabilitySource);
 if (providerServices.CertificateMetadata is not null) builder.Services.AddSingleton(providerServices.CertificateMetadata);
 if (providerServices.SigningKeys is not null) builder.Services.AddSingleton(providerServices.SigningKeys);
 if (providerServices.Mac is not null) builder.Services.AddSingleton(providerServices.Mac);
+
+builder.Services.AddSingleton<SoapSessionCache>();
+builder.Services.AddSingleton<OpaqueSessionLeaseProvider>(services => new SoapOpaqueSessionLeaseProvider(services.GetRequiredService<SoapSessionCache>()));
+builder.Services.AddSingleton<IGatewayOperationExecutionStrategy>(services => new OpaqueSessionHttpExecutionStrategy(
+    services.GetRequiredService<IConnectorConfigurationStore>(), services.GetRequiredService<OpaqueSessionLeaseProvider>(),
+    services.GetRequiredService<IHostResolver>(), services.GetRequiredService<IRestrictedTransport>(), services.GetRequiredService<IGatewayClock>(),
+    services.GetService<IPrivateDestinationAllowance>()));
+builder.Services.AddSingleton<IGatewayOperationExecutionStrategy>(services => new ComposedSoapExecutionStrategy(
+    services.GetRequiredService<IConnectorConfigurationStore>(), services.GetRequiredService<ISecretValueProvider>(), services.GetRequiredService<OpaqueSessionLeaseProvider>(),
+    services.GetRequiredService<IHostResolver>(), services.GetRequiredService<IRestrictedTransport>(), services.GetRequiredService<IGatewayClock>(),
+    services.GetService<IPrivateDestinationAllowance>()));
 
 byte[] activationKey;
 string? encodedActivationKey = hostOptions.ActivationHmacKeyBase64;

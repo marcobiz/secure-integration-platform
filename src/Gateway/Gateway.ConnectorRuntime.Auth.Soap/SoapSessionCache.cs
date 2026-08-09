@@ -222,7 +222,7 @@ internal sealed record OpaqueSessionDispatchLease(
 internal sealed class SoapOpaqueSessionLeaseProvider(SoapSessionCache cache) : OpaqueSessionLeaseProvider
 {
     internal override SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions.OpaqueSessionDispatchLease AcquireFinalLease(
-        OpaqueSessionReference reference,
+        OpaqueSessionReference? reference,
         OpaqueSessionLifecycleBinding binding,
         DateTimeOffset now)
     {
@@ -231,7 +231,7 @@ internal sealed class SoapOpaqueSessionLeaseProvider(SoapSessionCache cache) : O
         OpaqueSessionDispatchLease lease;
         try
         {
-            lease = cache.ResolveDispatchLease(key, new OpaqueSoapSessionReference(reference.Value), now);
+            lease = cache.ResolveDispatchLease(key, reference is null ? null : new OpaqueSoapSessionReference(reference.Value), now);
         }
         catch (SoapAuthException)
         {

@@ -177,6 +177,26 @@ Session generation/expiry, policy and resource state are then checked adjacent t
 projection and `IRestrictedTransport.SendAsync`, with no await between final lease acquisition and
 transport invocation. No authenticated `HttpRequestMessage`, raw session or attach helper is returned.
 
+## Wave 1 typed composed SOAP production dispatch
+
+Production gateway dispatch does not expose the lower-level capability selectors. After installation
+scope, exact grant and current Published operation resolution, `RestrictedEgressService` selects exactly
+one `IGatewayOperationExecutionStrategy` whose kind equals the Published authentication kind. The
+authorized handoff has no public constructor. A missing or duplicate registration fails closed and never
+falls back to the ordinary REST sender.
+
+The composed strategy takes policy and session-profile identifiers from the Published operation and the
+current opaque-session reference from the server-owned cache. The gateway caller supplies only the
+bounded operation payload. `ServerBoundBasicAuthentication`, `ResolvedBasicCredentialBinding` and the
+Basic apply operation are internal runtime details; provider/resource identity, version, revision,
+checksum and active resource stamp remain exact execution dependencies, and no authenticated request or
+Authorization value is returned.
+
+The strict authentication-placement denylist is distinct from historical Connector Definition v1
+`allowedClientHeaders` validation. This preserves load/publication/execution of an already-valid v1
+definition containing `SOAPAction`, while a new opaque-session or composed-SOAP placement using
+`SOAPAction` or `Content-Type` is rejected.
+
 ## Wave 1 generic JWT/X.509 extension note
 
 The connector-facing signing API remains policy ID plus allowlisted business claims. A

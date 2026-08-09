@@ -88,7 +88,8 @@ public sealed class RestrictedEgressService(
     IHostResolver resolver,
     IRestrictedTransport transport,
     IGatewayClock clock,
-    IPrivateDestinationAllowance? privateDestinationAllowance = null)
+    IPrivateDestinationAllowance? privateDestinationAllowance = null,
+    IEnumerable<IGatewayOperationExecutionStrategy>? executionStrategies = null)
 {
     /// <summary>Authorizes and invokes a server-owned external operation.</summary>
     public async Task<GatewayInvokeResponse> InvokeAsync(GatewayClientPrincipal authenticated, string connectorId, string operationId, GatewayInvokeRequest request, CancellationToken cancellationToken)
@@ -104,10 +105,6 @@ public sealed class RestrictedEgressService(
             throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403);
         GatewayOperationDefinition operation = await catalog.GetRequiredAsync(connectorId, operationId, identity.EnvironmentId,
             new(identity.InstallationId, identity.TenantId, identity.ApplicationId, operationId), cancellationToken).ConfigureAwait(false);
-        if (operation.Authentication is GatewayAuthenticationKind.OAuthAuthorizationCode or GatewayAuthenticationKind.OAuthClientCredentials or
-            GatewayAuthenticationKind.OpaqueSessionHttp or GatewayAuthenticationKind.SoapBasicOpaqueSession)
-            throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
-
         if (request.Metadata?.Count > 32 || request.Extensions?.Count > 16 || request.Metadata?.Values.Any(value => value.ValueKind is JsonValueKind.Array or JsonValueKind.Object) == true)
             throw new GatewayException("BGW-PROTOCOL-METADATA", 400);
         byte[] body;
@@ -123,6 +120,19 @@ public sealed class RestrictedEgressService(
         catch (FormatException) { throw new GatewayException("BGW-PROTOCOL-PAYLOAD", 400); }
         if (body.LongLength > operation.MaximumRequestBytes)
             throw new GatewayException("BGW-PROTOCOL-PAYLOAD", 413);
+
+        if (operation.Authentication is GatewayAuthenticationKind.OAuthAuthorizationCode or GatewayAuthenticationKind.OAuthClientCredentials or
+            GatewayAuthenticationKind.OpaqueSessionHttp or GatewayAuthenticationKind.SoapBasicOpaqueSession)
+        {
+            IGatewayOperationExecutionStrategy[] selected = (executionStrategies ?? []).Where(value => value.AuthenticationKind == operation.Authentication).Take(2).ToArray();
+            if (selected.Length != 1) throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+            AuthorizedGatewayInvocation invocation = new(authenticated, connectorId, operationId);
+            QualifiedGatewayExecutionResult result = await selected[0].ExecuteAsync(new(invocation, operation, body), cancellationToken).ConfigureAwait(false);
+            if (result.StatusCode is < 100 or > 599 || string.IsNullOrWhiteSpace(result.ContentType) || result.ContentType.Length > 512 || result.Body.LongLength > operation.MaximumResponseBytes)
+                throw new GatewayException("BGW-EGRESS-RESPONSE-TOO-LARGE", 502);
+            await registry.AppendAuditAsync(new GatewayAuditEvent(Guid.NewGuid(), clock.UtcNow, identity.TenantId, "installation", identity.InstallationId.ToString("D"), "operation.invoke", "operation", connectorId + "/" + operationId, request.CorrelationId, "success", "BGW-OPERATION-OK", new Dictionary<string, string> { ["connectorVersion"] = operation.Version, ["statusCategory"] = (result.StatusCode / 100).ToString(System.Globalization.CultureInfo.InvariantCulture) + "xx", ["callerKind"] = identity.InstallationKind.ToString() }), cancellationToken).ConfigureAwait(false);
+            return new GatewayInvokeResponse(request.CorrelationId, operation.Version, new GatewayPayload(result.ContentType, "base64", Convert.ToBase64String(result.Body)));
+        }
 
         IPAddress[] addresses = await resolver.ResolveAsync(operation.Endpoint.DnsSafeHost, cancellationToken).ConfigureAwait(false);
         if (addresses.Length == 0 || addresses.Any(address => IsForbiddenAddress(address) && privateDestinationAllowance?.IsAllowed(operation.Endpoint.DnsSafeHost, address) != true))
