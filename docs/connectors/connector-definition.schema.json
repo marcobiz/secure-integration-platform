@@ -235,7 +235,7 @@
       "properties": {
         "profileId": { "$ref": "#/$defs/identifier" },
         "soapVersion": { "enum": ["1.1", "1.2"] },
-        "action": { "type": "string", "format": "uri", "maxLength": 2048 },
+        "action": { "type": "string", "minLength": 3, "maxLength": 2048, "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:[^\\u0000-\\u0020\\u007F-\\u009F]+$" },
         "requestElement": { "$ref": "#/$defs/xmlQualifiedName" },
         "responseElement": { "$ref": "#/$defs/xmlQualifiedName" },
         "requestAdapter": { "$ref": "#/$defs/compiledAdapter" },
@@ -276,7 +276,7 @@
       "required": ["localName", "namespaceUri"],
       "properties": {
         "localName": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,99}$" },
-        "namespaceUri": { "type": "string", "format": "uri", "minLength": 1, "maxLength": 2048 }
+        "namespaceUri": { "type": "string", "minLength": 3, "maxLength": 2048, "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:[^\\u0000-\\u0020\\u007F-\\u009F]+$" }
       }
     },
     "oauthScopes": {
