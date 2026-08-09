@@ -34,6 +34,7 @@ production connector, a deployment environment, a distributed cache or generic X
 | documentation validation and conservative secret scan | PASS | repository documentation and tracked/untracked candidate content |
 | SPDX SBOM generation/validation | PASS | .NET, Admin Web and Gateway container artefacts |
 | vulnerable package scan | PASS | no vulnerable direct or transitive NuGet packages reported |
+| open-source Core export | PASS on `9f77cacaae294bb756b72413392825fcbdf9d230` | 377 files; clean-room scan/build/test/Admin/license checks; manifest SHA-256 `CFC83868E97A52F290C0E54D5A3DA553745BB1307F9107909EEFED32FEEA4A54` |
 
 ## Visible gate failures and remediation
 
@@ -49,6 +50,5 @@ production connector, a deployment environment, a distributed cache or generic X
 - Remediation evidence before the export rerun: AJV schema tests 2/2 PASS, typed unit tests 27/27
   PASS, Admin lint/API drift/unit 28/28/build PASS and owned full-stack 1/1 PASS.
 
-The open-source Core export, exact candidate HEAD, pull request, exact-head CI and independent review
-remain pending until the final commit and publication steps complete. No merge is authorized by this
-report.
+The concluding documentation commit, pull request, exact-head CI and independent review remain
+pending until the publication steps complete. No merge is authorized by this report.
