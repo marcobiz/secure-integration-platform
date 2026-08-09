@@ -1,13 +1,16 @@
 # FSE2 National Connector — initial organization profile
 
-Status: **IMPLEMENTATION_READY pending independent review**. This is not an official
+Status: **REMEDIATED pending targeted independent re-review**. This is not an official
 accreditation statement and is not `ACCREDITED_PRODUCTION_READY`.
 
 ## Supported authority model
 
-The only implemented actor profile is `ORGANIZATION`. An immutable, four-eyes-approved
-Published profile binds Tenant, Application, Installation, Environment, ConnectorVersion,
-Connector and operation to an organization P.IVA and assigning-authority OID. The pack
+The only implemented actor profile is `ORGANIZATION`. The production resolver reads the real
+`IConnectorConfigurationStore` with `PublishedConnectorAccessContext`, validates the exact
+Published lifecycle/version/operation/canonical checksum, and requires a current exact-digest
+four-eyes record from `IAdminSecurityStore`. The approved definition and active bindings bind
+Tenant, Application, Installation, Environment, ConnectorVersion, Connector and operation to
+an organization P.IVA and assigning-authority OID. The pack
 formats the canonical CX and supplies it to the existing Core signer as
 `JwtSubjectPolicy.Fixed`/`FixedSubject`.
 
@@ -24,6 +27,16 @@ Claim provenance is frozen as follows:
 | `TRUSTED_RUNTIME` | none in the initial organization profile |
 | `BUSINESS_ALLOWLISTED` | `person_id`, `patient_consent`, `resource_hl7_type` |
 | `DERIVED` | `purpose_of_use`, `action_id`, exact-byte `attachment_hash` |
+
+The v1 generic Connector schema has no pack extension object. Without changing Core, the FSE2
+production adapter therefore requires one checksum-bound, non-secret profile envelope in the
+canonical definition `description`, prefixed `fse2-organization-profile-v1:` and encoded as
+base64url JSON. Unknown envelope fields fail closed. The exact operation uses the existing
+`apiKeyAndMtls` dependency shape only as a two-resource Published binding carrier: its
+`secretBinding` is a provider-owned signing-key handle consumed solely through
+`IKeyOperationProvider`, while `certificateBinding` is the distinct mTLS client certificate.
+The FSE2 runtime never projects the former as an API-key header or retrieves a secret value.
+The definition checksum and binding-bundle digest are both required by the four-eyes record.
 
 ## Frozen operation matrix
 
@@ -48,15 +61,30 @@ surfaces are not available.
 
 ## Outbound security
 
-Every call emits a fresh `Authorization: Bearer` JWT and a fresh
+Every call prepares a fresh `Authorization: Bearer` JWT and a fresh
 `FSE-JWT-Signature` JWT. Both are RS256, contain the exact approved leaf DER in standard
 Base64 `x5c`, and use `iat` plus `exp` without `nbf`. Issuers are `auth:<verified CN>` and
 `integrity:<verified CN>`, where CN is read from the exact DER already matched to the
-approved fingerprint/SPKI. Signing and mTLS use different logical bindings and purposes.
+approved fingerprint/SPKI. CN means exactly one DER Subject attribute with OID `2.5.4.3`;
+absence, duplicates, empty/non-normalized values and unsupported encodings fail closed. Signing
+and mTLS use different logical bindings and purposes, each carrying its actual Published catalog
+revision/checksum, provider reference, binding revision/checksum and approved public identity.
 
-All outbound calls use the purpose-bound restricted transport. The endpoint is an HTTPS
-`/v1` base plus an allowlisted operation path; DNS/IP policy, redirect/proxy restrictions,
-timeout, cancellation and bounded responses remain enforced by Core infrastructure.
+Both JWTs and mTLS consume one internal `Fse2DispatchLease`. After JWT signing, public `x5c`
+resolution, mTLS material resolution, DNS and request preparation, the final Healthcare transport
+re-reads and compares the complete Published/profile/resource/endpoint authority. Only after that
+check are the two JWT headers projected synchronously and the restricted network transport called.
+
+Production accepts only
+`https://modipa.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1`; OfficialTest accepts only
+`https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1`. Variable synthetic HTTPS
+origins require an internal test-only authority and cannot be declared Production. DNS/IP policy,
+redirect/proxy restrictions, timeout, cancellation and bounded responses remain enforced by Core.
+
+Workflow persistence uses a full immutable Tenant/Application/Installation/Environment/
+ConnectorVersion/profile checksum+revision key plus the originating operation and technical
+workflow/trace identifiers. It stores no patient claims or document body. Status callers provide
+their current allowlisted clinical claims; those claims never become actor authority.
 
 ## Deferred scope
 
