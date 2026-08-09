@@ -306,8 +306,9 @@ available. Generic M6 auth tests are regression evidence only, not regional supp
 | Official-current registry | `docs/connectors/healthcare/sistema-ts-eprescription/official-source-registry.md` | PASS documentation freeze |
 | National SAC business contracts | Official specification 1.5.1 and 2026-04-28 kit digests; exact WSDL/action/XSD roots recorded | CONFIRMED, not implemented |
 | SAC/SAR server-owned routing | `docs/connectors/healthcare/sistema-ts-eprescription/spec.md` | DOCUMENTED, no regional adapter |
-| Basic and opaque ID-session | Current MFA 1.1 plus ID-session WSDL `create`/`revoke`/`checkToken` | CONFIRMED, not implemented |
-| HTTP `Authorization2F` placement | M6 API inspection: only SOAP Header element placement exists | BLOCKED_BY_GENERIC_PRIMITIVE |
+| Basic and opaque ID-session | Current MFA 1.1 plus ID-session WSDL `create`/`revoke`/`checkToken`; mandatory SSN `RICETTA-DEM`/`EROGATORE` create fields and production out-of-band delivery | CONFIRMED; current lifecycle cannot express check-then-promote completion |
+| HTTP `Authorization2F` placement | Generic fixed-scheme projection integrated in Foundation | PASS generic prerequisite |
+| SOAP/session one-shot composition | Source/API audit: opaque projection cannot add the frozen SOAP 1.1 `SOAPAction`; SOAP lifecycle login is empty/scalar-only and cannot promote an externally delivered opaque artifact | BLOCKED_BY_GENERIC_PRIMITIVE |
 | Synthetic server and connector security suite | Gate review | NOT STARTED by hard stop |
 | Accreditation and live conformance | Gate review | BLOCKED_BY_ACCREDITATION |
 

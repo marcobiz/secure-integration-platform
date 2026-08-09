@@ -3,20 +3,31 @@
 Status: **BLOCKED_BY_GENERIC_PRIMITIVE - NO-GO for implementation**
 
 Freeze date: 2026-08-08
+Implementation-resumption audit: 2026-08-09
 
 Target pack: `ConnectorPacks.Healthcare`
 
 ## Decision
 
 Current official WSDL/XSD and MFA material are available and have been frozen in the
-[official source registry](official-source-registry.md). The production connector was
-not started because the current SAC profile requires the opaque ID-session in the HTTP
-`Authorization2F` header, while the frozen M6 SOAP/session API can place a session only
-as a namespace-qualified SOAP Header element.
+[official source registry](official-source-registry.md). The 2026-08-09 currency recheck
+accepted that freeze without replacement. The generic opaque-session HTTP projection now
+supports the fixed server-owned `Authorization2F: Bearer` placement, so the earlier header
+placement gap is closed.
 
-Adding a caller-controlled header is forbidden. Adding a new generic, server-owned
-HTTP-session placement primitive is outside this wave. The requested hard stop therefore
-applies before contract generation, runtime composition or synthetic connector work.
+Implementation nevertheless remains blocked by two newly demonstrated generic composition
+gaps. The official SAC `create` request requires the server-owned `RICETTA-DEM` context and
+`EROGATORE` application plus identity fields, while production returns only an acknowledgement
+and delivers the ID-session out of band. The current SOAP lifecycle sends an empty login body,
+cannot parse the official nested response, and can promote only a session returned by a SOAP
+challenge-completion response; it cannot validate and promote an opaque artifact supplied
+through the transport-neutral interaction channel. Separately, the one-shot opaque-session
+HTTP dispatcher cannot apply the standard SOAP 1.1 `SOAPAction` header required by every
+frozen business WSDL.
+
+A connector-local cache, raw-header transport wrapper or synthetic simplification would bypass
+the qualified security boundary. The new-generic-gap hard stop therefore applies before DTO,
+serializer, runtime composition or synthetic connector implementation.
 
 ## Confirmed national business scope
 
@@ -80,9 +91,10 @@ constraint; it is not implemented or generalized here.
 Confirmed SAC sequence:
 
 1. resolve the Basic credential from an approved server-side secret binding;
-2. use the typed ID-session service operation `create` when a session must be requested;
+2. invoke typed ID-session operation `create` with the server-owned `RICETTA-DEM` context,
+   `EROGATORE` application and the provisioned identity fields required by the profile;
 3. complete the out-of-band interaction without assuming Direct, browser, Broker or any
-   single presentation adapter;
+   single presentation adapter, then validate and promote the supplied opaque ID-session;
 4. store only an opaque reference bound to Tenant, Installation, Application,
    Connector/version, operation/profile, environment, endpoint/binding and credential
    revision;
@@ -93,21 +105,38 @@ Expiry must come from the current service response/profile. The test-only wildca
 is not a production session and is never a fallback. Rotation, disable, expiry, wrong
 profile and replay fail closed. No session value may enter logs, audit, errors or responses.
 
-### Blocking primitive gap
+### Blocking generic composition gaps
 
-`SoapSessionProfile.SessionHeaderElement` and `SoapXmlBoundary.SerializeRequest` currently
-model only an XML element inside the SOAP Header. `SoapXmlBoundary.ApplyHttpHeaders`
-controls SOAPAction/content type but has no server-owned opaque-session HTTP-header
-placement. Consequently the official SAC profile cannot be expressed without changing a
-generic primitive.
+The previously missing fixed HTTP-session placement is present in
+`Gateway.ConnectorRuntime.Auth.Http/OpaqueSessions`. It is not sufficient to express the
+complete official SAC flow:
+
+- `SoapSessionClient.AcquireSessionAsync` invokes the compiled login with an empty value map,
+  but the SSN MFA profile makes `contesto=RICETTA-DEM` and `applicazione=EROGATORE` mandatory;
+- the official `CreateAuthRes` contains nested `info`, `errori` and test-only `comunicazioni`
+  structures, while the M6 login decoder accepts only unique scalar children;
+- production `create` acknowledges delivery through a certified out-of-band channel and does
+  not return the ID-session; the current interaction completion can store only a session
+  returned by another SOAP response and has no check-then-promote operation for a user-supplied
+  opaque artifact;
+- `OpaqueSessionHttpClient` creates the final request and projects exactly one approved session
+  header, but exposes no server-owned SOAP HTTP policy input, so the required SOAP 1.1
+  `SOAPAction` cannot be composed into the same one-shot restricted dispatch.
+
+These are generic SOAP/session orchestration concerns rather than Sistema TS semantics. They
+also arise for any SOAP service combining an out-of-band opaque credential with fixed standard
+SOAP HTTP headers, so implementing them inside the Healthcare pack would reverse ownership.
 
 The prerequisite for resuming this wave is a separately authorized Core change that:
 
-- permits only a compiled allowlisted header name and scheme;
-- accepts no header name or value from the caller;
-- injects the opaque session immediately before restricted dispatch;
-- preserves credential/binding/endpoint/profile revision checks and redaction;
-- includes positive and negative architecture, replay, substitution and log tests.
+- accepts only compiled/provider-resolved login values and typed nested response rules;
+- models transport-neutral delivery of an opaque artifact, validates it against the current
+  profile and promotes it into the existing bounded session cache without exposing its value;
+- composes version-specific SOAP HTTP policy, including fixed `SOAPAction`, with the existing
+  server-owned opaque-session projection in one restricted dispatch;
+- accepts no header, endpoint, method, session value or profile authority from the caller;
+- preserves generation, credential/binding/endpoint/profile revision checks and redaction;
+- includes positive and negative architecture, replay, substitution, cancellation and log tests.
 
 ## Business state and reconciliation
 
@@ -134,9 +163,9 @@ custody may be reused only after the blocking primitive is qualified.
 ## Synthetic server and security tests
 
 No Sistema TS synthetic server or connector-specific executable tests were created.
-Doing so before the required auth placement exists would create a misleading, non-runnable
-profile. Existing M6 synthetic tests continue to qualify only the generic SOAP Header
-session profile; they are not Sistema TS conformance evidence.
+Doing so before the required session-interaction and SOAP HTTP composition exist would create
+a misleading, non-runnable profile. Existing M6 synthetic tests continue to qualify only the
+generic primitives; they are not Sistema TS conformance evidence.
 
 When the prerequisite is available, the connector gate must add the positive lifecycle
 and every negative case listed in the Wave 1 request, including caller header injection,

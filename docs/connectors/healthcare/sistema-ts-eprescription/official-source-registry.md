@@ -1,6 +1,7 @@
 # Sistema TS ePrescription official source registry
 
 Freeze date: 2026-08-08
+Currency recheck: 2026-08-09
 Evidence label: `OFFICIAL_CURRENT` unless explicitly stated otherwise.
 
 This registry records only public material published by Sistema Tessera Sanitaria,
@@ -11,6 +12,11 @@ test identities, endpoints and SOAP projects are not vendored in the repository.
 `Current` means that the artifact was the one linked by the official portal on the
 freeze date. It is not a promise that Sistema TS will keep that artifact unchanged.
 Publication must revalidate the portal metadata and the SHA-256 digest.
+
+The 2026-08-09 lightweight recheck reached every registered official portal page.
+The visible SSN, MFA, ID-session and RBE dates/identifiers were unchanged, and fresh
+downloads of all seven frozen artifacts matched the SHA-256 values below. No replacement
+contract was linked by the official pages.
 
 ## Registry
 
@@ -57,6 +63,6 @@ the current official WSDL and must not be normalized or corrected by inference.
 
 - search-engine mirrors, federation or vendor summaries;
 - historical local characterization marked `KNOWN`;
-- customer/private research, captured traffic or credentials;
+- non-public implementation material, captured traffic or credentials;
 - SOAP UI examples as a replacement for the WSDL/XSD;
 - the test-only wildcard ID-session format as a production lifecycle rule.

@@ -1,8 +1,10 @@
 # Healthcare Wave 1 - Sistema TS gate review
 
-Review date: 2026-08-08
+Review date: 2026-08-09
 
-Baseline: `m6-auth-foundation-baseline-20260808` / `6e1a7c626e0e24d0a385c611fc03faef51598889`
+Resumed starting HEAD: `12d98d175d163bc4e73c9510b867b5c68af337c0`
+
+Foundation merge-base: `705e9d4bd203ca7b902ad0aeedc9d4402f9f4452`
 
 Branch: `wave1/sistema-ts-eprescription`
 
@@ -10,37 +12,45 @@ Branch: `wave1/sistema-ts-eprescription`
 
 **NO-GO for `SistemaTSEPrescriptionConnector` implementation.**
 
-The official-current source freeze is complete and the national SAC business contracts
-are identifiable. The hard stop is caused by a missing generic primitive, not by a missing
-WSDL: the current SAC ID-session must be sent in a fixed HTTP `Authorization2F` bearer
-header, while M6 supports only a session element in the SOAP Header.
+The official-current source freeze remains complete and the national SAC business contracts
+are identifiable. The Wave 1 Foundation closes the earlier fixed `Authorization2F` placement
+gap, but the complete profile still cannot be composed through the qualified generic APIs.
+
+Official SSN MFA requires server-owned `RICETTA-DEM` and `EROGATORE` values in `create`.
+Production acknowledges the request and delivers the ID-session out of band. The M6 lifecycle
+always sends an empty login value map, accepts only scalar login-response children and can cache
+only a session returned by a SOAP completion response. It cannot check and promote an opaque
+artifact supplied through the transport-neutral interaction. The final opaque-session dispatcher
+also cannot add the fixed SOAP 1.1 `SOAPAction` required by the business WSDLs.
 
 ## Requested output
 
 | Output | Result |
 |---|---|
-| Official registry | Complete; public links, versions, dates and SHA-256 digests recorded |
+| Official registry | Complete; 2026-08-09 portal recheck and 7/7 fresh digest matches |
 | Confirmed operations | retrieve/take-in-charge, release, dispense/close, suspend/revoke suspension, cancel/correct dispensation |
 | Unconfirmed/deferred operations | deferred/offline, reports, history, prescription-side and regional operations |
 | SAC routing model | documented as `NationalSac` vs server-owned `RegionalReference(profileId)`; no code added |
 | SOAP contracts | current official identities and digests frozen; no generated code or invented XML |
-| MFA/session model | official `create`, `revoke`, `checkToken` and `Authorization2F` placement recorded |
+| MFA/session model | official `create`, out-of-band delivery, `checkToken`, `revoke` and `Authorization2F` recorded; current Core composition gap demonstrated |
 | Business workflow | authoritative state retained upstream; only future correlation/idempotency/reconciliation metadata allowed |
 | RBE | current official family confirmed separately; not implemented or semantically merged |
-| Synthetic server | not implemented because the required auth primitive is absent |
+| Synthetic server | not implemented because a runnable official session/SOAP composition is absent |
 | Security tests | zero connector-specific tests added; no connector execution surface was introduced |
 | Product test total | 0 new product tests; existing M6 totals are not counted as Sistema TS evidence |
 | Live/accreditation evidence | none; no external call or onboarding claim |
-| Release decision | NO-GO until a separately authorized generic primitive and its security gate exist |
+| Release decision | BLOCKED_BY_GENERIC_PRIMITIVE until typed login/out-of-band promotion and SOAP 1.1 one-shot composition are separately authorized and qualified |
 
 ## Implemented confirmed scope
 
 `IMPLEMENTED_CONFIRMED_SCOPE` for this branch means only:
 
 - public official source registry and immutable digest freeze;
+- lightweight current-source recheck with seven matching fresh artifact digests;
 - confirmed/unconfirmed operation inventory;
 - provider-neutral SAC/SAR routing decision;
-- exact identification of the generic primitive gap;
+- proof that the earlier HTTP placement gap is closed and exact identification of the remaining
+  generic composition gaps;
 - public-safe provisioning and accreditation blockers.
 
 It does not mean a connector, DTO, serializer, synthetic server, Published definition or
@@ -50,9 +60,17 @@ external conformance implementation exists.
 
 ### BLOCKED_BY_GENERIC_PRIMITIVE
 
-A narrow, server-owned opaque-session HTTP-header placement capability is required. It
-must be implemented and qualified in Core under separate authorization before this wave
-can resume. A connector-local raw header injection workaround is prohibited.
+The required generic work is broader than the now-integrated fixed session-header placement:
+
+- server-owned typed login values and bounded nested response handling;
+- transport-neutral validation and promotion of an out-of-band opaque session into the existing
+  generation/revision-bound cache;
+- fixed SOAP 1.1 HTTP policy composed with opaque-session projection in the same one-shot
+  restricted dispatch.
+
+It must be implemented and qualified in Core under separate authorization before this wave can
+resume. A Healthcare cache, raw-header transport wrapper or simplified synthetic contract is
+prohibited.
 
 ### BLOCKED_BY_ACCREDITATION
 
@@ -62,7 +80,7 @@ not been performed. These remain separate even after the product code can be imp
 ## Gate evidence
 
 Documentation validation, secret scan and `git diff --check` are the applicable local
-gate for this documentation-only hard-stop branch. On 2026-08-08:
+gate for this documentation-only hard-stop update. On 2026-08-09:
 
 - `./eng/validate-docs.ps1`: PASS;
 - `./eng/scan-secrets.ps1`: PASS;

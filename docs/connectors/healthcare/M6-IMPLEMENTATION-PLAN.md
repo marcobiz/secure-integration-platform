@@ -10,7 +10,7 @@ The task calls this work “M6 Healthcare Characterization”. The repository ro
 
 | Priority | Connector | Reuse | Breadth/value | Specification clarity | Synthetic testability | Decision |
 |---:|---|---|---|---|---|---|
-| 1 | `sistema-ts-eprescription` | National SAC dispenser contracts confirmed; SAR protocol variants excluded | High national prescription coverage | Official WSDL/XSD and MFA current; blocked by missing server-owned HTTP session-header placement | High for SOAP/Basic/session behavior after prerequisite | Wave 1 hard stop |
+| 1 | `sistema-ts-eprescription` | National SAC dispenser contracts confirmed; SAR protocol variants excluded | High national prescription coverage | Official WSDL/XSD and MFA current; header projection present, but out-of-band session promotion and SOAP 1.1 HTTP composition are missing | High after generic prerequisites | Wave 1 hard stop |
 | 2 | `lombardia-oauth-helper` | High for OAuth token/session patterns | High regional prescription + FSE value | Medium-low: helper and source-profile conflict remain | High for helper/OAuth state machine | Wave 1, conditional |
 | 3 | `fvg-pkce-jwt` | High for PKCE/code handoff and RS256 | Strong FSE profile and reusable browser flow | Medium: high-level flow clear, claims/API missing | High for PKCE/token/JWT policy negatives | Wave 2 |
 | 4 | `umbria-mtls-jwt` | High for purpose-separated mTLS/signing | Strong FSE/mTLS/JWT coverage | Medium: certificate roles clear, claims/API missing | High with ephemeral certificates/keys | Wave 2, conditional on key custody |
@@ -84,17 +84,17 @@ Provider access remains capability-specific: secret retrieval, client-certificat
 
 | Area | Plan |
 |---|---|
-| Primitives | AP-01 server-bound Basic, AP-02 transport-neutral interactive challenge/opaque session, AP-07 secure SOAP/XML boundary, plus a separately authorized server-owned HTTP session-header placement primitive |
+| Primitives | AP-01 server-bound Basic, AP-02 opaque session, AP-07 secure SOAP/XML and fixed HTTP session projection exist; separately authorized typed login/out-of-band promotion and SOAP 1.1 HTTP composition remain required |
 | User interaction | Out-of-band ID-session delivery is official; presentation remains transport-neutral and does not require Broker |
 | Custody | Basic credential and ID-session remain at Gateway; the SAC profile does not introduce a client certificate |
-| Shared work | XML safety limits and opaque session lifecycle exist; HTTP placement is missing |
+| Shared work | XML safety limits, opaque session lifecycle and `Authorization2F` placement exist; mandatory login values, nested response handling, out-of-band session promotion and `SOAPAction` composition are missing |
 | Complexity | Official WSDL/XSD mapping is now available; implementation is blocked before generation |
 | Risks | Raw/caller header injection, session artifact binding, sensitive XML/fault leakage, accidental generic proxy |
 | Official source status | Current SSN dispenser 1.5.1, 2026-04-28 WSDL/XSD kit, MFA 1.1 and 2025-09-02 ID-session kit frozen in the Wave 1 registry |
 | Tests | Not started by hard stop; future suite must cover lifecycle, redaction, XML, routing, replay, substitution and business transitions |
 | Execution | **GATEWAY** for National/SAC; regional execution remains a server-owned profile reference only |
 | Synthetic implementation | Not started because the official authentication profile cannot be expressed by M6 |
-| Production blocker | `BLOCKED_BY_GENERIC_PRIMITIVE`: fixed `Authorization2F` HTTP placement; accreditation remains separate |
+| Production blocker | `BLOCKED_BY_GENERIC_PRIMITIVE`: typed server-owned login, validated out-of-band session promotion and SOAP 1.1 HTTP policy in the one-shot projection; accreditation remains separate |
 
 ### Connector 2 - `lombardia-oauth-helper`
 
