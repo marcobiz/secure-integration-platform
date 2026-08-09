@@ -537,7 +537,8 @@ public sealed class ConnectorDefinitionValidator
     private readonly JsonSchema schema = Schema;
     private static readonly HashSet<string> ForbiddenHeaders = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Authorization", "Cookie", "Host", "Forwarded", "Proxy-Authorization", "Connection", "Transfer-Encoding", "Upgrade"
+        "Authorization", "SOAPAction", "Content-Type", "Cookie", "Set-Cookie", "Host", "Content-Length", "Forwarded", "Via", "Expect", "TE", "Trailer",
+        "Proxy-Authorization", "Proxy-Authenticate", "Connection", "Transfer-Encoding", "Upgrade", "X-Correlation-ID", "traceparent", "tracestate", "baggage"
     };
 
     /// <summary>Validates a parsed definition and returns only bounded issue codes/locations.</summary>
@@ -613,7 +614,7 @@ public sealed class ConnectorDefinitionValidator
                 if (ForbiddenHeaders.Contains(header) || header.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase) || header.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase))
                     issues.Add(new("BGW-CONNECTOR-HEADER-FORBIDDEN", $"$.operations[{index}].allowedClientHeaders"));
             }
-            ValidateAuthentication(authentication, secrets, issues, index);
+            ValidateAuthentication(operation, authentication, secrets, issues, index);
             index++;
         }
     }
@@ -632,7 +633,7 @@ public sealed class ConnectorDefinitionValidator
         return result;
     }
 
-    private static void ValidateAuthentication(JsonElement auth, Dictionary<string, string> secrets, List<ConnectorValidationIssue> issues, int operationIndex)
+    private static void ValidateAuthentication(JsonElement operation, JsonElement auth, Dictionary<string, string> secrets, List<ConnectorValidationIssue> issues, int operationIndex)
     {
         string kind = auth.GetProperty("kind").GetString()!;
         if (string.Equals(kind, "oauthAuthorizationCode", StringComparison.Ordinal) && auth.TryGetProperty("redirectUri", out JsonElement redirectElement))
@@ -641,6 +642,29 @@ public sealed class ConnectorDefinitionValidator
             if (!Uri.TryCreate(redirectValue, UriKind.Absolute, out Uri? redirectUri) || !redirectUri.IsAbsoluteUri || redirectUri.Scheme != Uri.UriSchemeHttps ||
                 !string.IsNullOrEmpty(redirectUri.UserInfo) || !string.IsNullOrEmpty(redirectUri.Query) || !string.IsNullOrEmpty(redirectUri.Fragment))
                 issues.Add(new("BGW-CONNECTOR-OAUTH-REDIRECT-URI-INVALID", $"$.operations[{operationIndex}].authentication.redirectUri"));
+        }
+        if (kind is "opaqueSessionHttp" or "soapBasicOpaqueSession")
+        {
+            string headerName = auth.GetProperty("headerName").GetString()!;
+            if (!IsHttpToken(headerName) || ForbiddenHeaders.Contains(headerName) || headerName.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase) || headerName.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase))
+                issues.Add(new("BGW-CONNECTOR-HEADER-FORBIDDEN", $"$.operations[{operationIndex}].authentication.headerName"));
+            string valueFormat = auth.GetProperty("valueFormat").GetString()!;
+            bool hasScheme = auth.TryGetProperty("fixedScheme", out JsonElement schemeElement);
+            if (valueFormat == "rawOpaqueValue" && hasScheme || valueFormat == "fixedSchemeAndOpaqueValue" && (!hasScheme || !IsHttpToken(schemeElement.GetString()!)))
+                issues.Add(new("BGW-CONNECTOR-SESSION-HEADER-FORMAT-INVALID", $"$.operations[{operationIndex}].authentication.valueFormat"));
+        }
+        if (kind == "soapBasicOpaqueSession")
+        {
+            JsonElement soap = auth.GetProperty("soapHttp");
+            string version = soap.GetProperty("version").GetString()!;
+            string action = soap.GetProperty("action").GetString()!;
+            string expectedContentType = version == "1.1" ? "text/xml" : "application/soap+xml";
+            if (!string.Equals(operation.GetProperty("method").GetString(), "POST", StringComparison.Ordinal))
+                issues.Add(new("BGW-CONNECTOR-SOAP-METHOD-INVALID", $"$.operations[{operationIndex}].method"));
+            if (!string.Equals(operation.GetProperty("request").GetProperty("contentType").GetString(), expectedContentType, StringComparison.OrdinalIgnoreCase))
+                issues.Add(new("BGW-CONNECTOR-SOAP-CONTENT-TYPE-INVALID", $"$.operations[{operationIndex}].request.contentType"));
+            if (!Uri.TryCreate(action, UriKind.Absolute, out Uri? parsedAction) || !parsedAction.IsAbsoluteUri || action.Any(character => char.IsControl(character) || char.IsWhiteSpace(character) || character is '"' or '\\'))
+                issues.Add(new("BGW-CONNECTOR-SOAP-ACTION-INVALID", $"$.operations[{operationIndex}].authentication.soapHttp.action"));
         }
         Check("usernameBinding", "username");
         Check("passwordBinding", "password");
@@ -656,6 +680,9 @@ public sealed class ConnectorDefinitionValidator
                 issues.Add(new("CONNECTOR_SECRET_BINDING_INVALID", $"$.operations[{operationIndex}].authentication.{property}"));
         }
     }
+
+    private static bool IsHttpToken(string value) => !string.IsNullOrEmpty(value) && value.Length <= 100 && value.All(character =>
+        char.IsAsciiLetterOrDigit(character) || character is '!' or '#' or '$' or '%' or '&' or '\'' or '*' or '+' or '-' or '.' or '^' or '_' or '`' or '|' or '~');
 
     private static ValidatedConnectorDefinition Parse(string canonicalJson, string checksum)
     {
@@ -915,6 +942,8 @@ public sealed class PublishedConnectorCatalog(
         "apiKeyAndMtls" => GatewayAuthenticationKind.ApiKeyAndMutualTls,
         "oauthAuthorizationCode" => GatewayAuthenticationKind.OAuthAuthorizationCode,
         "oauthClientCredentials" => GatewayAuthenticationKind.OAuthClientCredentials,
+        "opaqueSessionHttp" => GatewayAuthenticationKind.OpaqueSessionHttp,
+        "soapBasicOpaqueSession" => GatewayAuthenticationKind.SoapBasicOpaqueSession,
         _ => throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-CORRUPT", 503)
     };
 

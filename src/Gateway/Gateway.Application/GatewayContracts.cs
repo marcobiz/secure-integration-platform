@@ -73,7 +73,11 @@ public enum GatewayAuthenticationKind
     /// <summary>OAuth Authorization Code is executed only by the capability-based outbound auth module.</summary>
     OAuthAuthorizationCode,
     /// <summary>OAuth Client Credentials is executed only by the capability-based outbound auth module.</summary>
-    OAuthClientCredentials
+    OAuthClientCredentials,
+    /// <summary>Opaque-session HTTP projection is executed only by its authority-bound capability.</summary>
+    OpaqueSessionHttp,
+    /// <summary>Basic + SOAP metadata + opaque-session dispatch is executed only by its composed capability.</summary>
+    SoapBasicOpaqueSession
 }
 
 /// <summary>Server-owned operation definition. No field is copied from an invoke request.</summary>

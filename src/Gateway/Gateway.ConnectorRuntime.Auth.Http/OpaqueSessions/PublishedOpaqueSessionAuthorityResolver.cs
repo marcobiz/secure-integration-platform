@@ -30,6 +30,13 @@ public sealed class PublishedOpaqueSessionAuthorityResolver
     /// Caller code cannot supply endpoint, method, placement, revision, operation or environment authority.
     /// </summary>
     public async Task<OpaqueSessionResolvedExecutionContext> ResolveAsync(OpaqueSessionAuthorizedInvocation invocation, OpaqueSessionHttpAuthorityRequest request, CancellationToken cancellationToken)
+        => await ResolveAsync(invocation, request, OpaqueSessionAuthorityProfileKind.HttpOnly, cancellationToken).ConfigureAwait(false);
+
+    internal async Task<OpaqueSessionResolvedExecutionContext> ResolveAsync(
+        OpaqueSessionAuthorizedInvocation invocation,
+        OpaqueSessionHttpAuthorityRequest request,
+        OpaqueSessionAuthorityProfileKind profileKind,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(invocation);
         ArgumentNullException.ThrowIfNull(request);
@@ -39,13 +46,13 @@ public sealed class PublishedOpaqueSessionAuthorityResolver
 
         PublishedConnectorAccessContext access = new(principal.InstallationId, principal.TenantId, principal.ApplicationId, invocation.OperationId);
         PublishedConnectorSnapshot expectedSnapshot = await RequiredSnapshotAsync(invocation.ConnectorId, principal.Identity.EnvironmentId, access, cancellationToken).ConfigureAwait(false);
-        ResolvedPolicy expected = Parse(expectedSnapshot, invocation, request);
+        ResolvedPolicy expected = Parse(expectedSnapshot, invocation, request, profileKind);
         OpaqueSessionHttpAuthorityState expectedState = State(principal, expectedSnapshot, invocation, request, expected);
 
         async Task<OpaqueSessionHttpAuthorityState> Revalidate(CancellationToken token)
         {
             PublishedConnectorSnapshot currentSnapshot = await RequiredSnapshotAsync(invocation.ConnectorId, principal.Identity.EnvironmentId, access, token).ConfigureAwait(false);
-            ResolvedPolicy current = Parse(currentSnapshot, invocation, request);
+            ResolvedPolicy current = Parse(currentSnapshot, invocation, request, profileKind);
             OpaqueSessionHttpAuthorityState currentState = State(principal, currentSnapshot, invocation, request, current);
             if (currentSnapshot.Stamp != expectedSnapshot.Stamp || currentSnapshot.Version.Id != expectedSnapshot.Version.Id ||
                 currentSnapshot.Version.State != ConnectorVersionState.Published || currentSnapshot.Bindings.State != ConnectorBindingState.Active ||
@@ -74,13 +81,18 @@ public sealed class PublishedOpaqueSessionAuthorityResolver
 
     private OpaqueSessionHttpAuthorityState State(GatewayClientPrincipal principal, PublishedConnectorSnapshot snapshot, OpaqueSessionAuthorizedInvocation invocation,
         OpaqueSessionHttpAuthorityRequest request, ResolvedPolicy resolved) => new(
+            snapshot,
             principal.TenantId, principal.InstallationId, principal.ApplicationId, principal.Identity.EnvironmentId, snapshot.Version.Id,
             snapshot.Version.ConnectorSlug, snapshot.Version.Version, invocation.OperationId, request.PolicyId, resolved.ProfileId,
             resolved.Endpoint, resolved.Method, resolved.ContentType, snapshot.Bindings.Revision, snapshot.Bindings.Revision,
             resolved.Credential.CatalogRevision, snapshot.Stamp.ResourceStampSha256, resolved.HeaderName, resolved.ValueFormat, resolved.FixedScheme,
             resolved.Timeout, resolved.MaximumRequestBytes, resolved.MaximumResponseBytes, principal.CorrelationId, clock.UtcNow.AddMinutes(30), resolved.SecurityFingerprint);
 
-    private static ResolvedPolicy Parse(PublishedConnectorSnapshot snapshot, OpaqueSessionAuthorizedInvocation invocation, OpaqueSessionHttpAuthorityRequest request)
+    private static ResolvedPolicy Parse(
+        PublishedConnectorSnapshot snapshot,
+        OpaqueSessionAuthorizedInvocation invocation,
+        OpaqueSessionHttpAuthorityRequest request,
+        OpaqueSessionAuthorityProfileKind profileKind)
     {
         try
         {
@@ -93,12 +105,14 @@ public sealed class PublishedOpaqueSessionAuthorityResolver
             using JsonDocument document = JsonDocument.Parse(snapshot.Version.CanonicalJson, new JsonDocumentOptions { MaxDepth = 32 });
             JsonElement operation = document.RootElement.GetProperty("operations").EnumerateArray().Single(value => string.Equals(value.GetProperty("operationId").GetString(), invocation.OperationId, StringComparison.Ordinal));
             JsonElement authentication = operation.GetProperty("authentication");
-            if (!string.Equals(authentication.GetProperty("kind").GetString(), "opaqueSessionHttp", StringComparison.Ordinal) ||
+            string requiredKind = profileKind == OpaqueSessionAuthorityProfileKind.HttpOnly ? "opaqueSessionHttp" : "soapBasicOpaqueSession";
+            if (!string.Equals(authentication.GetProperty("kind").GetString(), requiredKind, StringComparison.Ordinal) ||
                 !string.Equals(authentication.GetProperty("policyId").GetString(), request.PolicyId, StringComparison.Ordinal))
                 throw OpaqueSessionHttpFailures.Rejected();
 
             string credentialBinding = authentication.GetProperty("secretBinding").GetString()!;
-            if (dependencies.SecretBindingIds.Count != 1 || !dependencies.SecretBindingIds.Contains(credentialBinding, StringComparer.Ordinal) ||
+            int requiredSecretBindings = profileKind == OpaqueSessionAuthorityProfileKind.HttpOnly ? 1 : 3;
+            if (dependencies.SecretBindingIds.Count != requiredSecretBindings || !dependencies.SecretBindingIds.Contains(credentialBinding, StringComparer.Ordinal) ||
                 !snapshot.Bindings.SecretResources.TryGetValue(credentialBinding, out ProviderResourceBinding? credential) ||
                 !snapshot.Bindings.Endpoints.TryGetValue(dependencies.EndpointBindingId, out Uri? baseEndpoint))
                 throw OpaqueSessionHttpFailures.Rejected();
@@ -136,7 +150,8 @@ public sealed class PublishedOpaqueSessionAuthorityResolver
                 snapshot.Bindings.Id, snapshot.Bindings.Revision, snapshot.Bindings.ChecksumSha256, snapshot.Stamp.ResourceStampSha256,
                 invocation.OperationId, request.PolicyId, profileId, dependencies.EndpointBindingId, baseEndpoint.AbsoluteUri, endpoint.AbsoluteUri, method.Method,
                 contentType ?? string.Empty, headerName, valueFormat, fixedScheme ?? string.Empty, credentialBinding, credential.ProviderId, credential.ResourceId,
-                credential.Version ?? string.Empty, credential.CatalogRevision, credential.CatalogChecksumSha256, timeoutMilliseconds, maximumRequestBytes, maximumResponseBytes);
+                credential.Version ?? string.Empty, credential.CatalogRevision, credential.CatalogChecksumSha256, timeoutMilliseconds, maximumRequestBytes, maximumResponseBytes,
+                authentication.GetRawText());
             string fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintInput)));
             return new(profileId, endpoint, method, contentType, credential, headerName, valueFormat, fixedScheme,
                 TimeSpan.FromMilliseconds(timeoutMilliseconds), maximumRequestBytes, maximumResponseBytes, fingerprint);

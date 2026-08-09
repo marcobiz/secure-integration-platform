@@ -1,8 +1,15 @@
 using System.Text.Json.Serialization;
 using System.Net.Http.Headers;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.Domain;
 
 namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
+
+internal enum OpaqueSessionAuthorityProfileKind
+{
+    HttpOnly,
+    ComposedSoapBasic
+}
 
 /// <summary>Closed formatting choices for an opaque session HTTP header.</summary>
 public enum OpaqueSessionHttpHeaderValueFormat
@@ -135,6 +142,7 @@ internal sealed class OpaqueSessionDispatchLease(string upstreamValue, DateTimeO
 internal sealed class OpaqueSessionHttpAuthorityState
 {
     internal OpaqueSessionHttpAuthorityState(
+        PublishedConnectorSnapshot snapshot,
         Guid tenantId,
         Guid installationId,
         Guid applicationId,
@@ -162,6 +170,7 @@ internal sealed class OpaqueSessionHttpAuthorityState
         DateTimeOffset deadline,
         string securityFingerprint)
     {
+        Snapshot = snapshot;
         TenantId = tenantId;
         InstallationId = installationId;
         ApplicationId = applicationId;
@@ -189,6 +198,7 @@ internal sealed class OpaqueSessionHttpAuthorityState
         Validate();
     }
 
+    internal PublishedConnectorSnapshot Snapshot { get; }
     internal Guid TenantId { get; }
     internal Guid InstallationId { get; }
     internal Guid ApplicationId { get; }
@@ -219,7 +229,7 @@ internal sealed class OpaqueSessionHttpAuthorityState
 
     private void Validate()
     {
-        if (TenantId == Guid.Empty || InstallationId == Guid.Empty || ApplicationId == Guid.Empty || EnvironmentId == Guid.Empty || ConnectorVersionId == Guid.Empty || CorrelationId == Guid.Empty ||
+        if (Snapshot is null || TenantId == Guid.Empty || InstallationId == Guid.Empty || ApplicationId == Guid.Empty || EnvironmentId == Guid.Empty || ConnectorVersionId == Guid.Empty || CorrelationId == Guid.Empty ||
             !OpaqueSessionHttpValidation.Identifier(ConnectorId) || !OpaqueSessionHttpValidation.Identifier(ConnectorVersion) || !OpaqueSessionHttpValidation.Identifier(OperationId) ||
             !OpaqueSessionHttpValidation.Identifier(PolicyId) || !OpaqueSessionHttpValidation.Identifier(ProfileId) || !OpaqueSessionHttpValidation.HttpsEndpoint(Endpoint) ||
             BindingRevision < 1 || EndpointRevision < 1 || CredentialRevision < 1 || string.IsNullOrWhiteSpace(ResourceStamp) || ResourceStamp.Length > 256 || ResourceStamp.Any(char.IsControl) ||
@@ -234,7 +244,7 @@ internal sealed class HttpRequestHeaderOpaqueSessionPlacement
 {
     private static readonly HashSet<string> Forbidden = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Authorization", "Host", "Content-Length", "Transfer-Encoding", "Connection", "Cookie", "Set-Cookie",
+        "Authorization", "SOAPAction", "Content-Type", "Host", "Content-Length", "Transfer-Encoding", "Connection", "Cookie", "Set-Cookie",
         "Proxy-Authorization", "Proxy-Authenticate", "Forwarded", "Via", "Expect", "Upgrade", "TE", "Trailer",
         "X-Correlation-ID", "traceparent", "tracestate", "baggage"
     };

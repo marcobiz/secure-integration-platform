@@ -69,17 +69,26 @@ internal static class SoapXmlBoundary
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(operation);
         ArgumentNullException.ThrowIfNull(envelope);
-        if (request.Content is not null || request.Headers.Contains("SOAPAction")) throw new SoapAuthException("SOAP-HTTP-POLICY-VIOLATION");
-        request.Content = new ByteArrayContent(envelope);
-        if (operation.Version == SoapEnvelopeVersion.Soap11)
-        {
-            request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("text/xml; charset=utf-8");
-            request.Headers.TryAddWithoutValidation("SOAPAction", '"' + operation.Action + '"');
-        }
-        else
-        {
-            request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse("application/soap+xml; charset=utf-8; action=\"" + operation.Action + "\"");
-        }
+        new SoapHttpRequestMetadata(operation.Version, operation.Action).Apply(request, envelope);
+    }
+
+    /// <summary>Validates a bounded caller-produced SOAP envelope against Published HTTP metadata.</summary>
+    internal static byte[] ValidateRequestEnvelope(ReadOnlyMemory<byte> envelope, SoapHttpRequestMetadata metadata, long maximumRequestBytes)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        if (envelope.IsEmpty || envelope.Length > maximumRequestBytes || maximumRequestBytes is < 1 or > 16 * 1024 * 1024)
+            throw new SoapAuthException("SOAP-REQUEST-INVALID");
+        byte[] copy = envelope.ToArray();
+        XDocument document = LoadHardened(copy, maximumRequestBytes, CancellationToken.None);
+        string envelopeNamespace = EnvelopeNamespace(metadata.Version);
+        XElement root = document.Root ?? throw new SoapAuthException("SOAP-XML-MALFORMED");
+        if (root.Name != XName.Get("Envelope", envelopeNamespace) || root.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration) || HasSignificantText(root))
+            throw new SoapAuthException("SOAP-ENVELOPE-NAMESPACE");
+        XElement[] structural = root.Elements().ToArray();
+        if (structural.Length != 1 || structural[0].Name != XName.Get("Body", envelopeNamespace) ||
+            structural[0].Attributes().Any(attribute => !attribute.IsNamespaceDeclaration) || HasSignificantText(structural[0]) || structural[0].Elements().Count() != 1)
+            throw new SoapAuthException("SOAP-ENVELOPE-STRUCTURE");
+        return copy;
     }
 
     /// <summary>Parses one bounded response and returns only values allowlisted by the compiled profile.</summary>

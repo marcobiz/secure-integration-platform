@@ -41,6 +41,8 @@ public sealed class OpaqueSessionHttpProjectionTests
 
     [Theory]
     [InlineData("Authorization")]
+    [InlineData("SOAPAction")]
+    [InlineData("Content-Type")]
     [InlineData("Host")]
     [InlineData("Content-Length")]
     [InlineData("Transfer-Encoding")]

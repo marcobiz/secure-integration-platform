@@ -12,7 +12,14 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 namespace SecureIntegration.M6.SyntheticSoapServer;
 
 /// <summary>Configuration for one isolated synthetic Basic/SOAP/session server.</summary>
-public sealed record SyntheticSoapServerOptions(string Username, string Password, bool RequireChallenge, TimeSpan SessionLifetime, TimeSpan TimeoutDelay);
+public sealed record SyntheticSoapServerOptions(string Username, string Password, bool RequireChallenge, TimeSpan SessionLifetime, TimeSpan TimeoutDelay)
+{
+    /// <summary>Optional neutral custom header required by the composed SOAP endpoint.</summary>
+    public string? OpaqueSessionHeaderName { get; init; }
+
+    /// <summary>Expected opaque value for the composed SOAP endpoint.</summary>
+    public string? OpaqueSessionValue { get; init; }
+}
 
 /// <summary>Thread-safe counters exposed only to the synthetic test harness.</summary>
 public sealed class SyntheticSoapCounters
@@ -21,6 +28,12 @@ public sealed class SyntheticSoapCounters
     private int challenge;
     private int business;
     private int logout;
+    private int composed;
+    private int composedAccepted;
+    private int basicRejected;
+    private int opaqueSessionRejected;
+    private int soapPolicyRejected;
+    private readonly TaskCompletionSource<bool> composedAcceptedObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource<bool> bodyHeadersFlushed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource<bool> releaseStalledBody = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -32,6 +45,18 @@ public sealed class SyntheticSoapCounters
     public int Business => Volatile.Read(ref business);
     /// <summary>Logout request count.</summary>
     public int Logout => Volatile.Read(ref logout);
+    /// <summary>Requests reaching the composed SOAP endpoint.</summary>
+    public int Composed => Volatile.Read(ref composed);
+    /// <summary>Composed requests passing Basic, session, SOAP HTTP and XML validation.</summary>
+    public int ComposedAccepted => Volatile.Read(ref composedAccepted);
+    /// <summary>Composed requests rejected for missing or wrong Basic.</summary>
+    public int BasicRejected => Volatile.Read(ref basicRejected);
+    /// <summary>Composed requests rejected for missing, wrong or duplicate opaque session header.</summary>
+    public int OpaqueSessionRejected => Volatile.Read(ref opaqueSessionRejected);
+    /// <summary>Composed requests rejected for SOAP action, content type, version or envelope policy.</summary>
+    public int SoapPolicyRejected => Volatile.Read(ref soapPolicyRejected);
+    /// <summary>Completes when a composed request has passed request-side authentication and SOAP validation.</summary>
+    public Task WaitForComposedAcceptedAsync(CancellationToken cancellationToken) => composedAcceptedObserved.Task.WaitAsync(cancellationToken);
     /// <summary>Completes after the stalled-body scenario has flushed its response headers.</summary>
     public Task WaitForBodyHeadersFlushedAsync(CancellationToken cancellationToken) => bodyHeadersFlushed.Task.WaitAsync(cancellationToken);
 
@@ -46,6 +71,15 @@ public sealed class SyntheticSoapCounters
     internal void SignalBodyHeadersFlushed() => bodyHeadersFlushed.TrySetResult(true);
     internal Task WaitForStalledBodyReleaseAsync(CancellationToken cancellationToken) => releaseStalledBody.Task.WaitAsync(cancellationToken);
     internal void ReleaseStalledBody() => releaseStalledBody.TrySetResult(true);
+    internal void CountComposed() => Interlocked.Increment(ref composed);
+    internal void CountComposedAccepted()
+    {
+        Interlocked.Increment(ref composedAccepted);
+        composedAcceptedObserved.TrySetResult(true);
+    }
+    internal void CountBasicRejected() => Interlocked.Increment(ref basicRejected);
+    internal void CountOpaqueSessionRejected() => Interlocked.Increment(ref opaqueSessionRejected);
+    internal void CountSoapPolicyRejected() => Interlocked.Increment(ref soapPolicyRejected);
 }
 
 /// <summary>Running local HTTPS SOAP server used by real-HTTP integration tests.</summary>
@@ -180,6 +214,59 @@ public static class SyntheticSoapServerHost
             await WriteSoapAsync(response, version, ResponseElement("BusinessOperationResponse", "Result", "accepted"), StatusCodes.Status200OK, token).ConfigureAwait(false);
         });
 
+        app.MapPost("/composed", async (HttpRequest request, HttpResponse response, CancellationToken token) =>
+        {
+            if (options.OpaqueSessionHeaderName is null || options.OpaqueSessionValue is null)
+            {
+                response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+            counters.CountComposed();
+            if (!ValidBasic(request.Headers.Authorization.ToString(), options.Username, options.Password))
+            {
+                counters.CountBasicRejected();
+                response.StatusCode = StatusCodes.Status401Unauthorized;
+                return;
+            }
+            Microsoft.Extensions.Primitives.StringValues sessionValues = request.Headers[options.OpaqueSessionHeaderName!];
+            if (sessionValues.Count != 1 || sessionValues[0]?.Contains(',', StringComparison.Ordinal) == true || !Fixed(sessionValues[0] ?? string.Empty, options.OpaqueSessionValue!))
+            {
+                counters.CountOpaqueSessionRejected();
+                response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
+            byte[] body;
+            try { body = await ReadBoundedAsync(request.Body, MaximumRequestBytes, token).ConfigureAwait(false); }
+            catch (InvalidDataException) { counters.CountSoapPolicyRejected(); response.StatusCode = StatusCodes.Status413PayloadTooLarge; return; }
+            ParsedRequest parsed;
+            try { parsed = Parse(body); }
+            catch (Exception exception) when (exception is XmlException or InvalidOperationException or ArgumentException)
+            {
+                counters.CountSoapPolicyRejected();
+                response.StatusCode = StatusCodes.Status400BadRequest;
+                return;
+            }
+            if (!ValidHttpPolicy(request, parsed) || parsed.Session is not null || parsed.Operation != "BusinessOperation")
+            {
+                counters.CountSoapPolicyRejected();
+                response.StatusCode = StatusCodes.Status415UnsupportedMediaType;
+                return;
+            }
+            counters.CountComposedAccepted();
+            string payload = parsed.Fields.GetValueOrDefault("Payload") ?? string.Empty;
+            if (payload == "fault") { await WriteFaultAsync(response, parsed.Version, "BusinessRejected", token).ConfigureAwait(false); return; }
+            if (payload == "malformed-fault")
+            {
+                string malformed = parsed.Version == SoapVersion.Soap11
+                    ? $"<soap:Fault xmlns:soap=\"{EnvelopeNamespace(parsed.Version)}\" xmlns:f=\"{FaultNamespace}\"><faultcode>f:BusinessRejected</faultcode><faultcode>f:Other</faultcode><faultstring>synthetic fault</faultstring></soap:Fault>"
+                    : $"<soap:Fault xmlns:soap=\"{EnvelopeNamespace(parsed.Version)}\" xmlns:f=\"{FaultNamespace}\"><soap:Code><soap:Value>f:BusinessRejected</soap:Value><soap:Value>f:Other</soap:Value></soap:Code><soap:Reason><soap:Text xml:lang=\"en\">synthetic fault</soap:Text></soap:Reason></soap:Fault>";
+                await WriteSoapAsync(response, parsed.Version, malformed, StatusCodes.Status500InternalServerError, token).ConfigureAwait(false);
+                return;
+            }
+            if (payload == "timeout") await Task.Delay(options.TimeoutDelay, token).ConfigureAwait(false);
+            await WriteSoapAsync(response, parsed.Version, ResponseElement("BusinessOperationResponse", "Result", "accepted"), StatusCodes.Status200OK, token).ConfigureAwait(false);
+        });
+
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
         string address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()?.Addresses.Single()
             ?? throw new InvalidOperationException("Synthetic SOAP server did not publish an address.");
@@ -214,10 +301,17 @@ public static class SyntheticSoapServerHost
     {
         string action = "urn:synthetic:" + parsed.Operation;
         if (!MediaTypeHeaderValue.TryParse(request.ContentType, out MediaTypeHeaderValue? contentType)) return false;
+        NameValueHeaderValue[] charsetParameters = contentType.Parameters.Where(parameter => string.Equals(parameter.Name, "charset", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (charsetParameters.Length != 1 || !string.Equals(charsetParameters[0].Value?.Trim('"'), "utf-8", StringComparison.OrdinalIgnoreCase)) return false;
         if (parsed.Version == SoapVersion.Soap11)
-            return string.Equals(contentType.MediaType, "text/xml", StringComparison.OrdinalIgnoreCase) && Fixed(request.Headers["SOAPAction"].ToString().Trim('"'), action);
-        NameValueHeaderValue? actionParameter = contentType.Parameters.SingleOrDefault(parameter => string.Equals(parameter.Name, "action", StringComparison.OrdinalIgnoreCase));
-        return string.Equals(contentType.MediaType, "application/soap+xml", StringComparison.OrdinalIgnoreCase) && Fixed(actionParameter?.Value?.Trim('"') ?? string.Empty, action) && !request.Headers.ContainsKey("SOAPAction");
+        {
+            Microsoft.Extensions.Primitives.StringValues soapActions = request.Headers["SOAPAction"];
+            return string.Equals(contentType.MediaType, "text/xml", StringComparison.OrdinalIgnoreCase) && contentType.Parameters.Count == 1 &&
+                soapActions.Count == 1 && soapActions[0]?.Contains(',', StringComparison.Ordinal) != true && Fixed(soapActions[0] ?? string.Empty, '"' + action + '"');
+        }
+        NameValueHeaderValue[] actionParameters = contentType.Parameters.Where(parameter => string.Equals(parameter.Name, "action", StringComparison.OrdinalIgnoreCase)).ToArray();
+        return string.Equals(contentType.MediaType, "application/soap+xml", StringComparison.OrdinalIgnoreCase) && contentType.Parameters.Count == 2 && actionParameters.Length == 1 &&
+            Fixed(actionParameters[0].Value ?? string.Empty, '"' + action + '"') && !request.Headers.ContainsKey("SOAPAction");
     }
 
     private static async Task<byte[]> ReadBoundedAsync(Stream input, int maximumBytes, CancellationToken cancellationToken)
@@ -276,6 +370,9 @@ public static class SyntheticSoapServerHost
     {
         if (string.IsNullOrWhiteSpace(options.Username) || options.Username.Contains(':', StringComparison.Ordinal) || string.IsNullOrEmpty(options.Password) || options.SessionLifetime <= TimeSpan.Zero || options.TimeoutDelay <= TimeSpan.Zero)
             throw new ArgumentException("Invalid synthetic SOAP server configuration.", nameof(options));
+        if ((options.OpaqueSessionHeaderName is null) != (options.OpaqueSessionValue is null) ||
+            options.OpaqueSessionHeaderName is not null && (!options.OpaqueSessionHeaderName.All(character => char.IsAsciiLetterOrDigit(character) || character is '-') || string.IsNullOrEmpty(options.OpaqueSessionValue)))
+            throw new ArgumentException("Invalid synthetic composed SOAP configuration.", nameof(options));
     }
 
     private enum SoapVersion { Soap11, Soap12 }

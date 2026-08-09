@@ -169,6 +169,20 @@ Detailed mapping: `docs/traceability/auth-phase2-wave1-oauth.md`. PR #17 product
 | Vertical-neutral Core boundary | `Wave1_CT_Core_session_projection_is_vertical_neutral_and_has_no_healthcare_pack_dependency` | PASS local |
 | TM-054 | All named Wave 1 tests above | PASS local; independent review pending |
 
+## Wave 1 typed composed SOAP authenticated dispatch
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| Single Published authority for Basic + SOAP + opaque session | `Wave1_UT_composed_authority_applies_Basic_typed_SOAP_and_opaque_session_once`; `Wave1_IT_composed_Basic_session_SOAPAction_and_body_use_one_real_restricted_HTTPS_dispatch` | PASS local |
+| Typed SOAP 1.1/1.2 metadata and operation-owned action | positive version theory; schema action checksum test; wrong version/content type/action/policy negatives | PASS local |
+| Authorization/custom-header ownership and no header bag | `Wave1_SEC_composed_session_header_cannot_collide_or_inject`; `Wave1_CT_composed_public_surface_has_no_authority_or_header_override`; composed architecture boundary | PASS local |
+| Existing Basic and opaque-session handoff reuse | Basic header cardinality/provider resolution assertions; `OpaqueSessionLeaseProvider` architecture assertion; complete M6/opaque regression gates | PASS local |
+| Final Published/resource/session TOCTOU | unit and real-HTTPS Basic/session/endpoint/revision/action/disable race theories with zero transport/server requests | PASS local |
+| SOAP-aware one-shot transport and strict Fault preservation | `Wave1_UT_SendSoapAsync_preserves_HTTP500_for_strict_Fault_parser`; `Wave1_IT_HTTP500_SOAP_Fault_reaches_hardened_parser_and_malformed_Fault_is_denied` | PASS local |
+| Connector schema/catalog/four-eyes checksum publishability | `Wave1_CT_opaque_and_composed_SOAP_profiles_are_schema_catalog_and_checksum_publishable`; `opaqueSessionHttp` and `soapBasicOpaqueSession` production parser enums | PASS local |
+| SSRF, timeout, cancellation and redaction | unit closed-failure test; real HTTPS timeout/cancellation test; intended-destination wrong-Basic counter | PASS local |
+| TM-063/TM-064 | all named composed unit, real-HTTPS and architecture tests above | PASS local; independent review pending |
+
 ## M6 Certificate, Signing and mTLS primitives - Wave 2 synthetic
 
 | Requirement | Automated evidence | Status |

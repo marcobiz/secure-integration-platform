@@ -10,7 +10,7 @@ Una definizione dichiara:
 - nomi logici di endpoint e segreti;
 - operation REST con method/path fissi;
 - limiti request/response e timeout;
-- autenticazione `none`, `basic`, `apiKey`, `mtls` o `apiKeyAndMtls` applicata dal Gateway;
+- autenticazione REST built-in `none`, `basic`, `apiKey`, `mtls` o `apiKeyAndMtls`, profili OAuth capability-bound e modalita opt-in `opaqueSessionHttp`/`soapBasicOpaqueSession` applicate dal Gateway;
 - redirect deny, client header allowlist, idempotenza e retry limitato.
 
 Non contiene URI, secret value, provider reference, tenant, codice, script, espressioni o workflow. Il client runtime seleziona soltanto `connectorId` e `operationId`; endpoint, credenziali e versione Published sono risolti server-side.
@@ -44,11 +44,13 @@ Lo snapshot Published ha TTL configurabile. Prima di ogni invocazione il Gateway
 - ogni logical binding e `operationId` è univoco;
 - ogni riferimento usato dall'operation deve essere dichiarato;
 - header sensibili o hop-by-hop non possono essere client-controlled;
+- `opaqueSessionHttp` usa soltanto una placement custom tipizzata (`headerName`, `valueFormat`, eventuale `fixedScheme`) e non puo usare Authorization, SOAPAction, Content-Type, routing, proxy, forwarding, tracing o correlation header;
+- `soapBasicOpaqueSession` richiede POST, binding logici username/password/session, placement opaque e `soapHttp` tipizzato (`version` 1.1/1.2 e action assoluta); Content-Type e SOAPAction sono derivati e non esiste un header bag;
 - retry richiede operazione idempotente o idempotency key obbligatoria;
 - redirect è sempre `deny` in v1;
 - endpoint e path non sono sovrascrivibili dal payload;
 - grant Installation/Connector/operation è deny-by-default.
 
-## Fuori perimetro M4
+## Fuori perimetro M4 e delle capability generiche
 
-YAML, UI, plugin, scripting, workflow, SOAP avanzato, OAuth browser, SAML, WS-Security, XML-DSig, provider cloud aggiuntivi e connector reali. I vecchi esempi managed/secure-layer descrivono analisi pre-M4 e non sono Connector Definition v1 eseguibili.
+YAML, UI, plugin, scripting, workflow arbitrario, SAML, WS-Security, XML-DSig, provider cloud aggiuntivi e connector reali. Le capability OAuth/SOAP/session generiche non qualificano automaticamente alcun profilo esterno production. I vecchi esempi managed/secure-layer descrivono analisi pre-M4 e non sono Connector Definition v1 eseguibili.

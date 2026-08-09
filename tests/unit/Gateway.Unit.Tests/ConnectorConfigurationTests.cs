@@ -158,6 +158,84 @@ public sealed class ConnectorConfigurationTests
     }
 
     [Fact]
+    public async Task Wave1_CT_opaque_and_composed_SOAP_profiles_are_schema_catalog_and_checksum_publishable()
+    {
+        ConnectorDefinitionValidator validator = new();
+        using JsonDocument document = ComposedConnector();
+        ValidatedConnectorDefinition validated = validator.ValidateRequired(document.RootElement);
+        OperationBindingDependencies composedDependencies = ConnectorOperationBindings.Required(validated.CanonicalJson, "soap-dispatch");
+        Assert.Equal(["basic-password", "basic-username", "session-secret"], composedDependencies.SecretBindingIds);
+        Assert.Equal("service-endpoint", composedDependencies.EndpointBindingId);
+
+        string actionChangedJson = document.RootElement.GetRawText().Replace("urn:synthetic:soap-dispatch", "urn:synthetic:soap-dispatch-v2", StringComparison.Ordinal);
+        using JsonDocument actionChanged = JsonDocument.Parse(actionChangedJson);
+        Assert.NotEqual(validated.ChecksumSha256, validator.ValidateRequired(actionChanged.RootElement).ChecksumSha256);
+
+        AssertInvalid(document.RootElement.GetRawText().Replace("X-Session-Reference", "Authorization", StringComparison.Ordinal), "BGW-CONNECTOR-HEADER-FORBIDDEN");
+        AssertInvalid(document.RootElement.GetRawText().Replace("\"contentType\":\"text/xml\"", "\"contentType\":\"application/json\"", StringComparison.Ordinal), "BGW-CONNECTOR-SOAP-CONTENT-TYPE-INVALID");
+        AssertInvalid(document.RootElement.GetRawText().Replace("\"operationId\":\"soap-dispatch\",\"endpointBinding\":\"service-endpoint\",\"method\":\"POST\"", "\"operationId\":\"soap-dispatch\",\"endpointBinding\":\"service-endpoint\",\"method\":\"GET\"", StringComparison.Ordinal), "BGW-CONNECTOR-SOAP-METHOD-INVALID");
+        AssertInvalid(document.RootElement.GetRawText().Replace("urn:synthetic:soap-dispatch", "urn:synthetic:soap-dispatch\\r\\nInjected", StringComparison.Ordinal));
+        AssertInvalid(document.RootElement.GetRawText().Replace("urn:synthetic:soap-dispatch", "urn:synthetic:soap\\\"dispatch", StringComparison.Ordinal));
+        AssertInvalid(document.RootElement.GetRawText().Replace("urn:synthetic:soap-dispatch", "urn:synthetic:soap\\\\dispatch", StringComparison.Ordinal));
+        AssertInvalid(document.RootElement.GetRawText().Replace(",\"action\":\"urn:synthetic:soap-dispatch\"", string.Empty, StringComparison.Ordinal));
+        AssertInvalid(document.RootElement.GetRawText().Replace("\"valueFormat\":\"rawOpaqueValue\"", "\"valueFormat\":\"rawOpaqueValue\",\"fixedScheme\":\"Session\"", 1, StringComparison.Ordinal), "BGW-CONNECTOR-SESSION-HEADER-FORMAT-INVALID");
+        AssertInvalid(document.RootElement.GetRawText().Replace("soapBasicOpaqueSession", "unknownComposedKind", StringComparison.Ordinal));
+
+        Guid environmentId = Guid.NewGuid();
+        FixedClock clock = new();
+        InMemoryConnectorConfigurationStore store = new();
+        foreach ((string resourceId, string operationScope) in new[]
+        {
+            ("basic-username", "soap-dispatch"),
+            ("basic-password", "soap-dispatch"),
+            ("session-secret", "*")
+        })
+        {
+            _ = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic vault", "synthetic", resourceId, ProviderResourceType.Secret,
+                resourceId, environmentId, "generic-soap", operationScope, "synthetic://" + resourceId, ProviderResourceStatus.Active, null, 0, null, null, string.Empty, clock.UtcNow), TestContext.Current.CancellationToken);
+        }
+        PublishedConnectorCatalog catalog = new(store, validator, clock, TimeSpan.FromMinutes(5));
+        ConnectorAdministrationService admin = new(store, validator, catalog, new InMemoryGatewayRegistry(), clock, new DevelopmentConnectorApprovalPolicy());
+        ConnectorVersionResource version = await admin.ImportAsync(document.RootElement, null, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        version = await admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await admin.PutBindingsAsync(version.ConnectorId, new(environmentId,
+            new Dictionary<string, string>(StringComparer.Ordinal) { ["service-endpoint"] = "https://soap.example.test/base/" },
+            new Dictionary<string, ProviderResourceReference>(StringComparer.Ordinal)
+            {
+                ["basic-username"] = new("synthetic", "basic-username", ProviderResourceType.Secret),
+                ["basic-password"] = new("synthetic", "basic-password", ProviderResourceType.Secret),
+                ["session-secret"] = new("synthetic", "session-secret", ProviderResourceType.Secret)
+            }), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord stored = await store.GetVersionAsync(version.ConnectorId, version.Version, TestContext.Current.CancellationToken) ?? throw new InvalidOperationException();
+        ConnectorBindingSet publishedBinding = Assert.Single((await store.ListBindingsPageAsync(stored.Id, 0, 10, environmentId, TestContext.Current.CancellationToken)).Items);
+        ApprovalReviewResult review = ConnectorApprovalArtifacts.Create(stored, [publishedBinding]);
+        ValidatedConnectorDefinition changedDefinition = validator.ValidateRequired(actionChanged.RootElement);
+        ApprovalReviewResult changedReview = ConnectorApprovalArtifacts.Create(stored with
+        {
+            CanonicalJson = changedDefinition.CanonicalJson,
+            ChecksumSha256 = Convert.FromHexString(changedDefinition.ChecksumSha256)
+        }, [publishedBinding], review.Artifact);
+        Assert.NotEqual(review.DigestSha256, changedReview.DigestSha256);
+        Assert.Contains(changedReview.Diff, change => change.Path.EndsWith("/canonicalDefinitionChecksumSha256", StringComparison.Ordinal));
+        version = await admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        GatewayOperationDefinition opaque = await catalog.GetRequiredAsync("generic-soap", "opaque-http", environmentId, TestContext.Current.CancellationToken);
+        GatewayOperationDefinition composed = await catalog.GetRequiredAsync("generic-soap", "soap-dispatch", environmentId, TestContext.Current.CancellationToken);
+        Assert.Equal(GatewayAuthenticationKind.OpaqueSessionHttp, opaque.Authentication);
+        Assert.Equal(GatewayAuthenticationKind.SoapBasicOpaqueSession, composed.Authentication);
+        Assert.Equal("X-Session-Reference", composed.ApiKeyHeaderName);
+        Assert.Equal("1.0.0", version.Version);
+
+        void AssertInvalid(string candidate, string? expectedCode = null)
+        {
+            using JsonDocument invalid = JsonDocument.Parse(candidate);
+            ConnectorValidationResult result = validator.Validate(invalid.RootElement);
+            Assert.False(result.Valid);
+            if (expectedCode is not null) Assert.Contains(result.Issues, issue => issue.Code == expectedCode);
+        }
+    }
+
+    [Fact]
     public async Task M4_UT_Lifecycle_is_immutable_concurrent_and_rollback_reactivates_prior_publication()
     {
         Fixture fixture = new();
@@ -553,6 +631,17 @@ public sealed class ConnectorConfigurationTests
           "operations":[
             {"operationId":"submit","endpointBinding":"sample-vendor-endpoint","method":"POST","path":"/vendor/orders","request":{"contentType":"application/json","maximumBytes":1048576},"response":{"maximumBytes":1048576},"authentication":{"kind":"apiKeyAndMtls","secretBinding":"sample-vendor-api-key","headerName":"X-Vendor-Api-Key","certificateBinding":"sample-vendor-client-certificate"},"timeoutMs":30000,"redirectPolicy":"deny","allowedClientHeaders":[],"idempotent":false,"maximumRetries":0},
             {"operationId":"check-status","endpointBinding":"status-endpoint","method":"POST","path":"/vendor/status","request":{"contentType":"application/json","maximumBytes":1048576},"response":{"maximumBytes":1048576},"authentication":{"kind":"apiKeyAndMtls","secretBinding":"status-api-key","headerName":"X-Vendor-Api-Key","certificateBinding":"status-client-certificate"},"timeoutMs":30000,"redirectPolicy":"deny","allowedClientHeaders":[],"idempotent":false,"maximumRetries":0}
+          ]
+        }
+        """);
+
+    private static JsonDocument ComposedConnector() => JsonDocument.Parse("""
+        {
+          "schemaVersion":"1.0","connectorId":"generic-soap","version":"1.0.0","displayName":"Generic composed SOAP",
+          "bindings":{"endpoints":[{"name":"service-endpoint"}],"secrets":[{"name":"basic-username","kind":"username"},{"name":"basic-password","kind":"password"},{"name":"session-secret","kind":"opaque"}]},
+          "operations":[
+            {"operationId":"opaque-http","endpointBinding":"service-endpoint","method":"POST","path":"/opaque","request":{"contentType":"application/json","maximumBytes":4096},"response":{"maximumBytes":4096},"authentication":{"kind":"opaqueSessionHttp","policyId":"opaque-policy","sessionProfileId":"opaque-session","secretBinding":"session-secret","headerName":"X-Session-Reference","valueFormat":"rawOpaqueValue"},"timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[]},
+            {"operationId":"soap-dispatch","endpointBinding":"service-endpoint","method":"POST","path":"/soap","request":{"contentType":"text/xml","maximumBytes":1048576},"response":{"maximumBytes":1048576},"authentication":{"kind":"soapBasicOpaqueSession","policyId":"composed-policy","sessionProfileId":"opaque-session","usernameBinding":"basic-username","passwordBinding":"basic-password","secretBinding":"session-secret","headerName":"X-Session-Reference","valueFormat":"rawOpaqueValue","soapHttp":{"version":"1.1","action":"urn:synthetic:soap-dispatch"}},"timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[]}
           ]
         }
         """);

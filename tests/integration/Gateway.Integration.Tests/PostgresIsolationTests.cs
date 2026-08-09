@@ -4,7 +4,9 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Npgsql;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
 using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OAuth;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
 using SecureIntegration.Providers.Abstractions;
@@ -540,6 +542,83 @@ public sealed class PostgresIsolationTests
             new OAuthAuthorityRequest("postgres.oauth"), TestContext.Current.CancellationToken);
         Assert.Equal("postgres.oauth", resolved.ProfileId);
         Assert.Equal(connectorId, resolved.ConnectorId);
+    }
+
+    [Fact]
+    public async Task Wave1_IT_DAT_PostgreSQL18_composed_SOAP_validation_four_eyes_publication_and_authority_resolution_when_configured()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        string? migrationConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
+        if (string.IsNullOrWhiteSpace(migrationConnectionString)) Assert.Skip("PostgreSQL migration connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        await ApplyMigrationAsync();
+        await using AdminPostgresDataSource adminPool = new(connectionString);
+        await using AdminApiSecurityTests.PostgresRuntimeRoleLease runtimeRole = await AdminApiSecurityTests.PostgresRuntimeRoleLease.CreateAsync(connectionString, migrationConnectionString, TestContext.Current.CancellationToken);
+        await using NpgsqlDataSource runtimePool = NpgsqlDataSource.Create(runtimeRole.ConnectionString);
+        RoutingConnectorConfigurationStore store = new(adminPool, runtimePool);
+        PostgresGatewayRegistry registry = new(adminPool.Value);
+        PostgresAdminSecurityStore security = new(adminPool);
+        TestClock clock = new(DateTimeOffset.UtcNow);
+        ConnectorDefinitionValidator validator = new();
+        PublishedConnectorCatalog catalog = new(store, validator, clock, TimeSpan.FromMinutes(5));
+        ConnectorAdministrationService admin = new(store, validator, catalog, registry, clock, new FourEyesConnectorApprovalPolicy(security));
+        string suffix = Guid.NewGuid().ToString("N");
+        string connectorId = "soap-pg-" + suffix;
+        Guid tenantId = Guid.NewGuid();
+        Guid applicationId = Guid.NewGuid();
+        Guid environmentId = Guid.NewGuid();
+        Guid installationId = Guid.NewGuid();
+        await registry.AddTenantAsync(new(tenantId, "sw1-t-" + suffix, "SOAP tenant", TenantStatus.Active, clock.UtcNow), TestContext.Current.CancellationToken);
+        await registry.AddApplicationAsync(new(applicationId, "sw1-a-" + suffix, "SOAP application", ApplicationStatus.Active, "1.0.0", null, clock.UtcNow), TestContext.Current.CancellationToken);
+        await registry.AddEnvironmentAsync(new(environmentId, "sw1-e-" + suffix[..20], "SOAP environment", false), TestContext.Current.CancellationToken);
+        await registry.AddInstallationAsync(new(installationId, tenantId, applicationId, environmentId, InstallationStatus.Active, "3.0.0", clock.UtcNow), TestContext.Current.CancellationToken);
+        await registry.AddGrantAsync(new(Guid.NewGuid(), installationId, tenantId, connectorId, "invoke", true, clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
+
+        foreach (string resourceId in new[] { "basic-user-" + suffix, "basic-password-" + suffix, "session-resource-" + suffix })
+        {
+            _ = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic", resourceId,
+                ProviderResourceType.Secret, resourceId, environmentId, connectorId, "invoke", "synthetic://" + resourceId,
+                ProviderResourceStatus.Active, null, 0, null, null, string.Empty, clock.UtcNow), TestContext.Current.CancellationToken);
+        }
+        using JsonDocument definition = JsonDocument.Parse($$$"""
+        {
+          "schemaVersion":"1.0","connectorId":"{{{connectorId}}}","version":"1.0.0","displayName":"Composed SOAP PostgreSQL path",
+          "bindings":{"endpoints":[{"name":"soap-service"}],"secrets":[{"name":"basic-username","kind":"username"},{"name":"basic-password","kind":"password"},{"name":"session-resource","kind":"opaque"}]},
+          "operations":[
+            {"operationId":"invoke","endpointBinding":"soap-service","method":"POST","path":"/service","request":{"contentType":"text/xml","maximumBytes":1048576},"response":{"maximumBytes":1048576},"authentication":{"kind":"soapBasicOpaqueSession","policyId":"postgres.composed","sessionProfileId":"postgres.session","usernameBinding":"basic-username","passwordBinding":"basic-password","secretBinding":"session-resource","headerName":"X-Session-Reference","valueFormat":"rawOpaqueValue","soapHttp":{"version":"1.1","action":"urn:synthetic:postgres:invoke"}},"timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[]}
+          ]
+        }
+        """);
+        AdminPrincipalRecord editor = await security.EnsurePrincipalAsync(new("https://soap-pg.invalid", "editor-" + suffix, "Editor", null), TestContext.Current.CancellationToken);
+        AdminPrincipalRecord approver = await security.EnsurePrincipalAsync(new("https://soap-pg.invalid", "approver-" + suffix, "Approver", null), TestContext.Current.CancellationToken);
+        ConnectorVersionResource imported = await admin.ImportAsync(definition.RootElement, null, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionResource validated = await admin.ValidateStoredAsync(connectorId, "1.0.0", imported.RowVersion, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await admin.PutBindingsAsync(connectorId, new(environmentId,
+            new Dictionary<string, string> { ["soap-service"] = "https://soap.example.test/" },
+            new Dictionary<string, ProviderResourceReference>
+            {
+                ["basic-username"] = new("synthetic", "basic-user-" + suffix, ProviderResourceType.Secret),
+                ["basic-password"] = new("synthetic", "basic-password-" + suffix, ProviderResourceType.Secret),
+                ["session-resource"] = new("synthetic", "session-resource-" + suffix, ProviderResourceType.Secret)
+            }, null, null, "1.0.0"), editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord stored = await store.GetVersionAsync(connectorId, "1.0.0", TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("Composed SOAP version missing.");
+        ConnectorBindingSet binding = Assert.Single((await store.ListBindingsPageAsync(stored.Id, 0, 10, environmentId, TestContext.Current.CancellationToken)).Items);
+        ApprovalReviewResult review = ConnectorApprovalArtifacts.Create(stored, [binding]);
+        Assert.Equal(["basic-password", "basic-username", "session-resource"], Assert.Single(review.Artifact.Operations).BindingDependencies.SecretBindingIds);
+        byte[] digest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
+        Assert.Equal(review.DigestSha256, Convert.ToHexString(digest));
+        ConnectorApprovalRecord approvalRequest = await security.RequestApprovalAsync(stored, digest, editor.Id, Guid.NewGuid(), clock.UtcNow, TestContext.Current.CancellationToken);
+        _ = await store.ApproveCanonicalAsync(security, approvalRequest.Id, stored.Id, review.DigestSha256, stored.CreatedBy, approver.Id, null, Guid.NewGuid(), clock.UtcNow.AddMilliseconds(1), TestContext.Current.CancellationToken);
+        _ = await admin.PublishAsync(connectorId, "1.0.0", validated.RowVersion, 0, approver.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        RegisteredInstallationIdentity identity = new(installationId, tenantId, applicationId, environmentId, TenantStatus.Active, ApplicationStatus.Active, InstallationStatus.Active,
+            Guid.NewGuid(), CredentialStatus.Active, [1, 2, 3], clock.UtcNow.AddMinutes(-1), clock.UtcNow.AddHours(1), "3.0.0", null);
+        PublishedComposedSoapAuthorityResolver resolver = new(store, clock);
+        ComposedSoapResolvedExecutionContext resolved = await resolver.ResolveAsync(new(new GatewayClientPrincipal(identity, Guid.NewGuid()), connectorId, "invoke"),
+            new OpaqueSessionHttpAuthorityRequest("postgres.composed"), TestContext.Current.CancellationToken);
+        Assert.Equal(connectorId, resolved.ConnectorId);
+        Assert.Equal(SoapEnvelopeVersion.Soap11, resolved.SoapHttp.Version);
+        Assert.Equal("urn:synthetic:postgres:invoke", resolved.SoapHttp.Action);
     }
 
     [Fact]

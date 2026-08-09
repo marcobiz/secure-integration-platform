@@ -11,6 +11,11 @@ namespace SecureIntegration.Gateway.Application;
 /// <summary>Validated, immutable server-side operation catalogue.</summary>
 public sealed class GatewayOperationCatalog : IGatewayOperationCatalog
 {
+    private static readonly HashSet<string> ForbiddenAuthenticationHeaders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Authorization", "SOAPAction", "Content-Type", "Cookie", "Set-Cookie", "Host", "Content-Length", "Forwarded", "Via", "Expect", "TE", "Trailer",
+        "Proxy-Authorization", "Proxy-Authenticate", "Connection", "Transfer-Encoding", "Upgrade", "X-Correlation-ID", "traceparent", "tracestate", "baggage"
+    };
     private readonly Dictionary<string, GatewayOperationDefinition> operations;
 
     /// <summary>Validates and freezes all operation definitions.</summary>
@@ -60,10 +65,18 @@ public sealed class GatewayOperationCatalog : IGatewayOperationCatalog
             throw new InvalidOperationException("Combined API key and mTLS authentication requires server-side secret references and a safe header.");
         if ((value.Authentication is GatewayAuthenticationKind.OAuthAuthorizationCode or GatewayAuthenticationKind.OAuthClientCredentials) && string.IsNullOrWhiteSpace(value.ApiKeySecretReference))
             throw new InvalidOperationException("OAuth authentication requires a server-side secret reference.");
+        if (value.Authentication == GatewayAuthenticationKind.OpaqueSessionHttp && (string.IsNullOrWhiteSpace(value.ApiKeySecretReference) || !IsHeaderName(value.ApiKeyHeaderName)))
+            throw new InvalidOperationException("Opaque-session authentication requires a server-side resource and safe custom header.");
+        if (value.Authentication == GatewayAuthenticationKind.SoapBasicOpaqueSession &&
+            (string.IsNullOrWhiteSpace(value.UsernameSecretReference) || string.IsNullOrWhiteSpace(value.PasswordSecretReference) ||
+             string.IsNullOrWhiteSpace(value.ApiKeySecretReference) || !IsHeaderName(value.ApiKeyHeaderName)))
+            throw new InvalidOperationException("Composed SOAP authentication requires server-side Basic/session resources and a safe custom header.");
     }
 
     private static bool IsIdentifier(string value) => value.Length is > 0 and <= 100 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
-    private static bool IsHeaderName(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 100 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-');
+    private static bool IsHeaderName(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 100 &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) || character is '!' or '#' or '$' or '%' or '&' or '\'' or '*' or '+' or '-' or '.' or '^' or '_' or '`' or '|' or '~') &&
+        value is not null && !ForbiddenAuthenticationHeaders.Contains(value) && !value.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase) && !value.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>Executes a granted operation using only server-owned destination and credentials.</summary>
@@ -91,7 +104,8 @@ public sealed class RestrictedEgressService(
             throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403);
         GatewayOperationDefinition operation = await catalog.GetRequiredAsync(connectorId, operationId, identity.EnvironmentId,
             new(identity.InstallationId, identity.TenantId, identity.ApplicationId, operationId), cancellationToken).ConfigureAwait(false);
-        if (operation.Authentication is GatewayAuthenticationKind.OAuthAuthorizationCode or GatewayAuthenticationKind.OAuthClientCredentials)
+        if (operation.Authentication is GatewayAuthenticationKind.OAuthAuthorizationCode or GatewayAuthenticationKind.OAuthClientCredentials or
+            GatewayAuthenticationKind.OpaqueSessionHttp or GatewayAuthenticationKind.SoapBasicOpaqueSession)
             throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
 
         if (request.Metadata?.Count > 32 || request.Extensions?.Count > 16 || request.Metadata?.Values.Any(value => value.ValueKind is JsonValueKind.Array or JsonValueKind.Object) == true)

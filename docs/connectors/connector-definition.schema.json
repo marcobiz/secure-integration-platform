@@ -125,6 +125,37 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["kind", "policyId", "sessionProfileId", "secretBinding", "headerName", "valueFormat"],
+          "properties": {
+            "kind": { "const": "opaqueSessionHttp" },
+            "policyId": { "$ref": "#/$defs/identifier" },
+            "sessionProfileId": { "$ref": "#/$defs/identifier" },
+            "secretBinding": { "$ref": "#/$defs/identifier" },
+            "headerName": { "$ref": "#/$defs/safeOpaqueSessionHeader" },
+            "valueFormat": { "enum": ["rawOpaqueValue", "fixedSchemeAndOpaqueValue"] },
+            "fixedScheme": { "$ref": "#/$defs/httpToken" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "policyId", "sessionProfileId", "usernameBinding", "passwordBinding", "secretBinding", "headerName", "valueFormat", "soapHttp"],
+          "properties": {
+            "kind": { "const": "soapBasicOpaqueSession" },
+            "policyId": { "$ref": "#/$defs/identifier" },
+            "sessionProfileId": { "$ref": "#/$defs/identifier" },
+            "usernameBinding": { "$ref": "#/$defs/identifier" },
+            "passwordBinding": { "$ref": "#/$defs/identifier" },
+            "secretBinding": { "$ref": "#/$defs/identifier" },
+            "headerName": { "$ref": "#/$defs/safeOpaqueSessionHeader" },
+            "valueFormat": { "enum": ["rawOpaqueValue", "fixedSchemeAndOpaqueValue"] },
+            "fixedScheme": { "$ref": "#/$defs/httpToken" },
+            "soapHttp": { "$ref": "#/$defs/soapHttpRequestMetadata" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": ["kind", "secretBinding", "headerName"],
           "properties": {
             "kind": { "const": "apiKey" },
@@ -205,6 +236,21 @@
     },
     "oauthClientId": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^(?=.*\\S)[^\\u0000-\\u001F\\u007F-\\u009F]+$" },
     "oauthParameter": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$" },
+    "soapHttpRequestMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "action"],
+      "properties": {
+        "version": { "enum": ["1.1", "1.2"] },
+        "action": { "type": "string", "minLength": 3, "maxLength": 2048, "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:[^\\s\\u0000-\\u001F\\u007F-\\u009F\"\\\\]+$" }
+      }
+    },
+    "httpToken": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$" },
+    "safeOpaqueSessionHeader": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$",
+      "maxLength": 64
+    },
     "safeHeader": {
       "type": "string",
       "pattern": "^(?!Authorization$|Cookie$|Host$|Forwarded$|X-Forwarded-|Proxy-)[A-Za-z0-9-]+$",

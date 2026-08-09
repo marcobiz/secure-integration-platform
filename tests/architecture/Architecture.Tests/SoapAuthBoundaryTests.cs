@@ -64,6 +64,30 @@ public sealed class SoapAuthBoundaryTests
         Assert.DoesNotContain("AttachSessionHeader", source, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Wave1_CT_composed_SOAP_dispatch_is_closed_typed_Published_and_fault_preserving()
+    {
+        string soapRoot = Path.Combine(Root, "src", "Gateway", "Gateway.ConnectorRuntime.Auth.Soap");
+        string client = File.ReadAllText(Path.Combine(soapRoot, "ComposedSoapAuthenticatedClient.cs"));
+        string resolver = File.ReadAllText(Path.Combine(soapRoot, "PublishedComposedSoapAuthorityResolver.cs"));
+        string contracts = File.ReadAllText(Path.Combine(soapRoot, "ComposedSoapDispatchContracts.cs"));
+        string schema = File.ReadAllText(Path.Combine(Root, "docs", "connectors", "connector-definition.schema.json"));
+
+        Assert.Contains("transport.SendSoapAsync", client, StringComparison.Ordinal);
+        Assert.DoesNotContain("transport.SendAsync", client, StringComparison.Ordinal);
+        Assert.Contains("OpaqueSessionLeaseProvider", client, StringComparison.Ordinal);
+        Assert.Contains("AcquireFinalLease", client, StringComparison.Ordinal);
+        Assert.Contains("ServerBoundBasicAuthentication", client, StringComparison.Ordinal);
+        Assert.Contains("PublishedConnectorSnapshot", resolver, StringComparison.Ordinal);
+        Assert.Contains("OperationBindingDependencies", resolver, StringComparison.Ordinal);
+        Assert.Contains("SoapHttpRequestMetadata", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("IReadOnlyDictionary<string, string> Headers", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("Dictionary<string, string> headers", client, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"soapBasicOpaqueSession\"", schema, StringComparison.Ordinal);
+        Assert.Contains("\"opaqueSessionHttp\"", schema, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"headers\"", schema, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? current = new(AppContext.BaseDirectory);
