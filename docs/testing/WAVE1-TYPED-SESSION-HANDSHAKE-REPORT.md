@@ -1,63 +1,98 @@
 # Wave 1 typed session handshake and external admission report
 
-## Candidate scope
+## Candidate scope and reviewed baseline
 
 This report covers only the generic Core capability described by ADR-0022. It does not qualify a
 production connector, a deployment environment, a distributed cache or generic XML scripting.
 
-## Implemented controls
+- Base: `705e9d4bd203ca7b902ad0aeedc9d4402f9f4452`.
+- Independently reviewed head: `8f6218599dc7fb454a8a542184ae7ce816856c96`.
+- Targeted remediation product commit: `45605a9fb3085d83af3b2d9d50e8b08f4a987f65`.
+- Branch/PR: `wave1/auth-session-handshake`, PR #23; open and unmerged.
 
-- Published/four-eyes profile authority and exact registered adapter ID/type selection;
-- hardened, bounded Core-owned request writer and response reader boundary;
-- closed handshake outcomes without raw XML or dynamic field bags;
-- dedicated sensitive candidate presentation type and closed provenance;
-- opaque TTL/single-use admission intent embedded in the existing bounded session cache;
-- remote validation without cache authority;
-- post-validation policy/resource revalidation and atomic generation promotion;
-- remote expiry validation and server-owned cap;
-- rotate/disable/current-generation race denial;
-- neutral real-HTTPS nested handshake/validation protocol;
-- unchanged scalar M6 session profile path.
+No Sistema TS, PR #22 dispatch composition, arbitrary XML framework, second session cache,
+healthcare production connector or commercial adapter is introduced.
 
-## Local evidence on the candidate worktree
+## Reviewed findings
+
+| Finding | Result | Product control and named evidence |
+|---|---|---|
+| P1 validator owned network/credentials | FIXED | `ITypedExternalSessionValidationAdapter` only writes/parses typed XML; Core resolves Published endpoint, SOAP policy and existing credential bindings and owns restricted HTTPS/DNS/deadline/bounds. Real composition/store/Basic/HTTPS E2E and adapter mismatch zero-network matrix PASS. |
+| P1 stale promotion after final await | FIXED | Shared fixed 64-stripe mutation leases cover begin through completion of publish/binding/resource changes. Final synchronous CAS requires exact generation and zero active mutations, then checks proof/intent/session generation and promotes under the same stripe with no await. Final-window and capture-during-mutation tests PASS. |
+| P1 public candidate/no authenticated presentation boundary | FIXED | `ExternalSessionCandidate` is internal. Public completion accepts only authenticated principal, opaque intent reference and candidate bytes; Connector/operation/profile/key/provenance/expiry/validator are server-resolved and the grant is reauthorized. API and wrong-principal matrices PASS. |
+| P1 no production composition/store path | FIXED | API composition registers real authorizer, Published resolver/stamp provider, bounded exact registry, restricted SOAP client and runtime. PostgreSQL four-eyes/runtime locator plus production restricted-HTTPS admission and subsequent business use PASS. |
+| P2 fake cancellation crosses extension boundary | FIXED | Request/response/validation adapters preserve only a genuinely cancelled caller/effective token, rethrow a normalized OCE without extension message/inner, and map fake OCE/other exceptions to stable sanitized codes. |
+| P2 no individual XML value bound | FIXED | The first hardened scan chunk-reads and caps each text, CDATA and attribute value at 16,384 characters before `XDocument`; below-limit, over-limit and aggregate-limit matrices prove adapter invocation/no-invocation behavior. |
+| P2 concurrency/replay/final-race coverage | FIXED | Barrier/hook tests cover simultaneous completion, proof/candidate/intent/profile/context/generation replay, validation-window rotation and the post-final-await mutation window without sleep. |
+
+## Architecture and authority
+
+- The Published validation profile fixes adapter ID/type, endpoint binding/path, SOAP
+  version/action, exact request/response QName, deadline and request/response bounds in the
+  four-eyes checksum.
+- Validation adapters receive no `HttpClient`, endpoint, DNS, credential locator, secret, timeout,
+  proxy/redirect selector or transport. Core creates the envelope, resolves the operation's
+  server-owned Basic credential bindings, pins the approved destination and performs the bounded
+  HTTPS request and hardened parse.
+- The bounded explicit composition registry accepts at most 256 entries per adapter role and uses
+  exact logical ID/type keys without reflection, assembly scanning or caller-provided CLR types.
+- The authenticated runtime completion resolves all intent authority from the existing bounded
+  SOAP cache, enforces only the closed `InteractiveHandoff` provenance, reauthorizes the current
+  principal/grant and constructs the internal owned candidate. The API request buffer and candidate
+  are cleared on terminal paths and are excluded from JSON, diagnostics and audit metadata.
+- Published, binding and provider-resource mutation paths share one process-local 64-stripe
+  authority between Admin and runtime stores. A mutation lease advances generation at begin/end and
+  marks the stripe active without holding a lock across database I/O. Final promotion contains no
+  await and succeeds only under the exact inactive generation while the cache atomically consumes
+  the candidate-bound validation proof and assigns one current session generation.
+- The design retains one SOAP cache, cap 256, 64 acquisition stripes, TTL/lazy sweep and one current
+  generation. The process-local authority matches this existing single-node cache; scale-out would
+  require a separately reviewed distributed cache and linearization authority.
+
+## Local qualification on the product commit
 
 | Suite | Result | Coverage |
 |---|---:|---|
-| `TypedSessionHandshakeTests` | 27 PASS | typed adapters, admission, races, bounds, redaction, publication and API |
-| `TypedSessionHandshakeRealHttpIntegrationTests` | 2 PASS | direct and external admission over pinned real HTTPS plus subsequent session use |
-| legacy SOAP plus Connector configuration targeted unit tests | 34 PASS | backward compatibility and schema/lifecycle regression |
-| legacy real-HTTPS SOAP integration | 5 PASS | existing Login/Challenge/Business/Logout and hardening regression |
-| Architecture tests | 24 PASS | Core/provider/auth boundaries and vertical neutrality |
-| ordinary solution suite | 434 total: 423 PASS, 11 PostgreSQL-conditional SKIP | all solution projects; zero failures |
-| Gateway integration suite on PostgreSQL 18 | 105 PASS, 0 SKIP | fresh migration, idempotent second apply and non-superuser admin principal |
+| `TypedSessionHandshakeTests` | 41 PASS | authority, adapters, XML, cancellation, presentation, atomicity, concurrency, replay, bounds and redaction |
+| focused typed plus SOAP boundary unit filter | 57 PASS | typed remediation plus unchanged scalar boundary regression |
+| typed real-HTTPS integration | 4 PASS | direct/external handshake, production success/business reuse, and production authority negatives |
+| typed API authentication/redaction | 1 PASS | acquire/completion require authenticated principal and never echo candidate |
+| SOAP architecture filter | 4 PASS | provider neutrality, one cache, pure validation adapter and mutation CAS/lease boundary |
+| complete Architecture suite | 24 PASS | Core/provider/auth and vertical boundaries |
+| legacy SOAP plus Connector configuration unit | 35 PASS | scalar M6 and configuration compatibility |
+| legacy SOAP real-HTTPS integration | 5 PASS | Login/Challenge/Business/Logout and hardening compatibility |
+| ordinary solution suite | 453 total: 441 PASS, 12 PostgreSQL-conditional SKIP | all solution projects; zero failures |
+| Gateway integration on fresh PostgreSQL 18 | 109 PASS, 0 SKIP | migration checksum/idempotency, non-superuser Admin role, four-eyes and runtime locator |
 | Release restore/build | PASS, 0 warnings, 0 errors | pinned .NET SDK and locked dependency graph |
-| documentation validation and conservative secret scan | PASS | repository documentation and tracked/untracked candidate content |
-| SPDX SBOM generation/validation | PASS | .NET, Admin Web and Gateway container artefacts |
+| Admin Web | lint/API drift PASS; 28 unit, 37 UI mock, 2 accessibility, 1 full-stack PASS | production build, lifecycle, redaction and cleanup; npm audit zero vulnerabilities |
+| documentation validation and conservative secret scan | PASS | repository docs and tracked/untracked candidate content |
+| SPDX SBOM generation/validation | PASS | .NET, Admin Web and Gateway container; 165 container packages indexed |
 | vulnerable package scan | PASS | no vulnerable direct or transitive NuGet packages reported |
-| open-source Core export | PASS on `9f77cacaae294bb756b72413392825fcbdf9d230` | 377 files; clean-room scan/build/test/Admin/license checks; manifest SHA-256 `CFC83868E97A52F290C0E54D5A3DA553745BB1307F9107909EEFED32FEEA4A54` |
-| remediated product-head Core export | PASS on `3260f385ec5d76a0f35528b2340d8d5ece573540` | 377 files; manifest SHA-256 `D37B2E745107F7D42479EDB8623DD36A3497569ED233A9289E3DBE4517788730` |
-| PR #23 product-head CI | 21/21 PASS on `3260f385ec5d76a0f35528b2340d8d5ece573540` | main CI run `31309002108` 6/6; M5/Admin run `31309002106` 15/15 |
+| open-source Core export | PASS on `45605a9fb3085d83af3b2d9d50e8b08f4a987f65` | 380 files; clean-room scan/build/test/Admin/license checks; manifest SHA-256 `FD2CCA693FE181D51A7FFA8110A1BCADACA156EFA5DB0AE14929AFDDC31C398A` |
+| PR #23 exact-head CI | PENDING publication | must pass on the concluding documentation commit before targeted re-review |
 
-## Visible gate failures and remediation
+## Visible failed attempts and remediation
 
-- The first Core export on candidate `cac6bfe` failed in the exported Admin Web tests because the
-  new `action` and `namespaceUri` fields used JSON Schema `format: uri`, while the pinned AJV
-  composition intentionally has no format plugin. Exported .NET build and tests had passed before
-  that failure. The schema now uses explicit bounded, scheme-prefixed, control/space-denying
-  patterns instead of relying on an unregistered format.
-- A direct `npm run test:e2e` invocation then reached zero product assertions because its required
-  Gateway at `https://localhost:8443` was not running (`ECONNREFUSED`). The repository-owned
-  `Invoke-M5FullStack.ps1` harness was used for the qualified rerun: `FULLSTACK-01`, redaction and
-  cleanup all passed against the production build and real PostgreSQL/synthetic-service stack.
-- Remediation evidence before the export rerun: AJV schema tests 2/2 PASS, typed unit tests 27/27
-  PASS, Admin lint/API drift/unit 28/28/build PASS and owned full-stack 1/1 PASS.
-- Exact-head CI on `6ebaf2ecc55c7f93d22a7a9e7bceaf5c9ba49c3c` then failed
-  `admin-ui-lint` because three newly emitted semantic validation reasons were missing from the
-  authoritative runtime-wire catalog. The catalog, generated JSON/TypeScript contracts and the
-  explicit unit lock now include exactly the method/auth/content-type reasons. Local remediation:
-  the complete failed lint/API/runtime-generation/negative/drift step PASS, Gateway unit 145/145,
-  Architecture 24/24 and Admin unit 28/28/build PASS. A new exact-head CI run is required.
+- The first expanded production-negative test build referenced `ConnectorBindingSet.CreatedAt`,
+  which does not exist. The fixture now uses the actual `UpdatedAt` contract; the full production
+  matrix and solution build pass.
+- The first ordinary suite run exposed cross-test interference: the new E2E disposed the shared
+  `GatewayApiFactory` and cleared its process-wide Admin test key while the M4 class fixture ran in
+  parallel. A dedicated typed-runtime factory now runs with Admin disabled and touches no process
+  environment. The full Gateway suite and ordinary solution reruns pass with global parallelism.
+- The first PostgreSQL wrapper completed 109/109 tests but then failed an optional evidence query
+  against an obsolete `canonical_json` column name. The non-canonical query was removed; a fresh
+  migration/idempotency/non-superuser run exits cleanly with 109/109 and container cleanup.
+- The first in-progress mutation-lease build was stopped by warnings-as-errors `CA1859`. The lease
+  now has a concrete, externally non-constructible return type; the complete build and affected
+  gates pass with zero warnings.
+- An initial combined Admin command exceeded its local command timeout during dependency setup.
+  Locked `npm ci` and every Admin gate were then executed separately and passed; no product failure
+  was accepted by retry.
+- SBOM validation/generation passed, while Docker Scout warned that one external temporary archive
+  was still open during its own best-effort deletion. This did not affect the generated SPDX result;
+  repository artifacts and container resources are cleaned separately.
 
-PR #23 is open and unmerged. The remediated product head completed exact-head CI 21/21; this
-concluding documentation-only evidence commit must retain green checks before handoff. Independent
-review remains pending, and no merge is authorized by this report.
+The product commit is locally qualified and exported. The concluding evidence commit must retain
+green exact-head CI before handoff. Independent targeted re-review remains required, and no merge is
+authorized by this report.
