@@ -25,3 +25,4 @@ Formato: contesto, decisione, conseguenze e alternative. Tutti gli ADR elencati 
 | [0019](0019-provider-pack-boundaries.md) | Confini fisici dei provider pack |
 | [0020](0020-direct-gateway-client-principal.md) | Direct Gateway Access e principal runtime unificato |
 | [0021](0021-regional-eprescription-commonality.md) | Regional ePrescription commonality and profile boundary |
+| [0022](0022-typed-session-handshake-and-external-admission.md) | Typed session handshake and authorized external admission |

@@ -220,6 +220,26 @@ Dual-JWT orchestration, service-specific issuer/CN composition, CX/XON/IHE ident
 and document hash remain Connector responsibilities. Lifetime/skew already exists and
 was reused without a new subsystem.
 
+## Wave 1 typed session handshake and authorized external admission
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| One Published request+response profile and exact registered adapter authority | `Wave1_UT_Published_profile_selects_exact_compiled_adapters_and_nested_request`; `Wave1_SEC_Published_adapter_ID_and_type_mismatch_fail_before_transport`; four-eyes digest test | PASS local |
+| Core-owned typed request writer and immutable resolved value authority | nested request assertions; `Wave1_SEC_Core_stops_typed_request_adapter_at_the_Published_byte_bound_before_transport`; public API/architecture boundary | PASS local |
+| Hardened outer XML boundary before typed response adapter | `Wave1_SEC_Typed_response_keeps_hardened_outer_XML_boundary` DTD/QName/two-payload/Body-attribute matrix | PASS local |
+| Strict nested response order/cardinality/domain/duplicate/unexpected/mixed denial | `Wave1_SEC_Typed_response_adapter_denies_order_cardinality_domains_nested_unexpected_and_mixed_content` | PASS local |
+| Closed Issued/ExternalAdmissionRequired/Rejected outcomes | direct nested issuance, external handoff and closed public result assertions | PASS local |
+| Dedicated sensitive candidate and closed provenance | `Wave1_UT_External_handoff_validates_and_atomically_promotes_into_existing_cache`; public API and redaction tests | PASS local |
+| Intent single-use/TTL/exact profile and authenticated context binding | wrong/reused/expired/profile test plus `Wave1_SEC_Admission_intent_is_bound_to_exact_tenant_application_installation_and_lifecycle_key` | PASS local |
+| Typed validator, remote expiry and atomic promotion | validator status matrix; `Wave1_SEC_Remote_expiry_is_mandatory_future_and_capped_by_server_policy`; external promotion/session-use test | PASS local |
+| Rotate/disable post-validation race denial | `Wave1_SEC_Rotate_or_disable_during_remote_validation_prevents_promotion` | PASS local |
+| Existing 256-key cache/lazy sweep/current generation reuse | `Wave1_SEC_Admission_state_reuses_256_cap_and_lazy_TTL_sweep`; subsequent business use; legacy cache regression | PASS local |
+| Redaction of candidate/session/raw XML/remote diagnostics | `Wave1_SEC_Candidate_session_raw_XML_and_validator_diagnostics_are_redacted` | PASS local |
+| Neutral real HTTPS typed handshake and external admission | `Wave1_IT_Real_HTTPS_typed_handshake_direct_or_external_admission_promotes_and_supports_session_use` direct/external theory | PASS local |
+| Backward-compatible scalar M6 path | existing `AcquireSessionAsync` public API assertion; 34 targeted legacy/configuration unit and 5 legacy HTTPS SOAP integration PASS | PASS local |
+| Provider-neutral Core and no generic XML/session-insertion framework | `Wave1_CT_Typed_handshake_and_external_admission_are_Published_compiled_vertical_neutral_and_reuse_the_single_cache` | PASS local |
+| TM-065/TM-066/TM-067 | `SEC-W1-HS-001/002/003` named matrices above | PASS local; independent review pending |
+
 ## Healthcare Wave 1 — Regional ePrescription foundation
 
 | Requirement | Automated evidence | Status |

@@ -1,6 +1,6 @@
 # Implementation status
 
-Aggiornato: 2026-08-08
+Aggiornato: 2026-08-09
 
 ## Stato sintetico
 
@@ -19,6 +19,7 @@ Aggiornato: 2026-08-08
 | M6 — SOAP/Basic/Session primitives | Implementato sul branch; remediation PR #10 e CI/review pending | AP-01/AP-02/AP-07 sintetiche, cache/stamp/deadline/Fault hardened, server SOAP HTTPS reale e 21 casi mirati PASS locali |
 | Wave 1 — Generic opaque-session HTTP projection | Remediation local product gate PASS; CI exact-head e targeted re-review pending | 312 suite ordinaria (302 PASS, 10 PG conditional); targeted 49 unit (34 generic + 15 SOAP), 10 integration (5 generic + 5 SOAP), 17 architecture e 11/11 PostgreSQL 18 PASS; handoff non-forgeable da Published state, cache SOAP M6 ripristinata, final race zero-network |
 | Wave 1 — Typed composed SOAP authenticated dispatch | Remediation product gate locale PASS; CI exact-head e re-review pending | strategia runtime production exact-kind post grant/Published, Basic helper non esportato, compatibilità Connector v1 preservata; 433 ordinary PASS + 23 PG conditional, 124/124 Gateway integration con PostgreSQL, 99 unit mirati, 20 real-HTTPS regression, 11/11 store→publish→runtime→TLS, 24 architecture e `FULLSTACK-01` PASS; nessun connector production |
+| Wave 1 — Typed SOAP session handshake + authorized external admission | Gate locale PASS salvo Core export post-commit; CI exact-head e review indipendente pending | profilo Published four-eyes, adapter compilati, XML boundary hardened, intent opachi single-use nella cache M6 e promozione atomica post-validazione; 434 ordinary (423 PASS, 11 PG conditional), PostgreSQL 18 105/105, scan/SBOM/vulnerability PASS |
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | Wave 1 - Generic JWT/X.509 extensions | Remediation mirata local gate PASS; CI exact-head e rereview pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 304 ordinary, 71 PostgreSQL relevant, scan/SBOM/vulnerability/Core export PASS |
 | Healthcare Wave 1 — Regional ePrescription | Foundation compilata; profili regionali non pubblicabili | capability opaca Core post-auth con stato/grant verificati indipendentemente dalle credenziali, adapter al vero store Published, schema estensioni e safe-code allowlist server-owned, isolamento cross-profile; 14 test pack + 4 architecture PASS locali; Lombardia ed Emilia-Romagna `BLOCKED_BY_SPEC` |
@@ -170,6 +171,17 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 - E2E PostgreSQL reale con ruoli migration/admin/runtime separati, store, validate, editor/approver distinti, publish atomico, catalogo, runtime strategy e SOAP TLS pinned passa 11/11; tutte le negazioni richieste provano contatori SOAP e generic a zero senza `MutableSnapshots`;
 - product gate locale PASS: build Release senza warning/errori, 433 test ordinari PASS e 23 PostgreSQL-condizionali SKIP, poi 124/124 Gateway integration con PostgreSQL 18 e zero skip; 28/28 Vitest, drift API/runtime, build Admin, `FULLSTACK-01`, redazione/cleanup, scan, SBOM, vulnerability e document validation PASS;
 - report: `docs/implementation/WAVE1-TYPED-COMPOSED-SOAP-DISPATCH.md`; Core export, CI exact-head e review indipendente restano pending sul candidate commit.
+
+### Wave 1 — Typed SOAP session handshake e authorized external admission
+
+- profilo di handshake selezionato esclusivamente dal ConnectorVersion Published e incluso nel checksum four-eyes con SOAP version/action, QName esatti, adapter request/response compilati, limiti, lifetime e validator/endpoint opzionali;
+- nessun dizionario libero, XPath, XSLT, reflection dinamica o template XML: il Core apre Envelope/Body e payload esatto, gli adapter scrivono/leggono soltanto nodi tipizzati e la boundary XML applica DTD/entity/network resolution disabilitati con limiti di byte, depth, node e attributi;
+- outcome chiusi `Issued`, `ExternalAdmissionRequired` e `Rejected`; il valore di sessione resta server-side e il chiamante riceve solo reference o intent opachi;
+- gli intent di ammissione esterna vivono nella cache SOAP M6 esistente, sono bounded, scoped a Tenant/Installation/Application, Connector/version, Environment, binding/endpoint/profile e security fingerprint, con expiry, single-use e provenance `InteractiveHandoff`;
+- il candidate esterno attraversa un tipo sensibile dedicato, non un business field; il validator non riceve API cache e restituisce soltanto outcome chiusi. La promozione avviene sotto la lock stripe dopo revalidation Published/resource-stamp immediatamente precedente e sostituisce atomicamente l'intent con una sessione corrente;
+- CreateSession/ValidateSession sintetiche sono provider-neutral e validate con ordine/nesting rigoroso su HTTPS reale; il business call successivo prova il riuso della sessione, mentre M6 legacy rimane compatibile;
+- evidenza locale: 27 unit typed, 2 integration HTTPS reali, 34 unit SOAP legacy/config, 5 integration SOAP legacy e 24 architecture PASS; suite ordinaria 434 totali (423 PASS, 11 PostgreSQL conditional), PostgreSQL 18 105/105, build Release senza warning/errori, document validation, secret scan, SBOM e vulnerability scan PASS. Core export post-commit, CI exact-head e review indipendente restano da qualificare prima di qualsiasi GO di pubblicazione;
+- decisione e report: ADR-0022, `docs/implementation/WAVE1-TYPED-SESSION-HANDSHAKE.md` e `docs/testing/WAVE1-TYPED-SESSION-HANDSHAKE-REPORT.md`.
 
 ### M6 — Certificate, Signing and outbound mTLS primitives
 
