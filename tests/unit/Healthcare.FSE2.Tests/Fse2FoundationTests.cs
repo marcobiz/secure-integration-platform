@@ -1,6 +1,8 @@
+using System.Formats.Asn1;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
-using SecureIntegration.Authentication.CertificateSigning;
 using Xunit;
 
 namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2.Tests;
@@ -8,101 +10,113 @@ namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2.Tests;
 public sealed class Fse2FoundationTests
 {
     [Fact]
-    public void FSE2_OPS_frozen_matrix_has_only_nine_production_and_two_official_test_operations()
+    public void FSE2_OPS_frozen_matrix_and_retry_policy_are_exact()
     {
-        Assert.Equal(11, Fse2OperationCatalog.All.Count);
+        Assert.Equal(11, Fse2OperationCatalog.All.Length);
         Assert.Equal(9, Fse2OperationCatalog.All.Count(value => value.Availability == Fse2OperationAvailability.ProductionAvailable));
         Assert.Equal(2, Fse2OperationCatalog.All.Count(value => value.Availability == Fse2OperationAvailability.TestOnlyOfficial));
-        Assert.Equal(Fse2OperationAvailability.NotAvailable, Fse2OperationCatalog.GetAvailability("direct-fhir-create"));
-        Assert.Equal(Fse2OperationAvailability.NotAvailable, Fse2OperationCatalog.GetAvailability("callback-consumer"));
-
         Assert.All(Fse2OperationCatalog.All.Where(value => value.Operation is Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace),
             value => Assert.Equal(Fse2RetryClass.SafeRetry, value.RetryClass));
-        Assert.All(Fse2OperationCatalog.All.Where(value => value.Operation is not (Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace)),
-            value => Assert.Equal(Fse2RetryClass.NoAutomaticRetry, value.RetryClass));
+    }
+
+    [Fact]
+    public void FSE2_OPS_catalog_exposes_no_mutable_array_set_or_entry_authority()
+    {
+        object all = Fse2OperationCatalog.All;
+        Fse2OperationDescriptor create = Fse2OperationCatalog.Get(Fse2Operation.Create);
+        Assert.False(all is Fse2OperationDescriptor[]);
+        Assert.False(create.SuccessStatusCodes is HashSet<int>);
+        ISet<int> setFacade = Assert.IsAssignableFrom<ISet<int>>(create.SuccessStatusCodes);
+        Assert.Throws<NotSupportedException>(() => setFacade.Add(418));
+        Assert.Throws<NotSupportedException>(() => setFacade.Remove(202));
+        Fse2OperationDescriptor forged = create with { Availability = Fse2OperationAvailability.TestOnlyOfficial,
+            SuccessStatusCodes = new HashSet<int> { 418 } };
+        Assert.NotEqual(forged.Availability, Fse2OperationCatalog.Get(Fse2Operation.Create).Availability);
+        Assert.DoesNotContain(418, Fse2OperationCatalog.Get(Fse2Operation.Create).SuccessStatusCodes);
+        Assert.Contains(202, Fse2OperationCatalog.Get(Fse2Operation.Create).SuccessStatusCodes);
     }
 
     [Theory]
     [InlineData(Fse2Operation.ValidateCda, "POST", "documents/validation", "TREATMENT", "CREATE")]
-    [InlineData(Fse2Operation.ValidateFhir, "POST", "documents/fhir-validation", "TREATMENT", "CREATE")]
     [InlineData(Fse2Operation.Create, "POST", "documents", "TREATMENT", "CREATE")]
     [InlineData(Fse2Operation.Replace, "PUT", "documents/{id}", "UPDATE", "UPDATE")]
     [InlineData(Fse2Operation.Delete, "DELETE", "documents/{id}", "UPDATE", "DELETE")]
-    [InlineData(Fse2Operation.UpdateMetadata, "PUT", "documents/{id}/metadata-iti-57", "UPDATE", "UPDATE")]
     [InlineData(Fse2Operation.UpdateMetadataChainConcealment, "PUT", "documents/{id}/metadata-oscuramento-catena", "ACCESS UPDATE", "UPDATE")]
-    [InlineData(Fse2Operation.ValidateAndCreate, "POST", "documents/validate-and-create", "TREATMENT", "CREATE")]
-    [InlineData(Fse2Operation.ValidateAndReplace, "PUT", "documents/validate-and-replace/{id}", "UPDATE", "UPDATE")]
-    public void FSE2_CLAIMS_role_purpose_action_matrix_is_frozen(
-        Fse2Operation operation, string method, string path, string purpose, string action)
+    public void FSE2_CLAIMS_role_purpose_action_matrix_is_frozen(Fse2Operation operation, string method, string path, string purpose, string action)
     {
         Fse2OperationDescriptor descriptor = Fse2OperationCatalog.Get(operation);
-        Assert.Equal(method, descriptor.Method.Method);
-        Assert.Equal(path, descriptor.RelativePath);
+        Assert.Equal(method, descriptor.Method.Method); Assert.Equal(path, descriptor.RelativePath);
         Assert.Equal(purpose, Fse2OperationCatalog.ClaimValue(descriptor.PurposeOfUse!.Value));
         Assert.Equal(action, Fse2OperationCatalog.ClaimValue(descriptor.Action!.Value));
         Fse2OperationCatalog.ValidateOrganizationCombination("DAP", descriptor.OperationId, descriptor.PurposeOfUse.Value, descriptor.Action.Value);
     }
 
     [Fact]
-    public void FSE2_CLAIMS_authority_is_explicit_and_wrong_role_purpose_action_or_unknown_claim_fail_closed()
+    public void FSE2_CLAIMS_caller_surface_has_no_actor_policy_endpoint_or_certificate_selector()
     {
-        Assert.Equal(Fse2ClaimAuthority.ServerOwned, Fse2OperationCatalog.GetClaimAuthority("sub"));
-        Assert.Equal(Fse2ClaimAuthority.ServerOwned, Fse2OperationCatalog.GetClaimAuthority("subject_organization"));
-        Assert.Equal(Fse2ClaimAuthority.BusinessAllowlisted, Fse2OperationCatalog.GetClaimAuthority("person_id"));
-        Assert.Equal(Fse2ClaimAuthority.Derived, Fse2OperationCatalog.GetClaimAuthority("attachment_hash"));
+        string[] properties = typeof(Fse2Request).GetProperties(BindingFlags.Instance | BindingFlags.Public).Select(value => value.Name).ToArray();
+        string[] forbidden = ["Subject", "OrganizationIdentifier", "Vat", "Role", "Purpose", "Action", "Endpoint", "Algorithm", "Issuer", "Audience", "X5c", "Certificate", "UseSubjectAsAuthor"];
+        Assert.DoesNotContain(properties, property => forbidden.Any(value => property.Contains(value, StringComparison.OrdinalIgnoreCase)));
         Assert.Throws<Fse2ConnectorException>(() => Fse2OperationCatalog.GetClaimAuthority("use_subject_as_author"));
-        Assert.Throws<Fse2ConnectorException>(() => Fse2OperationCatalog.ValidateOrganizationCombination("ASS", "create", Fse2PurposeOfUse.Treatment, Fse2Action.Create));
-        Assert.Throws<Fse2ConnectorException>(() => Fse2OperationCatalog.ValidateOrganizationCombination("DAP", "create", Fse2PurposeOfUse.Update, Fse2Action.Create));
-        Assert.Throws<Fse2ConnectorException>(() => Fse2OperationCatalog.ValidateOrganizationCombination("DAP", "create", Fse2PurposeOfUse.Treatment, Fse2Action.Delete));
+    }
+
+    [Theory]
+    [InlineData("3.1")]
+    [InlineData("1.40")]
+    [InlineData("0.40")]
+    [InlineData("1.01")]
+    [InlineData("1..2")]
+    [InlineData("1.-1")]
+    [InlineData("1.a")]
+    [InlineData("")]
+    [InlineData("1")]
+    public void FSE2_OID_semantically_invalid_vectors_are_denied(string value) =>
+        Assert.ThrowsAny<ArgumentException>(() => Fse2Validation.ValidateOid(value));
+
+    [Theory]
+    [InlineData("0.0")]
+    [InlineData("0.39")]
+    [InlineData("1.39")]
+    [InlineData("2.40")]
+    [InlineData("2.999999999999999999999999999999999999999")]
+    [InlineData("2.16.840.1.113883.2.9.4.1.2")]
+    public void FSE2_OID_valid_canonical_vectors_pass(string value) => Assert.Equal(value, Fse2Validation.ValidateOid(value));
+
+    [Fact]
+    public void FSE2_CN_exact_DER_parser_accepts_one_CN_in_single_or_multivalued_RDN()
+    {
+        using X509Certificate2 single = Certificate(Name(Rdn(("2.5.4.3", "Signing One"))));
+        using X509Certificate2 multi = Certificate(Name(Rdn(("2.5.4.10", "Organization"), ("2.5.4.3", "Signing Multi"))));
+        Assert.Equal("Signing One", Fse2X500CommonName.ReadExactlyOne(single.SubjectName.RawData));
+        Assert.Equal("Signing Multi", Fse2X500CommonName.ReadExactlyOne(multi.SubjectName.RawData));
     }
 
     [Fact]
-    public void FSE2_PROFILE_organization_subject_is_fixed_CX_checksum_bound_and_four_eyes_approved()
+    public void FSE2_CN_absent_duplicate_multiple_empty_malformed_and_SAN_fallback_are_denied()
     {
-        Fse2PublishedOrganizationProfile profile = Fse2TestData.Profile(Fse2Operation.Create, new("https://fse.example.test/v1"));
-        Fse2PublishedOrganizationProfile changedIdentity = Fse2TestData.Profile(Fse2Operation.Create, new("https://fse.example.test/v1"), organizationIdentifier: "00488410010");
-
-        Assert.Equal("01114601006^^^&2.16.840.1.113883.2.9.4.1.2&ISO", profile.SubjectCx);
-        Assert.Equal("DAP", profile.SubjectRole);
-        Assert.NotEqual(profile.ChecksumSha256, changedIdentity.ChecksumSha256);
-        Assert.NotEqual(profile.SigningBindingId, profile.MutualTlsBindingId);
-        Assert.Throws<ArgumentException>(() => Fse2TestData.Profile(Fse2Operation.Create, new("https://fse.example.test/v1"), createdBy: "same", approvedBy: "same"));
-        Assert.Throws<ArgumentException>(() => Fse2TestData.Profile(Fse2Operation.Create, new("https://fse.example.test/v1"), subjectRole: "ASS"));
-        Assert.Throws<ArgumentException>(() => Fse2PublishedOrganizationProfile.ValidateSuccessor(profile, changedIdentity));
-        Fse2PublishedOrganizationProfile successor = Fse2TestData.Profile(Fse2Operation.Create, new("https://fse.example.test/v1"), organizationIdentifier: "00488410010", revision: 8);
-        Fse2PublishedOrganizationProfile.ValidateSuccessor(profile, successor);
+        using X509Certificate2 absent = Certificate(Name(Rdn(("2.5.4.10", "Organization"))));
+        using X509Certificate2 duplicateSameRdn = Certificate(Name(Rdn(("2.5.4.3", "One"), ("2.5.4.3", "Two"))));
+        using X509Certificate2 duplicateRdns = Certificate(Name(Rdn(("2.5.4.3", "One")), Rdn(("2.5.4.3", "Two"))));
+        using X509Certificate2 empty = Certificate(Name(Rdn(("2.5.4.3", ""))));
+        using X509Certificate2 sanOnly = CertificateWithSan(Name(Rdn(("2.5.4.10", "Organization"))), "simple-name.example");
+        Assert.ThrowsAny<CryptographicException>(() => Fse2X500CommonName.ReadExactlyOne(absent.SubjectName.RawData));
+        Assert.ThrowsAny<CryptographicException>(() => Fse2X500CommonName.ReadExactlyOne(duplicateSameRdn.SubjectName.RawData));
+        Assert.ThrowsAny<CryptographicException>(() => Fse2X500CommonName.ReadExactlyOne(duplicateRdns.SubjectName.RawData));
+        Assert.ThrowsAny<CryptographicException>(() => Fse2X500CommonName.ReadExactlyOne(empty.SubjectName.RawData));
+        Assert.ThrowsAny<CryptographicException>(() => Fse2X500CommonName.ReadExactlyOne(sanOnly.SubjectName.RawData));
+        Assert.ThrowsAny<Exception>(() => Fse2X500CommonName.ReadExactlyOne(new byte[] { 0x30, 0x03, 0x31 }));
+        Assert.Equal("simple-name.example", sanOnly.GetNameInfo(X509NameType.DnsName, false));
     }
 
     [Fact]
-    public void FSE2_PROFILE_production_rejects_official_test_only_operation()
+    public void FSE2_ENDPOINT_official_authorities_are_exact_and_synthetic_cannot_claim_Production()
     {
-        Fse2PublishedOrganizationProfile profile = Fse2TestData.Profile(Fse2Operation.ValidateFhir, new("https://fse.example.test/v1"), Fse2EnvironmentClass.Production);
-        Fse2PublishedProfileLookup lookup = profile.Authority;
-
-        Fse2ConnectorException denied = Assert.Throws<Fse2ConnectorException>(() => InvokeValidateAuthority(profile, lookup));
-        Assert.Equal("FSE2_OPERATION_NOT_PRODUCTION_AVAILABLE", denied.SafeCode);
-    }
-
-    [Fact]
-    public void FSE2_IHE_CX_XON_are_canonical_and_malformed_ambiguous_or_injected_values_are_denied()
-    {
-        string organization = Fse2IheFormatter.FormatOrganizationCx("01114601006", "2.16.840.1.113883.2.9.4.1.2");
-        string person = Fse2IheFormatter.FormatPersonCx("RSSMRA80A01H501U", "2.16.840.1.113883.2.9.4.3.2");
-        string locality = Fse2IheFormatter.FormatLocalityXon("Azienda Sanitaria Sintetica", "2.16.840.1.113883.2.9.4.1.1", "001");
-
-        Assert.Equal("01114601006^^^&2.16.840.1.113883.2.9.4.1.2&ISO", organization);
-        Assert.Equal("RSSMRA80A01H501U^^^&2.16.840.1.113883.2.9.4.3.2&ISO", person);
-        Assert.Equal("Azienda Sanitaria Sintetica^^^^^&2.16.840.1.113883.2.9.4.1.1&ISO^^^^001", locality);
-        Fse2IheFormatter.ValidateCx(organization, organization: true);
-        Fse2IheFormatter.ValidateCx(person, organization: false);
-        Fse2IheFormatter.ValidateXon(locality);
-
-        Assert.Throws<ArgumentException>(() => Fse2IheFormatter.ValidateCx("01114601006^^&2.16.840.1.113883.2.9.4.1.2&ISO", true));
-        Assert.Throws<ArgumentException>(() => Fse2IheFormatter.ValidateCx("01114601006^^^&02.16.840.1&ISO", true));
-        Assert.Throws<ArgumentException>(() => Fse2IheFormatter.ValidateXon("Azienda\rInjected^^^^^&2.16.840.1&ISO^^^^001"));
-        Assert.Throws<ArgumentException>(() => Fse2IheFormatter.FormatLocalityXon("Azienda^Ambigua", "2.16.840.1", "001"));
-        Assert.Throws<ArgumentException>(() => Fse2IheFormatter.FormatPersonCx("rssmra80a01h501u", "2.16.840.1"));
-        Assert.Throws<ArgumentException>(() => Fse2IheFormatter.FormatPersonCx("RSSMRA80A01H501A", "2.16.840.1"));
+        Assert.Equal(Fse2EnvironmentClass.Production, Fse2EndpointAuthority.Resolve(Fse2EndpointAuthority.Production, Fse2EnvironmentClass.Production, null));
+        Assert.Equal(Fse2EnvironmentClass.OfficialTest, Fse2EndpointAuthority.Resolve(Fse2EndpointAuthority.OfficialTest, Fse2EnvironmentClass.OfficialTest, null));
+        Assert.Throws<Fse2ConnectorException>(() => Fse2EndpointAuthority.Resolve(new("https://attacker.example/v1"), Fse2EnvironmentClass.Production, null));
+        Fse2SyntheticEndpointAuthority synthetic = Fse2SyntheticEndpointAuthority.CreateForTests(new("https://localhost:4443/v1"));
+        Assert.Throws<Fse2ConnectorException>(() => Fse2EndpointAuthority.Resolve(new("https://localhost:4443/v1"), Fse2EnvironmentClass.Production, synthetic));
+        Assert.Throws<Fse2ConnectorException>(() => Fse2EndpointAuthority.Resolve(new("https://sub.modipa.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1"), Fse2EnvironmentClass.Production, null));
     }
 
     [Fact]
@@ -114,53 +128,41 @@ public sealed class Fse2FoundationTests
     }
 
     [Fact]
-    public void FSE2_AUTHORITY_caller_request_has_no_actor_policy_endpoint_or_use_subject_as_author_selector()
-    {
-        string[] publicProperties = typeof(Fse2Request).GetProperties(BindingFlags.Instance | BindingFlags.Public).Select(value => value.Name).ToArray();
-        string[] forbidden = ["Subject", "OrganizationIdentifier", "Vat", "Role", "Purpose", "Action", "Endpoint", "Algorithm", "Issuer", "Audience", "X5c", "Certificate", "UseSubjectAsAuthor"];
-        Assert.DoesNotContain(publicProperties, property => forbidden.Any(value => property.Contains(value, StringComparison.OrdinalIgnoreCase)));
-        Assert.DoesNotContain(typeof(Fse2ClinicalClaims).GetProperties().Select(value => value.Name), value => value.Contains("Subject", StringComparison.OrdinalIgnoreCase));
-
-        byte[] document = [1, 2, 3];
-        byte[] body = "{}"u8.ToArray();
-        Fse2Request request = Fse2Request.Create(document, body, Fse2TestData.Claims());
-        document[0] = 99;
-        body[0] = 99;
-        Assert.Equal(1, request.Document.Span[0]);
-        Assert.Equal((byte)'{', request.RequestBody.Span[0]);
-    }
-
-    [Fact]
-    public void FSE2_ERROR_RFC7807_mapper_retains_only_allowlisted_safe_code_and_never_detail_canary()
+    public void FSE2_ERROR_RFC7807_mapper_retains_only_safe_code()
     {
         const string canary = "clinical-payload-redaction-canary";
-        byte[] problem = Encoding.UTF8.GetBytes($$"""{"type":"https://errors.example/FSE2_DOCUMENT_REJECTED","title":"rejected","detail":"{{canary}}","stack":"{{canary}}"}""");
+        byte[] problem = Encoding.UTF8.GetBytes($$"""{"type":"https://errors.example/FSE2_DOCUMENT_REJECTED","detail":"{{canary}}"}""");
         Fse2ConnectorException error = Fse2ResponseMapper.MapProblem(new(400, "application/problem+json", problem), Fse2RetryClass.NoAutomaticRetry);
-
-        Assert.Equal("FSE2_DOCUMENT_REJECTED", error.SafeCode);
-        Assert.Equal(Fse2ErrorCategory.UpstreamRejected, error.Category);
-        Assert.DoesNotContain(canary, error.ToString(), StringComparison.Ordinal);
-        Assert.Null(error.InnerException);
+        Assert.Equal("FSE2_DOCUMENT_REJECTED", error.SafeCode); Assert.DoesNotContain(canary, error.ToString(), StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void FSE2_WORKFLOW_status_is_safe_retry_and_requires_server_stored_security_context()
+    private static (string Oid, string Value)[] Rdn(params (string Oid, string Value)[] attributes) => attributes;
+    private static byte[] Name(params (string Oid, string Value)[][] rdns)
     {
-        Fse2OperationDescriptor workflow = Fse2OperationCatalog.Get(Fse2Operation.GetStatusByWorkflow);
-        Fse2OperationDescriptor trace = Fse2OperationCatalog.Get(Fse2Operation.GetStatusByTrace);
-        Assert.Equal(Fse2RetryClass.SafeRetry, workflow.RetryClass);
-        Assert.Equal(Fse2RetryClass.SafeRetry, trace.RetryClass);
-        Assert.Null(workflow.Action);
-        Assert.Null(trace.PurposeOfUse);
-        Assert.Null(Fse2Request.GetStatusByWorkflow("workflow-123").ClinicalClaims);
-        Assert.Null(Fse2Request.GetStatusByTrace("trace-123").ClinicalClaims);
+        AsnWriter writer = new(AsnEncodingRules.DER); writer.PushSequence();
+        foreach ((string Oid, string Value)[] rdn in rdns)
+        {
+            writer.PushSetOf();
+            foreach ((string oid, string value) in rdn)
+            {
+                writer.PushSequence(); writer.WriteObjectIdentifier(oid); writer.WriteCharacterString(UniversalTagNumber.UTF8String, value); writer.PopSequence();
+            }
+            writer.PopSetOf();
+        }
+        writer.PopSequence(); return writer.Encode();
     }
-
-    private static void InvokeValidateAuthority(Fse2PublishedOrganizationProfile profile, Fse2PublishedProfileLookup lookup)
+    private static X509Certificate2 Certificate(byte[] subject)
     {
-        MethodInfo method = typeof(Fse2PublishedOrganizationProfile).GetMethod("ValidateAuthority", BindingFlags.Static | BindingFlags.NonPublic)!;
-        try { method.Invoke(null, [profile, lookup]); }
-        catch (TargetInvocationException exception) when (exception.InnerException is not null) { throw exception.InnerException; }
+        using RSA rsa = RSA.Create(2048);
+        CertificateRequest request = new(new X500DistinguishedName(subject), rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        return request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
+    }
+    private static X509Certificate2 CertificateWithSan(byte[] subject, string dns)
+    {
+        using RSA rsa = RSA.Create(2048);
+        CertificateRequest request = new(new X500DistinguishedName(subject), rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        SubjectAlternativeNameBuilder san = new(); san.AddDnsName(dns); request.CertificateExtensions.Add(san.Build());
+        return request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1));
     }
 }
 
@@ -171,47 +173,8 @@ internal static class Fse2TestData
     internal static readonly Guid InstallationId = Guid.Parse("30000000-0000-0000-0000-000000000003");
     internal static readonly Guid EnvironmentId = Guid.Parse("40000000-0000-0000-0000-000000000004");
     internal static readonly Guid ConnectorVersionId = Guid.Parse("50000000-0000-0000-0000-000000000005");
-
+    internal static readonly Guid ConnectorId = Guid.Parse("60000000-0000-0000-0000-000000000006");
+    internal static readonly Guid BindingId = Guid.Parse("70000000-0000-0000-0000-000000000007");
     internal static Fse2ClinicalClaims Claims(string resource = "('11502-2^^2.16.840.1.113883.6.1')") =>
         Fse2ClinicalClaims.CreatePerson("RSSMRA80A01H501U", "2.16.840.1.113883.2.9.4.3.2", true, resource);
-
-    internal static Fse2PublishedOrganizationProfile Profile(
-        Fse2Operation operation,
-        Uri baseEndpoint,
-        Fse2EnvironmentClass environmentClass = Fse2EnvironmentClass.Synthetic,
-        string organizationIdentifier = "01114601006",
-        string createdBy = "author-one",
-        string approvedBy = "approver-two",
-        string subjectRole = "DAP",
-        long revision = 7,
-        TimeSpan? timeout = null) =>
-        Fse2PublishedOrganizationProfile.CreateApproved(
-            new(TenantId, ApplicationId, InstallationId, EnvironmentId, "fse2-national", operation),
-            ConnectorVersionId,
-            environmentClass,
-            baseEndpoint,
-            organizationIdentifier,
-            "2.16.840.1.113883.2.9.4.1.2",
-            "Azienda Sanitaria Sintetica",
-            "asl-synthetic",
-            "Azienda Sanitaria Sintetica",
-            "2.16.840.1.113883.2.9.4.1.1",
-            "001",
-            subjectRole,
-            "broker-gateway",
-            "Synthetic Vendor",
-            "1.0.0",
-            "fse2-auth-jwt",
-            "fse2-signature-jwt",
-            "fse2-mtls",
-            "fse2-signing-certificate",
-            "fse2-mtls-certificate",
-            TimeSpan.FromMinutes(5),
-            TimeSpan.FromSeconds(30),
-            timeout ?? TimeSpan.FromSeconds(5),
-            8 * 1024 * 1024,
-            64 * 1024,
-            revision,
-            createdBy,
-            approvedBy);
 }

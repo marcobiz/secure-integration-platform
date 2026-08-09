@@ -125,6 +125,11 @@ public sealed class Fse2ClinicalClaims
 /// </summary>
 public sealed class Fse2Request
 {
+    private const int MaximumDocumentInputBytes = 128 * 1024 * 1024;
+    private const int MaximumJsonInputBytes = 1024 * 1024;
+    private readonly byte[] document;
+    private readonly byte[] requestBody;
+
     private Fse2Request(
         Fse2Operation operation,
         ReadOnlyMemory<byte> document,
@@ -134,19 +139,23 @@ public sealed class Fse2Request
         Fse2ClinicalClaims? clinicalClaims)
     {
         Operation = operation;
-        Document = document.ToArray();
-        RequestBody = requestBody.ToArray();
+        if (document.Length > MaximumDocumentInputBytes || requestBody.Length > MaximumJsonInputBytes)
+            throw new ArgumentException("FSE2_PAYLOAD_TOO_LARGE");
+        this.document = document.ToArray();
+        this.requestBody = requestBody.ToArray();
         DocumentContentType = documentContentType;
         ResourceIdentifier = resourceIdentifier;
         ClinicalClaims = clinicalClaims;
     }
 
     public Fse2Operation Operation { get; }
-    public ReadOnlyMemory<byte> Document { get; }
-    public ReadOnlyMemory<byte> RequestBody { get; }
+    public ReadOnlyMemory<byte> Document => document.ToArray();
+    public ReadOnlyMemory<byte> RequestBody => requestBody.ToArray();
     public string? DocumentContentType { get; }
     public string? ResourceIdentifier { get; }
     public Fse2ClinicalClaims? ClinicalClaims { get; }
+
+    internal Fse2RequestSnapshot CaptureSnapshot() => new(this, document.ToArray(), requestBody.ToArray());
 
     public static Fse2Request ValidateCda(ReadOnlyMemory<byte> document, ReadOnlyMemory<byte> requestBody, Fse2ClinicalClaims claims) =>
         DocumentRequest(Fse2Operation.ValidateCda, document, requestBody, "application/pdf", null, claims);
@@ -175,11 +184,13 @@ public sealed class Fse2Request
     public static Fse2Request ValidateAndReplace(string documentId, ReadOnlyMemory<byte> document, ReadOnlyMemory<byte> requestBody, Fse2ClinicalClaims claims) =>
         DocumentRequest(Fse2Operation.ValidateAndReplace, document, requestBody, "application/pdf", Fse2Validation.ValidateDocumentId(documentId), claims);
 
-    public static Fse2Request GetStatusByWorkflow(string workflowInstanceId) =>
-        new(Fse2Operation.GetStatusByWorkflow, default, default, null, Fse2Validation.ValidateWorkflowId(workflowInstanceId), null);
+    public static Fse2Request GetStatusByWorkflow(string workflowInstanceId, Fse2ClinicalClaims claims) =>
+        new(Fse2Operation.GetStatusByWorkflow, default, default, null, Fse2Validation.ValidateWorkflowId(workflowInstanceId),
+            claims ?? throw new ArgumentNullException(nameof(claims)));
 
-    public static Fse2Request GetStatusByTrace(string traceId) =>
-        new(Fse2Operation.GetStatusByTrace, default, default, null, Fse2Validation.ValidateTraceId(traceId), null);
+    public static Fse2Request GetStatusByTrace(string traceId, Fse2ClinicalClaims claims) =>
+        new(Fse2Operation.GetStatusByTrace, default, default, null, Fse2Validation.ValidateTraceId(traceId),
+            claims ?? throw new ArgumentNullException(nameof(claims)));
 
     private static Fse2Request DocumentRequest(Fse2Operation operation, ReadOnlyMemory<byte> document, ReadOnlyMemory<byte> requestBody, string contentType, string? id, Fse2ClinicalClaims claims)
     {
@@ -198,6 +209,13 @@ public sealed class Fse2Request
     }
 }
 
+/// <summary>One private invocation-entry copy consumed for validation, hashing and transport.</summary>
+internal sealed record Fse2RequestSnapshot(Fse2Request Source, byte[] DocumentBytes, byte[] RequestBodyBytes)
+{
+    internal ReadOnlyMemory<byte> Document => DocumentBytes;
+    internal ReadOnlyMemory<byte> RequestBody => RequestBodyBytes;
+}
+
 /// <summary>Technical-only normalized response.</summary>
 public sealed record Fse2Response(
     int StatusCode,
@@ -208,16 +226,33 @@ public sealed record Fse2Response(
     string? SafeWarning,
     Fse2RetryClass RetryClass);
 
-/// <summary>Server-side workflow security context used only for status reconciliation.</summary>
-public sealed record Fse2WorkflowSecurityContext(
+/// <summary>Full immutable authority prefix shared by workflow record and status lookup.</summary>
+public sealed record Fse2WorkflowAuthorityScope(
+    Guid TenantId,
+    Guid ApplicationId,
+    Guid InstallationId,
+    Guid EnvironmentId,
+    Guid ConnectorVersionId,
+    string ConnectorVersion,
+    string ConnectorId,
+    string ProfileAuthorityId,
+    long PublishedRevision,
+    string PublishedChecksumSha256);
+
+/// <summary>Technical-only persisted reconciliation record. It contains no patient or document data.</summary>
+public sealed record Fse2WorkflowRecord(
+    Fse2WorkflowAuthorityScope Authority,
+    Fse2Operation OriginatingOperation,
+    string OriginatingOperationId,
     Fse2Action Action,
     Fse2PurposeOfUse PurposeOfUse,
-    Fse2ClinicalClaims ClinicalClaims,
-    string OperationReference);
+    string? WorkflowInstanceId,
+    string? TraceId);
 
 /// <summary>Technical correlation persistence; clinical payloads are outside this contract.</summary>
 public interface IFse2WorkflowCorrelationStore
 {
-    Task RecordAsync(Guid correlationId, string connectorId, Fse2Operation operation, Fse2Response response, Fse2WorkflowSecurityContext securityContext, CancellationToken cancellationToken);
-    Task<Fse2WorkflowSecurityContext> ResolveAsync(Guid tenantId, Guid applicationId, Guid installationId, string connectorId, Fse2Operation statusOperation, string resourceIdentifier, CancellationToken cancellationToken);
+    Task RecordAsync(Guid correlationId, Fse2WorkflowRecord record, CancellationToken cancellationToken);
+    Task<Fse2WorkflowRecord> ResolveAsync(Fse2WorkflowAuthorityScope authority, Fse2Operation statusOperation,
+        string resourceIdentifier, CancellationToken cancellationToken);
 }

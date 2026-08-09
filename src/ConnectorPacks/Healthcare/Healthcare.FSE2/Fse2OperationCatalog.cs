@@ -1,3 +1,5 @@
+using System.Collections.Frozen;
+using System.Collections.Immutable;
 using System.Text.RegularExpressions;
 
 namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2;
@@ -21,7 +23,7 @@ public sealed record Fse2OperationDescriptor(
 /// <summary>Frozen FSE2 operation allowlist. No arbitrary relative URL is accepted.</summary>
 public static class Fse2OperationCatalog
 {
-    private static readonly Dictionary<string, Fse2ClaimAuthority> ClaimAuthorities =
+    private static readonly FrozenDictionary<string, Fse2ClaimAuthority> ClaimAuthorities =
         new Dictionary<string, Fse2ClaimAuthority>(StringComparer.Ordinal)
         {
             ["iss"] = Fse2ClaimAuthority.ServerOwned,
@@ -43,8 +45,8 @@ public static class Fse2OperationCatalog
             ["purpose_of_use"] = Fse2ClaimAuthority.Derived,
             ["action_id"] = Fse2ClaimAuthority.Derived,
             ["attachment_hash"] = Fse2ClaimAuthority.Derived
-        };
-    private static readonly IReadOnlyDictionary<Fse2Operation, Fse2OperationDescriptor> Descriptors =
+        }.ToFrozenDictionary(StringComparer.Ordinal);
+    private static readonly FrozenDictionary<Fse2Operation, Fse2OperationDescriptor> Descriptors =
         new Dictionary<Fse2Operation, Fse2OperationDescriptor>
         {
             [Fse2Operation.ValidateCda] = Descriptor(Fse2Operation.ValidateCda, "validate-cda", HttpMethod.Post, "documents/validation", Fse2OperationAvailability.ProductionAvailable, Fse2PurposeOfUse.Treatment, Fse2Action.Create, true, true, false, false, 200, 201),
@@ -58,9 +60,10 @@ public static class Fse2OperationCatalog
             [Fse2Operation.ValidateAndReplace] = Descriptor(Fse2Operation.ValidateAndReplace, "validate-and-replace", HttpMethod.Put, "documents/validate-and-replace/{id}", Fse2OperationAvailability.ProductionAvailable, Fse2PurposeOfUse.Update, Fse2Action.Update, true, true, true, true, 202),
             [Fse2Operation.GetStatusByWorkflow] = Descriptor(Fse2Operation.GetStatusByWorkflow, "get-status-by-workflow", HttpMethod.Get, "status/{id}", Fse2OperationAvailability.ProductionAvailable, null, null, false, false, true, false, 200),
             [Fse2Operation.GetStatusByTrace] = Descriptor(Fse2Operation.GetStatusByTrace, "get-status-by-trace", HttpMethod.Get, "status/search/{id}", Fse2OperationAvailability.ProductionAvailable, null, null, false, false, true, false, 200)
-        };
+        }.ToFrozenDictionary();
 
-    public static IReadOnlyCollection<Fse2OperationDescriptor> All { get; } = Descriptors.Values.ToArray();
+    public static ImmutableArray<Fse2OperationDescriptor> All { get; } =
+        Descriptors.Values.OrderBy(value => value.Operation).ToImmutableArray();
 
     public static Fse2OperationDescriptor Get(Fse2Operation operation) =>
         Descriptors.TryGetValue(operation, out Fse2OperationDescriptor? descriptor)
@@ -135,9 +138,9 @@ public static class Fse2OperationCatalog
         Fse2OperationAvailability availability, Fse2PurposeOfUse? purpose, Fse2Action? action, bool document, bool json,
         bool resource, bool hash, params int[] success) =>
         new(operation, id, method, path, availability, availability == Fse2OperationAvailability.ProductionAvailable && operation is Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace
-            ? Fse2RetryClass.SafeRetry : Fse2RetryClass.NoAutomaticRetry, purpose, action, document, json, resource, hash, new HashSet<int>(success));
+            ? Fse2RetryClass.SafeRetry : Fse2RetryClass.NoAutomaticRetry, purpose, action, document, json, resource, hash, success.ToFrozenSet());
 
-    private static void ValidateBaseEndpoint(Uri endpoint)
+    internal static void ValidateBaseEndpoint(Uri endpoint)
     {
         if (!endpoint.IsAbsoluteUri || endpoint.Scheme != Uri.UriSchemeHttps || !string.IsNullOrEmpty(endpoint.UserInfo) || !string.IsNullOrEmpty(endpoint.Query) ||
             !string.IsNullOrEmpty(endpoint.Fragment) || !endpoint.AbsolutePath.TrimEnd('/').EndsWith("/v1", StringComparison.Ordinal))
