@@ -12,7 +12,14 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 namespace SecureIntegration.M6.SyntheticSoapServer;
 
 /// <summary>Configuration for one isolated synthetic Basic/SOAP/session server.</summary>
-public sealed record SyntheticSoapServerOptions(string Username, string Password, bool RequireChallenge, TimeSpan SessionLifetime, TimeSpan TimeoutDelay)
+public sealed record SyntheticSoapServerOptions(
+    string Username,
+    string Password,
+    bool RequireChallenge,
+    TimeSpan SessionLifetime,
+    TimeSpan TimeoutDelay,
+    bool RequireExternalAdmission = false,
+    string ExternalSessionCandidate = "synthetic-external-session")
 {
     /// <summary>Optional neutral custom header required by the composed SOAP endpoint.</summary>
     public string? OpaqueSessionHeaderName { get; init; }
@@ -34,6 +41,8 @@ public sealed class SyntheticSoapCounters
     private int opaqueSessionRejected;
     private int soapPolicyRejected;
     private readonly TaskCompletionSource<bool> composedAcceptedObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int createSession;
+    private int validateSession;
     private readonly TaskCompletionSource<bool> bodyHeadersFlushed = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource<bool> releaseStalledBody = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -57,6 +66,10 @@ public sealed class SyntheticSoapCounters
     public int SoapPolicyRejected => Volatile.Read(ref soapPolicyRejected);
     /// <summary>Completes when a composed request has passed request-side authentication and SOAP validation.</summary>
     public Task WaitForComposedAcceptedAsync(CancellationToken cancellationToken) => composedAcceptedObserved.Task.WaitAsync(cancellationToken);
+    /// <summary>Typed nested session-handshake request count.</summary>
+    public int CreateSession => Volatile.Read(ref createSession);
+    /// <summary>Typed external-session validation request count.</summary>
+    public int ValidateSession => Volatile.Read(ref validateSession);
     /// <summary>Completes after the stalled-body scenario has flushed its response headers.</summary>
     public Task WaitForBodyHeadersFlushedAsync(CancellationToken cancellationToken) => bodyHeadersFlushed.Task.WaitAsync(cancellationToken);
 
@@ -66,6 +79,8 @@ public sealed class SyntheticSoapCounters
         else if (operation == "CompleteChallenge") Interlocked.Increment(ref challenge);
         else if (operation == "BusinessOperation") Interlocked.Increment(ref business);
         else if (operation == "Logout") Interlocked.Increment(ref logout);
+        else if (operation == "CreateSession") Interlocked.Increment(ref createSession);
+        else if (operation == "ValidateSession") Interlocked.Increment(ref validateSession);
     }
 
     internal void SignalBodyHeadersFlushed() => bodyHeadersFlushed.TrySetResult(true);
@@ -104,6 +119,7 @@ public static class SyntheticSoapServerHost
 {
     private const string OperationNamespace = "urn:synthetic:session";
     private const string FaultNamespace = "urn:synthetic:fault";
+    private const string TypedSessionNamespace = "urn:synthetic:typed-session";
     private const int MaximumRequestBytes = 1_048_576;
 
     /// <summary>Starts HTTPS on a dynamically assigned loopback port.</summary>
@@ -137,6 +153,37 @@ public static class SyntheticSoapServerHost
             if (!ValidHttpPolicy(request, parsed)) { response.StatusCode = StatusCodes.Status415UnsupportedMediaType; return; }
             counters.Count(parsed.Operation);
             SoapVersion version = parsed.Version;
+
+            if (parsed.Operation == "CreateSession")
+            {
+                if (!ValidCreateSessionRequest(parsed.Payload)) { response.StatusCode = StatusCodes.Status400BadRequest; return; }
+                if (options.RequireExternalAdmission)
+                {
+                    string externalRequired = $"<s:CreateSessionResponse xmlns:s=\"{TypedSessionNamespace}\"><s:Result><s:Status>external_admission_required</s:Status><s:Admission><s:Provenance>interactive_handoff</s:Provenance></s:Admission></s:Result></s:CreateSessionResponse>";
+                    await WriteSoapAsync(response, version, externalRequired, StatusCodes.Status200OK, token).ConfigureAwait(false);
+                    return;
+                }
+                string issued = NewSession(sessions, options.SessionLifetime);
+                DateTimeOffset issuedExpiry = sessions[issued];
+                string issuedResponse = $"<s:CreateSessionResponse xmlns:s=\"{TypedSessionNamespace}\"><s:Result><s:Status>issued</s:Status><s:Session><s:Value>{WebUtility.HtmlEncode(issued)}</s:Value><s:ExpiresAt>{issuedExpiry:O}</s:ExpiresAt></s:Session></s:Result></s:CreateSessionResponse>";
+                await WriteSoapAsync(response, version, issuedResponse, StatusCodes.Status200OK, token).ConfigureAwait(false);
+                return;
+            }
+            if (parsed.Operation == "ValidateSession")
+            {
+                string? candidate = ReadValidationCandidate(parsed.Payload);
+                if (candidate is null || !Fixed(candidate, options.ExternalSessionCandidate))
+                {
+                    string rejected = $"<s:ValidateSessionResponse xmlns:s=\"{TypedSessionNamespace}\"><s:Validation><s:Status>rejected</s:Status></s:Validation></s:ValidateSessionResponse>";
+                    await WriteSoapAsync(response, version, rejected, StatusCodes.Status200OK, token).ConfigureAwait(false);
+                    return;
+                }
+                DateTimeOffset validationExpiry = DateTimeOffset.UtcNow.Add(options.SessionLifetime);
+                sessions[candidate] = validationExpiry;
+                string valid = $"<s:ValidateSessionResponse xmlns:s=\"{TypedSessionNamespace}\"><s:Validation><s:Status>valid</s:Status><s:ExpiresAt>{validationExpiry:O}</s:ExpiresAt></s:Validation></s:ValidateSessionResponse>";
+                await WriteSoapAsync(response, version, valid, StatusCodes.Status200OK, token).ConfigureAwait(false);
+                return;
+            }
 
             if (parsed.Operation == "Login")
             {
@@ -289,12 +336,18 @@ public static class SyntheticSoapServerHost
         XNamespace soap = envelope.Name.Namespace;
         XElement bodyElement = envelope.Elements(soap + "Body").Single();
         XElement operation = bodyElement.Elements().Single();
-        if (operation.Name.NamespaceName != OperationNamespace) throw new XmlException();
+        if (operation.Name.NamespaceName != OperationNamespace && operation.Name.NamespaceName != TypedSessionNamespace) throw new XmlException();
         XElement? header = envelope.Elements(soap + "Header").SingleOrDefault();
         XElement? session = header?.Elements().SingleOrDefault();
         if (session is not null && session.Name != XName.Get("Session", OperationNamespace)) throw new XmlException();
         Dictionary<string, string> fields = operation.Elements().ToDictionary(element => element.Name.LocalName, element => element.Value, StringComparer.Ordinal);
-        return new(version, operation.Name.LocalName, session?.Value, fields);
+        string operationName = operation.Name.LocalName switch
+        {
+            "CreateSessionRequest" => "CreateSession",
+            "ValidateSessionRequest" => "ValidateSession",
+            _ => operation.Name.LocalName
+        };
+        return new(version, operationName, session?.Value, fields, operation);
     }
 
     private static bool ValidHttpPolicy(HttpRequest request, ParsedRequest parsed)
@@ -343,6 +396,35 @@ public static class SyntheticSoapServerHost
     }
 
     private static string ResponseElement(string response, string field, string value) => $"<op:{response} xmlns:op=\"{OperationNamespace}\"><op:{field}>{WebUtility.HtmlEncode(value)}</op:{field}></op:{response}>";
+
+    private static bool ValidCreateSessionRequest(XElement request)
+    {
+        XNamespace session = TypedSessionNamespace;
+        if (request.Name != session + "CreateSessionRequest" || request.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration)) return false;
+        XElement[] root = request.Elements().ToArray();
+        if (root.Length != 1 || root[0].Name != session + "ClientContext") return false;
+        XElement[] context = root[0].Elements().ToArray();
+        if (context.Length != 2 || context[0].Name != session + "Identity" || context[1].Name != session + "Policy") return false;
+        XElement[] identity = context[0].Elements().ToArray();
+        XElement[] policy = context[1].Elements().ToArray();
+        return identity.Select(value => value.Name).SequenceEqual([session + "Tenant", session + "Installation", session + "Application"]) &&
+            identity.All(value => !value.HasElements && !string.IsNullOrWhiteSpace(value.Value)) &&
+            policy.Select(value => value.Name).SequenceEqual([session + "Profile", session + "PublishedChecksum"]) &&
+            Fixed(policy[0].Value, "typed-session") && policy[1].Value.Length == 64;
+    }
+
+    private static string? ReadValidationCandidate(XElement request)
+    {
+        XNamespace session = TypedSessionNamespace;
+        if (request.Name != session + "ValidateSessionRequest" || request.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration)) return null;
+        XElement[] root = request.Elements().ToArray();
+        if (root.Length != 1 || root[0].Name != session + "Candidate") return null;
+        XElement[] candidate = root[0].Elements().ToArray();
+        return candidate.Length == 2 && candidate[0].Name == session + "Provenance" && candidate[1].Name == session + "OpaqueValue" &&
+            Fixed(candidate[0].Value, "interactive_handoff") && !candidate[1].HasElements
+            ? candidate[1].Value
+            : null;
+    }
     private static string NewSession(ConcurrentDictionary<string, DateTimeOffset> sessions, TimeSpan lifetime) { string value = Opaque(); sessions[value] = DateTimeOffset.UtcNow.Add(lifetime); return value; }
     private static string Opaque() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     private static string ContentType(SoapVersion version) => version == SoapVersion.Soap11 ? "text/xml; charset=utf-8" : "application/soap+xml; charset=utf-8";
@@ -368,7 +450,9 @@ public static class SyntheticSoapServerHost
 
     private static void Validate(SyntheticSoapServerOptions options)
     {
-        if (string.IsNullOrWhiteSpace(options.Username) || options.Username.Contains(':', StringComparison.Ordinal) || string.IsNullOrEmpty(options.Password) || options.SessionLifetime <= TimeSpan.Zero || options.TimeoutDelay <= TimeSpan.Zero)
+        if (string.IsNullOrWhiteSpace(options.Username) || options.Username.Contains(':', StringComparison.Ordinal) || string.IsNullOrEmpty(options.Password) ||
+            options.SessionLifetime <= TimeSpan.Zero || options.TimeoutDelay <= TimeSpan.Zero ||
+            string.IsNullOrWhiteSpace(options.ExternalSessionCandidate) || options.ExternalSessionCandidate.Length > 16_384 || options.ExternalSessionCandidate.Any(char.IsControl))
             throw new ArgumentException("Invalid synthetic SOAP server configuration.", nameof(options));
         if ((options.OpaqueSessionHeaderName is null) != (options.OpaqueSessionValue is null) ||
             options.OpaqueSessionHeaderName is not null && (!options.OpaqueSessionHeaderName.All(character => char.IsAsciiLetterOrDigit(character) || character is '-') || string.IsNullOrEmpty(options.OpaqueSessionValue)))
@@ -376,7 +460,7 @@ public static class SyntheticSoapServerHost
     }
 
     private enum SoapVersion { Soap11, Soap12 }
-    private sealed record ParsedRequest(SoapVersion Version, string Operation, string? Session, IReadOnlyDictionary<string, string> Fields);
+    private sealed record ParsedRequest(SoapVersion Version, string Operation, string? Session, IReadOnlyDictionary<string, string> Fields, XElement Payload);
 }
 
 internal static class Program

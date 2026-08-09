@@ -99,6 +99,38 @@ public sealed class SoapAuthBoundaryTests
         Assert.DoesNotContain("transport.SendAsync", strategy, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Wave1_CT_Typed_handshake_and_external_admission_are_Published_compiled_vertical_neutral_and_reuse_the_single_cache()
+    {
+        string soapRoot = Path.Combine(Root, "src", "Gateway", "Gateway.ConnectorRuntime.Auth.Soap");
+        string source = string.Join('\n', Directory.EnumerateFiles(soapRoot, "*.cs").Order(StringComparer.Ordinal).Select(File.ReadAllText));
+        Assert.DoesNotContain("ConnectorPacks.", source, StringComparison.Ordinal);
+        Assert.Contains("PublishedTypedSessionHandshakeResolver", source, StringComparison.Ordinal);
+        Assert.Contains("AuthorizedGatewayInvocation", source, StringComparison.Ordinal);
+        Assert.Contains("ITypedSessionHandshakeRequestAdapter", source, StringComparison.Ordinal);
+        Assert.Contains("XmlWriter writer", source, StringComparison.Ordinal);
+        Assert.Contains("ITypedSessionHandshakeResponseAdapter", source, StringComparison.Ordinal);
+        Assert.Contains("XmlReader payload", source, StringComparison.Ordinal);
+        Assert.Contains("ExternalSessionCandidate candidate", source, StringComparison.Ordinal);
+        Assert.Contains("cache.CompleteAdmission", source, StringComparison.Ordinal);
+        Assert.Equal(1, source.Split("private readonly SoapSessionCache cache = new();", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("Dictionary<string, object", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("XPath", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Xsl", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Activator.CreateInstance", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetType().Get", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("PutSession", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("SetCachedToken", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("PromoteSession", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("raw XElement", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("raw XML", source, StringComparison.OrdinalIgnoreCase);
+
+        string schema = File.ReadAllText(Path.Combine(Root, "docs", "connectors", "connector-definition.schema.json"));
+        Assert.Contains("typedSessionHandshake", schema, StringComparison.Ordinal);
+        Assert.Contains("compiledAdapter", schema, StringComparison.Ordinal);
+        Assert.Contains("externalAdmission", schema, StringComparison.Ordinal);
+    }
+
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? current = new(AppContext.BaseDirectory);
