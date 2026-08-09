@@ -14,16 +14,20 @@ public sealed class AdminPostgresDataSource(string connectionString) : IAsyncDis
 }
 
 /// <summary>Routes lifecycle writes to the Admin pool while Published runtime reads stay on the runtime pool.</summary>
-public sealed class RoutingConnectorConfigurationStore : IConnectorConfigurationStore
+public sealed class RoutingConnectorConfigurationStore : IConnectorConfigurationStore, IPublishedConnectorMutationAuthoritySource
 {
     private readonly PostgresConnectorConfigurationStore admin;
     private readonly PostgresConnectorConfigurationStore runtime;
 
+    /// <inheritdoc />
+    public PublishedConnectorMutationAuthority RuntimeMutationAuthority { get; }
+
     /// <summary>Creates a store with physically distinct connection pools.</summary>
     public RoutingConnectorConfigurationStore(AdminPostgresDataSource adminDataSource, NpgsqlDataSource runtimeDataSource)
     {
-        admin = new(adminDataSource.Value);
-        runtime = new(runtimeDataSource);
+        RuntimeMutationAuthority = new();
+        admin = new(adminDataSource.Value, runtimeMutationAuthority: RuntimeMutationAuthority);
+        runtime = new(runtimeDataSource, runtimeMutationAuthority: RuntimeMutationAuthority);
     }
 
     /// <inheritdoc />

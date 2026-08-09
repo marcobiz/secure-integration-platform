@@ -46,6 +46,28 @@ public sealed class GatewayApiTests : IClassFixture<GatewayApiFactory>
     }
 
     [Fact]
+    public async Task Wave1_IT_GTW_Typed_session_routes_require_authenticated_principal_and_never_echo_candidate()
+    {
+        using HttpRequestMessage acquireRequest = new(HttpMethod.Post, "/v1/connectors/synthetic-typed-session/operations/session-bootstrap/session-handshakes/typed-session:acquire")
+        {
+            Content = new ByteArrayContent([])
+        };
+        using HttpResponseMessage acquire = await client.SendAsync(acquireRequest, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, acquire.StatusCode);
+
+        const string candidateCanary = "typed-session-presentation-canary";
+        using HttpRequestMessage completionRequest = new(HttpMethod.Post, "/v1/session-admissions/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:complete")
+        {
+            Content = new ByteArrayContent(System.Text.Encoding.UTF8.GetBytes(candidateCanary))
+        };
+        using HttpResponseMessage completion = await client.SendAsync(completionRequest, TestContext.Current.CancellationToken);
+        string body = await completion.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, completion.StatusCode);
+        Assert.DoesNotContain(candidateCanary, body, StringComparison.Ordinal);
+        Assert.DoesNotContain(candidateCanary, string.Join('\n', factory.Logs), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task IT_GTW_Invalid_JSON_does_not_echo_canary_or_exception_details()
     {
         const string canary = "M2_SECRET_CANARY_NEVER_ECHO";

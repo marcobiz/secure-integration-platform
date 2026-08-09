@@ -244,7 +244,7 @@
         "externalAdmission": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["validator", "endpointBinding", "path", "intentLifetimeSeconds", "timeoutMs", "maximumResponseBytes"],
+          "required": ["validator", "endpointBinding", "path", "soapVersion", "action", "requestElement", "responseElement", "intentLifetimeSeconds", "timeoutMs", "maximumRequestBytes", "maximumResponseBytes"],
           "properties": {
             "validator": { "$ref": "#/$defs/compiledAdapter" },
             "endpointBinding": { "$ref": "#/$defs/identifier" },
@@ -254,8 +254,13 @@
               "maxLength": 1024,
               "not": { "pattern": "(^|/)\\.\\.(/|$)|[?#]" }
             },
+            "soapVersion": { "enum": ["1.1", "1.2"] },
+            "action": { "type": "string", "minLength": 3, "maxLength": 2048, "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:[^\\u0000-\\u0020\\u007F-\\u009F]+$" },
+            "requestElement": { "$ref": "#/$defs/xmlQualifiedName" },
+            "responseElement": { "$ref": "#/$defs/xmlQualifiedName" },
             "intentLifetimeSeconds": { "type": "integer", "minimum": 30, "maximum": 1800 },
             "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 },
+            "maximumRequestBytes": { "type": "integer", "minimum": 256, "maximum": 16777216 },
             "maximumResponseBytes": { "type": "integer", "minimum": 256, "maximum": 16777216 }
           }
         }

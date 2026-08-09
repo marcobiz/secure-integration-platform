@@ -90,6 +90,27 @@ public sealed class SoapAuthenticationTests
     }
 
     [Fact]
+    public void Wave1_SEC_XML_initial_scan_bounds_each_text_CDATA_and_attribute_value_before_DOM_materialization()
+    {
+        const int maximumIndividualValue = 16_384;
+        string below = new('x', maximumIndividualValue - 1);
+        string above = new('x', maximumIndividualValue + 1);
+
+        Assert.NotNull(SoapXmlBoundary.LoadHardened(Encoding.UTF8.GetBytes($"<r><v>{below}</v></r>"), 100_000, TestContext.Current.CancellationToken));
+        Assert.NotNull(SoapXmlBoundary.LoadHardened(Encoding.UTF8.GetBytes($"<r><v><![CDATA[{below}]]></v></r>"), 100_000, TestContext.Current.CancellationToken));
+        Assert.NotNull(SoapXmlBoundary.LoadHardened(Encoding.UTF8.GetBytes($"<r a=\"{below}\"/>"), 100_000, TestContext.Current.CancellationToken));
+
+        AssertCode("SOAP-XML-VALUE-TOO-LARGE", () => SoapXmlBoundary.LoadHardened(Encoding.UTF8.GetBytes($"<r><v>{above}</v></r>"), 100_000, TestContext.Current.CancellationToken));
+        AssertCode("SOAP-XML-VALUE-TOO-LARGE", () => SoapXmlBoundary.LoadHardened(Encoding.UTF8.GetBytes($"<r><v><![CDATA[{above}]]></v></r>"), 100_000, TestContext.Current.CancellationToken));
+        AssertCode("SOAP-XML-VALUE-TOO-LARGE", () => SoapXmlBoundary.LoadHardened(Encoding.UTF8.GetBytes($"<r a=\"{above}\"/>"), 100_000, TestContext.Current.CancellationToken));
+
+        SoapOperationProfile aggregateBound = BusinessOperation(SoapEnvelopeVersion.Soap11, maximumResponseBytes: 512);
+        AssertCode("SOAP-RESPONSE-TOO-LARGE", () => SoapXmlBoundary.ParseResponse(aggregateBound,
+            Response(SoapEnvelopeVersion.Soap11, Envelope(SoapEnvelopeVersion.Soap11, $"<op:BusinessOperationResponse xmlns:op=\"{OperationNamespace}\"><op:Result>{new string('a', 300)}</op:Result><op:Extra>{new string('b', 300)}</op:Extra></op:BusinessOperationResponse>")),
+            null, null, new Dictionary<(string, string), SoapFaultCategory>(), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task M6_UT_Session_cache_expiry_rotation_disable_logout_and_controlled_reacquisition()
     {
         MutableClock clock = new();

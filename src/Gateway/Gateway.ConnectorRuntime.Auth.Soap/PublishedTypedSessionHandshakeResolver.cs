@@ -12,21 +12,26 @@ public sealed class PublishedTypedSessionHandshakeResolver
     private readonly Func<string, Guid, PublishedConnectorAccessContext, CancellationToken, Task<PublishedConnectorSnapshot?>> snapshotSource;
     private readonly TypedSessionHandshakeAdapterRegistry adapters;
     private readonly IGatewayClock clock;
+    private readonly PublishedConnectorMutationAuthority mutationAuthority;
 
     /// <summary>Creates the controlled resolver over the server-owned Connector configuration store.</summary>
     public PublishedTypedSessionHandshakeResolver(IConnectorConfigurationStore store, TypedSessionHandshakeAdapterRegistry adapters, IGatewayClock clock)
-        : this((connectorId, environmentId, access, cancellationToken) => store.GetPublishedSnapshotAsync(connectorId, environmentId, access, cancellationToken), adapters, clock)
+        : this((connectorId, environmentId, access, cancellationToken) => store.GetPublishedSnapshotAsync(connectorId, environmentId, access, cancellationToken),
+            adapters, clock, (store as IPublishedConnectorMutationAuthoritySource)?.RuntimeMutationAuthority
+                ?? throw new ArgumentException("Connector store must expose the runtime mutation authority.", nameof(store)))
     {
     }
 
     internal PublishedTypedSessionHandshakeResolver(
         Func<string, Guid, PublishedConnectorAccessContext, CancellationToken, Task<PublishedConnectorSnapshot?>> snapshotSource,
         TypedSessionHandshakeAdapterRegistry adapters,
-        IGatewayClock clock)
+        IGatewayClock clock,
+        PublishedConnectorMutationAuthority mutationAuthority)
     {
         this.snapshotSource = snapshotSource ?? throw new ArgumentNullException(nameof(snapshotSource));
         this.adapters = adapters ?? throw new ArgumentNullException(nameof(adapters));
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        this.mutationAuthority = mutationAuthority ?? throw new ArgumentNullException(nameof(mutationAuthority));
     }
 
     /// <summary>
@@ -57,6 +62,7 @@ public sealed class PublishedTypedSessionHandshakeResolver
             if (currentSnapshot.Stamp != expectedSnapshot.Stamp || currentSnapshot.Version.Id != expectedSnapshot.Version.Id ||
                 currentSnapshot.Version.State != ConnectorVersionState.Published || currentSnapshot.Bindings.State != ConnectorBindingState.Active ||
                 currentSnapshot.Bindings.Id != expectedSnapshot.Bindings.Id || currentSnapshot.Bindings.Revision != expectedSnapshot.Bindings.Revision ||
+                current.AuthorityGeneration != expected.AuthorityGeneration ||
                 !string.Equals(current.SecurityFingerprint, expected.SecurityFingerprint, StringComparison.Ordinal))
                 throw TypedSessionHandshakeFailures.AuthorityStale();
             return current;
@@ -165,11 +171,10 @@ public sealed class PublishedTypedSessionHandshakeResolver
                 throw TypedSessionHandshakeFailures.AuthorityRejected();
             }
 
-            IAuthorizedExternalSessionValidator? validator = null;
+            ITypedExternalSessionValidationAdapter? validationAdapter = null;
             Uri? admissionEndpoint = null;
+            SoapOperationProfile? admissionOperation = null;
             TimeSpan admissionIntentLifetime = default;
-            TimeSpan admissionTimeout = default;
-            long admissionMaximumResponseBytes = 0;
             string? validatorId = null;
             string? validatorType = null;
             string? admissionEndpointBindingId = null;
@@ -178,15 +183,27 @@ public sealed class PublishedTypedSessionHandshakeResolver
                 JsonElement validatorElement = admission.GetProperty("validator");
                 validatorId = validatorElement.GetProperty("id").GetString()!;
                 validatorType = validatorElement.GetProperty("type").GetString()!;
-                validator = adapters.Validator(validatorId, validatorType);
+                validationAdapter = adapters.Validation(validatorId, validatorType);
                 admissionEndpointBindingId = admission.GetProperty("endpointBinding").GetString()!;
                 if (!snapshot.Bindings.Endpoints.TryGetValue(admissionEndpointBindingId, out Uri? validationBase))
                     throw TypedSessionHandshakeFailures.AuthorityRejected();
                 admissionEndpoint = new(validationBase, admission.GetProperty("path").GetString()!);
                 if (!Https(admissionEndpoint)) throw TypedSessionHandshakeFailures.AuthorityRejected();
                 admissionIntentLifetime = TimeSpan.FromSeconds(admission.GetProperty("intentLifetimeSeconds").GetInt32());
-                admissionTimeout = TimeSpan.FromMilliseconds(admission.GetProperty("timeoutMs").GetInt32());
-                admissionMaximumResponseBytes = admission.GetProperty("maximumResponseBytes").GetInt64();
+                SoapEnvelopeVersion admissionSoapVersion = admission.GetProperty("soapVersion").GetString() switch
+                {
+                    "1.1" => SoapEnvelopeVersion.Soap11,
+                    "1.2" => SoapEnvelopeVersion.Soap12,
+                    _ => throw TypedSessionHandshakeFailures.AuthorityRejected()
+                };
+                JsonElement admissionRequestQName = admission.GetProperty("requestElement");
+                JsonElement admissionResponseQName = admission.GetProperty("responseElement");
+                admissionOperation = new("typed-session-admission-validation", admissionSoapVersion, admission.GetProperty("action").GetString()!,
+                    new(admissionRequestQName.GetProperty("localName").GetString()!, admissionRequestQName.GetProperty("namespaceUri").GetString()!),
+                    new(admissionResponseQName.GetProperty("localName").GetString()!, admissionResponseQName.GetProperty("namespaceUri").GetString()!),
+                    timeoutMilliseconds: admission.GetProperty("timeoutMs").GetInt32(),
+                    maximumRequestBytes: admission.GetProperty("maximumRequestBytes").GetInt64(),
+                    maximumResponseBytes: admission.GetProperty("maximumResponseBytes").GetInt64());
             }
 
             string policyChecksum = Convert.ToHexString(snapshot.Version.ChecksumSha256);
@@ -201,7 +218,11 @@ public sealed class PublishedTypedSessionHandshakeResolver
                 requestAdapterId, requestAdapterType, responseAdapterId, responseAdapterType, authenticationKind, resourcesFingerprint,
                 profile.GetProperty("sessionLifetimeSeconds").GetInt32(), validatorId ?? string.Empty, validatorType ?? string.Empty,
                 admissionEndpointBindingId ?? string.Empty, admissionEndpoint?.AbsoluteUri ?? string.Empty, admissionIntentLifetime,
-                admissionTimeout, admissionMaximumResponseBytes, timeoutMilliseconds, handshakeOperation.MaximumRequestBytes, handshakeOperation.MaximumResponseBytes);
+                admissionOperation?.Version, admissionOperation?.Action, admissionOperation?.RequestElement.NamespaceUri,
+                admissionOperation?.RequestElement.LocalName, admissionOperation?.ResponseElement.NamespaceUri,
+                admissionOperation?.ResponseElement.LocalName, admissionOperation?.TimeoutMilliseconds,
+                admissionOperation?.MaximumRequestBytes, admissionOperation?.MaximumResponseBytes,
+                timeoutMilliseconds, handshakeOperation.MaximumRequestBytes, handshakeOperation.MaximumResponseBytes);
             string fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintInput)));
             ConnectorAuthExecutionContext execution = new(principal.TenantId, principal.InstallationId, principal.ApplicationId, principal.Identity.EnvironmentId,
                 snapshot.Version.ConnectorSlug, snapshot.Version.Version, invocation.OperationId, snapshot.Bindings.Revision, snapshot.Bindings.Revision,
@@ -221,11 +242,12 @@ public sealed class PublishedTypedSessionHandshakeResolver
                 PublishedPolicyChecksum = policyChecksum,
                 ResourceStamp = snapshot.Stamp.ResourceStampSha256,
                 SecurityFingerprint = fingerprint,
-                AdmissionValidator = validator,
+                AdmissionValidationAdapter = validationAdapter,
                 AdmissionEndpoint = admissionEndpoint,
+                AdmissionOperation = admissionOperation,
                 AdmissionIntentLifetime = admissionIntentLifetime,
-                AdmissionTimeout = admissionTimeout,
-                AdmissionMaximumResponseBytes = admissionMaximumResponseBytes
+                MutationAuthority = mutationAuthority,
+                AuthorityGeneration = mutationAuthority.Capture(invocation.ConnectorId, principal.Identity.EnvironmentId)
             };
         }
         catch (SoapAuthException) { throw; }

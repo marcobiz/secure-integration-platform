@@ -115,7 +115,7 @@ internal sealed class SoapSessionCache
             KeyState state = GetOrCreate(key);
             state.InteractionGeneration = checked(state.InteractionGeneration + 1);
             state.Interaction = new StoredInteraction(state.InteractionGeneration, Digest(reference), InteractionKind.Challenge,
-                upstreamChallenge, null, null, state.Generation, expiresAt, null);
+                upstreamChallenge, null, null, null, state.Generation, expiresAt, null);
         }
         return new SoapInteractiveChallenge(reference, upstreamChallenge, expiresAt);
     }
@@ -168,12 +168,13 @@ internal sealed class SoapSessionCache
     public ExternalSessionAdmissionIntent StoreAdmissionIntent(
         SoapSessionCacheKey key,
         string authorityFingerprint,
+        string operationId,
         string profileId,
         ExternalSessionProvenance provenance,
         DateTimeOffset now,
         DateTimeOffset expiresAt)
     {
-        if (string.IsNullOrWhiteSpace(authorityFingerprint)) throw TypedSessionHandshakeFailures.Configuration();
+        if (string.IsNullOrWhiteSpace(authorityFingerprint) || !TypedSessionHandshakeValidation.Identifier(operationId)) throw TypedSessionHandshakeFailures.Configuration();
         string reference = NewReference();
         lock (sync)
         {
@@ -182,20 +183,47 @@ internal sealed class SoapSessionCache
             if (state.Current is not null) throw TypedSessionHandshakeFailures.AdmissionIntentInvalid();
             state.InteractionGeneration = checked(state.InteractionGeneration + 1);
             state.Interaction = new StoredInteraction(state.InteractionGeneration, Digest(reference), InteractionKind.ExternalAdmission,
-                null, authorityFingerprint, provenance, state.Generation, expiresAt, null);
+                null, authorityFingerprint, operationId, provenance, state.Generation, expiresAt, null);
         }
         return new(reference, profileId, provenance, expiresAt, authorityFingerprint);
     }
 
+    internal ExternalAdmissionPresentation ResolveAdmissionPresentation(
+        string reference,
+        GatewayClientPrincipal principal,
+        DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(principal);
+        ValidateReference(reference);
+        string digest = Digest(reference);
+        lock (sync)
+        {
+            SweepExpired(now);
+            foreach ((SoapSessionCacheKey key, KeyState state) in entries)
+            {
+                StoredInteraction? interaction = state.Interaction;
+                if (interaction is null || interaction.Kind != InteractionKind.ExternalAdmission || interaction.CompletionId is not null ||
+                    !string.Equals(interaction.Digest, digest, StringComparison.Ordinal) || key.TenantId != principal.TenantId ||
+                    key.InstallationId != principal.InstallationId || key.ApplicationId != principal.ApplicationId ||
+                    key.EnvironmentId != principal.Identity.EnvironmentId || interaction.SessionGeneration != state.Generation)
+                    continue;
+                return new(key, reference, interaction.OperationId ?? throw TypedSessionHandshakeFailures.AdmissionIntentInvalid(),
+                    interaction.AuthorityFingerprint ?? throw TypedSessionHandshakeFailures.AdmissionIntentInvalid(),
+                    interaction.Provenance ?? throw TypedSessionHandshakeFailures.AdmissionIntentInvalid(), interaction.ExpiresAt);
+            }
+        }
+        throw TypedSessionHandshakeFailures.AdmissionIntentInvalid();
+    }
+
     public AdmissionCompletion BeginAdmission(
-        SoapSessionCacheKey key,
-        ExternalSessionAdmissionIntent intent,
+        ExternalAdmissionPresentation presentation,
         string authorityFingerprint,
         DateTimeOffset now)
     {
-        ArgumentNullException.ThrowIfNull(intent);
-        ValidateReference(intent.Reference);
-        string digest = Digest(intent.Reference);
+        ArgumentNullException.ThrowIfNull(presentation);
+        SoapSessionCacheKey key = presentation.Key;
+        ValidateReference(presentation.Reference);
+        string digest = Digest(presentation.Reference);
         lock (sync)
         {
             SweepExpired(now);
@@ -203,23 +231,27 @@ internal sealed class SoapSessionCache
                 interaction.Kind != InteractionKind.ExternalAdmission || interaction.CompletionId is not null ||
                 !string.Equals(interaction.Digest, digest, StringComparison.Ordinal) ||
                 !string.Equals(interaction.AuthorityFingerprint, authorityFingerprint, StringComparison.Ordinal) ||
-                !string.Equals(intent.AuthorityFingerprint, authorityFingerprint, StringComparison.Ordinal) ||
-                !string.Equals(intent.ProfileId, key.ProfileId, StringComparison.Ordinal) ||
-                interaction.Provenance != intent.Provenance || interaction.SessionGeneration != state.Generation)
+                !string.Equals(presentation.AuthorityFingerprint, authorityFingerprint, StringComparison.Ordinal) ||
+                !string.Equals(presentation.OperationId, interaction.OperationId, StringComparison.Ordinal) ||
+                interaction.Provenance != presentation.Provenance || interaction.SessionGeneration != state.Generation)
                 throw TypedSessionHandshakeFailures.AdmissionIntentInvalid();
             Guid completionId = Guid.NewGuid();
             state.Interaction = interaction with { CompletionId = completionId };
-            return new(key, interaction.Generation, completionId, interaction.SessionGeneration, intent.Provenance, authorityFingerprint);
+            return new(key, interaction.Generation, completionId, interaction.SessionGeneration, presentation.Provenance, authorityFingerprint);
         }
     }
 
     public OpaqueSoapSessionReference CompleteAdmission(
-        AdmissionCompletion completion,
+        AdmissionValidationProof proof,
         string upstreamSession,
         DateTimeOffset now,
         DateTimeOffset expiresAt)
     {
         if (!TypedSessionHandshakeValidation.SessionValue(upstreamSession)) throw TypedSessionHandshakeFailures.CandidateInvalid();
+        AdmissionCompletion completion = proof.Completion;
+        byte[] actualCandidateDigest = SHA256.HashData(Encoding.UTF8.GetBytes(upstreamSession));
+        if (proof.CandidateDigestSha256.Length != 32 || !CryptographicOperations.FixedTimeEquals(proof.CandidateDigestSha256, actualCandidateDigest))
+            throw TypedSessionHandshakeFailures.AdmissionIntentInvalid();
         string reference = NewReference();
         string digest = Digest(reference);
         lock (sync)
@@ -304,6 +336,7 @@ internal sealed class SoapSessionCache
         InteractionKind Kind,
         string? SensitiveState,
         string? AuthorityFingerprint,
+        string? OperationId,
         ExternalSessionProvenance? Provenance,
         long SessionGeneration,
         DateTimeOffset ExpiresAt,
@@ -319,6 +352,32 @@ internal sealed record AdmissionCompletion(
     long SessionGeneration,
     ExternalSessionProvenance Provenance,
     string AuthorityFingerprint);
+
+internal sealed class AdmissionValidationProof
+{
+    internal AdmissionValidationProof(AdmissionCompletion completion, byte[] candidateDigestSha256)
+    {
+        Completion = completion ?? throw new ArgumentNullException(nameof(completion));
+        if (candidateDigestSha256 is null || candidateDigestSha256.Length != 32) throw TypedSessionHandshakeFailures.ValidationFailed();
+        CandidateDigestSha256 = candidateDigestSha256.ToArray();
+    }
+
+    internal AdmissionCompletion Completion { get; }
+    internal byte[] CandidateDigestSha256 { get; }
+
+    public override string ToString() => $"AdmissionValidationProof(InteractionGeneration={Completion.InteractionGeneration}, SessionGeneration={Completion.SessionGeneration}, Redacted=True)";
+}
+
+internal sealed record ExternalAdmissionPresentation(
+    SoapSessionCacheKey Key,
+    string Reference,
+    string OperationId,
+    string AuthorityFingerprint,
+    ExternalSessionProvenance Provenance,
+    DateTimeOffset ExpiresAt)
+{
+    public override string ToString() => $"ExternalAdmissionPresentation(OperationId={OperationId}, Provenance={Provenance}, ExpiresAt={ExpiresAt:O}, Redacted=True)";
+}
 
 internal sealed record SoapSessionCacheKey(
     Guid TenantId,

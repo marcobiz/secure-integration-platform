@@ -170,6 +170,21 @@ builder.Services.AddSingleton<GatewayProvisioningService>();
 builder.Services.AddSingleton<InstallationEnrollmentService>();
 builder.Services.AddSingleton<RuntimeIdentityService>();
 builder.Services.AddSingleton<RestrictedEgressService>();
+builder.Services.AddSingleton<IGatewayInvocationAuthorizer, GatewayInvocationAuthorizer>();
+builder.Services.AddSingleton<ISoapSessionResourceStampProvider, PublishedSoapSessionResourceStampProvider>();
+builder.Services.AddSingleton(_ => new TypedSessionHandshakeAdapterRegistry(
+    [new SyntheticTypedSessionRequestAdapter()],
+    [new SyntheticTypedSessionResponseAdapter()],
+    [new SyntheticExternalSessionValidationAdapter()]));
+builder.Services.AddSingleton<PublishedTypedSessionHandshakeResolver>();
+builder.Services.AddSingleton(services => new SoapSessionClient(
+    services.GetRequiredService<ISecretValueProvider>(),
+    services.GetRequiredService<IHostResolver>(),
+    services.GetRequiredService<IRestrictedTransport>(),
+    services.GetRequiredService<IGatewayClock>(),
+    services.GetRequiredService<ISoapSessionResourceStampProvider>(),
+    services.GetService<IPrivateDestinationAllowance>()));
+builder.Services.AddSingleton<TypedSessionHandshakeRuntime>();
 builder.Services.AddSingleton<AdminAccessService>();
 builder.Services.AddSingleton<ConnectorApprovalService>();
 if (developmentApiKeyCompatibility || !hostOptions.Admin.RequireFourEyes)
@@ -340,6 +355,33 @@ app.MapPost("/v1/connectors/{connectorId}/operations/{operationId}:invoke", asyn
     GatewayInvokeRequest request = DeserializeRequired<GatewayInvokeRequest>(body);
     GatewayClientPrincipal authenticated = await AuthenticateAsync(context, identityService, body, request.CorrelationId, cancellationToken).ConfigureAwait(false);
     return Results.Ok(await egressService.InvokeAsync(authenticated, connectorId, operationId, request, cancellationToken).ConfigureAwait(false));
+});
+
+app.MapPost("/v1/connectors/{connectorId}/operations/{operationId}/session-handshakes/{profileId}:acquire", async (
+    string connectorId, string operationId, string profileId, HttpContext context, RuntimeIdentityService identityService,
+    TypedSessionHandshakeRuntime runtime, CancellationToken cancellationToken) =>
+{
+    byte[] body = await ReadBoundedBodyAsync(context.Request, 0, cancellationToken).ConfigureAwait(false);
+    GatewayClientPrincipal authenticated = await AuthenticateAsync(context, identityService, body, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+    context.Response.Headers.CacheControl = "no-store";
+    return Results.Ok(await runtime.AcquireAsync(authenticated, connectorId, operationId, profileId, cancellationToken).ConfigureAwait(false));
+});
+
+app.MapPost("/v1/session-admissions/{intentReference}:complete", async (
+    string intentReference, HttpContext context, RuntimeIdentityService identityService, TypedSessionHandshakeRuntime runtime,
+    CancellationToken cancellationToken) =>
+{
+    byte[] body = await ReadBoundedBodyAsync(context.Request, 16_384, cancellationToken).ConfigureAwait(false);
+    try
+    {
+        GatewayClientPrincipal authenticated = await AuthenticateAsync(context, identityService, body, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+        context.Response.Headers.CacheControl = "no-store";
+        return Results.Ok(await runtime.CompleteExternalAdmissionAsync(authenticated, intentReference, body, cancellationToken).ConfigureAwait(false));
+    }
+    finally
+    {
+        CryptographicOperations.ZeroMemory(body);
+    }
 });
 
 app.MapPost("/admin/v1/connectors:validate", async (HttpContext context, ConnectorAdministrationService service, CancellationToken cancellationToken) =>
@@ -1048,11 +1090,14 @@ static (int Offset, int Limit) PageArgs(int? offset, int? limit, string? filter)
 }
 
 static async Task<byte[]> ReadBodyAsync(HttpRequest request, CancellationToken cancellationToken)
+    => await ReadBoundedBodyAsync(request, 16 * 1024 * 1024, cancellationToken).ConfigureAwait(false);
+
+static async Task<byte[]> ReadBoundedBodyAsync(HttpRequest request, long maximumBytes, CancellationToken cancellationToken)
 {
-    if (request.ContentLength > 16 * 1024 * 1024) throw new GatewayException("BGW-PROTOCOL-PAYLOAD", 413);
+    if (maximumBytes < 0 || request.ContentLength > maximumBytes) throw new GatewayException("BGW-PROTOCOL-PAYLOAD", 413);
     using MemoryStream output = new();
     await request.Body.CopyToAsync(output, cancellationToken).ConfigureAwait(false);
-    if (output.Length > 16 * 1024 * 1024) throw new GatewayException("BGW-PROTOCOL-PAYLOAD", 413);
+    if (output.Length > maximumBytes) throw new GatewayException("BGW-PROTOCOL-PAYLOAD", 413);
     return output.ToArray();
 }
 

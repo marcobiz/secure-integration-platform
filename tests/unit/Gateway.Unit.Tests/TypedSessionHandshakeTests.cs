@@ -8,6 +8,7 @@ using System.Globalization;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 using SecureIntegration.Gateway.Domain;
+using SecureIntegration.Gateway.Infrastructure;
 using SecureIntegration.Providers.Abstractions;
 using Xunit;
 
@@ -64,16 +65,17 @@ public sealed class TypedSessionHandshakeTests
     [Fact]
     public async Task Wave1_UT_External_handoff_validates_and_atomically_promotes_into_existing_cache()
     {
-        CapturingValidator validator = new((_, _, _) => Task.FromResult(ExternalSessionValidationResult.Valid(At("2026-08-09T12:10:00Z"))));
+        CapturingValidator validator = new(_ => ExternalSessionValidationResult.Valid(At("2026-08-09T12:10:00Z")));
         Fixture fixture = new(HandshakeResponse.ExternalAdmissionRequired(), validator);
         ResolvedTypedSessionHandshake resolved = await fixture.ResolveAsync();
         TypedSessionHandshakeResult bootstrap = await fixture.Client.AcquireTypedSessionAsync(resolved, TestContext.Current.CancellationToken);
         Assert.Equal(TypedSessionHandshakeResultKind.ExternalAdmissionRequired, bootstrap.Kind);
         Assert.Equal(ExternalSessionProvenance.InteractiveHandoff, bootstrap.AdmissionIntent!.Provenance);
 
-        ExternalSessionCandidate candidate = ExternalSessionCandidate.FromPresentation(Encoding.UTF8.GetBytes("presented-session"));
+        ExternalSessionCandidate candidate = ExternalSessionCandidate.Create(Encoding.UTF8.GetBytes("presented-session"));
+        ExternalAdmissionPresentation presentation = fixture.Client.ResolveAdmissionPresentation(fixture.Principal(), bootstrap.AdmissionIntent.Reference);
         TypedSessionHandshakeResult admitted = await fixture.Client.CompleteExternalAdmissionAsync(
-            resolved, bootstrap.AdmissionIntent, candidate, TestContext.Current.CancellationToken);
+            resolved, presentation, candidate, TestContext.Current.CancellationToken);
 
         Assert.Equal(TypedSessionHandshakeResultKind.Issued, admitted.Kind);
         Assert.Equal(ExternalSessionProvenance.InteractiveHandoff, admitted.Provenance);
@@ -88,33 +90,25 @@ public sealed class TypedSessionHandshakeTests
     }
 
     [Fact]
-    public async Task Wave1_SEC_Admission_intent_wrong_reused_expired_and_wrong_profile_are_denied()
+    public async Task Wave1_SEC_Admission_intent_wrong_reference_reuse_and_expiry_are_denied()
     {
         Fixture fixture = new(HandshakeResponse.ExternalAdmissionRequired(), CapturingValidator.Valid());
         ResolvedTypedSessionHandshake resolved = await fixture.ResolveAsync();
         TypedSessionHandshakeResult first = await fixture.Client.AcquireTypedSessionAsync(resolved, TestContext.Current.CancellationToken);
         ExternalSessionAdmissionIntent intent = first.AdmissionIntent!;
 
-        ExternalSessionAdmissionIntent wrongReference = new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", intent.ProfileId, intent.Provenance, intent.ExpiresAt, intent.AuthorityFingerprint);
-        await AssertCodeAsync("SOAP-ADMISSION-INTENT-INVALID", () => fixture.Client.CompleteExternalAdmissionAsync(resolved, wrongReference,
-            ExternalSessionCandidate.FromPresentation("candidate"u8), TestContext.Current.CancellationToken));
+        await AssertCodeAsync("SOAP-ADMISSION-INTENT-INVALID", () => fixture.CompleteAsync(resolved,
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "candidate"u8.ToArray()));
 
-        ExternalSessionAdmissionIntent wrongProfile = new(intent.Reference, "wrong-profile", intent.Provenance, intent.ExpiresAt, intent.AuthorityFingerprint);
-        await AssertCodeAsync("SOAP-ADMISSION-INTENT-INVALID", () => fixture.Client.CompleteExternalAdmissionAsync(resolved, wrongProfile,
-            ExternalSessionCandidate.FromPresentation("candidate"u8), TestContext.Current.CancellationToken));
-
-        TypedSessionHandshakeResult admitted = await fixture.Client.CompleteExternalAdmissionAsync(resolved, intent,
-            ExternalSessionCandidate.FromPresentation("candidate"u8), TestContext.Current.CancellationToken);
+        TypedSessionHandshakeResult admitted = await fixture.CompleteAsync(resolved, intent.Reference, "candidate"u8.ToArray());
         Assert.Equal(TypedSessionHandshakeResultKind.Issued, admitted.Kind);
-        await AssertCodeAsync("SOAP-ADMISSION-INTENT-INVALID", () => fixture.Client.CompleteExternalAdmissionAsync(resolved, intent,
-            ExternalSessionCandidate.FromPresentation("candidate"u8), TestContext.Current.CancellationToken));
+        await AssertCodeAsync("SOAP-ADMISSION-INTENT-INVALID", () => fixture.CompleteAsync(resolved, intent.Reference, "candidate"u8.ToArray()));
 
         Fixture expiryFixture = new(HandshakeResponse.ExternalAdmissionRequired(), CapturingValidator.Valid());
         ResolvedTypedSessionHandshake expiryResolved = await expiryFixture.ResolveAsync();
         ExternalSessionAdmissionIntent expiring = (await expiryFixture.Client.AcquireTypedSessionAsync(expiryResolved, TestContext.Current.CancellationToken)).AdmissionIntent!;
         expiryFixture.Clock.UtcNow = expiring.ExpiresAt.AddTicks(1);
-        await AssertCodeAsync("SOAP-ADMISSION-INTENT-INVALID", () => expiryFixture.Client.CompleteExternalAdmissionAsync(expiryResolved, expiring,
-            ExternalSessionCandidate.FromPresentation("candidate"u8), TestContext.Current.CancellationToken));
+        await AssertCodeAsync("SOAP-ADMISSION-INTENT-INVALID", () => expiryFixture.CompleteAsync(expiryResolved, expiring.Reference, "candidate"u8.ToArray()));
     }
 
     [Fact]
@@ -126,9 +120,7 @@ public sealed class TypedSessionHandshakeTests
 
         foreach (PrincipalDimension dimension in Enum.GetValues<PrincipalDimension>().Where(value => value != PrincipalDimension.None))
         {
-            ResolvedTypedSessionHandshake wrong = await fixture.ResolveAsync(dimension);
-            await AssertCodeAsync("SOAP-ADMISSION-INTENT-INVALID", () => fixture.Client.CompleteExternalAdmissionAsync(wrong, intent,
-                ExternalSessionCandidate.FromPresentation("candidate"u8), TestContext.Current.CancellationToken));
+            await AssertCodeAsync("SOAP-ADMISSION-INTENT-INVALID", () => fixture.CompleteAsync(original, intent.Reference, "candidate"u8.ToArray(), dimension));
         }
     }
 
@@ -138,34 +130,30 @@ public sealed class TypedSessionHandshakeTests
     [InlineData(ExternalSessionValidationStatus.Unavailable, "SOAP-ADMISSION-VALIDATION-FAILED")]
     public async Task Wave1_SEC_Validator_nonvalid_outcomes_consume_intent_without_promotion(ExternalSessionValidationStatus status, string code)
     {
-        CapturingValidator validator = new((_, _, _) => Task.FromResult(ExternalSessionValidationResult.Invalid(status)));
+        CapturingValidator validator = new(_ => ExternalSessionValidationResult.Invalid(status));
         Fixture fixture = new(HandshakeResponse.ExternalAdmissionRequired(), validator);
         ResolvedTypedSessionHandshake resolved = await fixture.ResolveAsync();
         ExternalSessionAdmissionIntent intent = (await fixture.Client.AcquireTypedSessionAsync(resolved, TestContext.Current.CancellationToken)).AdmissionIntent!;
 
-        await AssertCodeAsync(code, () => fixture.Client.CompleteExternalAdmissionAsync(resolved, intent,
-            ExternalSessionCandidate.FromPresentation("remote-canary"u8), TestContext.Current.CancellationToken));
-        await AssertCodeAsync("SOAP-ADMISSION-INTENT-INVALID", () => fixture.Client.CompleteExternalAdmissionAsync(resolved, intent,
-            ExternalSessionCandidate.FromPresentation("candidate"u8), TestContext.Current.CancellationToken));
+        await AssertCodeAsync(code, () => fixture.CompleteAsync(resolved, intent.Reference, "remote-canary"u8.ToArray()));
+        await AssertCodeAsync("SOAP-ADMISSION-INTENT-INVALID", () => fixture.CompleteAsync(resolved, intent.Reference, "candidate"u8.ToArray()));
         Assert.Single(validator.Candidates);
     }
 
     [Fact]
     public async Task Wave1_SEC_Remote_expiry_is_mandatory_future_and_capped_by_server_policy()
     {
-        CapturingValidator expired = new((_, _, _) => Task.FromResult(ExternalSessionValidationResult.Valid(At("2026-08-09T11:59:59Z"))));
+        CapturingValidator expired = new(_ => ExternalSessionValidationResult.Valid(At("2026-08-09T11:59:59Z")));
         Fixture invalidFixture = new(HandshakeResponse.ExternalAdmissionRequired(), expired);
         ResolvedTypedSessionHandshake invalidResolved = await invalidFixture.ResolveAsync();
         ExternalSessionAdmissionIntent invalidIntent = (await invalidFixture.Client.AcquireTypedSessionAsync(invalidResolved, TestContext.Current.CancellationToken)).AdmissionIntent!;
-        await AssertCodeAsync("SOAP-ADMISSION-REMOTE-EXPIRY-INVALID", () => invalidFixture.Client.CompleteExternalAdmissionAsync(invalidResolved, invalidIntent,
-            ExternalSessionCandidate.FromPresentation("candidate"u8), TestContext.Current.CancellationToken));
+        await AssertCodeAsync("SOAP-ADMISSION-REMOTE-EXPIRY-INVALID", () => invalidFixture.CompleteAsync(invalidResolved, invalidIntent.Reference, "candidate"u8.ToArray()));
 
-        CapturingValidator longRemote = new((_, _, _) => Task.FromResult(ExternalSessionValidationResult.Valid(At("2026-08-12T12:00:00Z"))));
+        CapturingValidator longRemote = new(_ => ExternalSessionValidationResult.Valid(At("2026-08-12T12:00:00Z")));
         Fixture cappedFixture = new(HandshakeResponse.ExternalAdmissionRequired(), longRemote);
         ResolvedTypedSessionHandshake cappedResolved = await cappedFixture.ResolveAsync();
         ExternalSessionAdmissionIntent cappedIntent = (await cappedFixture.Client.AcquireTypedSessionAsync(cappedResolved, TestContext.Current.CancellationToken)).AdmissionIntent!;
-        TypedSessionHandshakeResult result = await cappedFixture.Client.CompleteExternalAdmissionAsync(cappedResolved, cappedIntent,
-            ExternalSessionCandidate.FromPresentation("candidate"u8), TestContext.Current.CancellationToken);
+        TypedSessionHandshakeResult result = await cappedFixture.CompleteAsync(cappedResolved, cappedIntent.Reference, "candidate"u8.ToArray());
         Assert.Equal(cappedFixture.Clock.UtcNow.AddHours(1), result.ExpiresAt);
     }
 
@@ -195,6 +183,45 @@ public sealed class TypedSessionHandshakeTests
         await AssertCodeAsync(code, () => fixture.Client.AcquireTypedSessionAsync(resolved, TestContext.Current.CancellationToken));
     }
 
+    [Theory]
+    [InlineData("text")]
+    [InlineData("cdata")]
+    [InlineData("attribute")]
+    public async Task Wave1_SEC_Per_value_XML_bound_fails_before_the_typed_adapter_is_invoked(string valueKind)
+    {
+        CountingResponseAdapter adapter = new();
+        Fixture fixture = new(HandshakeResponse.OversizedIndividualValue(valueKind), responseAdapter: adapter);
+        ResolvedTypedSessionHandshake resolved = await fixture.ResolveAsync();
+
+        await AssertCodeAsync("SOAP-XML-VALUE-TOO-LARGE", () => fixture.Client.AcquireTypedSessionAsync(resolved, TestContext.Current.CancellationToken));
+        Assert.Equal(0, adapter.Calls);
+    }
+
+    [Theory]
+    [InlineData("text")]
+    [InlineData("cdata")]
+    [InlineData("attribute")]
+    public async Task Wave1_SEC_Per_value_XML_bound_accepts_values_immediately_below_the_boundary(string valueKind)
+    {
+        CountingResponseAdapter adapter = new();
+        Fixture fixture = new(HandshakeResponse.IndividualValue(valueKind, 16_384), responseAdapter: adapter);
+        ResolvedTypedSessionHandshake resolved = await fixture.ResolveAsync();
+
+        await AssertCodeAsync("SOAP-TYPED-ADAPTER-REJECTED", () => fixture.Client.AcquireTypedSessionAsync(resolved, TestContext.Current.CancellationToken));
+        Assert.Equal(1, adapter.Calls);
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_Aggregate_XML_bound_fails_before_the_typed_adapter_is_invoked()
+    {
+        CountingResponseAdapter adapter = new();
+        Fixture fixture = new(HandshakeResponse.AggregateOversizedValues(), responseAdapter: adapter);
+        ResolvedTypedSessionHandshake resolved = await fixture.ResolveAsync();
+
+        await AssertCodeAsync("SOAP-RESPONSE-TOO-LARGE", () => fixture.Client.AcquireTypedSessionAsync(resolved, TestContext.Current.CancellationToken));
+        Assert.Equal(0, adapter.Calls);
+    }
+
     [Fact]
     public async Task Wave1_SEC_Core_stops_typed_request_adapter_at_the_Published_byte_bound_before_transport()
     {
@@ -205,11 +232,74 @@ public sealed class TypedSessionHandshakeTests
     }
 
     [Fact]
+    public async Task Wave1_SEC_Adapter_cancellation_is_preserved_only_for_the_actual_token_and_otherwise_sanitized()
+    {
+        const string canary = "adapter-cancellation-extension-canary";
+        Fixture requestFailure = new(HandshakeResponse.Issued("unused", null), requestAdapter: new CancelingRequestAdapter(canary, null));
+        ResolvedTypedSessionHandshake requestResolved = await requestFailure.ResolveAsync();
+        SoapAuthException requestError = await Assert.ThrowsAsync<SoapAuthException>(() => requestFailure.Client.AcquireTypedSessionAsync(requestResolved, TestContext.Current.CancellationToken));
+        Assert.Equal("SOAP-TYPED-ADAPTER-REJECTED", requestError.Code);
+        Assert.Null(requestError.InnerException);
+        Assert.DoesNotContain(canary, requestError.ToString(), StringComparison.Ordinal);
+
+        Fixture responseFailure = new(HandshakeResponse.Issued("unused", null), responseAdapter: new CancelingResponseAdapter(canary));
+        ResolvedTypedSessionHandshake responseResolved = await responseFailure.ResolveAsync();
+        SoapAuthException responseError = await Assert.ThrowsAsync<SoapAuthException>(() => responseFailure.Client.AcquireTypedSessionAsync(responseResolved, TestContext.Current.CancellationToken));
+        Assert.Equal("SOAP-TYPED-ADAPTER-REJECTED", responseError.Code);
+        Assert.Null(responseError.InnerException);
+        Assert.DoesNotContain(canary, responseError.ToString(), StringComparison.Ordinal);
+
+        Fixture validationFailure = new(HandshakeResponse.ExternalAdmissionRequired(), new CancelingValidationAdapter(canary));
+        ResolvedTypedSessionHandshake validationResolved = await validationFailure.ResolveAsync();
+        ExternalSessionAdmissionIntent intent = (await validationFailure.Client.AcquireTypedSessionAsync(validationResolved, TestContext.Current.CancellationToken)).AdmissionIntent!;
+        SoapAuthException validationError = await Assert.ThrowsAsync<SoapAuthException>(() => validationFailure.CompleteAsync(validationResolved, intent.Reference, "candidate"u8.ToArray()));
+        Assert.Equal("SOAP-ADMISSION-VALIDATION-FAILED", validationError.Code);
+        Assert.Null(validationError.InnerException);
+        Assert.DoesNotContain(canary, validationError.ToString(), StringComparison.Ordinal);
+
+        using CancellationTokenSource canceled = new();
+        Fixture realCancellation = new(HandshakeResponse.Issued("unused", null), requestAdapter: new CancelingRequestAdapter(canary, canceled));
+        ResolvedTypedSessionHandshake realResolved = await realCancellation.ResolveAsync();
+        OperationCanceledException actual = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => realCancellation.Client.AcquireTypedSessionAsync(realResolved, canceled.Token));
+        Assert.Equal(canceled.Token, actual.CancellationToken);
+        Assert.Null(actual.InnerException);
+        Assert.DoesNotContain(canary, actual.Message, StringComparison.Ordinal);
+
+        using CancellationTokenSource validationCanceled = new();
+        Fixture realValidationCancellation = new(HandshakeResponse.ExternalAdmissionRequired(), new CancelingValidationAdapter(canary, validationCanceled));
+        ResolvedTypedSessionHandshake realValidationResolved = await realValidationCancellation.ResolveAsync();
+        ExternalSessionAdmissionIntent realValidationIntent = (await realValidationCancellation.Client.AcquireTypedSessionAsync(realValidationResolved, TestContext.Current.CancellationToken)).AdmissionIntent!;
+        ExternalAdmissionPresentation realValidationPresentation = realValidationCancellation.Client.ResolveAdmissionPresentation(realValidationCancellation.Principal(), realValidationIntent.Reference);
+        OperationCanceledException actualValidation = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => realValidationCancellation.Client.CompleteExternalAdmissionAsync(
+            realValidationResolved, realValidationPresentation, ExternalSessionCandidate.Create("candidate"u8), validationCanceled.Token));
+        Assert.Equal(validationCanceled.Token, actualValidation.CancellationToken);
+        Assert.Null(actualValidation.InnerException);
+        Assert.DoesNotContain(canary, actualValidation.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Wave1_SEC_Published_adapter_ID_and_type_mismatch_fail_before_transport()
     {
-        Fixture fixture = new(HandshakeResponse.Issued("unused", null), requestAdapter: new MismatchedRequestAdapter());
-        await AssertCodeAsync("SOAP-TYPED-ADAPTER-UNAVAILABLE", () => fixture.ResolveAsync());
-        Assert.Empty(fixture.Transport.RequestBodies);
+        Fixture[] fixtures =
+        [
+            new(HandshakeResponse.Issued("unused", null), requestAdapter: new MismatchedRequestAdapter()),
+            new(HandshakeResponse.Issued("unused", null), responseAdapter: new MismatchedResponseAdapter()),
+            new(HandshakeResponse.Issued("unused", null), validator: new MismatchedValidationAdapter())
+        ];
+        foreach (Fixture fixture in fixtures)
+        {
+            await AssertCodeAsync("SOAP-TYPED-ADAPTER-UNAVAILABLE", () => fixture.ResolveAsync());
+            Assert.Empty(fixture.Transport.RequestBodies);
+        }
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_Unknown_or_future_external_provenance_is_rejected_at_the_adapter_boundary()
+    {
+        Fixture fixture = new(HandshakeResponse.ExternalAdmissionRequired(), responseAdapter: new UnknownProvenanceResponseAdapter());
+        ResolvedTypedSessionHandshake resolved = await fixture.ResolveAsync();
+
+        await AssertCodeAsync("SOAP-TYPED-ADAPTER-REJECTED", () => fixture.Client.AcquireTypedSessionAsync(resolved, TestContext.Current.CancellationToken));
     }
 
     [Theory]
@@ -218,19 +308,158 @@ public sealed class TypedSessionHandshakeTests
     public async Task Wave1_SEC_Rotate_or_disable_during_remote_validation_prevents_promotion(bool disable)
     {
         Fixture? fixture = null;
-        CapturingValidator validator = new((_, _, _) =>
+        CapturingValidator validator = new(_ =>
         {
             if (disable) fixture!.Snapshots.Disable(); else fixture!.Snapshots.Rotate();
-            return Task.FromResult(ExternalSessionValidationResult.Valid(At("2026-08-09T12:10:00Z")));
+            return ExternalSessionValidationResult.Valid(At("2026-08-09T12:10:00Z"));
         });
         fixture = new(HandshakeResponse.ExternalAdmissionRequired(), validator);
         ResolvedTypedSessionHandshake resolved = await fixture.ResolveAsync();
         ExternalSessionAdmissionIntent intent = (await fixture.Client.AcquireTypedSessionAsync(resolved, TestContext.Current.CancellationToken)).AdmissionIntent!;
 
-        SoapAuthException failure = await Assert.ThrowsAsync<SoapAuthException>(() => fixture.Client.CompleteExternalAdmissionAsync(resolved, intent,
-            ExternalSessionCandidate.FromPresentation("candidate"u8), TestContext.Current.CancellationToken));
+        SoapAuthException failure = await Assert.ThrowsAsync<SoapAuthException>(() => fixture.CompleteAsync(resolved, intent.Reference, "candidate"u8.ToArray()));
         Assert.True(failure.Code is "SOAP-TYPED-AUTHORITY-STALE" or "SOAP-TYPED-AUTHORITY-REJECTED");
-        Assert.Single(fixture.Transport.RequestBodies);
+        Assert.Equal(2, fixture.Transport.RequestBodies.Count);
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_Final_window_mutation_after_every_async_check_fails_the_generation_CAS()
+    {
+        TaskCompletionSource<bool> enteredFinalWindow = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> resumePromotion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Fixture fixture = new(HandshakeResponse.ExternalAdmissionRequired(), CapturingValidator.Valid(), beforeAdmissionPromotion: async cancellationToken =>
+        {
+            enteredFinalWindow.TrySetResult(true);
+            await resumePromotion.Task.WaitAsync(cancellationToken);
+        });
+        ResolvedTypedSessionHandshake resolved = await fixture.ResolveAsync();
+        ExternalSessionAdmissionIntent intent = (await fixture.Client.AcquireTypedSessionAsync(resolved, TestContext.Current.CancellationToken)).AdmissionIntent!;
+
+        Task<TypedSessionHandshakeResult> completion = fixture.CompleteAsync(resolved, intent.Reference, "candidate"u8.ToArray());
+        await enteredFinalWindow.Task.WaitAsync(TestContext.Current.CancellationToken);
+        fixture.MutateAuthorityAfterFinalChecks();
+        resumePromotion.TrySetResult(true);
+
+        await AssertCodeAsync("SOAP-TYPED-AUTHORITY-STALE", async () => await completion);
+        Assert.Equal(0, fixture.Client.CachedSessionCount);
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_Concurrent_same_intent_completion_has_exactly_one_success_without_timing_assumptions()
+    {
+        TaskCompletionSource<bool> firstReserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<bool> releaseFirst = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Fixture fixture = new(HandshakeResponse.ExternalAdmissionRequired(), CapturingValidator.Valid(), beforeAdmissionPromotion: async cancellationToken =>
+        {
+            firstReserved.TrySetResult(true);
+            await releaseFirst.Task.WaitAsync(cancellationToken);
+        });
+        ResolvedTypedSessionHandshake resolved = await fixture.ResolveAsync();
+        ExternalSessionAdmissionIntent intent = (await fixture.Client.AcquireTypedSessionAsync(resolved, TestContext.Current.CancellationToken)).AdmissionIntent!;
+
+        Task<TypedSessionHandshakeResult> first = fixture.CompleteAsync(resolved, intent.Reference, "candidate"u8.ToArray());
+        await firstReserved.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await AssertCodeAsync("SOAP-ADMISSION-INTENT-INVALID", () => fixture.CompleteAsync(resolved, intent.Reference, "candidate"u8.ToArray()));
+        releaseFirst.TrySetResult(true);
+        TypedSessionHandshakeResult winner = await first;
+
+        Assert.Equal(TypedSessionHandshakeResultKind.Issued, winner.Kind);
+        Assert.Equal(1, fixture.Client.CachedSessionCount);
+    }
+
+    [Fact]
+    public void Wave1_SEC_Validation_proof_is_bound_to_candidate_intent_profile_context_and_generation_and_is_single_use()
+    {
+        DateTimeOffset now = At("2026-08-09T12:00:00Z");
+        Guid tenant = Guid.NewGuid();
+        Guid installation = Guid.NewGuid();
+        Guid application = Guid.NewGuid();
+        Guid environment = Guid.NewGuid();
+        SoapSessionCache cache = new();
+        SoapSessionCacheKey key = new(tenant, installation, application, environment, "connector", "1.0.0", 1, 1, 1, "profile-a");
+        GatewayClientPrincipal principal = PrincipalForCache(tenant, installation, application, environment, now);
+        ExternalSessionAdmissionIntent intent = cache.StoreAdmissionIntent(key, "authority-a", "operation-a", "profile-a",
+            ExternalSessionProvenance.InteractiveHandoff, now, now.AddMinutes(1));
+        ExternalAdmissionPresentation presentation = cache.ResolveAdmissionPresentation(intent.Reference, principal, now);
+        AdmissionCompletion completion = cache.BeginAdmission(presentation, "authority-a", now);
+        AdmissionValidationProof proof = new(completion, SHA256.HashData("candidate-a"u8.ToArray()));
+
+        OpaqueSoapSessionReference issued = cache.CompleteAdmission(proof, "candidate-a", now, now.AddMinutes(5));
+        Assert.NotNull(issued);
+        AssertCode("SOAP-ADMISSION-INTENT-INVALID", () => cache.CompleteAdmission(proof, "candidate-a", now, now.AddMinutes(5)));
+        AssertCode("SOAP-ADMISSION-INTENT-INVALID", () => cache.CompleteAdmission(proof, "candidate-b", now, now.AddMinutes(5)));
+
+        cache.Invalidate(key);
+        ExternalSessionAdmissionIntent later = cache.StoreAdmissionIntent(key, "authority-a", "operation-a", "profile-a",
+            ExternalSessionProvenance.InteractiveHandoff, now, now.AddMinutes(1));
+        _ = cache.BeginAdmission(cache.ResolveAdmissionPresentation(later.Reference, principal, now), "authority-a", now);
+        AssertCode("SOAP-ADMISSION-INTENT-INVALID", () => cache.CompleteAdmission(proof, "candidate-a", now, now.AddMinutes(5)));
+
+        SoapSessionCacheKey otherProfile = key with { ProfileId = "profile-b" };
+        ExternalSessionAdmissionIntent other = cache.StoreAdmissionIntent(otherProfile, "authority-b", "operation-a", "profile-b",
+            ExternalSessionProvenance.InteractiveHandoff, now, now.AddMinutes(1));
+        _ = cache.BeginAdmission(cache.ResolveAdmissionPresentation(other.Reference, principal, now), "authority-b", now);
+        AssertCode("SOAP-ADMISSION-INTENT-INVALID", () => cache.CompleteAdmission(proof, "candidate-a", now, now.AddMinutes(5)));
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_Authoritative_store_mutations_invalidate_binding_publication_and_resource_promotion_generations()
+    {
+        InMemoryConnectorConfigurationStore store = new();
+        PublishedConnectorMutationAuthority authority = store.RuntimeMutationAuthority;
+        Guid environmentId = Guid.NewGuid();
+        const string connectorSlug = "typed-mutation-authority";
+        DateTimeOffset now = At("2026-08-09T12:00:00Z");
+
+        PublishedConnectorAuthorityGeneration beforeResource = authority.Capture(connectorSlug, environmentId);
+        _ = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic", "synthetic", "credential", ProviderResourceType.Secret,
+            "Credential", environmentId, connectorSlug, "session-bootstrap", "synthetic://credential", ProviderResourceStatus.Active, null, 0,
+            null, null, string.Empty, now), TestContext.Current.CancellationToken);
+        Assert.False(authority.TryPromoteIfCurrent(beforeResource, () => true, out _));
+
+        using JsonDocument definition = JsonDocument.Parse(PublishedDefinition("synthetic-create-session-request").Replace("synthetic-typed-session", connectorSlug, StringComparison.Ordinal));
+        ValidatedConnectorDefinition validatedDefinition = new ConnectorDefinitionValidator().ValidateRequired(definition.RootElement);
+        ConnectorVersionRecord draft = await store.CreateDraftAsync(new(Guid.NewGuid(), Guid.Empty, connectorSlug, "1.0.0", "1.0", ConnectorVersionState.Draft,
+            validatedDefinition.CanonicalJson, Convert.FromHexString(validatedDefinition.ChecksumSha256), "editor", now, 0, null, null), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord validated = await store.MarkValidatedAsync(draft.Id, draft.RowVersion, now, TestContext.Current.CancellationToken);
+        Dictionary<string, Uri> endpoints = new()
+        {
+            ["handshake-endpoint"] = new("https://handshake.example.test/"),
+            ["validation-endpoint"] = new("https://validation.example.test/")
+        };
+        string checksum = ConnectorBindingDigests.Revision(validated.Id, environmentId, endpoints,
+            new Dictionary<string, ProviderResourceBinding>(), new Dictionary<string, ProviderResourceBinding>());
+        PublishedConnectorAuthorityGeneration beforeBinding = authority.Capture(connectorSlug, environmentId);
+        _ = await store.PutBindingsAsync(new(Guid.NewGuid(), validated.ConnectorId, validated.Id, environmentId, endpoints,
+            new Dictionary<string, ProviderResourceBinding>(), new Dictionary<string, ProviderResourceBinding>(), 0, checksum,
+            ConnectorBindingState.Draft, now, "editor"), null, Guid.NewGuid(), TestContext.Current.CancellationToken);
+        Assert.False(authority.TryPromoteIfCurrent(beforeBinding, () => true, out _));
+
+        PublishedConnectorAuthorityGeneration beforePublication = authority.Capture(connectorSlug, environmentId);
+        _ = await store.PublishAsync(validated.Id, validated.RowVersion, 0, "approver", now, TestContext.Current.CancellationToken);
+        Assert.False(authority.TryPromoteIfCurrent(beforePublication, () => true, out _));
+    }
+
+    [Fact]
+    public void Wave1_SEC_Promotion_is_rejected_for_the_entire_in_progress_mutation_window_even_when_captured_after_begin()
+    {
+        PublishedConnectorMutationAuthority authority = new();
+        Guid environmentId = Guid.NewGuid();
+        const string connectorId = "typed-in-progress-mutation";
+        PublishedConnectorAuthorityGeneration before = authority.Capture(connectorId, environmentId);
+        PublishedConnectorAuthorityGeneration during;
+
+        using (authority.BeginMutation(connectorId, environmentId))
+        {
+            during = authority.Capture(connectorId, environmentId);
+            Assert.False(authority.TryPromoteIfCurrent(before, () => true, out _));
+            Assert.False(authority.TryPromoteIfCurrent(during, () => true, out _));
+        }
+
+        Assert.False(authority.TryPromoteIfCurrent(during, () => true, out _));
+        PublishedConnectorAuthorityGeneration after = authority.Capture(connectorId, environmentId);
+        Assert.True(authority.TryPromoteIfCurrent(after, () => true, out bool? promoted));
+        Assert.True(promoted);
     }
 
     [Fact]
@@ -255,14 +484,15 @@ public sealed class TypedSessionHandshakeTests
     public async Task Wave1_SEC_Candidate_session_raw_XML_and_validator_diagnostics_are_redacted()
     {
         const string canary = "candidate-validator-raw-xml-canary";
-        CapturingValidator validator = new((_, _, _) => throw new InvalidOperationException(canary));
+        CapturingValidator validator = new(_ => throw new InvalidOperationException(canary));
         Fixture fixture = new(HandshakeResponse.ExternalAdmissionRequired(), validator);
         ResolvedTypedSessionHandshake resolved = await fixture.ResolveAsync();
         ExternalSessionAdmissionIntent intent = (await fixture.Client.AcquireTypedSessionAsync(resolved, TestContext.Current.CancellationToken)).AdmissionIntent!;
-        ExternalSessionCandidate candidate = ExternalSessionCandidate.FromPresentation(Encoding.UTF8.GetBytes(canary));
+        ExternalSessionCandidate candidate = ExternalSessionCandidate.Create(Encoding.UTF8.GetBytes(canary));
+        ExternalAdmissionPresentation presentation = fixture.Client.ResolveAdmissionPresentation(fixture.Principal(), intent.Reference);
 
         SoapAuthException failure = await Assert.ThrowsAsync<SoapAuthException>(() => fixture.Client.CompleteExternalAdmissionAsync(
-            resolved, intent, candidate, TestContext.Current.CancellationToken));
+            resolved, presentation, candidate, TestContext.Current.CancellationToken));
         string diagnostic = string.Join('\n', failure.ToString(), intent.ToString(), resolved.ToString(), validator.ToString(), JsonSerializer.Serialize(intent), JsonSerializer.Serialize(candidate));
         Assert.DoesNotContain(canary, diagnostic, StringComparison.Ordinal);
         Assert.DoesNotContain("<soap", diagnostic, StringComparison.OrdinalIgnoreCase);
@@ -270,14 +500,18 @@ public sealed class TypedSessionHandshakeTests
     }
 
     [Fact]
-    public void Wave1_CT_Public_API_has_dedicated_candidate_boundary_and_keeps_legacy_scalar_path_optional()
+    public void Wave1_CT_Public_API_exposes_only_authenticated_presentation_and_keeps_legacy_scalar_path_optional()
     {
         Type client = typeof(SoapSessionClient);
         Assert.Contains(client.GetMethods(), method => method.Name == nameof(SoapSessionClient.AcquireSessionAsync));
         Assert.Contains(client.GetMethods(), method => method.Name == nameof(SoapSessionClient.AcquireTypedSessionAsync) &&
             method.GetParameters().Select(parameter => parameter.ParameterType).SequenceEqual([typeof(ResolvedTypedSessionHandshake), typeof(CancellationToken)]));
-        Assert.Contains(client.GetMethods(), method => method.Name == nameof(SoapSessionClient.CompleteExternalAdmissionAsync) &&
-            method.GetParameters().Any(parameter => parameter.ParameterType == typeof(ExternalSessionCandidate)));
+        Assert.DoesNotContain(client.GetMethods(), method => method.Name.Contains("CompleteExternalAdmission", StringComparison.Ordinal));
+        Type runtime = typeof(TypedSessionHandshakeRuntime);
+        System.Reflection.MethodInfo completion = Assert.Single(runtime.GetMethods(), method => method.Name == nameof(TypedSessionHandshakeRuntime.CompleteExternalAdmissionAsync));
+        Assert.Equal([typeof(GatewayClientPrincipal), typeof(string), typeof(ReadOnlyMemory<byte>), typeof(CancellationToken)],
+            completion.GetParameters().Select(parameter => parameter.ParameterType));
+        Assert.False(typeof(ExternalSessionCandidate).IsPublic);
         Assert.DoesNotContain(client.GetMethods(), method => method.Name.Contains("PutSession", StringComparison.Ordinal) ||
             method.Name.Contains("SetCachedToken", StringComparison.Ordinal) || method.Name.Contains("PromoteSession", StringComparison.Ordinal));
         Assert.Single(typeof(TypedSessionHandshakeAuthorityRequest).GetConstructors());
@@ -320,6 +554,19 @@ public sealed class TypedSessionHandshakeTests
         Assert.Equal(expected, exception.Code);
     }
 
+    private static void AssertCode(string expected, Action action)
+    {
+        SoapAuthException exception = Assert.Throws<SoapAuthException>(action);
+        Assert.Equal(expected, exception.Code);
+    }
+
+    private static GatewayClientPrincipal PrincipalForCache(Guid tenant, Guid installation, Guid application, Guid environment, DateTimeOffset now)
+    {
+        RegisteredInstallationIdentity identity = new(installation, tenant, application, environment, TenantStatus.Active, ApplicationStatus.Active,
+            InstallationStatus.Active, Guid.NewGuid(), CredentialStatus.Active, [1, 2, 3], now.AddMinutes(-1), now.AddHours(1), "1.0.0", null);
+        return new(identity, Guid.NewGuid());
+    }
+
     private static DateTimeOffset At(string value) => DateTimeOffset.ParseExact(value, "yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
 
     private static string? SessionValue(string xml) => XDocument.Parse(xml).Descendants(XName.Get("Session", ProtocolNamespace)).SingleOrDefault()?.Value;
@@ -355,8 +602,13 @@ public sealed class TypedSessionHandshakeTests
                 "validator":{"id":"synthetic-session-validator","type":"compiled-typed-validator"},
                 "endpointBinding":"validation-endpoint",
                 "path":"/session/validate",
+                "soapVersion":"1.1",
+                "action":"urn:synthetic:ValidateSession",
+                "requestElement":{"localName":"ValidateSessionRequest","namespaceUri":"urn:synthetic:typed-session"},
+                "responseElement":{"localName":"ValidateSessionResponse","namespaceUri":"urn:synthetic:typed-session"},
                 "intentLifetimeSeconds":60,
                 "timeoutMs":5000,
+                "maximumRequestBytes":32768,
                 "maximumResponseBytes":32768
               }
             },
@@ -381,34 +633,63 @@ public sealed class TypedSessionHandshakeTests
         private readonly Guid installationId = Guid.NewGuid();
         private readonly PublishedTypedSessionHandshakeResolver authority;
 
-        internal Fixture(HandshakeResponse response, CapturingValidator? validator = null, ITypedSessionHandshakeRequestAdapter? requestAdapter = null)
+        internal Fixture(
+            HandshakeResponse response,
+            ITypedExternalSessionValidationAdapter? validator = null,
+            ITypedSessionHandshakeRequestAdapter? requestAdapter = null,
+            ITypedSessionHandshakeResponseAdapter? responseAdapter = null,
+            Func<CancellationToken, Task>? beforeAdmissionPromotion = null)
         {
             Clock = new();
+            MutationAuthority = new();
             Transport = new(response);
             requestAdapter ??= new RequestAdapter();
-            ResponseAdapter responseAdapter = new();
+            responseAdapter ??= new ResponseAdapter();
             validator ??= CapturingValidator.Valid();
             TypedSessionHandshakeAdapterRegistry registry = new([requestAdapter], [responseAdapter], [validator]);
             Snapshots = new(CreateSnapshot());
-            authority = new(Snapshots.ResolveAsync, registry, Clock);
-            Client = new(new FixedSecrets(), new FixedResolver(), Transport, Clock, new MatchingStampProvider());
+            authority = new(Snapshots.ResolveAsync, registry, Clock, MutationAuthority);
+            Client = new(new FixedSecrets(), new FixedResolver(), Transport, Clock, new MatchingStampProvider(), null, beforeAdmissionPromotion);
         }
 
         internal MutableClock Clock { get; }
+        internal PublishedConnectorMutationAuthority MutationAuthority { get; }
         internal TypedTransport Transport { get; }
         internal MutableSnapshotSource Snapshots { get; }
         internal SoapSessionClient Client { get; }
 
         internal async Task<ResolvedTypedSessionHandshake> ResolveAsync(PrincipalDimension changed = PrincipalDimension.None, int salt = 0)
         {
+            GatewayClientPrincipal principal = Principal(changed, salt);
+            AuthorizedGatewayInvocation invocation = new(principal, "synthetic-typed-session", "session-bootstrap");
+            return await authority.ResolveAsync(invocation, new("typed-session"), TestContext.Current.CancellationToken);
+        }
+
+        internal Task<TypedSessionHandshakeResult> CompleteAsync(
+            ResolvedTypedSessionHandshake resolved,
+            string intentReference,
+            ReadOnlyMemory<byte> candidate,
+            PrincipalDimension changed = PrincipalDimension.None,
+            int salt = 0)
+        {
+            ExternalAdmissionPresentation presentation = Client.ResolveAdmissionPresentation(Principal(changed, salt), intentReference);
+            return Client.CompleteExternalAdmissionAsync(resolved, presentation, ExternalSessionCandidate.Create(candidate.Span), TestContext.Current.CancellationToken);
+        }
+
+        internal GatewayClientPrincipal Principal(PrincipalDimension changed = PrincipalDimension.None, int salt = 0)
+        {
             Guid tenant = changed == PrincipalDimension.Tenant ? Guid.NewGuid() : Salt(tenantId, salt);
             Guid application = changed == PrincipalDimension.Application ? Guid.NewGuid() : applicationId;
             Guid installation = changed == PrincipalDimension.Installation ? Guid.NewGuid() : installationId;
             RegisteredInstallationIdentity identity = new(installation, tenant, application, environmentId, TenantStatus.Active, ApplicationStatus.Active,
                 InstallationStatus.Active, Guid.NewGuid(), CredentialStatus.Active, [1, 2, 3], Clock.UtcNow.AddMinutes(-1), Clock.UtcNow.AddHours(1), "1.0.0", null);
-            GatewayClientPrincipal principal = new(identity, Guid.NewGuid());
-            AuthorizedGatewayInvocation invocation = new(principal, "synthetic-typed-session", "session-bootstrap");
-            return await authority.ResolveAsync(invocation, new("typed-session"), TestContext.Current.CancellationToken);
+            return new(identity, Guid.NewGuid());
+        }
+
+        internal void MutateAuthorityAfterFinalChecks()
+        {
+            Snapshots.Rotate();
+            MutationAuthority.Invalidate("synthetic-typed-session", environmentId);
         }
 
         internal static SoapSessionProfile BusinessProfile()
@@ -455,8 +736,13 @@ public sealed class TypedSessionHandshakeTests
                                 validator = new { id = "synthetic-session-validator", type = "compiled-typed-validator" },
                                 endpointBinding = "validation-endpoint",
                                 path = "/validate",
+                                soapVersion = "1.1",
+                                action = "urn:synthetic:ValidateSession",
+                                requestElement = new { localName = "ValidateSessionRequest", namespaceUri = ProtocolNamespace },
+                                responseElement = new { localName = "ValidateSessionResponse", namespaceUri = ProtocolNamespace },
                                 intentLifetimeSeconds = 60,
                                 timeoutMs = 5_000,
+                                maximumRequestBytes = 32_768,
                                 maximumResponseBytes = 32_768
                             }
                         }
@@ -524,6 +810,81 @@ public sealed class TypedSessionHandshakeTests
         public void WriteRequest(XmlWriter writer, TypedSessionHandshakeRequestContext context) => throw new InvalidOperationException();
     }
 
+    private sealed class MismatchedResponseAdapter : ITypedSessionHandshakeResponseAdapter
+    {
+        public string AdapterId => "synthetic-create-session-response-other";
+        public string AdapterType => "compiled-typed-response";
+        public TypedSessionHandshakeAdapterOutcome ReadResponse(XmlReader payload, TypedSessionHandshakeResponseContext context) => throw new InvalidOperationException();
+    }
+
+    private sealed class MismatchedValidationAdapter : ITypedExternalSessionValidationAdapter
+    {
+        public string AdapterId => "synthetic-session-validator-other";
+        public string AdapterType => "compiled-typed-validator";
+        public void WriteValidationRequest(XmlWriter writer, ExternalSessionValidationRequestContext context) => throw new InvalidOperationException();
+        public ExternalSessionValidationResult ReadValidationResponse(XmlReader payload, ExternalSessionValidationResponseContext context) => throw new InvalidOperationException();
+    }
+
+    private sealed class CancelingRequestAdapter(string canary, CancellationTokenSource? cancellation) : ITypedSessionHandshakeRequestAdapter
+    {
+        public string AdapterId => "synthetic-create-session-request";
+        public string AdapterType => "compiled-typed-request";
+
+        public void WriteRequest(XmlWriter writer, TypedSessionHandshakeRequestContext context)
+        {
+            cancellation?.Cancel();
+            throw new OperationCanceledException(canary, new InvalidOperationException(canary), cancellation?.Token ?? CancellationToken.None);
+        }
+    }
+
+    private sealed class CancelingResponseAdapter(string canary) : ITypedSessionHandshakeResponseAdapter
+    {
+        public string AdapterId => "synthetic-create-session-response";
+        public string AdapterType => "compiled-typed-response";
+
+        public TypedSessionHandshakeAdapterOutcome ReadResponse(XmlReader payload, TypedSessionHandshakeResponseContext context) =>
+            throw new OperationCanceledException(canary, new InvalidOperationException(canary), CancellationToken.None);
+    }
+
+    private sealed class CountingResponseAdapter : ITypedSessionHandshakeResponseAdapter
+    {
+        public string AdapterId => "synthetic-create-session-response";
+        public string AdapterType => "compiled-typed-response";
+        internal int Calls { get; private set; }
+
+        public TypedSessionHandshakeAdapterOutcome ReadResponse(XmlReader payload, TypedSessionHandshakeResponseContext context)
+        {
+            Calls++;
+            throw new InvalidOperationException("Adapter must not receive an XML value rejected by the initial scan.");
+        }
+    }
+
+    private sealed class UnknownProvenanceResponseAdapter : ITypedSessionHandshakeResponseAdapter
+    {
+        public string AdapterId => "synthetic-create-session-response";
+        public string AdapterType => "compiled-typed-response";
+
+        public TypedSessionHandshakeAdapterOutcome ReadResponse(XmlReader payload, TypedSessionHandshakeResponseContext context) =>
+            TypedSessionHandshakeAdapterOutcome.ExternalAdmissionRequired((ExternalSessionProvenance)int.MaxValue);
+    }
+
+    private sealed class CancelingValidationAdapter(string canary, CancellationTokenSource? cancellation = null) : ITypedExternalSessionValidationAdapter
+    {
+        public string AdapterId => "synthetic-session-validator";
+        public string AdapterType => "compiled-typed-validator";
+
+        public void WriteValidationRequest(XmlWriter writer, ExternalSessionValidationRequestContext context)
+        {
+            writer.WriteElementString("s", "Candidate", ProtocolNamespace, Encoding.UTF8.GetString(context.SensitiveCandidate.Span));
+        }
+
+        public ExternalSessionValidationResult ReadValidationResponse(XmlReader payload, ExternalSessionValidationResponseContext context)
+        {
+            cancellation?.Cancel();
+            throw new OperationCanceledException(canary, new InvalidOperationException(canary), cancellation?.Token ?? CancellationToken.None);
+        }
+    }
+
     private sealed class ResponseAdapter : ITypedSessionHandshakeResponseAdapter
     {
         public string AdapterId => "synthetic-create-session-response";
@@ -589,22 +950,35 @@ public sealed class TypedSessionHandshakeTests
         }
     }
 
-    private sealed class CapturingValidator(
-        Func<ExternalSessionValidationContext, ExternalSessionCandidate, CancellationToken, Task<ExternalSessionValidationResult>> behavior)
-        : IAuthorizedExternalSessionValidator
+    private sealed class CapturingValidator(Func<ExternalSessionValidationResponseContext, ExternalSessionValidationResult> behavior)
+        : ITypedExternalSessionValidationAdapter
     {
-        public string ValidatorId => "synthetic-session-validator";
-        public string ValidatorType => "compiled-typed-validator";
+        public string AdapterId => "synthetic-session-validator";
+        public string AdapterType => "compiled-typed-validator";
         internal List<string> Candidates { get; } = [];
 
-        public async Task<ExternalSessionValidationResult> ValidateAsync(ExternalSessionValidationContext context, ExternalSessionCandidate candidate, CancellationToken cancellationToken)
+        public void WriteValidationRequest(XmlWriter writer, ExternalSessionValidationRequestContext context)
         {
-            Candidates.Add(Encoding.UTF8.GetString(candidate.SensitiveValue.Span));
-            return await behavior(context, candidate, cancellationToken);
+            string candidate = Encoding.UTF8.GetString(context.SensitiveCandidate.Span);
+            Candidates.Add(candidate);
+            writer.WriteStartElement("s", "Candidate", ProtocolNamespace);
+            writer.WriteElementString("s", "Provenance", ProtocolNamespace, "interactive_handoff");
+            writer.WriteElementString("s", "OpaqueValue", ProtocolNamespace, candidate);
+            writer.WriteEndElement();
         }
 
-        internal static CapturingValidator Valid() => new((_, _, _) =>
-            Task.FromResult(ExternalSessionValidationResult.Valid(At("2026-08-09T12:10:00Z"))));
+        public ExternalSessionValidationResult ReadValidationResponse(XmlReader payload, ExternalSessionValidationResponseContext context)
+        {
+            payload.ReadStartElement("ValidateSessionResponse", ProtocolNamespace);
+            payload.ReadStartElement("Validation", ProtocolNamespace);
+            string status = payload.ReadElementContentAsString("Status", ProtocolNamespace);
+            payload.ReadEndElement();
+            payload.ReadEndElement();
+            if (!string.Equals(status, "valid", StringComparison.Ordinal)) throw new XmlException();
+            return behavior(context);
+        }
+
+        internal static CapturingValidator Valid() => new(_ => ExternalSessionValidationResult.Valid(At("2026-08-09T12:10:00Z")));
 
         public override string ToString() => "CapturingValidator(Redacted=True)";
     }
@@ -626,6 +1000,8 @@ public sealed class TypedSessionHandshakeTests
             SoapActions.Add(request.Headers.TryGetValues("SOAPAction", out IEnumerable<string>? values) ? values.Single().Trim('"') : string.Empty);
             if (body.Contains("BusinessRequest", StringComparison.Ordinal))
                 return XmlResponse($"<s:BusinessResponse xmlns:s=\"{ProtocolNamespace}\"><s:Result>accepted</s:Result></s:BusinessResponse>");
+            if (body.Contains("ValidateSessionRequest", StringComparison.Ordinal))
+                return XmlResponse($"<s:ValidateSessionResponse xmlns:s=\"{ProtocolNamespace}\"><s:Validation><s:Status>valid</s:Status></s:Validation></s:ValidateSessionResponse>");
             return new(200, "text/xml; charset=utf-8", Encoding.UTF8.GetBytes(response.Xml));
         }
     }
@@ -637,6 +1013,27 @@ public sealed class TypedSessionHandshakeTests
 
         internal static HandshakeResponse ExternalAdmissionRequired() => Payload(
             $"<s:CreateSessionResponse xmlns:s=\"{ProtocolNamespace}\"><s:Result><s:Status>external_admission_required</s:Status><s:Admission><s:Provenance>interactive_handoff</s:Provenance></s:Admission></s:Result></s:CreateSessionResponse>");
+
+        internal static HandshakeResponse OversizedIndividualValue(string kind) => IndividualValue(kind, 16_385);
+
+        internal static HandshakeResponse IndividualValue(string kind, int length)
+        {
+            string value = new('x', length);
+            string result = kind switch
+            {
+                "text" => $"<s:Result>{value}</s:Result>",
+                "cdata" => $"<s:Result><![CDATA[{value}]]></s:Result>",
+                "attribute" => $"<s:Result a=\"{value}\"/>",
+                _ => throw new ArgumentOutOfRangeException(nameof(kind))
+            };
+            return Payload($"<s:CreateSessionResponse xmlns:s=\"{ProtocolNamespace}\">{result}</s:CreateSessionResponse>");
+        }
+
+        internal static HandshakeResponse AggregateOversizedValues()
+        {
+            string value = new('x', 12_000);
+            return Payload($"<s:CreateSessionResponse xmlns:s=\"{ProtocolNamespace}\"><s:A>{value}</s:A><s:B>{value}</s:B><s:C>{value}</s:C></s:CreateSessionResponse>");
+        }
 
         internal static HandshakeResponse Malformed(string mutation) => mutation switch
         {

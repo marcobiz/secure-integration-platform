@@ -622,6 +622,78 @@ public sealed class PostgresIsolationTests
     }
 
     [Fact]
+    public async Task Wave1_IT_DAT_PostgreSQL18_typed_session_four_eyes_publication_and_runtime_locator_resolution_when_configured()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        string? migrationConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
+        if (string.IsNullOrWhiteSpace(migrationConnectionString)) Assert.Skip("PostgreSQL migration connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        await ApplyMigrationAsync();
+        await using AdminPostgresDataSource adminPool = new(connectionString);
+        await using AdminApiSecurityTests.PostgresRuntimeRoleLease runtimeRole = await AdminApiSecurityTests.PostgresRuntimeRoleLease.CreateAsync(connectionString, migrationConnectionString, TestContext.Current.CancellationToken);
+        await using NpgsqlDataSource runtimePool = NpgsqlDataSource.Create(runtimeRole.ConnectionString);
+        RoutingConnectorConfigurationStore store = new(adminPool, runtimePool);
+        PostgresGatewayRegistry registry = new(adminPool.Value);
+        PostgresAdminSecurityStore security = new(adminPool);
+        TestClock clock = new(DateTimeOffset.UtcNow);
+        ConnectorDefinitionValidator validator = new();
+        PublishedConnectorCatalog catalog = new(store, validator, clock, TimeSpan.FromMinutes(5));
+        ConnectorAdministrationService admin = new(store, validator, catalog, registry, clock, new FourEyesConnectorApprovalPolicy(security));
+        string suffix = Guid.NewGuid().ToString("N");
+        string connectorId = "typed-pg-" + suffix;
+        Guid tenantId = Guid.NewGuid();
+        Guid applicationId = Guid.NewGuid();
+        Guid environmentId = Guid.NewGuid();
+        Guid installationId = Guid.NewGuid();
+        await registry.AddTenantAsync(new(tenantId, "tw1pg-t-" + suffix, "Typed PG tenant", TenantStatus.Active, clock.UtcNow), TestContext.Current.CancellationToken);
+        await registry.AddApplicationAsync(new(applicationId, "tw1pg-a-" + suffix, "Typed PG application", ApplicationStatus.Active, "1.0.0", null, clock.UtcNow), TestContext.Current.CancellationToken);
+        await registry.AddEnvironmentAsync(new(environmentId, "tw1pg-e-" + suffix[..20], "Typed PG environment", false), TestContext.Current.CancellationToken);
+        await registry.AddInstallationAsync(new(installationId, tenantId, applicationId, environmentId, InstallationStatus.Active, "3.0.0", clock.UtcNow), TestContext.Current.CancellationToken);
+        await registry.AddGrantAsync(new(Guid.NewGuid(), installationId, tenantId, connectorId, "session-bootstrap", true, clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
+
+        ProviderResourceCatalogRecord username = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic", "typed-user-" + suffix,
+            ProviderResourceType.Secret, "Typed username", environmentId, connectorId, "session-bootstrap", "synthetic://typed-user-" + suffix,
+            ProviderResourceStatus.Active, null, 0, null, null, string.Empty, clock.UtcNow), TestContext.Current.CancellationToken);
+        ProviderResourceCatalogRecord password = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic", "typed-password-" + suffix,
+            ProviderResourceType.Secret, "Typed password", environmentId, connectorId, "session-bootstrap", "synthetic://typed-password-" + suffix,
+            ProviderResourceStatus.Active, null, 0, null, null, string.Empty, clock.UtcNow), TestContext.Current.CancellationToken);
+        using JsonDocument definition = JsonDocument.Parse(ConnectorRuntime.Auth.Soap.TypedSessionHandshakeRealHttpIntegrationTests.ProductionDefinition(connectorId));
+        AdminPrincipalRecord editor = await security.EnsurePrincipalAsync(new("https://typed-pg.invalid", "editor-" + suffix, "Editor", null), TestContext.Current.CancellationToken);
+        AdminPrincipalRecord approver = await security.EnsurePrincipalAsync(new("https://typed-pg.invalid", "approver-" + suffix, "Approver", null), TestContext.Current.CancellationToken);
+        ConnectorVersionResource imported = await admin.ImportAsync(definition.RootElement, null, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionResource validated = await admin.ValidateStoredAsync(connectorId, "1.0.0", imported.RowVersion, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await admin.PutBindingsAsync(connectorId, new(environmentId,
+            new Dictionary<string, string> { ["soap"] = "https://typed-session.example.test/" },
+            new Dictionary<string, ProviderResourceReference>
+            {
+                ["username"] = new(username.ProviderId, username.ResourceId, username.ResourceType),
+                ["password"] = new(password.ProviderId, password.ResourceId, password.ResourceType)
+            }, null, null, "1.0.0"), editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord stored = await store.GetVersionAsync(connectorId, "1.0.0", TestContext.Current.CancellationToken) ?? throw new InvalidOperationException("Typed version missing.");
+        ConnectorBindingSet binding = Assert.Single((await store.ListBindingsPageAsync(stored.Id, 0, 10, environmentId, TestContext.Current.CancellationToken)).Items);
+        ApprovalReviewResult review = ConnectorApprovalArtifacts.Create(stored, [binding]);
+        Assert.Equal("session-admission-validation", Assert.Single(Assert.Single(review.Artifact.Operations).AuthorityEndpoints).Role);
+        byte[] digest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
+        ConnectorApprovalRecord approvalRequest = await security.RequestApprovalAsync(stored, digest, editor.Id, Guid.NewGuid(), clock.UtcNow, TestContext.Current.CancellationToken);
+        GatewayException selfApproval = await Assert.ThrowsAsync<GatewayException>(() => store.ApproveCanonicalAsync(security, approvalRequest.Id, stored.Id,
+            Convert.ToHexString(digest), stored.CreatedBy, editor.Id, null, Guid.NewGuid(), clock.UtcNow.AddMilliseconds(1), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-ADMIN-FOUR-EYES", selfApproval.Code);
+        _ = await store.ApproveCanonicalAsync(security, approvalRequest.Id, stored.Id, Convert.ToHexString(digest), stored.CreatedBy, approver.Id, null,
+            Guid.NewGuid(), clock.UtcNow.AddMilliseconds(2), TestContext.Current.CancellationToken);
+        GatewayException wrongCurrentDigest = await Assert.ThrowsAsync<GatewayException>(() => store.PublishApprovedAsync(stored.Id, new byte[32], validated.RowVersion, 0,
+            approver.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow.AddMilliseconds(3), TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-ADMIN-APPROVAL-STALE", wrongCurrentDigest.Code);
+        _ = await admin.PublishAsync(connectorId, "1.0.0", validated.RowVersion, 0, approver.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        PublishedConnectorSnapshot snapshot = await store.GetPublishedSnapshotAsync(connectorId, environmentId,
+            new(installationId, tenantId, applicationId, "session-bootstrap"), TestContext.Current.CancellationToken)
+            ?? throw new InvalidOperationException("Published typed snapshot missing.");
+        Assert.Equal(2, snapshot.SecretProviderReferences.Count);
+        Assert.Equal(ConnectorVersionState.Published, snapshot.Version.State);
+        Assert.Equal(binding.Revision, snapshot.Bindings.Revision);
+    }
+
+    [Fact]
     public async Task M5_IT_DAT_Approved_binding_digest_and_publication_are_atomic_under_concurrent_mutation_when_configured()
     {
         string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");

@@ -14,8 +14,9 @@ the attack surface and would let callers influence server-owned authentication s
 
 - Request and response mapping are one `TypedSessionHandshakeProfile` in the immutable Published
   Connector operation. The profile fixes logical adapter ID/type pairs, exact request and response
-  QNames, SOAP version/action, bounds, local maximum lifetime and optional external-validation
-  endpoint/validator authority.
+  QNames, SOAP version/action, bounds and local maximum lifetime. Its optional external-validation
+  profile separately fixes the validation adapter ID/type, endpoint binding/path, SOAP
+  version/action, exact QNames, deadline and request/response bounds.
 - Only an already-authorized Gateway invocation and a logical profile ID may enter the resolver.
   The current Published snapshot supplies endpoint, ConnectorVersion, binding/resource revisions,
   resource stamp and policy checksum. These decisions are included in the four-eyes review digest.
@@ -24,11 +25,15 @@ the attack surface and would let callers influence server-owned authentication s
 - Hardened Core opens the exact request element and supplies an `XmlWriter` for its structured
   children. Writes are byte-bounded while they occur. Core owns SOAP serialization and HTTP policy.
 - Core validates the bounded response document, DTD/entity prohibition, depth/node/attribute
-  limits, exact Envelope/Body, one payload and exact payload QName before a registered response
-  adapter receives a bounded `XmlReader`. The adapter returns only `Issued`,
+  limits, per-text/per-CDATA/per-attribute-value limits, exact Envelope/Body, one payload and exact
+  payload QName before a registered response adapter receives a bounded `XmlReader`. The adapter returns only `Issued`,
   `ExternalAdmissionRequired` or `Rejected`.
-- External presentation uses an owned sensitive candidate buffer and a closed
-  `InteractiveHandoff` provenance. It never enters the ordinary connector business-input contract.
+- The public completion boundary accepts only the authenticated `GatewayClientPrincipal`, opaque
+  intent reference and bounded candidate bytes. It recovers Connector/operation/profile, cache
+  key, expiry and the closed `InteractiveHandoff` provenance from server-side intent state,
+  reauthorizes the current grant and re-resolves the Published profile. Only this boundary can
+  construct the internal, owned sensitive candidate. The candidate never enters the ordinary
+  connector business-input contract.
 - An external-admission intent is opaque, TTL-bounded, single-use and bound to authenticated
   Tenant/Application/Installation, exact cache key, ConnectorVersion/operation/profile, endpoint,
   resource revisions, Published checksum and resource stamp.
@@ -36,14 +41,28 @@ the attack surface and would let callers influence server-owned authentication s
   cache. The 256-key cap, lazy expiry sweep, striped acquisition locks, one current generation and
   existing invalidation/rotation semantics remain authoritative. There is no second cache or
   lifecycle.
-- A registered typed validator may validate the candidate through its exact Published restricted
-  endpoint and returns only validity/status/remote expiry. It has no cache capability. Core
-  revalidates Published authority and resource stamps after remote validation, caps remote expiry
-  by the local maximum, and alone performs atomic generation promotion.
+- A registered typed validation adapter has no transport or cache capability. It only serializes
+  the protocol-specific request body and parses the already bounded response into a closed
+  validity/status/remote-expiry outcome. Core alone resolves the Published endpoint and existing
+  server-owned credential bindings, pins DNS/IP, denies proxy/redirect, enforces HTTPS, deadline
+  and byte bounds, creates the SOAP envelope and performs the network call and hardened parse.
+- Published, binding and provider-resource mutations open a fixed 64-stripe process-local authority
+  lease before mutation and advance its generation again when the mutation succeeds or fails.
+  Leases mark the affected stripe active without holding its lock across database I/O. Completion
+  captures a generation before remote validation, performs every asynchronous Published/resource
+  revalidation first, then executes a synchronous compare-and-promote only if that generation is
+  current and no relevant mutation is active. The same critical section checks the intent proof and
+  session generation, consumes the intent and promotes the new session; there is no await,
+  in-progress-mutation window or check/write gap. Core caps remote expiry by the local maximum.
+- Extension-thrown cancellation is preserved only when the actual caller/deadline token is
+  cancelled, and is rethrown without extension message or inner exception. Otherwise it is a
+  sanitized adapter failure, as are all other extension exceptions.
 
 ## Consequences
 
 Nested protocols require small compiled adapters and explicit tests for order, cardinality,
 allowed domains, duplicate/unexpected elements and mixed content. Existing scalar session profiles
 do not register adapters and continue unchanged. Scale-out storage, generic XML mapping, arbitrary
-session insertion and protocol-specific semantics remain outside this decision.
+session insertion and protocol-specific semantics remain outside this decision. The striped
+mutation authority matches the existing single-node bounded session cache; a future scale-out
+cache requires a correspondingly distributed linearization authority and a new decision.

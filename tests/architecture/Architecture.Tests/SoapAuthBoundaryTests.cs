@@ -110,8 +110,11 @@ public sealed class SoapAuthBoundaryTests
         Assert.Contains("ITypedSessionHandshakeRequestAdapter", source, StringComparison.Ordinal);
         Assert.Contains("XmlWriter writer", source, StringComparison.Ordinal);
         Assert.Contains("ITypedSessionHandshakeResponseAdapter", source, StringComparison.Ordinal);
+        Assert.Contains("ITypedExternalSessionValidationAdapter", source, StringComparison.Ordinal);
         Assert.Contains("XmlReader payload", source, StringComparison.Ordinal);
         Assert.Contains("ExternalSessionCandidate candidate", source, StringComparison.Ordinal);
+        Assert.Contains("PublishedConnectorMutationAuthority", source, StringComparison.Ordinal);
+        Assert.Contains("TryPromoteIfCurrent", source, StringComparison.Ordinal);
         Assert.Contains("cache.CompleteAdmission", source, StringComparison.Ordinal);
         Assert.Equal(1, source.Split("private readonly SoapSessionCache cache = new();", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("Dictionary<string, object", source, StringComparison.OrdinalIgnoreCase);
@@ -122,8 +125,15 @@ public sealed class SoapAuthBoundaryTests
         Assert.DoesNotContain("PutSession", source, StringComparison.Ordinal);
         Assert.DoesNotContain("SetCachedToken", source, StringComparison.Ordinal);
         Assert.DoesNotContain("PromoteSession", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("IAuthorizedExternalSessionValidator", source, StringComparison.Ordinal);
+        string contracts = File.ReadAllText(Path.Combine(soapRoot, "TypedSessionHandshakeContracts.cs"));
+        Assert.DoesNotContain("Task<ExternalSessionValidationResult> ValidateAsync", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public sealed class ExternalSessionCandidate", contracts, StringComparison.Ordinal);
         Assert.DoesNotContain("raw XElement", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("raw XML", source, StringComparison.OrdinalIgnoreCase);
+        string mutationAuthority = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "PublishedConnectorMutationAuthority.cs"));
+        Assert.Contains("BeginMutation", mutationAuthority, StringComparison.Ordinal);
+        Assert.Contains("ActiveMutations != 0", mutationAuthority, StringComparison.Ordinal);
 
         string schema = File.ReadAllText(Path.Combine(Root, "docs", "connectors", "connector-definition.schema.json"));
         Assert.Contains("typedSessionHandshake", schema, StringComparison.Ordinal);

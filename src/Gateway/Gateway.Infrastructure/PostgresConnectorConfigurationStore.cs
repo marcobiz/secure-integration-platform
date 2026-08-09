@@ -8,11 +8,18 @@ using SecureIntegration.Gateway.Domain;
 namespace SecureIntegration.Gateway.Infrastructure;
 
 /// <summary>PostgreSQL 18 Connector lifecycle store with transactional publication and rollback.</summary>
-public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSource, IAdminTransactionFaultInjector? faultInjector = null) : IConnectorConfigurationStore
+public sealed class PostgresConnectorConfigurationStore(
+    NpgsqlDataSource dataSource,
+    IAdminTransactionFaultInjector? faultInjector = null,
+    PublishedConnectorMutationAuthority? runtimeMutationAuthority = null) : IConnectorConfigurationStore, IPublishedConnectorMutationAuthoritySource
 {
+    /// <inheritdoc />
+    public PublishedConnectorMutationAuthority RuntimeMutationAuthority { get; } = runtimeMutationAuthority ?? new();
+
     /// <inheritdoc />
     public async Task<ProviderResourceCatalogRecord> RegisterProviderResourceAsync(ProviderResourceCatalogRecord resource, CancellationToken cancellationToken)
     {
+        using PublishedConnectorMutationAuthority.MutationLease mutation = BeginResourceMutation(resource);
         ProviderResourceReferenceValidator.Validate(new(resource.ProviderId, resource.ResourceId, resource.ResourceType, resource.Version, resource.PublicMetadataRevision));
         if (resource.ResourceType == ProviderResourceType.ClientCertificate && resource.CertificateMetadata is null) throw new GatewayException("BGW-PROVIDER-CERTIFICATE-METADATA-REQUIRED", 409);
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
@@ -225,6 +232,7 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
     /// <inheritdoc />
     public async Task<ConnectorVersionRecord> PublishAsync(Guid versionId, long expectedRowVersion, long expectedPublicationRevision, string actor, DateTimeOffset now, CancellationToken cancellationToken)
     {
+        using PublishedConnectorMutationAuthority.MutationLease mutation = RuntimeMutationAuthority.BeginMutationAll();
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
         ConnectorVersionRecord target = await ReadVersionForUpdateAsync(connection, transaction, versionId, cancellationToken).ConfigureAwait(false);
@@ -244,6 +252,7 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
     /// <inheritdoc />
     public async Task<ConnectorVersionRecord> PublishApprovedAsync(Guid versionId, byte[] expectedBindingDigestSha256, long expectedRowVersion, long expectedPublicationRevision, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
+        using PublishedConnectorMutationAuthority.MutationLease mutation = RuntimeMutationAuthority.BeginMutationAll();
         try
         {
             return await PublishApprovedCoreAsync(versionId, expectedBindingDigestSha256, expectedRowVersion, expectedPublicationRevision, actor, correlationId, now, cancellationToken).ConfigureAwait(false);
@@ -297,6 +306,7 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
     /// <inheritdoc />
     public async Task<ConnectorVersionRecord> RollbackAsync(string connectorId, string targetVersion, long expectedActiveRowVersion, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
+        using PublishedConnectorMutationAuthority.MutationLease mutation = RuntimeMutationAuthority.BeginMutationAll();
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
         Guid connectorGuid;
@@ -327,6 +337,7 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
     /// <inheritdoc />
     public async Task<ConnectorVersionRecord> RetireAsync(Guid versionId, long expectedRowVersion, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
+        using PublishedConnectorMutationAuthority.MutationLease mutation = RuntimeMutationAuthority.BeginMutationAll();
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
         ConnectorVersionRecord target = await ReadVersionForUpdateAsync(connection, transaction, versionId, cancellationToken).ConfigureAwait(false);
@@ -343,6 +354,7 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
     /// <inheritdoc />
     public async Task<ConnectorBindingSet> PutBindingsAsync(ConnectorBindingSet bindings, long? expectedRevision, Guid correlationId, CancellationToken cancellationToken)
     {
+        using PublishedConnectorMutationAuthority.MutationLease mutation = RuntimeMutationAuthority.BeginMutationAll();
         try
         {
             string endpointJson = JsonSerializer.Serialize(bindings.Endpoints.ToDictionary(item => item.Key, item => item.Value.AbsoluteUri, StringComparer.Ordinal));
@@ -644,6 +656,11 @@ public sealed class PostgresConnectorConfigurationStore(NpgsqlDataSource dataSou
         current.ProviderDisplayName == candidate.ProviderDisplayName && current.ProviderType == candidate.ProviderType && current.DisplayName == candidate.DisplayName &&
         current.EnvironmentId == candidate.EnvironmentId && current.ConnectorScope == candidate.ConnectorScope && current.OperationScope == candidate.OperationScope &&
         current.ProviderReference == candidate.ProviderReference && current.Status == candidate.Status && current.PublicMetadataRevision == candidate.PublicMetadataRevision && current.CertificateMetadata == candidate.CertificateMetadata;
+
+    private PublishedConnectorMutationAuthority.MutationLease BeginResourceMutation(ProviderResourceCatalogRecord resource) =>
+        resource.EnvironmentId != Guid.Empty && !string.IsNullOrWhiteSpace(resource.ConnectorScope) && !string.Equals(resource.ConnectorScope, "*", StringComparison.Ordinal)
+            ? RuntimeMutationAuthority.BeginMutation(resource.ConnectorScope, resource.EnvironmentId)
+            : RuntimeMutationAuthority.BeginMutationAll();
 
     private static string ResourceType(ProviderResourceType value) => value == ProviderResourceType.ClientCertificate ? "client_certificate" : "secret";
     private static ProviderResourceType ParseResourceType(string value) => value == "client_certificate" ? ProviderResourceType.ClientCertificate : ProviderResourceType.Secret;

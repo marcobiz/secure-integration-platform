@@ -27,6 +27,10 @@ The `typedSessionHandshake` definition member is checksum/four-eyes controlled a
 - local maximum session lifetime;
 - optional validator ID/type, validation endpoint/path, intent TTL, timeout and response bound.
 
+The external-validation profile also fixes SOAP version/action, exact request/response QName and
+maximum request bytes. It does not grant the validation adapter any endpoint, credential, timeout,
+DNS or HTTP authority.
+
 The immutable authority fingerprint also covers ConnectorVersion ID/version/checksum, publication
 revision, binding checksum/revision, resource stamp, credential resource revisions, operation and
 profile. Registry lookup is exact and uses no CLR reflection.
@@ -37,9 +41,17 @@ Published metadata only; there is no arbitrary dictionary or ordinary business p
 write stream stops output at the Published request limit.
 
 The response path first applies the existing hardened XML reader settings and structural SOAP
-checks. Only the expected payload is exposed through `XmlReader` to the compiled response adapter.
+checks, including the generic 16,384-character bound on each text, CDATA and attribute value before
+`XDocument` construction. Only the expected payload is exposed through `XmlReader` to the compiled response adapter.
 The adapter performs protocol-specific nested validation and returns the closed
 `TypedSessionHandshakeAdapterOutcome`.
+
+The compiled external-validation adapter is equally narrow: it writes only typed payload children
+and parses only the exact bounded payload into a closed status and remote expiry. Core resolves the
+validation operation from Published state, including the endpoint and the operation's existing
+Basic credential bindings, then owns the SOAP envelope, restricted HTTPS transport, DNS/IP pinning,
+no-proxy/no-redirect policy, deadline, request/response limits, Fault boundary and hardened parse.
+No adapter constructor or context contains a URL, credential locator, secret, timeout or transport.
 
 ## Authorized external admission
 
@@ -47,23 +59,45 @@ The adapter performs protocol-specific nested validation and returns the closed
 `ExternalAdmissionRequired`. It carries an opaque reference plus safe provenance/expiry metadata;
 the cache retains only its digest and exact authority binding.
 
-`ExternalSessionCandidate` is a dedicated presentation type with an owned, bounded UTF-8 buffer.
-The completion method consumes and clears it on every terminal path. Candidate, admitted value,
-validator body and remote diagnostics are absent from exceptions, `ToString`, JSON and audit
-metadata.
+`ExternalSessionCandidate` is internal and has an owned, bounded UTF-8 buffer. The public runtime
+completion method accepts only an authenticated `GatewayClientPrincipal`, the opaque intent
+reference and candidate bytes. It resolves the intent from the bounded SOAP cache, reauthorizes the
+principal/grant, re-resolves the current Published Connector/operation/profile and validates the
+server-owned cache key, expiry and `InteractiveHandoff` provenance before constructing the internal
+candidate. The completion method consumes and clears the candidate on every terminal path.
+Candidate, admitted value, validation body and remote diagnostics are absent from exceptions,
+`ToString`, JSON and audit metadata.
 
 The sequence is:
 
-1. revalidate Published authority and the existing session resource stamp;
-2. reserve the exact intent once in the existing cache;
-3. call the profile-selected validator with the sensitive candidate and exact validation context;
-4. revalidate Published authority and resource stamp after the remote await;
-5. verify the reserved interaction and session generation are still current;
-6. cap valid remote expiry by the Published local maximum;
-7. atomically promote the candidate as the one current generation in `SoapSessionCache`.
+1. resolve the intent and reauthorize its authenticated principal and exact current profile;
+2. capture the Connector/Environment generation from the store's shared 64-stripe mutation authority;
+3. reserve the exact intent once in the existing cache;
+4. serialize a typed validation request and perform the Core-controlled restricted HTTPS call;
+5. parse the bounded response and obtain a candidate-bound internal validation proof;
+6. revalidate Published authority and resource stamp after the remote await;
+7. validate the remote expiry and cap it by the Published local maximum; and
+8. after all awaits, compare the captured authority generation and synchronously verify the proof,
+   intent/session generation and exact fingerprint, consume the intent and promote one current
+   session under the same stripe.
+
+Every Published version, binding or provider-resource mutation opens a fixed-stripe lease before it
+mutates state and advances the generation again on disposal after success or failure. No lock is
+held across database I/O, but compare-and-promote rejects both stale generations and any active
+mutation, including a resolver that captured after mutation begin but before commit. There is no
+global lock and no await between the final generation compare and cache promotion. Deterministic
+tests cover that entire in-progress window and the hook immediately after the last async check;
+publish/rotate/disable in either former gap makes compare-and-promote fail.
 
 Validation rejection/failure, cancellation, expiry, reuse, cross-context/profile/key mismatch,
 rotation or disable abandons the intent and never promotes a session.
+
+The production composition root registers one bounded explicit registry (maximum 256 entries per
+adapter role), the real `GatewayInvocationAuthorizer`, Published resolver/resource-stamp provider,
+restricted SOAP client and `TypedSessionHandshakeRuntime`. It exposes authenticated acquire and
+completion routes. The completion route takes its candidate as a bounded request body, clears that
+buffer on exit and never accepts tenant, application, installation, ConnectorVersion, profile,
+lifecycle key, provenance, expiry, endpoint, credential or adapter selectors.
 
 ## Synthetic protocol and verification matrix
 
@@ -74,11 +108,14 @@ validated candidate so a subsequent session-authenticated business operation pro
 reuse.
 
 Named tests cover Published adapter selection; nested request/response; strict order, cardinality,
-domain, duplicate, unexpected, mixed-content and nested denial; DTD/QName/Body hardening; direct
-issuance; external handoff; wrong/reused/expired/cross-context/profile intent; validation failure;
-remote-expiry validation/capping; rotate/disable race; request bound; 256-key cap/lazy sweep;
-redaction; real TLS; subsequent session use; architecture neutrality; and the complete legacy SOAP
-regression.
+domain, duplicate, unexpected, mixed-content and nested denial; DTD/QName/Body hardening; individual
+text/CDATA/attribute and aggregate bounds before adapter invocation; fake and real cancellation at
+all three adapter boundaries; direct issuance; authenticated external handoff; wrong/reused/expired/
+cross-context/profile intent; candidate/proof substitution and replay; validation failure; remote
+expiry validation/capping; rotate/disable during validation and in the final pre-promotion window;
+simultaneous double completion; 256-key cap/lazy sweep; redaction; real TLS; subsequent session use;
+architecture neutrality; production composition/store/four-eyes/authorizer/registry execution; and
+the complete legacy SOAP regression. Concurrency tests use barriers/hooks rather than sleep.
 
 The local full-suite, PostgreSQL 18, scan, SBOM and vulnerability evidence is recorded in the
 testing report. Core export, exact-head CI and independent review are qualified only after the

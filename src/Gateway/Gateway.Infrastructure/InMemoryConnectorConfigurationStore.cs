@@ -5,7 +5,9 @@ using SecureIntegration.Gateway.Domain;
 namespace SecureIntegration.Gateway.Infrastructure;
 
 /// <summary>Deterministic Connector lifecycle store for Development and tests.</summary>
-public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditRegistry = null) : IConnectorConfigurationStore
+public sealed class InMemoryConnectorConfigurationStore(
+    IGatewayRegistry? auditRegistry = null,
+    PublishedConnectorMutationAuthority? runtimeMutationAuthority = null) : IConnectorConfigurationStore, IPublishedConnectorMutationAuthoritySource
 {
     private readonly object gate = new();
     private readonly Dictionary<string, Guid> connectorIds = new(StringComparer.Ordinal);
@@ -17,9 +19,13 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
     private readonly Dictionary<string, List<ProviderResourceCatalogRecord>> providerResources = new(StringComparer.Ordinal);
 
     /// <inheritdoc />
+    public PublishedConnectorMutationAuthority RuntimeMutationAuthority { get; } = runtimeMutationAuthority ?? new();
+
+    /// <inheritdoc />
     public Task<ProviderResourceCatalogRecord> RegisterProviderResourceAsync(ProviderResourceCatalogRecord resource, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        using PublishedConnectorMutationAuthority.MutationLease mutation = BeginResourceMutation(resource);
         ProviderResourceReferenceValidator.Validate(new(resource.ProviderId, resource.ResourceId, resource.ResourceType, resource.Version, resource.PublicMetadataRevision));
         if (resource.ResourceType == ProviderResourceType.ClientCertificate && resource.CertificateMetadata is null) throw new GatewayException("BGW-PROVIDER-CERTIFICATE-METADATA-REQUIRED", 409);
         lock (gate)
@@ -216,6 +222,7 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
     public Task<ConnectorVersionRecord> PublishAsync(Guid versionId, long expectedRowVersion, long expectedPublicationRevision, string actor, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        using PublishedConnectorMutationAuthority.MutationLease mutation = RuntimeMutationAuthority.BeginMutationAll();
         lock (gate)
         {
             ConnectorVersionRecord target = Required(versionId);
@@ -243,6 +250,7 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
     public Task<ConnectorVersionRecord> PublishApprovedAsync(Guid versionId, byte[] expectedBindingDigestSha256, long expectedRowVersion, long expectedPublicationRevision, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        using PublishedConnectorMutationAuthority.MutationLease mutation = RuntimeMutationAuthority.BeginMutationAll();
         throw new GatewayException("BGW-ADMIN-ATOMIC-PUBLISH-REQUIRES-POSTGRES", 503);
     }
 
@@ -250,6 +258,7 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
     public Task<ConnectorVersionRecord> RollbackAsync(string connectorId, string targetVersion, long expectedActiveRowVersion, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        using PublishedConnectorMutationAuthority.MutationLease mutation = RuntimeMutationAuthority.BeginMutationAll();
         lock (gate)
         {
             if (!connectorIds.TryGetValue(connectorId, out Guid connectorGuid) || !activeVersions.TryGetValue(connectorGuid, out Guid activeId)) throw new GatewayException("BGW-CONNECTOR-NOT-PUBLISHED", 409);
@@ -270,6 +279,7 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
     public Task<ConnectorVersionRecord> RetireAsync(Guid versionId, long expectedRowVersion, string actor, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        using PublishedConnectorMutationAuthority.MutationLease mutation = RuntimeMutationAuthority.BeginMutationAll();
         lock (gate)
         {
             ConnectorVersionRecord value = Required(versionId);
@@ -290,6 +300,7 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
     public Task<ConnectorBindingSet> PutBindingsAsync(ConnectorBindingSet bindings, long? expectedRevision, Guid correlationId, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        using PublishedConnectorMutationAuthority.MutationLease mutation = RuntimeMutationAuthority.BeginMutationAll();
         lock (gate)
         {
             if (!connectorIds.ContainsValue(bindings.ConnectorId)) throw new GatewayException("BGW-CONNECTOR-NOT-FOUND", 404);
@@ -421,4 +432,9 @@ public sealed class InMemoryConnectorConfigurationStore(IGatewayRegistry? auditR
         current.ProviderDisplayName == candidate.ProviderDisplayName && current.ProviderType == candidate.ProviderType && current.DisplayName == candidate.DisplayName &&
         current.EnvironmentId == candidate.EnvironmentId && current.ConnectorScope == candidate.ConnectorScope && current.OperationScope == candidate.OperationScope &&
         current.ProviderReference == candidate.ProviderReference && current.Status == candidate.Status && current.PublicMetadataRevision == candidate.PublicMetadataRevision && current.CertificateMetadata == candidate.CertificateMetadata;
+
+    private PublishedConnectorMutationAuthority.MutationLease BeginResourceMutation(ProviderResourceCatalogRecord resource) =>
+        resource.EnvironmentId != Guid.Empty && !string.IsNullOrWhiteSpace(resource.ConnectorScope) && !string.Equals(resource.ConnectorScope, "*", StringComparison.Ordinal)
+            ? RuntimeMutationAuthority.BeginMutation(resource.ConnectorScope, resource.EnvironmentId)
+            : RuntimeMutationAuthority.BeginMutationAll();
 }

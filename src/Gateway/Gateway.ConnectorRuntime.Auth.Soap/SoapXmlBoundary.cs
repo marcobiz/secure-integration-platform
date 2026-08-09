@@ -14,6 +14,7 @@ internal static class SoapXmlBoundary
     private const int MaximumNodes = 10_000;
     private const int MaximumAttributesPerElement = 32;
     private const int MaximumAttributes = 1_024;
+    private const int MaximumIndividualValueCharacters = 16_384;
     private const int MaximumExtractedCharacters = 65_536;
     private static readonly UTF8Encoding Utf8 = new(false, true);
 
@@ -206,6 +207,7 @@ internal static class SoapXmlBoundary
         {
             using MemoryStream input = new(body, writable: false);
             using XmlReader reader = XmlReader.Create(input, settings);
+            char[] valueChunk = new char[4_096];
             int nodes = 0;
             int attributes = 0;
             while (reader.Read())
@@ -215,7 +217,15 @@ internal static class SoapXmlBoundary
                 if (reader.NodeType == XmlNodeType.Element)
                 {
                     if (reader.AttributeCount > MaximumAttributesPerElement || (attributes += reader.AttributeCount) > MaximumAttributes) throw new SoapAuthException("SOAP-XML-COMPLEXITY");
+                    if (reader.HasAttributes)
+                    {
+                        while (reader.MoveToNextAttribute())
+                            EnsureIndividualValueBound(reader, valueChunk);
+                        reader.MoveToElement();
+                    }
                 }
+                else if (reader.NodeType is XmlNodeType.Text or XmlNodeType.CDATA)
+                    EnsureIndividualValueBound(reader, valueChunk);
             }
             input.Position = 0;
             using XmlReader documentReader = XmlReader.Create(input, settings);
@@ -226,6 +236,25 @@ internal static class SoapXmlBoundary
         catch (SoapAuthException) { throw; }
         catch (XmlException) { throw new SoapAuthException("SOAP-XML-MALFORMED"); }
         catch (DecoderFallbackException) { throw new SoapAuthException("SOAP-XML-MALFORMED"); }
+    }
+
+    private static void EnsureIndividualValueBound(XmlReader reader, char[] chunk)
+    {
+        if (!reader.CanReadValueChunk)
+        {
+            if (reader.Value.Length > MaximumIndividualValueCharacters) throw new SoapAuthException("SOAP-XML-VALUE-TOO-LARGE");
+            return;
+        }
+
+        int characters = 0;
+        int read;
+        do
+        {
+            read = reader.ReadValueChunk(chunk, 0, chunk.Length);
+            characters = checked(characters + read);
+            if (characters > MaximumIndividualValueCharacters) throw new SoapAuthException("SOAP-XML-VALUE-TOO-LARGE");
+        }
+        while (read != 0);
     }
 
     private static SoapFaultException ParseFault(XElement fault, SoapEnvelopeVersion version, IReadOnlyDictionary<(string LocalName, string NamespaceUri), SoapFaultCategory> rules, CancellationToken cancellationToken)

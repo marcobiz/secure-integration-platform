@@ -11,11 +11,11 @@ internal static class TypedSessionHandshakeXmlBoundary
 {
     private static readonly UTF8Encoding Utf8 = new(false, true);
 
-    internal static byte[] SerializeRequest(TypedSessionHandshakeAuthorityState state)
+    internal static byte[] SerializeRequest(TypedSessionHandshakeAuthorityState state, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(state);
-        byte[] fragment = SerializeAdapterFragment(state);
-        XDocument fragmentDocument = SoapXmlBoundary.LoadHardened(fragment, state.Operation.MaximumRequestBytes, CancellationToken.None);
+        byte[] fragment = SerializeAdapterFragment(state, cancellationToken);
+        XDocument fragmentDocument = SoapXmlBoundary.LoadHardened(fragment, state.Operation.MaximumRequestBytes, cancellationToken);
         XElement wrapper = fragmentDocument.Root ?? throw TypedSessionHandshakeFailures.AdapterRejected();
         if (wrapper.Name != XName.Get("AdapterPayload", "urn:secure-integration:typed-session-handshake:internal") ||
             wrapper.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration))
@@ -38,6 +38,8 @@ internal static class TypedSessionHandshakeXmlBoundary
             if (output.Length > state.Operation.MaximumRequestBytes) throw new SoapAuthException("SOAP-REQUEST-TOO-LARGE");
             return output.ToArray();
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
+        catch (OperationCanceledException) { throw TypedSessionHandshakeFailures.AdapterRejected(); }
         catch (SoapAuthException) { throw; }
         catch (Exception exception) when (exception is XmlException or InvalidOperationException or ArgumentException)
         {
@@ -61,8 +63,89 @@ internal static class TypedSessionHandshakeXmlBoundary
             cancellationToken.ThrowIfCancellationRequested();
             return outcome;
         }
-        catch (OperationCanceledException) { throw; }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
+        catch (OperationCanceledException) { throw TypedSessionHandshakeFailures.AdapterRejected(); }
         catch (Exception) { throw TypedSessionHandshakeFailures.AdapterRejected(); }
+    }
+
+    internal static byte[] SerializeValidationRequest(
+        TypedSessionHandshakeAuthorityState state,
+        ExternalSessionCandidate candidate,
+        ExternalSessionProvenance provenance,
+        CancellationToken cancellationToken)
+    {
+        SoapOperationProfile operation = state.AdmissionOperation ?? throw TypedSessionHandshakeFailures.AdmissionNotSupported();
+        ITypedExternalSessionValidationAdapter adapter = state.AdmissionValidationAdapter ?? throw TypedSessionHandshakeFailures.AdmissionNotSupported();
+        try
+        {
+            using BoundedWriteStream fragment = new(operation.MaximumRequestBytes);
+            using (XmlWriter writer = XmlWriter.Create(fragment, Settings()))
+            {
+                writer.WriteStartElement("core", "AdapterPayload", "urn:secure-integration:typed-session-handshake:internal");
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    adapter.WriteValidationRequest(writer, new(state, candidate, provenance));
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
+                catch (OperationCanceledException) { throw TypedSessionHandshakeFailures.ValidationFailed(); }
+                catch (SoapAuthException exception) when (string.Equals(exception.Code, "SOAP-REQUEST-TOO-LARGE", StringComparison.Ordinal)) { throw; }
+                catch (Exception) { throw TypedSessionHandshakeFailures.ValidationFailed(); }
+                writer.WriteEndElement();
+            }
+
+            byte[] bytes = fragment.ToArray();
+            XDocument fragmentDocument = SoapXmlBoundary.LoadHardened(bytes, operation.MaximumRequestBytes, cancellationToken);
+            XElement wrapper = fragmentDocument.Root ?? throw TypedSessionHandshakeFailures.ValidationFailed();
+            if (wrapper.Name != XName.Get("AdapterPayload", "urn:secure-integration:typed-session-handshake:internal") ||
+                wrapper.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration))
+                throw TypedSessionHandshakeFailures.ValidationFailed();
+
+            using BoundedWriteStream output = new(operation.MaximumRequestBytes);
+            using (XmlWriter writer = XmlWriter.Create(output, Settings()))
+            {
+                string envelopeNamespace = SoapXmlBoundary.EnvelopeNamespace(operation.Version);
+                writer.WriteStartElement("soap", "Envelope", envelopeNamespace);
+                writer.WriteStartElement("soap", "Body", envelopeNamespace);
+                writer.WriteStartElement("op", operation.RequestElement.LocalName, operation.RequestElement.NamespaceUri);
+                foreach (XNode node in wrapper.Nodes()) node.WriteTo(writer);
+                writer.WriteEndElement();
+                writer.WriteEndElement();
+                writer.WriteEndElement();
+            }
+            return output.ToArray();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
+        catch (OperationCanceledException) { throw TypedSessionHandshakeFailures.ValidationFailed(); }
+        catch (SoapAuthException) { throw; }
+        catch (Exception exception) when (exception is XmlException or InvalidOperationException or ArgumentException)
+        {
+            throw TypedSessionHandshakeFailures.ValidationFailed();
+        }
+    }
+
+    internal static ExternalSessionValidationResult ParseValidationResponse(
+        TypedSessionHandshakeAuthorityState state,
+        ExternalResponse response,
+        CancellationToken cancellationToken)
+    {
+        SoapOperationProfile operation = state.AdmissionOperation ?? throw TypedSessionHandshakeFailures.AdmissionNotSupported();
+        ITypedExternalSessionValidationAdapter adapter = state.AdmissionValidationAdapter ?? throw TypedSessionHandshakeFailures.AdmissionNotSupported();
+        XElement payload = SoapXmlBoundary.ParseTypedPayload(operation, response,
+            new Dictionary<(string LocalName, string NamespaceUri), SoapFaultCategory>(), cancellationToken);
+        try
+        {
+            using XmlReader reader = payload.CreateReader();
+            if (reader.MoveToContent() != XmlNodeType.Element) throw TypedSessionHandshakeFailures.ValidationFailed();
+            ExternalSessionValidationResult result = adapter.ReadValidationResponse(reader, new(state))
+                ?? throw TypedSessionHandshakeFailures.ValidationFailed();
+            cancellationToken.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
+        catch (OperationCanceledException) { throw TypedSessionHandshakeFailures.ValidationFailed(); }
+        catch (Exception) { throw TypedSessionHandshakeFailures.ValidationFailed(); }
     }
 
     internal static void ApplyHttpHeaders(HttpRequestMessage request, SoapOperationProfile operation, byte[] envelope)
@@ -81,7 +164,7 @@ internal static class TypedSessionHandshakeXmlBoundary
         }
     }
 
-    private static byte[] SerializeAdapterFragment(TypedSessionHandshakeAuthorityState state)
+    private static byte[] SerializeAdapterFragment(TypedSessionHandshakeAuthorityState state, CancellationToken cancellationToken)
     {
         try
         {
@@ -89,7 +172,14 @@ internal static class TypedSessionHandshakeXmlBoundary
             using (XmlWriter writer = XmlWriter.Create(fragment, Settings()))
             {
                 writer.WriteStartElement("core", "AdapterPayload", "urn:secure-integration:typed-session-handshake:internal");
-                try { state.RequestAdapter.WriteRequest(writer, new(state)); }
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    state.RequestAdapter.WriteRequest(writer, new(state));
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
+                catch (OperationCanceledException) { throw TypedSessionHandshakeFailures.AdapterRejected(); }
                 catch (SoapAuthException exception) when (string.Equals(exception.Code, "SOAP-REQUEST-TOO-LARGE", StringComparison.Ordinal)) { throw; }
                 catch (Exception) { throw TypedSessionHandshakeFailures.AdapterRejected(); }
                 writer.WriteEndElement();
@@ -97,6 +187,8 @@ internal static class TypedSessionHandshakeXmlBoundary
             if (fragment.Length > state.Operation.MaximumRequestBytes) throw new SoapAuthException("SOAP-REQUEST-TOO-LARGE");
             return fragment.ToArray();
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
+        catch (OperationCanceledException) { throw TypedSessionHandshakeFailures.AdapterRejected(); }
         catch (SoapAuthException) { throw; }
         catch (Exception exception) when (exception is XmlException or InvalidOperationException or ArgumentException)
         {
