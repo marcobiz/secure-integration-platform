@@ -8,7 +8,11 @@ Official source snapshot: `ministero-salute/it-fse-support` commit `430e6b5d9dde
 
 Wave branch: `wave1/fse2-national`
 
-Verdict: **NO-GO before implementation - generic capability gap**
+Original freeze verdict: **NO-GO before implementation - generic capability gap**
+
+Resume verdict on baseline `705e9d4bd203ca7b902ad0aeedc9d4402f9f4452`:
+**FROZEN_SPEC_ACCEPTED / BLOCKED_BY_TRUSTED_ACTOR_SOURCE**. The generic gaps recorded
+below are retained as historical freeze evidence and are closed on the resumed baseline.
 
 This document is a public-safe freeze produced before connector code. It uses only the
 official public sources listed below. No production endpoint was contacted and no real
@@ -29,6 +33,15 @@ The guide references Affinity Domain Italia 2.6.1 in its references and records 
 of value tables to 2.6.4 in change 2.23. This freeze does not silently normalize that
 difference. Value-set implementation requires an exact, separately frozen official
 Affinity Domain artifact.
+
+## Currency check on resume
+
+The public official repository was checked again on 2026-08-09 without contacting an
+FSE service. Both repository `HEAD` and `refs/heads/main` still resolve to
+`430e6b5d9dde8a35b04ae635c11303db787a977e`. The GitHub comparison from the frozen commit
+to `main` is identical: zero commits ahead, zero commits behind and no changed files.
+The frozen guide, Gateway OpenAPI and workflow callback OpenAPI have therefore not been
+superseded. Result: **FROZEN_SPEC_ACCEPTED**.
 
 ## Official environments and API version
 
@@ -190,7 +203,7 @@ not retain raw response bodies or dynamic `detail` text. JWTs, authorization hea
 clinical content, certificate material, provider diagnostics, stack traces and arbitrary
 upstream data remain excluded.
 
-## Blocking generic capability gaps
+## Historical generic capability gaps at freeze time
 
 The qualified M6 public API cannot produce the frozen official JWT profile exactly:
 
@@ -210,11 +223,13 @@ The qualified M6 public API cannot produce the frozen official JWT profile exact
 6. The issuer must be bound to the Common Name of the same certificate carried in `x5c`.
    The current signing metadata does not expose or verify that certificate identity.
 
-These are generic JWS/JWT and trusted-context capabilities, not Healthcare-specific
-primitives. The repository rule requires implementation to stop rather than adding a
-vertical workaround to Core or bypassing the qualified signer.
+These were generic JWS/JWT and trusted-context capability gaps at the original freeze
+baseline. They are closed by the provider-neutral Wave 1 foundation present on resumed
+baseline `705e9d4bd203ca7b902ad0aeedc9d4402f9f4452`: typed X.509 public material and `x5c`,
+exact temporal inclusion, trusted runtime claim binding, existing validated lifetime/skew
+policy and certificate-bound signing regressions. They are not reopened by this audit.
 
-## Required decisions before resuming implementation
+## Historical decisions required before resuming implementation
 
 A separately authorized Core/Auth change needs an ADR, threat-model update, positive and
 negative tests, and an independent gate. It must remain provider-neutral and at minimum:
@@ -229,12 +244,45 @@ negative tests, and an independent gate. It must remain provider-neutral and at 
   claims;
 - receive an authoritative token lifetime/skew decision for this profile.
 
-Only after that capability is qualified may Wave 1 create the Healthcare pack, connector
-definition, synthetic HTTPS/mTLS server, security matrix, sample and E2E evidence.
+Those provider-neutral capabilities are now qualified. Their presence does not itself
+establish the healthcare professional or organization that the official profile requires
+as the dynamic JWT subject.
+
+## Resume gate: authoritative trusted actor source
+
+The current product has no authoritative server-side source for the authenticated FSE
+professional tax identifier or organization identifier. `GatewayClientPrincipal` exposes
+only the platform Tenant, Application and Installation identities. The production source
+tree contains the generic `ITrustedRuntimeClaimValueResolver` contract but no registered
+runtime implementation; implementations found by repository inspection are synthetic
+Core tests only.
+
+Tenant, Application or Installation identifiers are not official CF/organization actor
+identifiers and cannot be reformatted into them. Ordinary request/document metadata is
+business input and cannot be promoted to trusted `sub`. No global user principal, customer
+seam or guessed healthcare identity is introduced.
+
+Implementation can resume only when a deployment integration supplies a server-owned,
+authenticated and authorized actor source that:
+
+- establishes the professional CF or organization identifier and its exact assigning
+  authority from an authoritative runtime system;
+- binds the result to Tenant, Application, Installation, Environment, ConnectorVersion,
+  operation, endpoint, correlation, Published policy/catalog revisions and the exact
+  invocation;
+- provides a bounded opaque authorization-evidence reference and denies stale, mismatched,
+  ambiguous or caller-originated material;
+- is registered server-side as the Published-policy-selected trusted runtime resolver;
+- supports positive and negative conformance evidence without logging actor, token or
+  clinical payload values.
+
+Until then the mandatory result is **BLOCKED_BY_TRUSTED_ACTOR_SOURCE**. Provider invocation
+count and network count are both zero because the failure is established before connector,
+provider or transport construction.
 
 ## Deferred and readiness label
 
-Deferred because of the mandatory stop:
+Deferred because of the original generic stop and, on resume, the trusted-actor stop:
 
 - all connector production code and Connector Definition artifacts;
 - Healthcare architecture tests;
@@ -244,7 +292,7 @@ Deferred because of the mandatory stop:
 - sample configuration and runtime wiring;
 - accreditation testing and any call to official systems.
 
-Current label: **not IMPLEMENTATION_READY**.
+Current label: **not IMPLEMENTATION_READY — BLOCKED_BY_TRUSTED_ACTOR_SOURCE**.
 
 Accreditation label: **not ACCREDITED_PRODUCTION_READY**.
 
@@ -255,11 +303,11 @@ evidence from the official process. None of that is claimed by this freeze.
 
 ## Independent review gate
 
-**NO-GO** for connector implementation on the current baseline. A single independent
-review may approve this freeze and the stop decision; it cannot convert the missing generic
-capability or missing official lifetime into implementation evidence.
+**BLOCKED_BY_TRUSTED_ACTOR_SOURCE** for connector implementation on the resumed baseline.
+Independent review may verify the currency check and the stop decision; it cannot turn a
+synthetic or caller-supplied actor into an authoritative production identity.
 
-## Verification on the Wave branch
+## Historical verification on the original freeze branch
 
 The documentation-only candidate was verified on 2026-08-08:
 
@@ -275,3 +323,10 @@ The documentation-only candidate was verified on 2026-08-08:
 - live official-system or accreditation tests: not run;
 - PR CI on commit `67338ecae148ade44e8c0132532534c406887520`: 21/21 PASS in
   runs `31258553284` and `31258553286`.
+
+## Resume documentation gate
+
+The 2026-08-09 resume audit changed documentation only. Documentation validation,
+conservative secret scan and `git diff --check` pass locally. FSE2 product tests, a
+synthetic server and live/accreditation evidence do not exist and are not inferred from
+the generic regression suite. Exact-head CI is recorded separately after push.

@@ -325,11 +325,13 @@ available. Generic M6 auth tests are regression evidence only, not regional supp
 | Requirement | Evidence | Status |
 |---|---|---|
 | Official source freeze | `docs/implementation/FSE2-WAVE1-SPEC-FREEZE.md`; guide 2.23 and OpenAPI 1.0.0 at official commit `430e6b5d9dde8a35b04ae635c11303db787a977e` with recorded SHA-256 | PASS documentation |
+| Freeze currency on resume | Official `main` and `HEAD` still resolve to `430e6b5d9dde8a35b04ae635c11303db787a977e`; GitHub compare is identical with zero later commits | FROZEN_SPEC_ACCEPTED |
 | Current operation inventory | Paths, methods, request/response, workflow, production availability and retry class frozen from the official sources | PASS documentation |
 | Vertical isolation | No Healthcare code or dependency added; current Core/Auth surface inspected before implementation | PASS |
-| Exact dual-JWT profile | Mandatory `x5c`, trusted context-derived subject, exact registered-claim set and issuer/certificate binding are unavailable in qualified M6 public contracts | BLOCKED / NO-GO |
-| Token lifetime and skew | Not specified by the frozen official source and not inferred from examples | BLOCKED / NO-GO |
-| Connector, synthetic server and security tests | Intentionally not created after mandatory capability-gap stop | NOT STARTED |
+| Generic JWT/X.509 composition | RS256, public X.509 material, typed `x5c`, exact `iat+exp`, trusted runtime claim binding and mTLS are present on baseline `705e9d4bd203ca7b902ad0aeedc9d4402f9f4452` | CLOSED / regression only |
+| Token lifetime and skew | Not specified by the official source; the existing validated server-owned policy must be explicitly approved for a production profile and remains caller-inaccessible | COMPOSABLE / deployment approval required |
+| Authoritative FSE actor | `GatewayClientPrincipal` carries only server-derived platform Tenant/Application/Installation identity; repository search finds no production `ITrustedRuntimeClaimValueResolver` or healthcare actor authority | BLOCKED_BY_TRUSTED_ACTOR_SOURCE |
+| Connector, synthetic server and security tests | Not created because the explicit trusted-actor stop was reached before connector implementation; provider and network invocation counts remain zero | NOT STARTED / fail before use |
 | Production accreditation | Requires official provisioning, certificates, conformance execution and operational evidence | NOT ACCREDITED |
 
 ## Security threats
