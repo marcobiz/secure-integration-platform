@@ -33,7 +33,10 @@ public sealed class AdminSecurityTests
         Assert.Contains("BGW-CONNECTOR-SOAP-ACTION-INVALID", catalog.Reason);
         Assert.Contains("BGW-CONNECTOR-SOAP-CONTENT-TYPE-INVALID", catalog.Reason);
         Assert.Contains("BGW-CONNECTOR-SOAP-METHOD-INVALID", catalog.Reason);
-        Assert.Equal(145, catalog.Reason.Count);
+        Assert.Contains("BGW-CONNECTOR-TYPED-HANDSHAKE-METHOD", catalog.Reason);
+        Assert.Contains("BGW-CONNECTOR-TYPED-HANDSHAKE-AUTH", catalog.Reason);
+        Assert.Contains("BGW-CONNECTOR-TYPED-HANDSHAKE-CONTENT-TYPE", catalog.Reason);
+        Assert.Equal(148, catalog.Reason.Count);
         Assert.DoesNotContain("grant.revoke", catalog.AuditAction);
         Assert.DoesNotContain("BGW-GRANT-REVOKED", catalog.Reason);
         Assert.Contains(BackendRuntimeWireCodes.Reserved, value => value == new RuntimeWireCode(RuntimeWireCodeKind.AuditAction, "grant.revoke"));

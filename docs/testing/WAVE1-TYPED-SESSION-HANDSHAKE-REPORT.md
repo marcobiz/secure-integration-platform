@@ -49,6 +49,12 @@ production connector, a deployment environment, a distributed cache or generic X
   cleanup all passed against the production build and real PostgreSQL/synthetic-service stack.
 - Remediation evidence before the export rerun: AJV schema tests 2/2 PASS, typed unit tests 27/27
   PASS, Admin lint/API drift/unit 28/28/build PASS and owned full-stack 1/1 PASS.
+- Exact-head CI on `6ebaf2ecc55c7f93d22a7a9e7bceaf5c9ba49c3c` then failed
+  `admin-ui-lint` because three newly emitted semantic validation reasons were missing from the
+  authoritative runtime-wire catalog. The catalog, generated JSON/TypeScript contracts and the
+  explicit unit lock now include exactly the method/auth/content-type reasons. Local remediation:
+  the complete failed lint/API/runtime-generation/negative/drift step PASS, Gateway unit 145/145,
+  Architecture 24/24 and Admin unit 28/28/build PASS. A new exact-head CI run is required.
 
-The concluding documentation commit, pull request, exact-head CI and independent review remain
-pending until the publication steps complete. No merge is authorized by this report.
+PR #23 is open and unmerged. Its new exact-head CI run and independent review remain pending after
+the runtime-contract remediation. No merge is authorized by this report.
