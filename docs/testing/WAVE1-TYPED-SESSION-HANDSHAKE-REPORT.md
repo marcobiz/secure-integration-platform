@@ -35,6 +35,8 @@ production connector, a deployment environment, a distributed cache or generic X
 | SPDX SBOM generation/validation | PASS | .NET, Admin Web and Gateway container artefacts |
 | vulnerable package scan | PASS | no vulnerable direct or transitive NuGet packages reported |
 | open-source Core export | PASS on `9f77cacaae294bb756b72413392825fcbdf9d230` | 377 files; clean-room scan/build/test/Admin/license checks; manifest SHA-256 `CFC83868E97A52F290C0E54D5A3DA553745BB1307F9107909EEFED32FEEA4A54` |
+| remediated product-head Core export | PASS on `3260f385ec5d76a0f35528b2340d8d5ece573540` | 377 files; manifest SHA-256 `D37B2E745107F7D42479EDB8623DD36A3497569ED233A9289E3DBE4517788730` |
+| PR #23 product-head CI | 21/21 PASS on `3260f385ec5d76a0f35528b2340d8d5ece573540` | main CI run `31309002108` 6/6; M5/Admin run `31309002106` 15/15 |
 
 ## Visible gate failures and remediation
 
@@ -56,5 +58,6 @@ production connector, a deployment environment, a distributed cache or generic X
   the complete failed lint/API/runtime-generation/negative/drift step PASS, Gateway unit 145/145,
   Architecture 24/24 and Admin unit 28/28/build PASS. A new exact-head CI run is required.
 
-PR #23 is open and unmerged. Its new exact-head CI run and independent review remain pending after
-the runtime-contract remediation. No merge is authorized by this report.
+PR #23 is open and unmerged. The remediated product head completed exact-head CI 21/21; this
+concluding documentation-only evidence commit must retain green checks before handoff. Independent
+review remains pending, and no merge is authorized by this report.
