@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/ConnectorPacks/Healthcare/Healthcare.FSE2/Healthcare.FSE2.csproj" />
     <Project Path="src/ConnectorPacks/Healthcare/Healthcare.RegionalEPrescription/Healthcare.RegionalEPrescription.csproj" />
     <Project Path="src/Authentication/CertificateSigning/Authentication.CertificateSigning.csproj" />
     <Project Path="src/Providers/Abstractions/Providers.Abstractions.csproj" />
@@ -26,6 +27,7 @@
     <Project Path="tests/support/Synthetic.ConnectorExecutionCrossModule/Synthetic.ConnectorExecutionCrossModule.csproj" />
     <Project Path="tests/support/Synthetic.ConnectorExecutionDependencyModule/Synthetic.ConnectorExecutionDependencyModule.csproj" />
     <Project Path="tests/support/Synthetic.ConnectorExecutionModule/Synthetic.ConnectorExecutionModule.csproj" />
+    <Project Path="tests/unit/Healthcare.FSE2.Tests/Healthcare.FSE2.Tests.csproj" />
     <Project Path="tests/unit/Healthcare.RegionalEPrescription.Tests/Healthcare.RegionalEPrescription.Tests.csproj" />
     <Project Path="tests/unit/Authentication.CertificateSigning.Tests/Authentication.CertificateSigning.Tests.csproj" />
     <Project Path="tests/architecture/Architecture.Tests/Architecture.Tests.csproj" />
