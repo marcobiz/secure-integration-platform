@@ -42,6 +42,26 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
     }
 
     [Fact]
+    public void Wave1_SEC_synthetic_mTLS_server_requires_the_exact_trusted_client_certificate()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+        using SyntheticAuthenticationMaterial attacker = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+
+        Assert.True(SyntheticSignedMutualTlsServer.ValidateClientCertificate(
+            material.ClientCertificateRevision1,
+            material.ClientCertificateRevision1,
+            material.RootCertificate));
+        Assert.False(SyntheticSignedMutualTlsServer.ValidateClientCertificate(
+            material.ClientCertificateRevision2,
+            material.ClientCertificateRevision1,
+            material.RootCertificate));
+        Assert.False(SyntheticSignedMutualTlsServer.ValidateClientCertificate(
+            material.ClientCertificateRevision1,
+            material.ClientCertificateRevision1,
+            attacker.RootCertificate));
+    }
+
+    [Fact]
     public async Task Wave1_SEC_Published_A_to_B_during_signing_public_material_returns_no_token_and_performs_no_transport()
     {
         TaskCompletionSource publicMaterialEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -70,6 +90,7 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             material.ServerCertificate,
             material.ClientCertificateRevision1,
             material.SigningKeyRevision1,
+            material.RootCertificate,
             TestContext.Current.CancellationToken);
         await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
             "unused-signing-race-candidate",
@@ -162,6 +183,7 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             material.ServerCertificate,
             material.ClientCertificateRevision1,
             material.SigningKeyRevision1,
+            material.RootCertificate,
             TestContext.Current.CancellationToken);
         await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
             "unused-transport-race-candidate",
@@ -256,6 +278,7 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             material.ServerCertificate,
             material.ClientCertificateRevision1,
             material.SigningKeyRevision1,
+            material.RootCertificate,
             TestContext.Current.CancellationToken);
         HostedExecutionModuleConfiguration module = Module();
         await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
@@ -454,6 +477,7 @@ internal sealed class SyntheticSignedMutualTlsServer : IAsyncDisposable
         X509Certificate2 serverCertificate,
         X509Certificate2 expectedClientCertificate,
         X509Certificate2 expectedSigningCertificate,
+        X509Certificate2 trustedRootCertificate,
         CancellationToken cancellationToken)
     {
         string expectedFingerprint = Convert.ToHexString(SHA256.HashData(expectedClientCertificate.RawData));
@@ -463,7 +487,8 @@ internal sealed class SyntheticSignedMutualTlsServer : IAsyncDisposable
         {
             https.ServerCertificate = serverCertificate;
             https.ClientCertificateMode = ClientCertificateMode.RequireCertificate;
-            https.AllowAnyClientCertificate();
+            https.ClientCertificateValidation = (certificate, _, _) =>
+                ValidateClientCertificate(certificate, expectedClientCertificate, trustedRootCertificate);
         })));
         WebApplication app = builder.Build();
         SyntheticSignedMutualTlsServer? server = null;
@@ -526,6 +551,24 @@ internal sealed class SyntheticSignedMutualTlsServer : IAsyncDisposable
         Uri listening = new(address, UriKind.Absolute);
         server = new(app, new Uri($"https://localhost:{listening.Port}/", UriKind.Absolute), expectedFingerprint, expectedSigner);
         return server;
+    }
+
+    internal static bool ValidateClientCertificate(
+        X509Certificate2 certificate,
+        X509Certificate2 expectedCertificate,
+        X509Certificate2 trustedRootCertificate)
+    {
+        if (!CryptographicOperations.FixedTimeEquals(certificate.RawData, expectedCertificate.RawData))
+            return false;
+
+        using X509Chain chain = new();
+        chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        chain.ChainPolicy.CustomTrustStore.Add(trustedRootCertificate);
+        chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+        chain.ChainPolicy.DisableCertificateDownloads = true;
+        chain.ChainPolicy.VerificationFlags = X509VerificationFlags.NoFlag;
+        chain.ChainPolicy.ApplicationPolicy.Add(new Oid("1.3.6.1.5.5.7.3.2"));
+        return chain.Build(certificate);
     }
 
     private static byte[] Decode(string value)
