@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
 using SecureIntegration.Providers.Abstractions;
@@ -5,8 +6,10 @@ using SecureIntegration.Providers.Abstractions;
 namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 
 /// <summary>Production strategy for Basic + typed SOAP metadata + opaque-session dispatch.</summary>
-public sealed class ComposedSoapExecutionStrategy : IConnectorExecutionStrategy
+public sealed class ComposedSoapExecutionStrategy : IConnectorExecutionStrategy, ICoreConnectorExecutionStrategy
 {
+    private static readonly FrozenSet<GatewayAuthenticationKind> AuthenticationKinds =
+        new[] { GatewayAuthenticationKind.SoapBasicOpaqueSession }.ToFrozenSet();
     private readonly PublishedComposedSoapAuthorityResolver authority;
     private readonly ComposedSoapAuthenticatedClient client;
 
@@ -43,11 +46,26 @@ public sealed class ComposedSoapExecutionStrategy : IConnectorExecutionStrategy
     public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("composed-soap");
 
     /// <inheritdoc />
-    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
+    public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => AuthenticationKinds;
+
+    /// <inheritdoc />
+    public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
+        ExecuteCoreAsync(execution, requireSelectedKey: true, cancellationToken);
+
+    internal Task<QualifiedGatewayExecutionResult> ExecuteAuthorizedCapabilityAsync(
+        AuthorizedConnectorExecution execution,
+        CancellationToken cancellationToken) =>
+        ExecuteCoreAsync(execution, requireSelectedKey: false, cancellationToken);
+
+    private async Task<QualifiedGatewayExecutionResult> ExecuteCoreAsync(
+        AuthorizedConnectorExecution execution,
+        bool requireSelectedKey,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(execution);
         GatewayOperationDefinition operation = execution.Operation;
-        if (operation.Authentication != GatewayAuthenticationKind.SoapBasicOpaqueSession || execution.ExecutionStrategyKey != Key ||
+        if (operation.Authentication != GatewayAuthenticationKind.SoapBasicOpaqueSession ||
+            (requireSelectedKey && execution.ExecutionStrategyKey != Key) ||
             operation.Method != HttpMethod.Post || string.IsNullOrWhiteSpace(operation.AuthenticationPolicyId) ||
             string.IsNullOrWhiteSpace(operation.SessionProfileId))
             throw AuthenticationFailure();

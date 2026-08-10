@@ -21,11 +21,14 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         string source = string.Join('\n', Directory.EnumerateFiles(supportRoot, "*.cs").Select(File.ReadAllText));
         Assert.DoesNotContain("InternalsVisibleTo", source, StringComparison.Ordinal);
         Assert.DoesNotContain("System.Reflection", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("IServiceProvider", source, StringComparison.Ordinal);
         Assert.DoesNotContain("IServiceCollection", source, StringComparison.Ordinal);
         Assert.DoesNotContain("AuthenticateAsync", source, StringComparison.Ordinal);
         Assert.DoesNotContain("ISecretValueProvider", source, StringComparison.Ordinal);
         Assert.DoesNotContain("IClientCertificateProvider", source, StringComparison.Ordinal);
+        Assert.Contains("execution.Capabilities.ExecuteTypedSessionHandshakeAsync", source, StringComparison.Ordinal);
+        Assert.Contains("execution.Capabilities.ExecuteComposedSoapAsync", source, StringComparison.Ordinal);
+        Assert.Contains("SyntheticServiceProviderDependencyModule", source, StringComparison.Ordinal);
+        Assert.Contains("SyntheticStrategyCollectionDependencyModule", source, StringComparison.Ordinal);
 
         string applicationFriends = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "AssemblyInfo.cs"));
         Assert.DoesNotContain("Synthetic.ConnectorExecutionModule", applicationFriends, StringComparison.Ordinal);
@@ -39,6 +42,9 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         Assert.Contains("internal AuthorizedConnectorExecution(", contracts, StringComparison.Ordinal);
         Assert.Contains("public Stream OpenPayloadStream()", contracts, StringComparison.Ordinal);
         Assert.Contains("new MemoryStream(payload, writable: false)", contracts, StringComparison.Ordinal);
+        Assert.Contains("public IAuthorizedConnectorCapabilityBridge Capabilities", contracts, StringComparison.Ordinal);
+        Assert.Contains("public interface IAuthorizedConnectorCapabilityBridge", contracts, StringComparison.Ordinal);
+        Assert.Contains("IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds", contracts, StringComparison.Ordinal);
         Assert.DoesNotContain("public AuthorizedConnectorExecution(", contracts, StringComparison.Ordinal);
         Assert.DoesNotContain("IServiceCollection", contracts, StringComparison.Ordinal);
         Assert.DoesNotContain("IServiceProvider", contracts, StringComparison.Ordinal);
@@ -57,8 +63,8 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         int grant = runtime.IndexOf("registry.IsGrantedAsync", StringComparison.Ordinal);
         int published = runtime.IndexOf("catalog.GetRequiredAsync", StringComparison.Ordinal);
         int derive = runtime.IndexOf("ConnectorExecutionStrategyKeys.Resolve(operation)", StringComparison.Ordinal);
-        int lookup = runtime.IndexOf("executionStrategyRegistry.Required(strategyKey)", StringComparison.Ordinal);
-        int handoff = runtime.IndexOf("strategy.ExecuteAsync(new(invocation, operation, strategyKey, body)", StringComparison.Ordinal);
+        int lookup = runtime.IndexOf("executionStrategyRegistry.Required(strategyKey, operation.Authentication)", StringComparison.Ordinal);
+        int handoff = runtime.IndexOf("registration.Strategy.ExecuteAsync(execution", StringComparison.Ordinal);
 
         Assert.True(grant >= 0 && published > grant && derive > published && lookup > derive && handoff > lookup);
         string selection = runtime[grant..handoff];
@@ -77,12 +83,21 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         Assert.Contains("MaximumModules = 32", loader, StringComparison.Ordinal);
         Assert.Contains("Path.IsPathFullyQualified", loader, StringComparison.Ordinal);
         Assert.Contains("Path.GetFullPath", loader, StringComparison.Ordinal);
-        Assert.Contains("AssemblyName.GetAssemblyName(canonicalPath)", loader, StringComparison.Ordinal);
-        Assert.Contains("LoadFromAssemblyPath(canonicalPath)", loader, StringComparison.Ordinal);
-        Assert.Contains("Path.GetFullPath(assembly.Location)", loader, StringComparison.Ordinal);
+        Assert.Contains("DriveType.Fixed", loader, StringComparison.Ordinal);
+        Assert.Contains("FileAttributes.ReparsePoint", loader, StringComparison.Ordinal);
+        Assert.Contains("GC.AllocateUninitializedArray<byte>", loader, StringComparison.Ordinal);
+        Assert.Contains("ReadMetadata(bytes)", loader, StringComparison.Ordinal);
+        Assert.Contains("LoadFromStream(exactBytes)", loader, StringComparison.Ordinal);
+        Assert.Contains("loaded.ManifestModule.ModuleVersionId", loader, StringComparison.Ordinal);
+        Assert.DoesNotContain("AssemblyName.GetAssemblyName(canonicalPath)", loader, StringComparison.Ordinal);
+        Assert.DoesNotContain("LoadFromAssemblyPath", loader, StringComparison.Ordinal);
+        Assert.DoesNotContain("assembly.Location", loader, StringComparison.Ordinal);
         Assert.Contains("assembly.GetType(configured.ModuleType", loader, StringComparison.Ordinal);
         Assert.Contains("MaximumStrategiesPerModule = 64", loader, StringComparison.Ordinal);
-        Assert.Contains("type.Assembly != moduleAssembly", loader, StringComparison.Ordinal);
+        Assert.Contains("MaximumRegistrationsPerModule = 128", loader, StringComparison.Ordinal);
+        Assert.Contains("constructors.Length != 1", loader, StringComparison.Ordinal);
+        Assert.Contains("dependency.Assembly != moduleAssembly", loader, StringComparison.Ordinal);
+        Assert.Contains("ValidateConstructorGraph", loader, StringComparison.Ordinal);
         Assert.Contains("AssemblyPath", options, StringComparison.Ordinal);
         Assert.Contains("AssemblyFullName", options, StringComparison.Ordinal);
         Assert.Contains("ModuleType", options, StringComparison.Ordinal);
@@ -91,9 +106,30 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         foreach (string forbidden in new[]
         {
             "Directory.GetFiles", "Directory.EnumerateFiles", "AppDomain.CurrentDomain", "GetAssemblies(",
-            "EnumerateFileSystemEntries", "*.dll", "Assembly.Load("
+            "EnumerateFileSystemEntries", "*.dll", "Assembly.Load(", "LoadFromAssemblyPath"
         })
             Assert.DoesNotContain(forbidden, loader, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Wave1_CT_authorized_capability_bridge_is_closed_current_invocation_only_and_not_a_host_facade()
+    {
+        string contracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"));
+        string dispatcher = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.ConnectorRuntime.Auth.Soap", "AuthorizedConnectorCapabilityDispatcher.cs"));
+        string runtime = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "OperationServices.cs"));
+
+        Assert.Contains("private sealed class AuthorizedConnectorCapabilityBridge", contracts, StringComparison.Ordinal);
+        Assert.Contains("Interlocked.CompareExchange(ref consumed, 1, 0)", contracts, StringComparison.Ordinal);
+        Assert.Contains("ReferenceEquals(Current.Value, this)", contracts, StringComparison.Ordinal);
+        Assert.Contains("execution.Owns(exception)", runtime, StringComparison.Ordinal);
+        Assert.Contains("AcquireAuthorizedAsync", dispatcher, StringComparison.Ordinal);
+        Assert.Contains("ExecuteAuthorizedCapabilityAsync", dispatcher, StringComparison.Ordinal);
+        foreach (string forbidden in new[]
+        {
+            "IServiceProvider", "IServiceCollection", "ISecretValueProvider", "IClientCertificateProvider",
+            "IConnectorConfigurationStore", "IRestrictedTransport", "Uri ", "string profileId", "string endpoint"
+        })
+            Assert.DoesNotContain(forbidden, contracts, StringComparison.Ordinal);
     }
 
     [Fact]

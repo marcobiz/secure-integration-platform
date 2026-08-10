@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography.X509Certificates;
@@ -80,19 +81,50 @@ public sealed class GatewayOperationCatalog : IGatewayOperationCatalog
 }
 
 /// <summary>Executes a granted operation using only server-owned destination and credentials.</summary>
-public sealed class RestrictedEgressService(
-    IGatewayRegistry registry,
-    IGatewayOperationCatalog catalog,
-    ISecretValueProvider secrets,
-    IClientCertificateProvider certificates,
-    IHostResolver resolver,
-    IRestrictedTransport transport,
-    IGatewayClock clock,
-    IPrivateDestinationAllowance? privateDestinationAllowance = null,
-    IEnumerable<IConnectorExecutionStrategy>? executionStrategies = null)
+public sealed class RestrictedEgressService
 {
-    private readonly ConnectorExecutionStrategyRegistry executionStrategyRegistry = new(
-        PrependDefault(new DefaultHttpExecutionStrategy(secrets, certificates, resolver, transport, privateDestinationAllowance), executionStrategies));
+    private readonly IGatewayRegistry registry;
+    private readonly IGatewayOperationCatalog catalog;
+    private readonly IGatewayClock clock;
+    private readonly ConnectorExecutionStrategyRegistry executionStrategyRegistry;
+    private readonly IAuthorizedConnectorCapabilityDispatcher? capabilityDispatcher;
+
+    /// <summary>Creates the provider-neutral egress service with optional startup-fixed strategies.</summary>
+    public RestrictedEgressService(
+        IGatewayRegistry registry,
+        IGatewayOperationCatalog catalog,
+        ISecretValueProvider secrets,
+        IClientCertificateProvider certificates,
+        IHostResolver resolver,
+        IRestrictedTransport transport,
+        IGatewayClock clock,
+        IPrivateDestinationAllowance? privateDestinationAllowance = null,
+        IEnumerable<IConnectorExecutionStrategy>? executionStrategies = null)
+        : this(registry, catalog, secrets, certificates, resolver, transport, clock, privateDestinationAllowance,
+            executionStrategies, capabilityDispatcher: null)
+    {
+    }
+
+    internal RestrictedEgressService(
+        IGatewayRegistry registry,
+        IGatewayOperationCatalog catalog,
+        ISecretValueProvider secrets,
+        IClientCertificateProvider certificates,
+        IHostResolver resolver,
+        IRestrictedTransport transport,
+        IGatewayClock clock,
+        IPrivateDestinationAllowance? privateDestinationAllowance,
+        IEnumerable<IConnectorExecutionStrategy>? executionStrategies,
+        IAuthorizedConnectorCapabilityDispatcher? capabilityDispatcher)
+    {
+        this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        this.catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+        this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        executionStrategyRegistry = new(PrependDefault(
+            new DefaultHttpExecutionStrategy(secrets, certificates, resolver, transport, privateDestinationAllowance),
+            executionStrategies));
+        this.capabilityDispatcher = capabilityDispatcher;
+    }
 
     /// <summary>Authorizes and invokes a server-owned external operation.</summary>
     public async Task<GatewayInvokeResponse> InvokeAsync(GatewayClientPrincipal authenticated, string connectorId, string operationId, GatewayInvokeRequest request, CancellationToken cancellationToken)
@@ -124,22 +156,28 @@ public sealed class RestrictedEgressService(
         if (body.LongLength > operation.MaximumRequestBytes)
             throw new GatewayException("BGW-PROTOCOL-PAYLOAD", 413);
         ConnectorExecutionStrategyKey strategyKey = ConnectorExecutionStrategyKeys.Resolve(operation);
-        IConnectorExecutionStrategy strategy = executionStrategyRegistry.Required(strategyKey);
+        ConnectorExecutionStrategyRegistration registration = executionStrategyRegistry.Required(strategyKey, operation.Authentication);
         AuthorizedGatewayInvocation invocation = new(authenticated, connectorId, operationId);
+        AuthorizedConnectorExecution execution = new(invocation, operation, strategyKey, body, capabilityDispatcher);
         QualifiedGatewayExecutionResult result;
         try
         {
-            result = await strategy.ExecuteAsync(new(invocation, operation, strategyKey, body), cancellationToken).ConfigureAwait(false);
+            using IDisposable capabilityScope = execution.EnterCapabilityScope();
+            result = await registration.Strategy.ExecuteAsync(execution, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw new OperationCanceledException(cancellationToken);
         }
+        catch (AuthorizedConnectorCapabilityFailureException exception) when (execution.Owns(exception))
+        {
+            throw exception.Failure;
+        }
         catch (CoreProviderExecutionException exception)
         {
             throw new ProviderAccessException(exception.Code, exception.Retryable);
         }
-        catch (GatewayException) { throw; }
+        catch (GatewayException) when (registration.PreservesCoreFailures) { throw; }
         catch (Exception) { throw new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502); }
 
         if (result is null || result.Body is null || result.StatusCode is < 100 or > 599 || string.IsNullOrWhiteSpace(result.ContentType) ||
@@ -164,9 +202,20 @@ public sealed class RestrictedEgressService(
         IClientCertificateProvider certificates,
         IHostResolver resolver,
         IRestrictedTransport transport,
-        IPrivateDestinationAllowance? privateDestinationAllowance) : IConnectorExecutionStrategy
+        IPrivateDestinationAllowance? privateDestinationAllowance) : IConnectorExecutionStrategy, ICoreConnectorExecutionStrategy
     {
+        private static readonly FrozenSet<GatewayAuthenticationKind> AuthenticationKinds = new[]
+        {
+            GatewayAuthenticationKind.None,
+            GatewayAuthenticationKind.Basic,
+            GatewayAuthenticationKind.ApiKey,
+            GatewayAuthenticationKind.MutualTls,
+            GatewayAuthenticationKind.ApiKeyAndMutualTls
+        }.ToFrozenSet();
+
         public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKeys.DefaultHttp;
+
+        public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => AuthenticationKinds;
 
         public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
         {

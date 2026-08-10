@@ -26,6 +26,15 @@ public sealed class TypedSessionHandshakeRuntime(
         return await sessions.AcquireTypedSessionAsync(resolved, cancellationToken).ConfigureAwait(false);
     }
 
+    internal async Task<TypedSessionHandshakeResult> AcquireAuthorizedAsync(
+        AuthorizedGatewayInvocation invocation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(invocation);
+        ResolvedTypedSessionHandshake resolved = await resolver.ResolveCurrentAsync(invocation, cancellationToken).ConfigureAwait(false);
+        return await sessions.AcquireTypedSessionAsync(resolved, cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Completes an opaque single-use intent. Connector, operation, profile, cache key, provenance,
     /// expiry, endpoint, adapter and credential authority are recovered exclusively from server state.

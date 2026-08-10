@@ -78,7 +78,7 @@ public sealed class HttpOAuthBoundaryTests
 
         string builtInPipeline = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "OperationServices.cs"));
         int executionKeyResolution = builtInPipeline.IndexOf("ConnectorExecutionStrategyKeys.Resolve(operation)", StringComparison.Ordinal);
-        int exactStrategyLookup = builtInPipeline.IndexOf("executionStrategyRegistry.Required(strategyKey)", StringComparison.Ordinal);
+        int exactStrategyLookup = builtInPipeline.IndexOf("executionStrategyRegistry.Required(strategyKey, operation.Authentication)", StringComparison.Ordinal);
         int dnsResolution = builtInPipeline.IndexOf("resolver.ResolveAsync(operation.Endpoint.DnsSafeHost", StringComparison.Ordinal);
         Assert.InRange(executionKeyResolution, 0, exactStrategyLookup - 1);
         Assert.InRange(exactStrategyLookup, executionKeyResolution + 1, dnsResolution - 1);

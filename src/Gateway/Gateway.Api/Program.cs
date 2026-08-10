@@ -149,10 +149,11 @@ builder.Services.AddSingleton<IConnectorExecutionStrategy>(services => new Opaqu
     services.GetRequiredService<IConnectorConfigurationStore>(), services.GetRequiredService<OpaqueSessionLeaseProvider>(),
     services.GetRequiredService<IHostResolver>(), services.GetRequiredService<IRestrictedTransport>(), services.GetRequiredService<IGatewayClock>(),
     services.GetService<IPrivateDestinationAllowance>()));
-builder.Services.AddSingleton<IConnectorExecutionStrategy>(services => new ComposedSoapExecutionStrategy(
+builder.Services.AddSingleton<ComposedSoapExecutionStrategy>(services => new ComposedSoapExecutionStrategy(
     services.GetRequiredService<IConnectorConfigurationStore>(), services.GetRequiredService<ISecretValueProvider>(), services.GetRequiredService<OpaqueSessionLeaseProvider>(),
     services.GetRequiredService<IHostResolver>(), services.GetRequiredService<IRestrictedTransport>(), services.GetRequiredService<IGatewayClock>(),
     services.GetService<IPrivateDestinationAllowance>()));
+builder.Services.AddSingleton<IConnectorExecutionStrategy>(services => services.GetRequiredService<ComposedSoapExecutionStrategy>());
 ConnectorExecutionModuleLoader.Register(builder.Services, hostOptions.ExecutionModules);
 
 byte[] activationKey;
@@ -169,7 +170,6 @@ builder.Services.AddSingleton(new EnrollmentSecurityOptions { ActivationHmacKey 
 builder.Services.AddSingleton<GatewayProvisioningService>();
 builder.Services.AddSingleton<InstallationEnrollmentService>();
 builder.Services.AddSingleton<RuntimeIdentityService>();
-builder.Services.AddSingleton<RestrictedEgressService>();
 builder.Services.AddSingleton<IGatewayInvocationAuthorizer, GatewayInvocationAuthorizer>();
 builder.Services.AddSingleton<ISoapSessionResourceStampProvider, PublishedSoapSessionResourceStampProvider>();
 builder.Services.AddSingleton(_ => new TypedSessionHandshakeAdapterRegistry(
@@ -185,6 +185,18 @@ builder.Services.AddSingleton(services => new SoapSessionClient(
     services.GetRequiredService<ISoapSessionResourceStampProvider>(),
     services.GetService<IPrivateDestinationAllowance>()));
 builder.Services.AddSingleton<TypedSessionHandshakeRuntime>();
+builder.Services.AddSingleton<AuthorizedConnectorCapabilityDispatcher>();
+builder.Services.AddSingleton<RestrictedEgressService>(services => new RestrictedEgressService(
+    services.GetRequiredService<IGatewayRegistry>(),
+    services.GetRequiredService<IGatewayOperationCatalog>(),
+    services.GetRequiredService<ISecretValueProvider>(),
+    services.GetRequiredService<IClientCertificateProvider>(),
+    services.GetRequiredService<IHostResolver>(),
+    services.GetRequiredService<IRestrictedTransport>(),
+    services.GetRequiredService<IGatewayClock>(),
+    services.GetService<IPrivateDestinationAllowance>(),
+    services.GetServices<IConnectorExecutionStrategy>(),
+    services.GetRequiredService<AuthorizedConnectorCapabilityDispatcher>()));
 builder.Services.AddSingleton<AdminAccessService>();
 builder.Services.AddSingleton<ConnectorApprovalService>();
 if (developmentApiKeyCompatibility || !hostOptions.Admin.RequireFourEyes)

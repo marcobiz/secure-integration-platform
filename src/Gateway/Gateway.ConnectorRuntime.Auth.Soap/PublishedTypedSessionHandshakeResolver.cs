@@ -71,6 +71,40 @@ public sealed class PublishedTypedSessionHandshakeResolver
         return new(expected, Revalidate);
     }
 
+    internal async Task<ResolvedTypedSessionHandshake> ResolveCurrentAsync(
+        AuthorizedGatewayInvocation invocation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(invocation);
+        GatewayClientPrincipal principal = invocation.Principal;
+        PublishedConnectorAccessContext access = new(
+            principal.InstallationId,
+            principal.TenantId,
+            principal.ApplicationId,
+            invocation.OperationId);
+        PublishedConnectorSnapshot snapshot = await RequiredSnapshotAsync(
+            invocation.ConnectorId,
+            principal.Identity.EnvironmentId,
+            access,
+            cancellationToken).ConfigureAwait(false);
+        string profileId;
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(snapshot.Version.CanonicalJson, new JsonDocumentOptions { MaxDepth = 32 });
+            JsonElement operation = document.RootElement.GetProperty("operations").EnumerateArray()
+                .Single(value => string.Equals(value.GetProperty("operationId").GetString(), invocation.OperationId, StringComparison.Ordinal));
+            profileId = operation.GetProperty("typedSessionHandshake").GetProperty("profileId").GetString()
+                ?? throw TypedSessionHandshakeFailures.AuthorityRejected();
+        }
+        catch (SoapAuthException) { throw; }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException or KeyNotFoundException)
+        {
+            throw TypedSessionHandshakeFailures.AuthorityRejected();
+        }
+
+        return await ResolveAsync(invocation, new(profileId), cancellationToken).ConfigureAwait(false);
+    }
+
     private async Task<PublishedConnectorSnapshot> RequiredSnapshotAsync(
         string connectorId,
         Guid environmentId,

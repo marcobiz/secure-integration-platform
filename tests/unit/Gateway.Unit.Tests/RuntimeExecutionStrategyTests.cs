@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Net;
 using System.Reflection;
 using System.Security.Cryptography.X509Certificates;
@@ -64,6 +65,17 @@ public sealed class RuntimeExecutionStrategyTests
             property.Name is "Payload" or "Operation" or "Principal" or "Endpoint");
         Assert.All(typeof(AuthorizedConnectorExecution).GetProperties(BindingFlags.Public | BindingFlags.Instance), property => Assert.False(property.CanWrite));
         Assert.DoesNotContain(typeof(AuthorizedConnectorExecution).GetMethods(BindingFlags.Public | BindingFlags.Static), method => method.Name.Contains("Create", StringComparison.Ordinal));
+        Assert.Equal(typeof(IAuthorizedConnectorCapabilityBridge), typeof(AuthorizedConnectorExecution).GetProperty(nameof(AuthorizedConnectorExecution.Capabilities))!.PropertyType);
+        Assert.Equal(
+            [nameof(IAuthorizedConnectorCapabilityBridge.ExecuteComposedSoapAsync), nameof(IAuthorizedConnectorCapabilityBridge.ExecuteTypedSessionHandshakeAsync)],
+            typeof(IAuthorizedConnectorCapabilityBridge).GetMethods().Select(method => method.Name).Order(StringComparer.Ordinal).ToArray());
+        Assert.All(typeof(IAuthorizedConnectorCapabilityBridge).GetMethods(), method =>
+        {
+            Assert.Equal(typeof(Task<QualifiedGatewayExecutionResult>), method.ReturnType);
+            Assert.Equal([typeof(CancellationToken)], method.GetParameters().Select(parameter => parameter.ParameterType).ToArray());
+        });
+        Assert.DoesNotContain(typeof(AuthorizedConnectorExecution).Assembly.GetExportedTypes(), type =>
+            type != typeof(IAuthorizedConnectorCapabilityBridge) && typeof(IAuthorizedConnectorCapabilityBridge).IsAssignableFrom(type));
     }
 
     [Theory]
@@ -98,6 +110,25 @@ public sealed class RuntimeExecutionStrategyTests
         Assert.Equal(0, fixture.Transport.Calls);
     }
 
+    [Theory]
+    [InlineData(GatewayAuthenticationKind.OpaqueSessionHttp)]
+    [InlineData(GatewayAuthenticationKind.SoapBasicOpaqueSession)]
+    public async Task Wave1_SEC_basic_strategy_cannot_execute_incompatible_session_or_composed_mode(
+        GatewayAuthenticationKind publishedAuthenticationKind)
+    {
+        ConnectorExecutionStrategyKey key = ConnectorExecutionStrategyKey.Parse("synthetic-incompatible");
+        RuntimeFixture fixture = await RuntimeFixture.CreateAsync(publishedAuthenticationKind, grant: true, key);
+        IncompatibleStrategy strategy = new(key);
+
+        GatewayException failure = await Assert.ThrowsAsync<GatewayException>(() => fixture.Runtime([strategy]).InvokeAsync(
+            fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, fixture.Request,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-EGRESS-AUTHENTICATION", failure.Code);
+        Assert.Equal(0, strategy.Calls);
+        Assert.Equal(0, fixture.Transport.Calls);
+    }
+
     [Fact]
     public async Task Wave1_SEC_explicit_unknown_key_never_falls_back_to_default_HTTP()
     {
@@ -127,6 +158,7 @@ public sealed class RuntimeExecutionStrategyTests
         GatewayException forgedProviderFailure = await Assert.ThrowsAsync<GatewayException>(() => fixture.Runtime([new ForgedProviderFailureStrategy(key)]).InvokeAsync(
             fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, fixture.Request, TestContext.Current.CancellationToken));
         Assert.Equal("BGW-EGRESS-UPSTREAM-REJECTED", forgedProviderFailure.Code);
+        Assert.Equal(502, forgedProviderFailure.StatusCode);
         Assert.False(forgedProviderFailure.Retryable);
 
         GatewayException fakeCancellation = await Assert.ThrowsAsync<GatewayException>(() => fixture.Runtime([new FakeCancellationStrategy(key)]).InvokeAsync(
@@ -183,6 +215,22 @@ public sealed class RuntimeExecutionStrategyTests
             .Select(index => (IConnectorExecutionStrategy)new RecordingStrategy(ConnectorExecutionStrategyKey.Parse($"strategy-{index:D3}")))
             .ToArray();
         Assert.Throws<InvalidOperationException>(() => new ConnectorExecutionStrategyRegistry(strategies));
+    }
+
+    [Fact]
+    public void Wave1_SEC_strategy_authentication_metadata_is_validated_and_snapshotted_at_startup()
+    {
+        ConnectorExecutionStrategyKey key = ConnectorExecutionStrategyKey.Parse("mutable-compatibility");
+        MutableCompatibilityStrategy strategy = new(key);
+        ConnectorExecutionStrategyRegistry registry = new([strategy]);
+
+        strategy.AuthenticationKinds.Clear();
+        strategy.AuthenticationKinds.Add(GatewayAuthenticationKind.OpaqueSessionHttp);
+
+        Assert.Same(strategy, registry.Required(key, GatewayAuthenticationKind.None).Strategy);
+        GatewayException mismatch = Assert.Throws<GatewayException>(() => registry.Required(key, GatewayAuthenticationKind.OpaqueSessionHttp));
+        Assert.Equal("BGW-EGRESS-AUTHENTICATION", mismatch.Code);
+        Assert.Throws<InvalidOperationException>(() => new ConnectorExecutionStrategyRegistry([new EmptyCompatibilityStrategy(key)]));
     }
 
     private sealed class RuntimeFixture
@@ -244,6 +292,7 @@ public sealed class RuntimeExecutionStrategyTests
     private sealed class RecordingStrategy(ConnectorExecutionStrategyKey key) : IConnectorExecutionStrategy
     {
         public ConnectorExecutionStrategyKey Key => key;
+        public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => StrategyAuthenticationKinds.All;
         public int Calls { get; private set; }
         public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
         {
@@ -257,6 +306,7 @@ public sealed class RuntimeExecutionStrategyTests
     private sealed class ThrowingStrategy(ConnectorExecutionStrategyKey key) : IConnectorExecutionStrategy
     {
         public ConnectorExecutionStrategyKey Key => key;
+        public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => StrategyAuthenticationKinds.All;
         public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("synthetic-extension-diagnostic-canary");
     }
@@ -264,6 +314,7 @@ public sealed class RuntimeExecutionStrategyTests
     private sealed class FakeCancellationStrategy(ConnectorExecutionStrategyKey key) : IConnectorExecutionStrategy
     {
         public ConnectorExecutionStrategyKey Key => key;
+        public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => StrategyAuthenticationKinds.All;
         public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
             throw new OperationCanceledException("synthetic-fake-cancellation-canary", new CancellationToken(canceled: true));
     }
@@ -271,18 +322,56 @@ public sealed class RuntimeExecutionStrategyTests
     private sealed class ForgedProviderFailureStrategy(ConnectorExecutionStrategyKey key) : IConnectorExecutionStrategy
     {
         public ConnectorExecutionStrategyKey Key => key;
+        public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => StrategyAuthenticationKinds.All;
         public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
-            throw new ProviderAccessException("BGW-PROVIDER-UNAVAILABLE", retryable: true);
+            throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403, retryable: true);
     }
 
     private sealed class CallerCancellationStrategy(ConnectorExecutionStrategyKey key, CancellationTokenSource callerCancellation) : IConnectorExecutionStrategy
     {
         public ConnectorExecutionStrategyKey Key => key;
+        public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => StrategyAuthenticationKinds.All;
         public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
         {
             callerCancellation.Cancel();
             throw new OperationCanceledException(cancellationToken);
         }
+    }
+
+    private sealed class IncompatibleStrategy(ConnectorExecutionStrategyKey key) : IConnectorExecutionStrategy
+    {
+        public ConnectorExecutionStrategyKey Key => key;
+        public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => StrategyAuthenticationKinds.Basic;
+        public int Calls { get; private set; }
+        public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
+        {
+            Calls++;
+            return Task.FromResult(new QualifiedGatewayExecutionResult(200, "application/json", []));
+        }
+    }
+
+    private static class StrategyAuthenticationKinds
+    {
+        internal static readonly FrozenSet<GatewayAuthenticationKind> All = Enum.GetValues<GatewayAuthenticationKind>().ToFrozenSet();
+        internal static readonly FrozenSet<GatewayAuthenticationKind> None = new[] { GatewayAuthenticationKind.None }.ToFrozenSet();
+        internal static readonly FrozenSet<GatewayAuthenticationKind> Basic = new[] { GatewayAuthenticationKind.Basic }.ToFrozenSet();
+    }
+
+    private sealed class MutableCompatibilityStrategy(ConnectorExecutionStrategyKey key) : IConnectorExecutionStrategy
+    {
+        internal HashSet<GatewayAuthenticationKind> AuthenticationKinds { get; } = [GatewayAuthenticationKind.None];
+        public ConnectorExecutionStrategyKey Key => key;
+        public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => AuthenticationKinds;
+        public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
+            Task.FromResult(new QualifiedGatewayExecutionResult(200, "application/json", []));
+    }
+
+    private sealed class EmptyCompatibilityStrategy(ConnectorExecutionStrategyKey key) : IConnectorExecutionStrategy
+    {
+        public ConnectorExecutionStrategyKey Key => key;
+        public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds { get; } = new HashSet<GatewayAuthenticationKind>();
+        public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
+            Task.FromResult(new QualifiedGatewayExecutionResult(200, "application/json", []));
     }
 
     private sealed class RecordingTransport : IRestrictedTransport
