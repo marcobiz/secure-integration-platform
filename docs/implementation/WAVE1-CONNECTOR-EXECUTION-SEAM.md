@@ -46,6 +46,7 @@ runtime installation, remote resolution, reload, unload or tenant-specific activ
 | duplicate strategy key | startup failure before serving |
 | explicit key absent from deployment | stable `BGW-EGRESS-AUTHENTICATION`, no default fallback |
 | unexpected strategy exception or fake cancellation | stable `BGW-EGRESS-UPSTREAM-REJECTED`, no extension diagnostic |
+| provider failure raised by Core's built-in `default-http` strategy | existing sanitized `BGW-PROVIDER-*` code and retryability are preserved; an external module cannot forge this path |
 | actual caller cancellation | cancellation preserved with the actual token |
 | invalid or oversized strategy result | existing bounded egress failure |
 

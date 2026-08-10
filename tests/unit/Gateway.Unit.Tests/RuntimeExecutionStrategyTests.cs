@@ -124,6 +124,11 @@ public sealed class RuntimeExecutionStrategyTests
         Assert.Equal("BGW-EGRESS-UPSTREAM-REJECTED", unexpected.Message);
         Assert.Null(unexpected.InnerException);
 
+        GatewayException forgedProviderFailure = await Assert.ThrowsAsync<GatewayException>(() => fixture.Runtime([new ForgedProviderFailureStrategy(key)]).InvokeAsync(
+            fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, fixture.Request, TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-EGRESS-UPSTREAM-REJECTED", forgedProviderFailure.Code);
+        Assert.False(forgedProviderFailure.Retryable);
+
         GatewayException fakeCancellation = await Assert.ThrowsAsync<GatewayException>(() => fixture.Runtime([new FakeCancellationStrategy(key)]).InvokeAsync(
             fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, fixture.Request, TestContext.Current.CancellationToken));
         Assert.Equal("BGW-EGRESS-UPSTREAM-REJECTED", fakeCancellation.Code);
@@ -133,6 +138,20 @@ public sealed class RuntimeExecutionStrategyTests
         OperationCanceledException realCancellation = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.Runtime([new CallerCancellationStrategy(key, callerCancellation)]).InvokeAsync(
             fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, fixture.Request, callerCancellation.Token));
         Assert.Equal(callerCancellation.Token, realCancellation.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Wave1_REG_default_HTTP_preserves_sanitized_provider_unavailability()
+    {
+        RuntimeFixture fixture = await RuntimeFixture.CreateAsync(GatewayAuthenticationKind.ApiKey, grant: true);
+
+        ProviderAccessException failure = await Assert.ThrowsAsync<ProviderAccessException>(() => fixture.Runtime([], new UnavailableSecrets()).InvokeAsync(
+            fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, fixture.Request, TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-PROVIDER-UNAVAILABLE", failure.Code);
+        Assert.True(failure.Retryable);
+        Assert.Null(failure.InnerException);
+        Assert.Equal(0, fixture.Transport.Calls);
     }
 
     [Fact]
@@ -187,8 +206,8 @@ public sealed class RuntimeExecutionStrategyTests
         internal GatewayInvokeRequest Request { get; }
         internal GatewayOperationDefinition Operation { get; }
 
-        internal RestrictedEgressService Runtime(IEnumerable<IConnectorExecutionStrategy> strategies) =>
-            new(registry, catalog, new NeverSecrets(), new NeverCertificates(), new PublicResolver(), Transport, new FixedClock(), null, strategies);
+        internal RestrictedEgressService Runtime(IEnumerable<IConnectorExecutionStrategy> strategies, ISecretValueProvider? secrets = null) =>
+            new(registry, catalog, secrets ?? new NeverSecrets(), new NeverCertificates(), new PublicResolver(), Transport, new FixedClock(), null, strategies);
 
         internal static async Task<RuntimeFixture> CreateAsync(
             GatewayAuthenticationKind kind,
@@ -249,6 +268,13 @@ public sealed class RuntimeExecutionStrategyTests
             throw new OperationCanceledException("synthetic-fake-cancellation-canary", new CancellationToken(canceled: true));
     }
 
+    private sealed class ForgedProviderFailureStrategy(ConnectorExecutionStrategyKey key) : IConnectorExecutionStrategy
+    {
+        public ConnectorExecutionStrategyKey Key => key;
+        public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
+            throw new ProviderAccessException("BGW-PROVIDER-UNAVAILABLE", retryable: true);
+    }
+
     private sealed class CallerCancellationStrategy(ConnectorExecutionStrategyKey key, CancellationTokenSource callerCancellation) : IConnectorExecutionStrategy
     {
         public ConnectorExecutionStrategyKey Key => key;
@@ -273,6 +299,12 @@ public sealed class RuntimeExecutionStrategyTests
     private sealed class NeverSecrets : ISecretValueProvider
     {
         public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken) => throw new InvalidOperationException();
+    }
+
+    private sealed class UnavailableSecrets : ISecretValueProvider
+    {
+        public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken) =>
+            throw new ProviderAccessException("BGW-PROVIDER-UNAVAILABLE", retryable: true, new InvalidOperationException("synthetic-provider-diagnostic"));
     }
 
     private sealed class NeverCertificates : IClientCertificateProvider

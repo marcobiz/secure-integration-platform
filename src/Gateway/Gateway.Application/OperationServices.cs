@@ -135,6 +135,10 @@ public sealed class RestrictedEgressService(
         {
             throw new OperationCanceledException(cancellationToken);
         }
+        catch (CoreProviderExecutionException exception)
+        {
+            throw new ProviderAccessException(exception.Code, exception.Retryable);
+        }
         catch (GatewayException) { throw; }
         catch (Exception) { throw new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502); }
 
@@ -166,30 +170,39 @@ public sealed class RestrictedEgressService(
 
         public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
         {
-            GatewayOperationDefinition operation = execution.Operation;
-            IPAddress[] addresses = await resolver.ResolveAsync(operation.Endpoint.DnsSafeHost, cancellationToken).ConfigureAwait(false);
-            if (addresses.Length == 0 || addresses.Any(address => IsForbiddenAddress(address) && privateDestinationAllowance?.IsAllowed(operation.Endpoint.DnsSafeHost, address) != true))
-                throw new GatewayException("BGW-EGRESS-DESTINATION-DENIED", 403);
-
-            int attempts = operation.MaximumRetries + 1;
-            for (int attempt = 1; ; attempt++)
+            try
             {
-                using HttpRequestMessage outbound = new(operation.Method, operation.Endpoint);
-                outbound.Headers.TryAddWithoutValidation("X-Correlation-ID", execution.CorrelationId.ToString("D"));
-                if (operation.Method != HttpMethod.Get)
-                    outbound.Content = new ByteArrayContent(execution.Payload.ToArray()) { Headers = { ContentType = MediaTypeHeaderValue.Parse(operation.RequestContentType) } };
-                X509Certificate2? clientCertificate = null;
-                try
+                GatewayOperationDefinition operation = execution.Operation;
+                IPAddress[] addresses = await resolver.ResolveAsync(operation.Endpoint.DnsSafeHost, cancellationToken).ConfigureAwait(false);
+                if (addresses.Length == 0 || addresses.Any(address => IsForbiddenAddress(address) && privateDestinationAllowance?.IsAllowed(operation.Endpoint.DnsSafeHost, address) != true))
+                    throw new GatewayException("BGW-EGRESS-DESTINATION-DENIED", 403);
+
+                int attempts = operation.MaximumRetries + 1;
+                for (int attempt = 1; ; attempt++)
                 {
-                    clientCertificate = await ApplyAuthenticationAsync(outbound, operation, cancellationToken).ConfigureAwait(false);
-                    ExternalResponse response = await transport.SendAsync(outbound, addresses, clientCertificate, TimeSpan.FromMilliseconds(operation.TimeoutMilliseconds), operation.MaximumResponseBytes, cancellationToken).ConfigureAwait(false);
-                    return new(response.StatusCode, response.ContentType, response.Body);
+                    using HttpRequestMessage outbound = new(operation.Method, operation.Endpoint);
+                    outbound.Headers.TryAddWithoutValidation("X-Correlation-ID", execution.CorrelationId.ToString("D"));
+                    if (operation.Method != HttpMethod.Get)
+                        outbound.Content = new ByteArrayContent(execution.Payload.ToArray()) { Headers = { ContentType = MediaTypeHeaderValue.Parse(operation.RequestContentType) } };
+                    X509Certificate2? clientCertificate = null;
+                    try
+                    {
+                        clientCertificate = await ApplyAuthenticationAsync(outbound, operation, cancellationToken).ConfigureAwait(false);
+                        ExternalResponse response = await transport.SendAsync(outbound, addresses, clientCertificate, TimeSpan.FromMilliseconds(operation.TimeoutMilliseconds), operation.MaximumResponseBytes, cancellationToken).ConfigureAwait(false);
+                        return new(response.StatusCode, response.ContentType, response.Body);
+                    }
+                    catch (Exception exception) when (attempt < attempts && exception is HttpRequestException or TimeoutException)
+                    {
+                        // Retry only operations explicitly declared idempotent by server configuration.
+                    }
+                    finally { clientCertificate?.Dispose(); }
                 }
-                catch (Exception exception) when (attempt < attempts && exception is HttpRequestException or TimeoutException)
-                {
-                    // Retry only operations explicitly declared idempotent by server configuration.
-                }
-                finally { clientCertificate?.Dispose(); }
+            }
+            catch (ProviderAccessException exception)
+            {
+                // Only the built-in Core strategy may preserve provider-neutral provider failures.
+                // The outer strategy boundary still sanitizes the same exception from external modules.
+                throw new CoreProviderExecutionException(exception.Code, exception.Retryable);
             }
         }
 
@@ -218,6 +231,12 @@ public sealed class RestrictedEgressService(
                     throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 500);
             }
         }
+    }
+
+    private sealed class CoreProviderExecutionException(string code, bool retryable) : Exception
+    {
+        internal string Code { get; } = code;
+        internal bool Retryable { get; } = retryable;
     }
 
     /// <summary>Returns true for loopback, link-local, metadata and non-public address ranges.</summary>
