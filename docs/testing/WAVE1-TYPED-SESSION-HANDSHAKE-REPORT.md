@@ -5,15 +5,18 @@
 This report covers only the generic Core capability described by ADR-0022. It does not qualify a
 production connector, a deployment environment, a distributed cache or generic XML scripting.
 
-- Base: `705e9d4bd203ca7b902ad0aeedc9d4402f9f4452`.
+- Rebased base / merged PR #22 head: `9b560ff11cc3ac35160a050ccc10b192c2782166`.
 - Original independently reviewed head: `8f6218599dc7fb454a8a542184ae7ce816856c96`.
 - Targeted remediation product commit: `45605a9fb3085d83af3b2d9d50e8b08f4a987f65`.
 - Previous targeted re-review head: `e48c1eee4d83f76630ed8cdc1f358d91f6d1f6f1`.
 - Final test/evidence remediation commit: `95eeaf5d6e2c2170570f48e7570f90b8dfb4e646`.
-- `PRODUCTION_CODE_CHANGED`: **NO**. The final remediation changes test/harness and evidence only.
+- Starting rebased PR #23 head: `fb5f622221d855d5be829e3516a538e87c3bda59`.
+- Shared-lifecycle wiring fix: `f08eb9762fcc21dc7d6d7ba236cf6a80840dfac9`.
+- `PRODUCTION_CODE_CHANGED`: **YES**, limited to the `Gateway.Api` DI alias that removes the
+  independent business cache. No protocol or session implementation changed.
 - Branch/PR: `wave1/auth-session-handshake`, PR #23; open and unmerged.
 
-No Sistema TS, PR #22 dispatch composition, arbitrary XML framework, second session cache,
+No Sistema TS, duplicated PR #22 dispatch composition, arbitrary XML framework, second session cache,
 healthcare production connector or commercial adapter is introduced.
 
 ## Reviewed findings
@@ -34,6 +37,7 @@ healthcare production connector or commercial adapter is introduced.
 |---|---|---|
 | P2 production presentation E2E | **FIXED** | `Wave1_IT_PRODUCTION_HOST_authenticated_routes_store_registry_admission_replay_and_session_use` starts the actual `Program`, sends HTTP through acquire/completion, executes `AuthenticateAsync`, current grants, PostgreSQL Published resolution, DI adapters, restricted HTTPS validation, HTTP cache reuse and subsequent SOAP business use. |
 | P2 production-store concurrency/replay evidence | **FIXED** | `Wave1_IT_PRODUCTION_STORE_final_race_uses_same_PostgreSQL_authority_and_denies_promotion` uses the host's `RoutingConnectorConfigurationStore` and resolver. Real publish and resource-disable variants occur after one validator success and before CAS; both deny promotion and replay with zero additional network. The hosted test separately denies valid-grant cross-Tenant, cross-Application and cross-Installation principals before validator network. |
+| P2 subsequent hosted session use | **FIXED** | The production DI graph aliases `OpaqueSessionLeaseProvider` to `SoapSessionClient.OpaqueSessionLeases`. The hosted test invokes `POST /v1/connectors/{connectorId}/operations/session-business:invoke`; BGW1, grant and Published `soapBasicOpaqueSession` select `ComposedSoapExecutionStrategy`, resolve Basic and lease the promoted generation for one real restricted-HTTPS SOAP dispatch. |
 
 The old `Wave1_IT_Internal_composition_*` tests remain useful but are explicitly classified as
 `INTERNAL_COMPOSITION_TEST`; they are not production-host or production-store evidence.
@@ -66,8 +70,10 @@ The old `Wave1_IT_Internal_composition_*` tests remain useful but are explicitly
   await and succeeds only under the exact inactive generation while the cache atomically consumes
   the candidate-bound validation proof and assigns one current session generation.
 - The design retains one SOAP cache, cap 256, 64 acquisition stripes, TTL/lazy sweep and one current
-  generation. The process-local authority matches this existing single-node cache; scale-out would
-  require a separately reviewed distributed cache and linearization authority.
+  generation. `SoapSessionClient` owns it and the production `OpaqueSessionLeaseProvider` is an alias
+  of `SoapSessionClient.OpaqueSessionLeases`; the composition root does not register another cache.
+  The process-local authority matches this existing single-node cache; scale-out would require a
+  separately reviewed distributed cache and linearization authority.
 
 ## Hosted path and exact race
 
@@ -76,8 +82,11 @@ The old `Wave1_IT_Internal_composition_*` tests remain useful but are explicitly
   adapters, sends one real restricted-HTTPS `CreateSession`, and returns only the opaque intent.
 - Completion enters the mapped presentation route, reauthenticates, resolves intent authority
   server-side, sends one real restricted-HTTPS `ValidateSession`, and returns an opaque session.
-  A second signed acquire returns the same promoted opaque reference with no network. The same
-  production `SoapSessionClient` then performs the synthetic session-authenticated business request.
+  A second signed acquire returns the same promoted opaque reference with no network. A signed HTTP
+  `session-business:invoke` then crosses inbound authentication and grant, resolves the Published
+  `soapBasicOpaqueSession` operation, selects `ComposedSoapExecutionStrategy`, obtains Basic plus the
+  current promoted lease and sends one real restricted-HTTPS SOAP request. Acquisition and validation
+  remain unchanged, business outbound increments once and session generation remains unchanged.
 - Independently enrolled cross-context principals all have an otherwise valid operation grant. A
   relationally valid cross-Tenant or cross-Application identity necessarily has its own Installation;
   the third case changes only Installation under the original Tenant/Application. All three deny
@@ -95,30 +104,33 @@ The old `Wave1_IT_Internal_composition_*` tests remain useful but are explicitly
 |---|---|---|
 | `UNIT_AUTHORITY_TEST` | `TypedSessionHandshakeTests` | Fast exact proof of adapter, cache, proof, concurrency and authority invariants. |
 | `INTERNAL_COMPOSITION_TEST` | `Wave1_IT_Internal_composition_*` | Manually composed real-HTTPS/store checks; not a `Program`/HTTP proof. |
-| `PRODUCTION_HOST_E2E` | `Wave1_IT_PRODUCTION_HOST_authenticated_routes_store_registry_admission_replay_and_session_use` | Actual host, authenticated routes, PostgreSQL, DI registry, acquire/completion/reuse/business path and hosted redaction. |
+| `PRODUCTION_HOST_E2E` | `Wave1_IT_PRODUCTION_HOST_authenticated_routes_store_registry_admission_replay_and_session_use` | Actual host, authenticated routes, PostgreSQL, DI identity, acquire/completion and hosted business API through production composed strategy/transport with generation and network-count proof. |
+| `ARCHITECTURE_LIFECYCLE_GUARD` | `Wave1_CT_Gateway_composition_aliases_business_leases_to_the_singleton_SOAP_session_lifecycle` | Production composition contains no second `SoapSessionCache`; business lease provider aliases the singleton client lifecycle. |
 | `PRODUCTION_STORE_RACE` | `Wave1_IT_PRODUCTION_STORE_final_race_uses_same_PostgreSQL_authority_and_denies_promotion` | Same production routing store/resolver/authority; publish and disable variants at the exact final linearization window. |
 
-## Local qualification on product plus final test/evidence commit
+## Local qualification on shared-lifecycle wiring commit
 
 | Suite | Result | Coverage |
 |---|---:|---|
 | `TypedSessionHandshakeTests` | 41 PASS | authority, adapters, XML, cancellation, presentation, atomicity, concurrency, replay, bounds and redaction |
-| focused typed plus SOAP boundary unit filter | 57 PASS | typed remediation plus unchanged scalar boundary regression |
+| focused session/composed/opaque/legacy unit filter | 120 PASS | typed authority, AP-02/legacy cache, opaque projection, composed dispatch and exact strategy selection |
 | typed hosted/integration filter | 8 PASS | 4 existing real-HTTPS/internal cases, 1 API authentication case, 1 production-host E2E and 2 production-store race variants |
 | final production-host/store cases | 3 PASS | hosted acquire/completion/replay/session use plus Published-revision and resource-disable final races |
-| SOAP architecture filter | 4 PASS | provider neutrality, one cache, pure validation adapter and mutation CAS/lease boundary |
-| complete Architecture suite | 24 PASS | Core/provider/auth and vertical boundaries |
+| focused SOAP/typed/opaque integration regression | 38 PASS | typed 8, composed 20, opaque HTTP 5 and legacy SOAP 5 |
+| SOAP architecture filter | 3 PASS | composed boundary, single SOAP cache and exact production lifecycle alias |
+| complete Architecture suite | 26 PASS | Core/provider/auth and vertical boundaries |
 | legacy SOAP plus Connector configuration unit | 35 PASS | scalar M6 and configuration compatibility |
 | legacy SOAP real-HTTPS integration | 5 PASS | Login/Challenge/Business/Logout and hardening compatibility |
-| ordinary solution suite | 456 total: 441 PASS, 15 PostgreSQL-conditional SKIP | all solution projects; zero failures; three new canonical cases move to PASS in the PostgreSQL gate |
-| Gateway integration on fresh PostgreSQL 18 | 112 PASS, 0 SKIP | prior 109 plus production-host E2E and two production-store race variants; non-superuser Admin/runtime roles |
+| ordinary solution suite | 509 total: 482 PASS, 27 PostgreSQL-conditional SKIP | all solution projects, zero failures; TRX evidence outside the repository |
+| Gateway integration on fresh PostgreSQL 18 | 10 iterations × 133 PASS, 0 SKIP | 1,330 tests; 10 fresh migrations, 10 second-apply no-op checks and forced RLS; non-superuser Admin/runtime roles |
+| PostgreSQL targeted stability matrices | 80/80 PASS | pagination, bootstrap fault injection, Tenant/Application concurrency and binding/publication concurrency; retry/sleep count zero |
 | Release restore/build | PASS, 0 warnings, 0 errors | pinned .NET SDK and locked dependency graph |
 | Admin Web | lint/API/runtime drift PASS; 28 unit, 37 UI mock, 2 accessibility, 1 canonical full-stack PASS | production build, lifecycle and redaction; Playwright used one worker, zero retries/flaky tests, then cleaned the stack; npm audit zero vulnerabilities |
 | documentation validation and conservative secret scan | PASS | repository docs and tracked/untracked candidate content |
-| Gitleaks v8.27.2 | PASS | complete final-remediation delta from `e48c1eee`; 66.99 KB scanned, no leaks |
+| Gitleaks | exact concluding-head run recorded externally | canonical Git candidate scan runs after the evidence commit; raw ignored full-stack fixtures are not publication content |
 | SPDX SBOM generation/validation | PASS | .NET, Admin Web and Gateway container; 165 container packages indexed |
 | vulnerable package scan | PASS | no vulnerable direct or transitive NuGet packages reported |
-| open-source Core export | PASS on product commit `45605a9fb3085d83af3b2d9d50e8b08f4a987f65`; exact concluding-head rerun follows the evidence commit | prior 380-file clean-room scan/build/test/Admin/license proof remains valid for unchanged product; the final export path/hash is recorded in PR evidence |
+| open-source Core export | exact concluding-head run recorded externally | clean-room scan/build/test/Admin/license proof, file count and artifact-specific manifest digest run after the evidence commit |
 | PR #23 exact-head CI | PENDING publication | must pass on the concluding documentation commit before targeted re-review |
 
 ## Visible failed attempts and remediation
@@ -157,8 +169,17 @@ The old `Wave1_IT_Internal_composition_*` tests remain useful but are explicitly
   the production stack and passed `FULLSTACK-01` 1/1 with zero retry/flaky results and redaction
   validation. Its first invocation also exposed a missing pinned-SDK `PATH`; rerunning the wrapper
   with the repository SDK environment corrected the harness environment, not product behavior.
+- The first hosted business invocation after rebasing over PR #22 reached
+  `ComposedSoapExecutionStrategy`, resolved both Basic bindings, but returned
+  `BGW-EGRESS-AUTHENTICATION` before network. Inspection proved that admission promoted into the
+  private `SoapSessionClient` cache while the business provider was backed by a separately
+  registered `SoapSessionCache`. The fix removes that registration and aliases the provider to the
+  singleton client's existing lifecycle; the same hosted test then passed with business outbound
+  `0→1`, acquisition/validation/generation unchanged and all synthetic composed assertions green.
+- The first compile after adding the runtime DI identity assertion lacked the opaque-session
+  namespace import and stopped before test execution. Adding the contract namespace fixed only the
+  test build; the canonical hosted scenario then passed on its first execution after compilation.
 
-The product commit remains unchanged. The final test/evidence commit is locally qualified; the
-concluding documentation commit must retain green exact-head CI and receive a new exact-head Core
-export before handoff. Independent targeted re-review remains required, and no merge is authorized
-by this report.
+The shared-lifecycle production fix and hosted evidence are locally qualified. The concluding
+documentation commit must retain green exact-head CI and receive a new exact-head Core export before
+handoff. Independent targeted re-review remains required, and no merge is authorized by this report.

@@ -2,7 +2,7 @@
 
 ## Scope and baseline
 
-- Base: `705e9d4bd203ca7b902ad0aeedc9d4402f9f4452`.
+- Rebased base with PR #22 composed dispatch: `9b560ff11cc3ac35160a050ccc10b192c2782166`.
 - Branch: `wave1/auth-session-handshake`.
 - Core capability only: typed nested SOAP session bootstrap plus authorized external opaque-session
   admission.
@@ -99,6 +99,21 @@ completion routes. The completion route takes its candidate as a bounded request
 buffer on exit and never accepts tenant, application, installation, ConnectorVersion, profile,
 lifecycle key, provenance, expiry, endpoint, credential or adapter selectors.
 
+## Shared authoritative SOAP session lifecycle
+
+`SoapSessionClient` is a process singleton and remains the owner of the existing bounded
+`SoapSessionCache` and its `OpaqueSessionLeases` adapter. The composition root registers
+`OpaqueSessionLeaseProvider` as an alias of that exact adapter. It does not register or construct a
+second `SoapSessionCache`. Consequently typed handshake, external admission, legacy AP-02 flows,
+generic opaque-session projection and `ComposedSoapExecutionStrategy` lease the same current
+generation across separate HTTP acquire, completion and business requests.
+
+`Wave1_CT_Gateway_composition_aliases_business_leases_to_the_singleton_SOAP_session_lifecycle`
+guards the production registration, while the hosted E2E asserts DI identity and proves behavior:
+the session is promoted through `SoapSessionClient`, then the signed HTTP business route selects
+the Published `soapBasicOpaqueSession` strategy and dispatches exactly once without acquisition or
+validation count changes. No cache primitive, lifetime, locking rule or public capability changed.
+
 ## Synthetic protocol and verification matrix
 
 The neutral HTTPS synthetic server supports nested `CreateSessionRequest` /
@@ -120,10 +135,11 @@ the complete legacy SOAP regression. Concurrency tests use barriers/hooks rather
 The canonical production proof is
 `Wave1_IT_PRODUCTION_HOST_authenticated_routes_store_registry_admission_replay_and_session_use`.
 It starts the application through `WebApplicationFactory<Program>`, sends HTTP requests through the
-mapped acquire/completion routes, presents a registered synthetic certificate to `TestServer`, and
-still executes the production `AuthenticateAsync` BGW1 signature/digest/nonce checks. It uses the
-PostgreSQL `RoutingConnectorConfigurationStore`, four-eyes application services and the
-composition-root adapter registry. A second named theory,
+mapped acquire/completion routes and then `POST /v1/connectors/{connectorId}/operations/session-business:invoke`,
+presents a registered synthetic certificate to `TestServer`, and still executes the production
+`AuthenticateAsync` BGW1 signature/digest/nonce checks. It uses the PostgreSQL
+`RoutingConnectorConfigurationStore`, four-eyes application services, composition-root adapter
+registry and the production `ComposedSoapExecutionStrategy`. A second named theory,
 `Wave1_IT_PRODUCTION_STORE_final_race_uses_same_PostgreSQL_authority_and_denies_promotion`, pauses only
 at the existing test hook after the last asynchronous revalidation and before the synchronous CAS;
 real publish and provider-resource-disable mutations advance the same store authority and deny
