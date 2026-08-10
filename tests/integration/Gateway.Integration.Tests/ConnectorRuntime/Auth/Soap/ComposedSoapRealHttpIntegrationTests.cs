@@ -107,22 +107,73 @@ public sealed class ComposedSoapRealHttpIntegrationTests
     }
 
     [Fact]
-    public async Task Wave1_IT_real_HTTPS_composed_timeout_and_caller_cancellation_remain_distinct()
+    public async Task Wave1_IT_real_HTTPS_composed_product_deadline_maps_to_timeout_and_dispatches_once()
     {
         using CertificateFixture certificates = CertificateFixture.Create();
         await using SyntheticSoapServerInstance timeoutServer = await StartServerAsync(certificates);
         await using RealComposedFixture timeout = await RealComposedFixture.CreateAsync(timeoutServer.Endpoint, certificates, SoapEnvelopeVersion.Soap11, timeout: TimeSpan.FromMilliseconds(150));
-        SoapAuthException timeoutFailure = await Assert.ThrowsAsync<SoapAuthException>(() => timeout.SendAsync("timeout", TestContext.Current.CancellationToken));
-        Assert.Equal("SOAP-TIMEOUT", timeoutFailure.Code);
-        Assert.Equal(1, timeoutServer.Counters.ComposedAccepted);
 
+        SoapAuthException timeoutFailure = await Assert.ThrowsAsync<SoapAuthException>(() => timeout.SendAsync("timeout", TestContext.Current.CancellationToken));
+
+        Assert.Equal("SOAP-TIMEOUT", timeoutFailure.Code);
+        Assert.DoesNotContain(RealComposedFixture.Password, timeoutFailure.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(RealComposedFixture.UpstreamSession, timeoutFailure.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, timeout.Transport.ComposedDispatches);
+        Assert.Equal(0, timeout.Transport.GenericDispatches);
+    }
+
+    [Fact]
+    public async Task Wave1_IT_real_HTTPS_composed_response_stall_after_request_observed_honors_timeout_and_dispatches_once()
+    {
+        using CertificateFixture certificates = CertificateFixture.Create();
+        await using SyntheticSoapServerInstance server = await StartServerAsync(certificates);
+        ResponsePhaseDeadlineController responseDeadline = new(TestContext.Current.CancellationToken);
+        await using RealComposedFixture fixture = await RealComposedFixture.CreateAsync(
+            server.Endpoint, certificates, SoapEnvelopeVersion.Soap11, responseDeadline: responseDeadline);
+
+        Task<ComposedSoapHttpResponse> pending = fixture.SendAsync("response-stalled", TestContext.Current.CancellationToken);
+        await server.Counters.WaitForComposedAcceptedAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, server.Counters.Composed);
+        Assert.Equal(1, server.Counters.ComposedAccepted);
+        Assert.Equal(1, fixture.Transport.ComposedDispatches);
+        Assert.Equal(0, fixture.Transport.GenericDispatches);
+        Assert.False(pending.IsCompleted);
+
+        responseDeadline.Expire();
+        SoapAuthException timeoutFailure = await Assert.ThrowsAsync<SoapAuthException>(() => pending);
+
+        Assert.Equal("SOAP-TIMEOUT", timeoutFailure.Code);
+        Assert.DoesNotContain(RealComposedFixture.Password, timeoutFailure.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(RealComposedFixture.UpstreamSession, timeoutFailure.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, server.Counters.Composed);
+        Assert.Equal(1, server.Counters.ComposedAccepted);
+        Assert.Equal(1, fixture.Transport.ComposedDispatches);
+    }
+
+    [Fact]
+    public async Task Wave1_IT_real_HTTPS_composed_caller_cancellation_remains_distinct_and_dispatches_once()
+    {
+        using CertificateFixture certificates = CertificateFixture.Create();
         await using SyntheticSoapServerInstance cancellationServer = await StartServerAsync(certificates);
         await using RealComposedFixture caller = await RealComposedFixture.CreateAsync(cancellationServer.Endpoint, certificates, SoapEnvelopeVersion.Soap11);
         using CancellationTokenSource cancellation = new();
-        Task<ComposedSoapHttpResponse> pending = caller.SendAsync("timeout", cancellation.Token);
+
+        Task<ComposedSoapHttpResponse> pending = caller.SendAsync("response-stalled", cancellation.Token);
         await cancellationServer.Counters.WaitForComposedAcceptedAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, cancellationServer.Counters.Composed);
+        Assert.Equal(1, cancellationServer.Counters.ComposedAccepted);
+        Assert.Equal(1, caller.Transport.ComposedDispatches);
+        Assert.Equal(0, caller.Transport.GenericDispatches);
+        Assert.False(pending.IsCompleted);
+
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+
+        Assert.Equal(1, cancellationServer.Counters.Composed);
+        Assert.Equal(1, cancellationServer.Counters.ComposedAccepted);
+        Assert.Equal(1, caller.Transport.ComposedDispatches);
     }
 
     private static Task<SyntheticSoapServerInstance> StartServerAsync(CertificateFixture certificates) => SyntheticSoapServerHost.StartAsync(
@@ -151,11 +202,11 @@ public sealed class ComposedSoapRealHttpIntegrationTests
         private readonly OpaqueSessionReference session;
 
         private RealComposedFixture(Uri endpoint, CertificateFixture certificates, SoapEnvelopeVersion version, bool wrongBasic, TimeSpan timeout,
-            Func<CancellationToken, Task>? beforeFinalAuthorization)
+            Func<CancellationToken, Task>? beforeFinalAuthorization, ResponsePhaseDeadlineController? responseDeadline)
         {
             this.version = version;
             SystemRestrictedTransport restricted = new(new X509Certificate2Collection(certificates.Root), Convert.ToHexString(SHA256.HashData(certificates.Server.RawData)));
-            Transport = new(restricted);
+            Transport = new(restricted, responseDeadline);
             Secrets = new(wrongBasic);
             Snapshots = new(environmentId, endpoint, version, timeout, clock);
             soap = new(Secrets, new LoopbackResolver(), Transport, clock, new MatchingStampProvider(), new LoopbackAllowance());
@@ -169,8 +220,8 @@ public sealed class ComposedSoapRealHttpIntegrationTests
         internal MutableSnapshots Snapshots { get; }
 
         internal static Task<RealComposedFixture> CreateAsync(Uri endpoint, CertificateFixture certificates, SoapEnvelopeVersion version, bool wrongBasic = false,
-            TimeSpan? timeout = null, Func<CancellationToken, Task>? beforeFinalAuthorization = null) =>
-            Task.FromResult(new RealComposedFixture(endpoint, certificates, version, wrongBasic, timeout ?? TimeSpan.FromSeconds(2), beforeFinalAuthorization));
+            TimeSpan? timeout = null, Func<CancellationToken, Task>? beforeFinalAuthorization = null, ResponsePhaseDeadlineController? responseDeadline = null) =>
+            Task.FromResult(new RealComposedFixture(endpoint, certificates, version, wrongBasic, timeout ?? TimeSpan.FromSeconds(2), beforeFinalAuthorization, responseDeadline));
 
         internal async Task<ComposedSoapHttpResponse> SendAsync(string payload, CancellationToken cancellationToken)
         {
@@ -284,15 +335,51 @@ public sealed class ComposedSoapRealHttpIntegrationTests
             "synthetic-composed", "business", "per-run", revision, null, null, "catalog-" + revision);
     }
 
-    private sealed class RoutingTransport(IRestrictedTransport restricted) : IRestrictedTransport
+    private sealed class ResponsePhaseDeadlineController(CancellationToken testCancellation)
     {
-        internal int GenericDispatches { get; private set; }
-        internal int ComposedDispatches { get; private set; }
+        private readonly TaskCompletionSource<bool> expiration = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal void Expire() => expiration.TrySetResult(true);
+
+        internal async Task<ExternalResponse> SendAsync(IRestrictedTransport restricted, HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses,
+            long maximumResponseBytes, CancellationToken productDeadline)
+        {
+            _ = productDeadline;
+            using CancellationTokenSource controlledDeadline = CancellationTokenSource.CreateLinkedTokenSource(testCancellation);
+            // The separate product-deadline test covers the real wall-clock contract. This test-only
+            // controller prevents that deadline from racing request observation, then expires the
+            // transport deadline only after the real HTTPS handler has validated the composed request.
+            Task<ExternalResponse> pending = restricted.SendSoapAsync(
+                request, approvedAddresses, Timeout.InfiniteTimeSpan, maximumResponseBytes, controlledDeadline.Token);
+            Task expirationRequested = expiration.Task.WaitAsync(testCancellation);
+            try
+            {
+                if (await Task.WhenAny(pending, expirationRequested).ConfigureAwait(false) == pending)
+                    return await pending.ConfigureAwait(false);
+
+                await expirationRequested.ConfigureAwait(false);
+                controlledDeadline.Cancel();
+                return await pending.ConfigureAwait(false);
+            }
+            finally
+            {
+                await controlledDeadline.CancelAsync().ConfigureAwait(false);
+            }
+        }
+    }
+
+    private sealed class RoutingTransport(IRestrictedTransport restricted, ResponsePhaseDeadlineController? responseDeadline) : IRestrictedTransport
+    {
+        private int genericDispatches;
+        private int composedDispatches;
+
+        internal int GenericDispatches => Volatile.Read(ref genericDispatches);
+        internal int ComposedDispatches => Volatile.Read(ref composedDispatches);
 
         public Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout,
             long maximumResponseBytes, CancellationToken cancellationToken)
         {
-            GenericDispatches++;
+            Interlocked.Increment(ref genericDispatches);
             throw new InvalidOperationException("Composed SOAP must not use generic SendAsync.");
         }
 
@@ -303,8 +390,10 @@ public sealed class ComposedSoapRealHttpIntegrationTests
                 string response = $"<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\"><soap:Body><s:LoginResponse xmlns:s=\"urn:synthetic:session\"><s:SessionId>{RealComposedFixture.UpstreamSession}</s:SessionId></s:LoginResponse></soap:Body></soap:Envelope>";
                 return Task.FromResult(new ExternalResponse(200, "text/xml; charset=utf-8", Encoding.UTF8.GetBytes(response)));
             }
-            ComposedDispatches++;
-            return restricted.SendSoapAsync(request, approvedAddresses, timeout, maximumResponseBytes, cancellationToken);
+            Interlocked.Increment(ref composedDispatches);
+            return responseDeadline is null
+                ? restricted.SendSoapAsync(request, approvedAddresses, timeout, maximumResponseBytes, cancellationToken)
+                : responseDeadline.SendAsync(restricted, request, approvedAddresses, maximumResponseBytes, cancellationToken);
         }
     }
 

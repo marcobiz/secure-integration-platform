@@ -41,6 +41,7 @@ public sealed class SyntheticSoapCounters
     private int opaqueSessionRejected;
     private int soapPolicyRejected;
     private readonly TaskCompletionSource<bool> composedAcceptedObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<bool> releaseComposedResponse = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int createSession;
     private int validateSession;
     private readonly TaskCompletionSource<bool> bodyHeadersFlushed = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -92,6 +93,8 @@ public sealed class SyntheticSoapCounters
         Interlocked.Increment(ref composedAccepted);
         composedAcceptedObserved.TrySetResult(true);
     }
+    internal Task WaitForComposedResponseReleaseAsync(CancellationToken cancellationToken) => releaseComposedResponse.Task.WaitAsync(cancellationToken);
+    internal void ReleaseComposedResponse() => releaseComposedResponse.TrySetResult(true);
     internal void CountBasicRejected() => Interlocked.Increment(ref basicRejected);
     internal void CountOpaqueSessionRejected() => Interlocked.Increment(ref opaqueSessionRejected);
     internal void CountSoapPolicyRejected() => Interlocked.Increment(ref soapPolicyRejected);
@@ -108,6 +111,7 @@ public sealed class SyntheticSoapServerInstance(WebApplication application, Uri 
     /// <summary>Stops and disposes the server.</summary>
     public async ValueTask DisposeAsync()
     {
+        Counters.ReleaseComposedResponse();
         Counters.ReleaseStalledBody();
         await application.StopAsync().ConfigureAwait(false);
         await application.DisposeAsync().ConfigureAwait(false);
@@ -310,6 +314,8 @@ public static class SyntheticSoapServerHost
                 await WriteSoapAsync(response, parsed.Version, malformed, StatusCodes.Status500InternalServerError, token).ConfigureAwait(false);
                 return;
             }
+            if (payload == "response-stalled")
+                await counters.WaitForComposedResponseReleaseAsync(token).ConfigureAwait(false);
             if (payload == "timeout") await Task.Delay(options.TimeoutDelay, token).ConfigureAwait(false);
             await WriteSoapAsync(response, parsed.Version, ResponseElement("BusinessOperationResponse", "Result", "accepted"), StatusCodes.Status200OK, token).ConfigureAwait(false);
         });
