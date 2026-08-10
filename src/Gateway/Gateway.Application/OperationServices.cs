@@ -138,8 +138,12 @@ public sealed class RestrictedEgressService
             throw new GatewayException("BGW-INSTALLATION-REVOKED", 403);
         if (!await registry.IsGrantedAsync(identity.InstallationId, identity.TenantId, connectorId, operationId, clock.UtcNow, cancellationToken).ConfigureAwait(false))
             throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403);
-        GatewayOperationDefinition operation = await catalog.GetRequiredAsync(connectorId, operationId, identity.EnvironmentId,
-            new(identity.InstallationId, identity.TenantId, identity.ApplicationId, operationId), cancellationToken).ConfigureAwait(false);
+        PublishedConnectorAccessContext access = new(identity.InstallationId, identity.TenantId, identity.ApplicationId, operationId);
+        AuthorizedPublishedOperation? published = catalog is IAuthorizedPublishedOperationCatalog authoritative
+            ? await authoritative.GetRequiredAuthorizedAsync(connectorId, operationId, identity.EnvironmentId, access, cancellationToken).ConfigureAwait(false)
+            : null;
+        GatewayOperationDefinition operation = published?.Operation ?? await catalog.GetRequiredAsync(
+            connectorId, operationId, identity.EnvironmentId, access, cancellationToken).ConfigureAwait(false);
         if (request.Metadata?.Count > 32 || request.Extensions?.Count > 16 || request.Metadata?.Values.Any(value => value.ValueKind is JsonValueKind.Array or JsonValueKind.Object) == true)
             throw new GatewayException("BGW-PROTOCOL-METADATA", 400);
         byte[] body;
@@ -158,7 +162,7 @@ public sealed class RestrictedEgressService
         ConnectorExecutionStrategyKey strategyKey = ConnectorExecutionStrategyKeys.Resolve(operation);
         ConnectorExecutionStrategyRegistration registration = executionStrategyRegistry.Required(strategyKey, operation.Authentication);
         AuthorizedGatewayInvocation invocation = new(authenticated, connectorId, operationId);
-        AuthorizedConnectorExecution execution = new(invocation, operation, strategyKey, body, capabilityDispatcher);
+        AuthorizedConnectorExecution execution = new(invocation, operation, strategyKey, body, capabilityDispatcher, published?.Authority);
         QualifiedGatewayExecutionResult result;
         try
         {

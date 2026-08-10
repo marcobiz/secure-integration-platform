@@ -105,6 +105,9 @@
 | TM-071 | I/R/D/E | Una strategy propaga message/inner/stack/provider data, forgia `GatewayException`/status/retryability o usa una falsa `OperationCanceledException` per simulare la cancellazione del caller. | Solo strategy Core con marker internal possono preservare failure qualificate; qualsiasi eccezione external, incluso `GatewayException`, diventa `BGW-EGRESS-UPSTREAM-REJECTED` senza inner/message e non retryable. Le failure capability usano un marker internal non costruibile, legato per reference all'esatto bridge corrente. Cancellation è conservata solo quando il token effettivo del caller risulta cancellato; risultato/content type/body restano bounded e copiati. | Un modulo full-trust può bloccare il processo, restituire intenzionalmente un risultato applicativo falso o usare reflection; isolamento di codice non fidato richiederebbe un processo separato ed è fuori scope. |
 | TM-072 | S/T/E | Una strategy conserva il bridge autorizzato dell'invocazione A, lo riusa per B, seleziona un profilo/endpoint/credential diverso o concatena più capability per ampliare l'autorità. | `IAuthorizedConnectorCapabilityBridge` espone solo typed handshake e composed SOAP sulla current handoff, senza selector di identity/operation/profile/endpoint/credential/provider/transport; implementazione privata, scope attivo mutabile, exact-reference check e consumo one-shot. Typed profile deriva dal Published corrente; admission resta sul boundary autenticato esistente; SOAP riusa il medesimo `SoapSessionClient`/lease provider. Replay retained produce solo failure non autorevole e viene sanitizzato. | Il modulo è comunque full-trust nel processo e può rifiutare servizio o chiamare proprie reti/API se la supply chain approvata è malevola; il bridge limita l'autorità supportata, non crea una sandbox. |
 
+| TM-073 | T/E | La configurazione Published cambia da A a B dopo caller/grant/strategy resolution ma prima del side effect del bridge, e un resolver tratta B come nuova authority autorizzata, incluso un cambio di strategy key, profilo, binding o risorsa. | Core cattura un `AuthorizedPublishedExecutionStamp` interno e immutabile dalla stessa snapshot A che produce operation, authentication kind e strategy key. Lo stamp lega version ID/version, publication revision, canonical checksum, binding ID/revision/checksum, resource stamp, operation checksum, auth kind e strategy key. Ogni rilettura handshake/composed è solo validazione contro A; confronto finale dopo provider/DNS/resource preparation e immediatamente prima del primo effetto nega B con failure stale host-only. Race deterministici A→B provano handshake provider/network/session a zero e composed business dispatch/reacquire a zero; il full E2E PostgreSQL prova il lifecycle non-racing. | Pubblicazione DB e dispatch di rete non sono una transazione globale: una modifica successiva all'inizio effettivo del dispatch non ritira byte già trasmessi. Store, provider e processo Gateway restano nella TCB. |
+| TM-074 | T/E/D | Un modulo A dipende da un servizio posseduto/registrato dal modulo B, oppure servizi module-owned formano un ciclo e influenzano DI tramite descrittori parzialmente registrati prima del fallimento. | Il registrar valida ricorsivamente ogni edge rispetto all'assembly proprietario e mantiene i descrittori del modulo in un buffer fino alla validazione completa. Test comportamentali separati verificano dipendenza cross-module, ciclo A→B→A e assenza di service/strategy descriptor del modulo fallito. | I moduli caricati e validati in precedenza restano codice full-trust; un fallimento di composizione impedisce comunque al processo host di servire richieste. |
+
 ## Analisi degli scenari obbligatori
 
 ### Amministratore locale/SYSTEM
@@ -183,6 +186,13 @@ opzionali. `SEC-W1-EXEC-003` mappa `TM-070` sui test public non-constructible/no
 context identity dal production host, payload snapshot copy/read-only e assenza di inbound re-auth.
 `SEC-W1-EXEC-004` mappa `TM-071` sui canary exception/fake-cancellation e sulla preservazione del
 token realmente cancellato.
+`SEC-W1-EXEC-005` mappa `TM-072` sul bridge one-shot/current-scope, sul retained replay denial e sul
+full lifecycle handshake→admission autenticata→shared session→composed SOAP del modulo no-IVT.
+`SEC-W1-EXEC-006` mappa `TM-073` sui test deterministici
+`Wave1_SEC_external_bridge_handshake_bound_to_A_denies_B_before_provider_network_or_session_effects`
+e `Wave1_SEC_external_bridge_composed_SOAP_bound_to_A_denies_strategy_changed_B_before_dispatch`,
+oltre al full E2E PostgreSQL della stessa bridge authority. `SEC-W1-EXEC-007` mappa `TM-074` sui
+negativi cross-module e ciclo con verifica di descriptor atomicity.
 
 ## Criteri di revisione
 

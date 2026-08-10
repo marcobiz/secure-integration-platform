@@ -19,10 +19,18 @@ internal sealed class AuthorizedConnectorCapabilityDispatcher(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(execution);
-        TypedSessionHandshakeResult result = await handshakes.AcquireAuthorizedAsync(
-            execution.Invocation,
-            cancellationToken).ConfigureAwait(false);
-        return new(200, "application/json", JsonSerializer.SerializeToUtf8Bytes(result, ResultJson));
+        try
+        {
+            TypedSessionHandshakeResult result = await handshakes.AcquireAuthorizedAsync(
+                execution.Invocation,
+                execution.PublishedAuthority,
+                cancellationToken).ConfigureAwait(false);
+            return new(200, "application/json", JsonSerializer.SerializeToUtf8Bytes(result, ResultJson));
+        }
+        catch (SoapAuthException exception) when (string.Equals(exception.Code, "SOAP-TYPED-AUTHORITY-STALE", StringComparison.Ordinal))
+        {
+            throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-STALE", 503, true);
+        }
     }
 
     public Task<QualifiedGatewayExecutionResult> ExecuteComposedSoapAsync(

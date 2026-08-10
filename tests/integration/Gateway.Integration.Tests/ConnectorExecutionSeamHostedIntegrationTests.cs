@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using SecureIntegration.Gateway.Api;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
 using Xunit;
 
@@ -119,11 +120,31 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
     }
 
     [Fact]
-    public async Task Wave1_IT_PRODUCTION_HOST_external_no_IVT_module_uses_authorized_handshake_admission_and_composed_SOAP_on_one_session_lifecycle()
+    public Task Wave1_IT_PRODUCTION_HOST_external_no_IVT_module_uses_authorized_handshake_admission_and_composed_SOAP_on_one_session_lifecycle() =>
+        RunExternalBridgeLifecycleAsync(runtimeConnection: null, adminConnection: null, requirePostgres: false);
+
+    [Fact]
+    public async Task Wave1_IT_PRODUCTION_HOST_PostgreSQL_full_external_no_IVT_bridge_lifecycle_uses_real_Published_authority_and_HTTPS()
+    {
+        string? adminConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(adminConnection)) Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        string? migrationConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
+        if (string.IsNullOrWhiteSpace(migrationConnection)) Assert.Skip("PostgreSQL migration connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        await PostgresIsolationTests.ApplyMigrationAsync();
+        await using AdminApiSecurityTests.PostgresRuntimeRoleLease runtimeRole =
+            await AdminApiSecurityTests.PostgresRuntimeRoleLease.CreateAsync(adminConnection, migrationConnection, TestContext.Current.CancellationToken);
+
+        await RunExternalBridgeLifecycleAsync(runtimeRole.ConnectionString, adminConnection, requirePostgres: true);
+    }
+
+    private static async Task RunExternalBridgeLifecycleAsync(string? runtimeConnection, string? adminConnection, bool requirePostgres)
     {
         const string candidate = "external-bridge-admission-candidate";
         HostedExecutionModuleConfiguration module = Module("synthetic-execution", "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticExecutionModule");
-        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(candidate, executionModule: module);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            candidate, runtimeConnection: runtimeConnection, adminConnection: adminConnection, executionModule: module);
+        if (requirePostgres) Assert.IsType<RoutingConnectorConfigurationStore>(fixture.Store);
+        else Assert.IsType<InMemoryConnectorConfigurationStore>(fixture.Store);
         Assert.Same(fixture.Sessions.OpaqueSessionLeases, fixture.Factory.Services.GetRequiredService<SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions.OpaqueSessionLeaseProvider>());
 
         string connectorId = "execution-bridge-" + Guid.NewGuid().ToString("N");
@@ -137,6 +158,21 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
         HostedConnectorAuthority authority = await fixture.PrepareConnectorVersionAsync(
             connectorId, "1.0.0", environmentId, definition.ToJsonString());
         await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        PublishedConnectorSnapshot published = await fixture.Store.GetPublishedSnapshotAsync(
+            connectorId, environmentId, null, TestContext.Current.CancellationToken)
+            ?? throw new InvalidOperationException("Published bridge authority was unavailable.");
+        Assert.Equal("1.0.0", published.Version.Version);
+        Assert.Equal(published.Version.Id, published.Stamp.VersionId);
+        Assert.Equal(1, published.Stamp.PublicationRevision);
+        Assert.Equal(published.Bindings.Revision, published.Stamp.BindingRevision);
+        Assert.Equal(published.Bindings.ChecksumSha256, published.Stamp.BindingChecksumSha256);
+        Assert.Equal(authority.Validated.ChecksumSha256, Convert.ToHexString(published.Version.ChecksumSha256));
+        Assert.False(string.IsNullOrWhiteSpace(published.Stamp.ResourceStampSha256));
+        using (JsonDocument publishedDefinition = JsonDocument.Parse(published.Version.CanonicalJson))
+        {
+            Assert.All(publishedDefinition.RootElement.GetProperty("operations").EnumerateArray(), operation =>
+                Assert.Equal("synthetic-capability-bridge", operation.GetProperty("executionStrategy").GetString()));
+        }
         HostedIdentity identity = await fixture.EnrollIdentityAsync(tenantId, applicationId, environmentId, "bridge-identity");
         await fixture.GrantAsync(connectorId, identity);
 
@@ -162,6 +198,7 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
         Assert.Equal("Issued", completed.Kind);
         Assert.Equal(1, fixture.Transport.ValidationRequests);
         long promotedGeneration = fixture.CaptureCurrentSessionGeneration();
+        Assert.True(promotedGeneration > 0);
 
         int acquisitionBeforeBusiness = fixture.Transport.AcquisitionRequests;
         int validationBeforeBusiness = fixture.Transport.ValidationRequests;
@@ -189,6 +226,146 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
         Assert.Equal(businessBefore + 1, fixture.Transport.BusinessRequests);
         Assert.Equal(0, fixture.Transport.GenericRequests);
         Assert.DoesNotContain(candidate, acquireEnvelope + completionBody + businessBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_external_bridge_handshake_bound_to_A_denies_B_before_provider_network_or_session_effects()
+    {
+        TaskCompletionSource finalCheckReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseFinalCheck = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task BeforeFinalCheck(CancellationToken cancellationToken)
+        {
+            finalCheckReached.TrySetResult();
+            await releaseFinalCheck.Task.WaitAsync(cancellationToken);
+        }
+
+        HostedExecutionModuleConfiguration module = Module("synthetic-execution", "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticExecutionModule");
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-handshake-race-candidate",
+            executionModule: module,
+            beforeHandshakeFinalAuthorization: BeforeFinalCheck);
+        string connectorId = "execution-handshake-race-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("handshake-race-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("handshake-race-application");
+
+        JsonNode definitionA = BridgeDefinition(connectorId, "1.0.0");
+        definitionA["operations"]![0]!["authentication"] = new JsonObject { ["kind"] = "none" };
+        HostedConnectorAuthority authorityA = await fixture.PrepareConnectorVersionAsync(
+            connectorId, "1.0.0", environmentId, definitionA.ToJsonString());
+        await fixture.PublishAsync(authorityA, expectedPublicationRevision: 0);
+        JsonNode definitionB = BridgeDefinition(connectorId, "2.0.0");
+        definitionB["operations"]![0]!["authentication"] = new JsonObject { ["kind"] = "none" };
+        HostedConnectorAuthority authorityB = await fixture.PrepareConnectorVersionAsync(
+            connectorId, "2.0.0", environmentId, definitionB.ToJsonString());
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(tenantId, applicationId, environmentId, "handshake-race-identity");
+        await fixture.GrantAsync(connectorId, identity);
+
+        GatewayInvokeRequest invocation = new("1.0", new("text/xml", "utf8", "<unused/>"), Guid.NewGuid());
+        Task<HttpResponseMessage> pending = fixture.SendSignedAsync(identity, HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/session-bootstrap:invoke",
+            JsonSerializer.SerializeToUtf8Bytes(invocation, WebJson));
+        await finalCheckReached.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(0, fixture.Factory.Secrets.TotalRequests);
+        Assert.Equal(0, fixture.Transport.TotalSoapRequests);
+
+        try
+        {
+            await fixture.PublishAsync(authorityB, expectedPublicationRevision: 1);
+        }
+        finally
+        {
+            releaseFinalCheck.TrySetResult();
+        }
+
+        using HttpResponseMessage response = await pending;
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Contains("BGW-CONNECTOR-CONFIGURATION-STALE", body, StringComparison.Ordinal);
+        Assert.Equal(0, fixture.Factory.Secrets.TotalRequests);
+        Assert.Equal(0, fixture.Transport.TotalSoapRequests);
+        Assert.Equal(0, fixture.Transport.AcquisitionRequests);
+        Assert.Equal(0, fixture.Transport.ValidationRequests);
+        Assert.Equal(0, fixture.Transport.BusinessRequests);
+        Assert.Equal(0, fixture.Transport.GenericRequests);
+        Assert.Equal(0, fixture.Sessions.CachedSessionCount);
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_external_bridge_composed_SOAP_bound_to_A_denies_strategy_changed_B_before_dispatch()
+    {
+        TaskCompletionSource finalCheckReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releaseFinalCheck = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task BeforeFinalCheck(CancellationToken cancellationToken)
+        {
+            finalCheckReached.TrySetResult();
+            await releaseFinalCheck.Task.WaitAsync(cancellationToken);
+        }
+
+        const string candidate = "external-composed-race-candidate";
+        HostedExecutionModuleConfiguration module = Module("synthetic-execution", "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticExecutionModule");
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            candidate,
+            executionModule: module,
+            beforeComposedFinalAuthorization: BeforeFinalCheck);
+        string connectorId = "execution-composed-race-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("composed-race-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("composed-race-application");
+        JsonNode definitionA = BridgeDefinition(connectorId, "1.0.0");
+        HostedConnectorAuthority authorityA = await fixture.PrepareConnectorVersionAsync(
+            connectorId, "1.0.0", environmentId, definitionA.ToJsonString());
+        await fixture.PublishAsync(authorityA, expectedPublicationRevision: 0);
+        JsonNode definitionB = BridgeDefinition(connectorId, "2.0.0");
+        definitionB["operations"]![1]!["executionStrategy"] = "composed-soap";
+        HostedConnectorAuthority authorityB = await fixture.PrepareConnectorVersionAsync(
+            connectorId, "2.0.0", environmentId, definitionB.ToJsonString());
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(tenantId, applicationId, environmentId, "composed-race-identity");
+        await fixture.GrantAsync(connectorId, identity);
+
+        GatewayInvokeRequest acquireInvocation = new("1.0", new("text/xml", "utf8", "<unused/>"), Guid.NewGuid());
+        using HttpResponseMessage acquireResponse = await fixture.SendSignedAsync(identity, HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/session-bootstrap:invoke",
+            JsonSerializer.SerializeToUtf8Bytes(acquireInvocation, WebJson));
+        GatewayInvokeResponse acquiredGateway = JsonSerializer.Deserialize<GatewayInvokeResponse>(
+            await acquireResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), WebJson)
+            ?? throw new InvalidOperationException("External bridge race acquire response was empty.");
+        HostedHandshakeResult acquired = HostedHandshakeResult.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(acquiredGateway.Result.Data)));
+        using HttpResponseMessage completionResponse = await fixture.SendSignedAsync(identity, HttpMethod.Post,
+            $"/v1/session-admissions/{acquired.IntentReference}:complete", Encoding.UTF8.GetBytes(candidate));
+        Assert.Equal(HttpStatusCode.OK, completionResponse.StatusCode);
+        long promotedGeneration = fixture.CaptureCurrentSessionGeneration();
+        int secretRequestsBeforeBusiness = fixture.Factory.Secrets.TotalRequests;
+        int acquisitionBeforeBusiness = fixture.Transport.AcquisitionRequests;
+        int validationBeforeBusiness = fixture.Transport.ValidationRequests;
+
+        Task<HttpResponseMessage> pending = fixture.SendSignedAsync(identity, HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{HostedTypedSessionFixture.BusinessOperationId}:invoke",
+            HostedTypedSessionFixture.BusinessInvocationBody());
+        await finalCheckReached.Task.WaitAsync(TestContext.Current.CancellationToken);
+        int secretRequestsAtStaleBoundary = fixture.Factory.Secrets.TotalRequests;
+        Assert.Equal(secretRequestsBeforeBusiness + 2, secretRequestsAtStaleBoundary);
+        Assert.Equal(0, fixture.Transport.BusinessRequests);
+
+        try
+        {
+            await fixture.PublishAsync(authorityB, expectedPublicationRevision: 1);
+        }
+        finally
+        {
+            releaseFinalCheck.TrySetResult();
+        }
+
+        using HttpResponseMessage response = await pending;
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Contains("BGW-CONNECTOR-CONFIGURATION-STALE", body, StringComparison.Ordinal);
+        Assert.Equal(secretRequestsAtStaleBoundary, fixture.Factory.Secrets.TotalRequests);
+        Assert.Equal(acquisitionBeforeBusiness, fixture.Transport.AcquisitionRequests);
+        Assert.Equal(validationBeforeBusiness, fixture.Transport.ValidationRequests);
+        Assert.Equal(0, fixture.Transport.BusinessRequests);
+        Assert.Equal(0, fixture.Transport.GenericRequests);
+        Assert.Equal(promotedGeneration, fixture.CaptureCurrentSessionGeneration());
     }
 
     [Fact]
@@ -245,6 +422,49 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
 
         Exception failure = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
         Assert.Contains("constructor dependency graph is invalid", failure.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Wave1_SEC_cross_module_constructor_dependency_fails_without_partial_requester_descriptors()
+    {
+        HostedExecutionModuleConfiguration owner = ModuleFromAssembly(
+            "synthetic-dependency-owner",
+            "SecureIntegration.Synthetic.ConnectorExecutionDependencyModule.SyntheticDependencyOwnerModule",
+            "SecureIntegration.Synthetic.ConnectorExecutionDependencyModule.dll");
+        HostedExecutionModuleConfiguration requester = ModuleFromAssembly(
+            "synthetic-cross-module",
+            "SecureIntegration.Synthetic.ConnectorExecutionCrossModule.SyntheticCrossModuleDependencyModule",
+            "SecureIntegration.Synthetic.ConnectorExecutionCrossModule.dll");
+        ServiceCollection services = new();
+
+        InvalidOperationException failure = Assert.Throws<InvalidOperationException>(() =>
+            ConnectorExecutionModuleLoader.Register(services, [Options(owner), Options(requester)]));
+
+        Assert.Equal("Connector execution module registration or constructor dependency graph is invalid.", failure.Message);
+        Assert.Equal(2, services.Count);
+        Assert.All(services, descriptor =>
+        {
+            Type implementation = descriptor.ImplementationType
+                ?? throw new InvalidOperationException("Synthetic owner registration unexpectedly used a factory or instance.");
+            Assert.Equal("SecureIntegration.Synthetic.ConnectorExecutionDependencyModule", implementation.Assembly.GetName().Name);
+        });
+        Assert.DoesNotContain(services, descriptor =>
+            string.Equals(descriptor.ImplementationType?.Name, "SyntheticCrossModuleDependencyStrategy", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Wave1_SEC_module_owned_constructor_cycle_fails_without_any_descriptor_commit()
+    {
+        HostedExecutionModuleConfiguration cycle = Module(
+            "synthetic-constructor-cycle",
+            "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticConstructorCycleModule");
+        ServiceCollection services = new();
+
+        InvalidOperationException failure = Assert.Throws<InvalidOperationException>(() =>
+            ConnectorExecutionModuleLoader.Register(services, [Options(cycle)]));
+
+        Assert.Equal("Connector execution module registration or constructor dependency graph is invalid.", failure.Message);
+        Assert.Empty(services);
     }
 
     [Theory]
@@ -386,13 +606,33 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
                 operation, true, fixture.Factory.Clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
     }
 
-    private static HostedExecutionModuleConfiguration Module(string id, string type)
+    private static JsonNode BridgeDefinition(string connectorId, string version)
     {
-        string path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "SecureIntegration.Synthetic.ConnectorExecutionModule.dll"));
+        JsonNode definition = JsonNode.Parse(HostedTypedSessionFixture.Definition(connectorId, version))
+            ?? throw new InvalidOperationException("Synthetic bridge definition was empty.");
+        foreach (JsonNode? operation in definition["operations"]!.AsArray())
+            operation!["executionStrategy"] = "synthetic-capability-bridge";
+        return definition;
+    }
+
+    private static HostedExecutionModuleConfiguration Module(string id, string type)
+        => ModuleFromAssembly(id, type, "SecureIntegration.Synthetic.ConnectorExecutionModule.dll");
+
+    private static HostedExecutionModuleConfiguration ModuleFromAssembly(string id, string type, string assemblyFile)
+    {
+        string path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, assemblyFile));
         string fullName = AssemblyName.GetAssemblyName(path).FullName
             ?? throw new InvalidOperationException("Synthetic execution module identity is unavailable.");
         return new(id, path, fullName, type);
     }
+
+    private static GatewayExecutionModuleOptions Options(HostedExecutionModuleConfiguration module) => new()
+    {
+        ModuleId = module.ModuleId,
+        AssemblyPath = module.AssemblyPath,
+        AssemblyFullName = module.AssemblyFullName,
+        ModuleType = module.ModuleType
+    };
 
     private static Guid ModuleVersionId(byte[] assemblyBytes)
     {

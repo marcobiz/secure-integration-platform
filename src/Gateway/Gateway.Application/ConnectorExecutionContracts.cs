@@ -74,12 +74,14 @@ public sealed class AuthorizedConnectorExecution
         GatewayOperationDefinition operation,
         ConnectorExecutionStrategyKey executionStrategyKey,
         ReadOnlySpan<byte> payload,
-        IAuthorizedConnectorCapabilityDispatcher? capabilityDispatcher = null)
+        IAuthorizedConnectorCapabilityDispatcher? capabilityDispatcher = null,
+        AuthorizedPublishedExecutionStamp? publishedAuthority = null)
     {
         Invocation = invocation;
         Operation = operation;
         ExecutionStrategyKey = executionStrategyKey;
         this.payload = payload.ToArray();
+        this.publishedAuthority = publishedAuthority;
         capabilities = new(this, capabilityDispatcher);
     }
 
@@ -119,6 +121,10 @@ public sealed class AuthorizedConnectorExecution
     internal AuthorizedGatewayInvocation Invocation { get; }
     internal GatewayOperationDefinition Operation { get; }
     internal ReadOnlyMemory<byte> Payload => payload;
+    internal AuthorizedPublishedExecutionStamp PublishedAuthority => publishedAuthority ??
+        throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-STALE", 503, true);
+
+    private readonly AuthorizedPublishedExecutionStamp? publishedAuthority;
 
     internal IDisposable EnterCapabilityScope() => capabilities.EnterExecutionScope();
 

@@ -105,7 +105,7 @@ public sealed class SyntheticForgedGatewayFailureStrategy : IConnectorExecutionS
 
     /// <inheritdoc />
     public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
-        throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403, true);
+        throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-STALE", 503, true);
 }
 
 /// <summary>Delegates only the current authorized invocation to existing server-owned capabilities.</summary>
@@ -228,6 +228,47 @@ public sealed class SyntheticRecursiveDependencyStrategy(
         throw new InvalidOperationException(dependency.ToString());
 }
 
+/// <summary>Startup-negative module containing an explicit module-owned constructor cycle.</summary>
+public sealed class SyntheticConstructorCycleModule : IConnectorExecutionModule
+{
+    /// <inheritdoc />
+    public ConnectorExecutionModuleId Id => ConnectorExecutionModuleId.Parse("synthetic-constructor-cycle");
+
+    /// <inheritdoc />
+    public void RegisterExecutionStrategies(IConnectorExecutionStrategyRegistrar registrar)
+    {
+        registrar.AddSingleton<SyntheticCycleA>();
+        registrar.AddSingleton<SyntheticCycleB>();
+        registrar.AddStrategy<SyntheticConstructorCycleStrategy>();
+    }
+}
+
+/// <summary>First node in the synthetic constructor cycle.</summary>
+public sealed class SyntheticCycleA(SyntheticCycleB dependency)
+{
+    /// <inheritdoc />
+    public override string ToString() => dependency.GetType().Name;
+}
+
+/// <summary>Second node in the synthetic constructor cycle.</summary>
+public sealed class SyntheticCycleB(SyntheticCycleA dependency)
+{
+    /// <inheritdoc />
+    public override string ToString() => dependency.GetType().Name;
+}
+
+/// <summary>Strategy reaching the explicit cycle through a module-owned service.</summary>
+public sealed class SyntheticConstructorCycleStrategy(SyntheticCycleA dependency) : IConnectorExecutionStrategy
+{
+    /// <inheritdoc />
+    public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("invalid-constructor-cycle");
+    /// <inheritdoc />
+    public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => SyntheticAuthenticationKinds.None;
+    /// <inheritdoc />
+    public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException(dependency.ToString());
+}
+
 /// <summary>Module-owned formatter resolved through constructor injection without a service locator.</summary>
 public sealed class SyntheticExecutionResultWriter
 {
@@ -266,6 +307,7 @@ internal static class SyntheticAuthenticationKinds
         new[] { GatewayAuthenticationKind.OpaqueSessionHttp }.ToFrozenSet();
     internal static readonly FrozenSet<GatewayAuthenticationKind> CapabilityBridge = new[]
     {
+        GatewayAuthenticationKind.None,
         GatewayAuthenticationKind.Basic,
         GatewayAuthenticationKind.SoapBasicOpaqueSession
     }.ToFrozenSet();

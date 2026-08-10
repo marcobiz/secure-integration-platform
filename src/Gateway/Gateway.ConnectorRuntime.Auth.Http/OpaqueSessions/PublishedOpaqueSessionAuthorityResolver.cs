@@ -36,6 +36,22 @@ public sealed class PublishedOpaqueSessionAuthorityResolver
         OpaqueSessionAuthorizedInvocation invocation,
         OpaqueSessionHttpAuthorityRequest request,
         OpaqueSessionAuthorityProfileKind profileKind,
+        CancellationToken cancellationToken) =>
+        await ResolveCoreAsync(invocation, request, profileKind, publishedAuthority: null, cancellationToken).ConfigureAwait(false);
+
+    internal async Task<OpaqueSessionResolvedExecutionContext> ResolveAuthorizedAsync(
+        OpaqueSessionAuthorizedInvocation invocation,
+        OpaqueSessionHttpAuthorityRequest request,
+        OpaqueSessionAuthorityProfileKind profileKind,
+        AuthorizedPublishedExecutionStamp publishedAuthority,
+        CancellationToken cancellationToken) =>
+        await ResolveCoreAsync(invocation, request, profileKind, publishedAuthority, cancellationToken).ConfigureAwait(false);
+
+    private async Task<OpaqueSessionResolvedExecutionContext> ResolveCoreAsync(
+        OpaqueSessionAuthorizedInvocation invocation,
+        OpaqueSessionHttpAuthorityRequest request,
+        OpaqueSessionAuthorityProfileKind profileKind,
+        AuthorizedPublishedExecutionStamp? publishedAuthority,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(invocation);
@@ -46,12 +62,16 @@ public sealed class PublishedOpaqueSessionAuthorityResolver
 
         PublishedConnectorAccessContext access = new(principal.InstallationId, principal.TenantId, principal.ApplicationId, invocation.OperationId);
         PublishedConnectorSnapshot expectedSnapshot = await RequiredSnapshotAsync(invocation.ConnectorId, principal.Identity.EnvironmentId, access, cancellationToken).ConfigureAwait(false);
+        if (publishedAuthority is not null && !publishedAuthority.Matches(expectedSnapshot))
+            throw OpaqueSessionHttpFailures.Stale();
         ResolvedPolicy expected = Parse(expectedSnapshot, invocation, request, profileKind);
         OpaqueSessionHttpAuthorityState expectedState = State(principal, expectedSnapshot, invocation, request, expected);
 
         async Task<OpaqueSessionHttpAuthorityState> Revalidate(CancellationToken token)
         {
             PublishedConnectorSnapshot currentSnapshot = await RequiredSnapshotAsync(invocation.ConnectorId, principal.Identity.EnvironmentId, access, token).ConfigureAwait(false);
+            if (publishedAuthority is not null && !publishedAuthority.Matches(currentSnapshot))
+                throw OpaqueSessionHttpFailures.Stale();
             ResolvedPolicy current = Parse(currentSnapshot, invocation, request, profileKind);
             OpaqueSessionHttpAuthorityState currentState = State(principal, currentSnapshot, invocation, request, current);
             if (currentSnapshot.Stamp != expectedSnapshot.Stamp || currentSnapshot.Version.Id != expectedSnapshot.Version.Id ||

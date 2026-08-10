@@ -7,12 +7,13 @@ qualified outbound authentication implementations. The invocation sequence is:
 
 1. the production route authenticates BGW1 and creates `GatewayClientPrincipal`;
 2. Core checks active identity state and the exact Connector/operation grant;
-3. the catalog resolves the current immutable Published operation for the authenticated
-   Environment;
+3. the catalog resolves one immutable Published snapshot for the authenticated Environment and
+   captures an internal opaque execution stamp from that same snapshot;
 4. Core obtains the explicit execution key, or its legacy server-side mapping;
 5. the bounded registry resolves exactly one strategy and verifies its startup-snapshotted auth-kind
    compatibility;
-6. Core creates `AuthorizedConnectorExecution` over an owned bounded payload snapshot;
+6. Core creates `AuthorizedConnectorExecution` over an owned bounded payload snapshot and the
+   exact internal Published stamp used for operation/authentication/key resolution;
 7. the strategy returns the existing bounded `QualifiedGatewayExecutionResult`.
 
 Outbound authentication remains a separate Published property. Core rejects an incompatible
@@ -53,8 +54,9 @@ runtime installation, remote resolution, reload, unload or tenant-specific activ
 `AuthorizedConnectorExecution.Capabilities` is the only sanctioned delegation path from an
 external strategy to existing qualified capabilities. Its public interface has exactly two methods:
 
-- `ExecuteTypedSessionHandshakeAsync(CancellationToken)` derives the profile from the current
-  Published operation and reuses `TypedSessionHandshakeRuntime` and `SoapSessionClient`;
+- `ExecuteTypedSessionHandshakeAsync(CancellationToken)` validates the current store state against
+  the initially authorized Published operation, derives its profile and reuses
+  `TypedSessionHandshakeRuntime` and `SoapSessionClient`;
 - `ExecuteComposedSoapAsync(CancellationToken)` reuses the internal authorized entry point of
   `ComposedSoapExecutionStrategy`.
 
@@ -63,6 +65,16 @@ transport or an arbitrary capability key. The concrete bridge is private, constr
 handoff, active only inside the owning strategy call and consumed once. A mutable active-scope check
 plus exact bridge identity prevents a retained bridge from being invoked by a later execution,
 including an inherited asynchronous execution context.
+
+The internal stamp binds Connector/version IDs, semantic version, publication revision, canonical
+definition checksum, binding ID/revision/checksum, resource stamp, operation checksum,
+authentication kind and execution strategy key. A resolver reread is only a validation of that
+original authority; it can never adopt a newer Published snapshot. Handshake and composed SOAP
+perform their final full stamp comparison after provider/DNS/resource preparation and immediately
+before the first network or session-mutating effect. No unrelated awaited authority work occurs
+between that comparison and dispatch. This is a final freshness check, not a claim that database
+publication and network I/O are globally atomic; a revocation after dispatch starts cannot retract
+bytes already sent.
 
 Capability failures cross the external strategy through an internal non-constructible marker bound
 to that exact bridge. The outer boundary preserves the qualified host failure only when the marker
@@ -84,6 +96,7 @@ belongs to the current execution. An external strategy cannot construct that pat
 | external strategy throws a valid-looking `GatewayException` | code/status/retryability discarded; stable `BGW-EGRESS-UPSTREAM-REJECTED` |
 | provider failure raised by Core's built-in `default-http` strategy | existing sanitized `BGW-PROVIDER-*` code and retryability are preserved; an external module cannot forge this path |
 | exact current bridge reports a qualified host capability failure | existing sanitized host code is preserved through exact authority ownership |
+| current Published state differs from the bridge's initially authorized stamp | host-generated `BGW-CONNECTOR-CONFIGURATION-STALE` (503, retryable), with no provider/network/session effect after the stale boundary |
 | retained, reused or unavailable bridge | denied; cross-invocation marker cannot be accepted as current authority |
 | actual caller cancellation | cancellation preserved with the actual token |
 | invalid or oversized strategy result | existing bounded egress failure |
@@ -118,12 +131,18 @@ Legacy definitions remain byte-for-byte stored and load without republish. Their
 - opaque-session HTTP: `opaque-session-http`;
 - composed SOAP: `composed-soap`.
 
-The neutral support assembly references only `Gateway.Application`, receives no friend access and
+The neutral support assembly references only public `Gateway.Application` execution contracts,
+receives no friend access and
 proves the production HTTP/BGW1/grant/Published/registry path. It also proves caller override
 attempts in payload, query, header and metadata, missing and duplicate keys, immutable payload,
 auth-kind mismatch before strategy/network, constructor-graph denial, sanitized forged host errors,
 real versus fake cancellation, retained-bridge denial and same-image TOCTOU loading. A second hosted
 path selects the external strategy for both session bootstrap and business operation, completes the
 existing authenticated external-admission route, and proves composed SOAP reuse of the same promoted
-session generation. Existing ordinary HTTP, opaque-session, composed SOAP and typed session suites
-remain regression gates.
+session generation. The same complete lifecycle also runs against real PostgreSQL Published state,
+distinct editor/approver four-eyes publication, authenticated hosted admission and the real HTTPS
+synthetic SOAP server. Deterministic external-bridge A-to-B races prove zero handshake provider/
+network/session effects and zero composed SOAP dispatch or session reacquisition; the latter also
+changes the Published strategy key. Separate startup negatives prove cross-module dependency and a
+module-owned constructor cycle are rejected without descriptors from the failing module. Existing
+ordinary HTTP, opaque-session, composed SOAP and typed session suites remain regression gates.

@@ -898,19 +898,35 @@ public sealed class PublishedConnectorCatalog(
     IConnectorConfigurationStore store,
     ConnectorDefinitionValidator validator,
     IGatewayClock clock,
-    TimeSpan ttl) : IGatewayOperationCatalog
+    TimeSpan ttl) : IGatewayOperationCatalog, IAuthorizedPublishedOperationCatalog
 {
     private readonly ConcurrentDictionary<string, CacheEntry> cache = new(StringComparer.Ordinal);
 
     /// <inheritdoc />
     public Task<GatewayOperationDefinition> GetRequiredAsync(string connectorId, string operationId, Guid environmentId, CancellationToken cancellationToken) =>
-        GetRequiredCoreAsync(connectorId, operationId, environmentId, null, cancellationToken);
+        GetRequiredOperationAsync(connectorId, operationId, environmentId, null, cancellationToken);
 
     /// <inheritdoc />
     public Task<GatewayOperationDefinition> GetRequiredAsync(string connectorId, string operationId, Guid environmentId, PublishedConnectorAccessContext accessContext, CancellationToken cancellationToken) =>
-        GetRequiredCoreAsync(connectorId, operationId, environmentId, accessContext, cancellationToken);
+        GetRequiredOperationAsync(connectorId, operationId, environmentId, accessContext, cancellationToken);
 
-    private async Task<GatewayOperationDefinition> GetRequiredCoreAsync(string connectorId, string operationId, Guid environmentId, PublishedConnectorAccessContext? accessContext, CancellationToken cancellationToken)
+    async Task<AuthorizedPublishedOperation> IAuthorizedPublishedOperationCatalog.GetRequiredAuthorizedAsync(
+        string connectorId,
+        string operationId,
+        Guid environmentId,
+        PublishedConnectorAccessContext accessContext,
+        CancellationToken cancellationToken) =>
+        await GetRequiredCoreAsync(connectorId, operationId, environmentId, accessContext, cancellationToken).ConfigureAwait(false);
+
+    private async Task<GatewayOperationDefinition> GetRequiredOperationAsync(
+        string connectorId,
+        string operationId,
+        Guid environmentId,
+        PublishedConnectorAccessContext? accessContext,
+        CancellationToken cancellationToken) =>
+        (await GetRequiredCoreAsync(connectorId, operationId, environmentId, accessContext, cancellationToken).ConfigureAwait(false)).Operation;
+
+    private async Task<AuthorizedPublishedOperation> GetRequiredCoreAsync(string connectorId, string operationId, Guid environmentId, PublishedConnectorAccessContext? accessContext, CancellationToken cancellationToken)
     {
         if (accessContext is not null && !string.Equals(accessContext.OperationId, operationId, StringComparison.Ordinal))
             throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403);
@@ -930,7 +946,7 @@ public sealed class PublishedConnectorCatalog(
             entry = Build(snapshot, operationId);
             cache[key] = entry;
         }
-        if (!entry.Operations.TryGetValue(operationId, out GatewayOperationDefinition? operation)) throw new GatewayException("BGW-OPERATION-NOT-FOUND", 404);
+        if (!entry.Operations.TryGetValue(operationId, out AuthorizedPublishedOperation? operation)) throw new GatewayException("BGW-OPERATION-NOT-FOUND", 404);
         return operation;
     }
 
@@ -944,7 +960,7 @@ public sealed class PublishedConnectorCatalog(
     {
         ValidatedConnectorDefinition parsed = validator.ParseStored(snapshot.Version.CanonicalJson, snapshot.Version.ChecksumSha256);
         using JsonDocument document = JsonDocument.Parse(parsed.CanonicalJson);
-        Dictionary<string, GatewayOperationDefinition> operations = new(StringComparer.Ordinal);
+        Dictionary<string, AuthorizedPublishedOperation> operations = new(StringComparer.Ordinal);
         foreach (JsonElement operation in document.RootElement.GetProperty("operations").EnumerateArray())
         {
             string operationId = operation.GetProperty("operationId").GetString()!;
@@ -969,7 +985,8 @@ public sealed class PublishedConnectorCatalog(
                     ? ConnectorExecutionStrategyKey.Parse(executionStrategy.GetString()!)
                     : null);
             _ = new GatewayOperationCatalog([definition]);
-            operations.Add(operationId, definition);
+            ConnectorExecutionStrategyKey strategyKey = ConnectorExecutionStrategyKeys.Resolve(definition);
+            operations.Add(operationId, new(definition, AuthorizedPublishedExecutionStamp.Capture(snapshot, snapshot.Bindings.EnvironmentId, definition, strategyKey)));
         }
         return new(snapshot.Stamp, clock.UtcNow.Add(ttl), operations);
     }
@@ -988,5 +1005,5 @@ public sealed class PublishedConnectorCatalog(
         _ => throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-CORRUPT", 503)
     };
 
-    private sealed record CacheEntry(PublishedConnectorStamp Stamp, DateTimeOffset ExpiresAt, IReadOnlyDictionary<string, GatewayOperationDefinition> Operations);
+    private sealed record CacheEntry(PublishedConnectorStamp Stamp, DateTimeOffset ExpiresAt, IReadOnlyDictionary<string, AuthorizedPublishedOperation> Operations);
 }

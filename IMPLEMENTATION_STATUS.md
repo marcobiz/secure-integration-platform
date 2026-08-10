@@ -20,7 +20,7 @@ Aggiornato: 2026-08-10
 | Wave 1 — Generic opaque-session HTTP projection | Remediation local product gate PASS; CI exact-head e targeted re-review pending | 312 suite ordinaria (302 PASS, 10 PG conditional); targeted 49 unit (34 generic + 15 SOAP), 10 integration (5 generic + 5 SOAP), 17 architecture e 11/11 PostgreSQL 18 PASS; handoff non-forgeable da Published state, cache SOAP M6 ripristinata, final race zero-network |
 | Wave 1 — Typed composed SOAP authenticated dispatch | Remediation product gate locale PASS; CI exact-head e re-review pending | strategia runtime production exact-kind post grant/Published, Basic helper non esportato, compatibilità Connector v1 preservata; 433 ordinary PASS + 23 PG conditional, 124/124 Gateway integration con PostgreSQL, 99 unit mirati, 20 real-HTTPS regression, 11/11 store→publish→runtime→TLS, 24 architecture e `FULLSTACK-01` PASS; nessun connector production |
 | Wave 1 — Typed SOAP session handshake + authorized external admission | Shared-lifecycle wiring remediation qualificata localmente; CI exact-head e targeted re-review pending | PR #23 commit `f08eb9762fcc21dc7d6d7ba236cf6a80840dfac9`: `OpaqueSessionLeaseProvider` è l'alias del lifecycle singleton posseduto da `SoapSessionClient`; vero host `Program`/HTTP/BGW1/Published/`ComposedSoapExecutionStrategy` riusa la sessione promossa senza reacquire; 120 unit session/composed, 38 integration mirati, 509 ordinary e 10×133 PostgreSQL integration PASS |
-| Wave 1 — Provider-neutral Connector execution seam | Remediation local product gate PASS; CI exact-head e targeted re-review pending | registrar constructor graph senza host dependencies; auth-kind compatibility centralizzata; failure external non forgiabili; bridge authority-bound no-IVT con handshake/admission/composed SOAP sul medesimo lifecycle; loader local-buffered same-image anti-TOCTOU |
+| Wave 1 — Provider-neutral Connector execution seam | Ultima remediation mirata implementata; full gate/CI exact-head e targeted re-review pending | bridge no-IVT vincolato allo snapshot Published iniziale con stale A→B zero-effect; full lifecycle PostgreSQL aggiunto; negativi cross-module/ciclo descriptor-atomic; loader invariato |
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | Wave 1 - Generic JWT/X.509 extensions | Remediation mirata local gate PASS; CI exact-head e rereview pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 304 ordinary, 71 PostgreSQL relevant, scan/SBOM/vulnerability/Core export PASS |
 | Healthcare Wave 1 — Regional ePrescription | Foundation compilata; profili regionali non pubblicabili | capability opaca Core post-auth con stato/grant verificati indipendentemente dalle credenziali, adapter al vero store Published, schema estensioni e safe-code allowlist server-owned, isolamento cross-profile; 14 test pack + 4 architecture PASS locali; Lombardia ed Emilia-Romagna `BLOCKED_BY_SPEC` |
@@ -201,21 +201,28 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
   load dalla stessa immagine buffered; nessuno scanning/hotload/service locator;
 - registrar buffered valida ricorsivamente un unico costruttore pubblico e consente soltanto
   dipendenze module-owned esplicitamente registrate (`SAFE_HOST_DEPENDENCIES=NONE`); provider DI,
-  scope, collection di strategy, delegate/cross-module e varianti annidate falliscono startup;
+  scope, collection di strategy, delegate/cross-module, cicli e varianti annidate falliscono startup;
+  test comportamentali verificano che il modulo fallito non commetta descrittori parziali;
 - ogni strategy dichiara auth-kind supportati, validati e snapshottati a startup; mismatch nega prima
   di strategy/rete. Solo marker Core internal preservano failure qualificate; un `GatewayException`
   external forgiato perde code/status/retryability e diventa `BGW-EGRESS-UPSTREAM-REJECTED`;
 - bridge pubblico minimo/non costruibile, per-invocazione e one-shot espone soltanto typed session
-  handshake e composed SOAP senza selector; modulo sintetico no-IVT completa acquire via invoke,
-  admission autenticata e business SOAP sulla stessa session generation; retained replay negato;
+  handshake e composed SOAP senza selector; uno stamp interno opaco catturato dalla stessa snapshot
+  Published che produce operation/auth/key lega version/publication/canonical/binding/resource,
+  operation e strategy key. Ogni rilettura valida A senza adottare B e il confronto finale avviene
+  dopo la preparazione awaited, adiacente al primo effetto; retained replay negato;
 - assembly sintetico separato usa solo contratti pubblici e nessun friend access; production-host E2E
-  attraversa HTTP/BGW1, principal, grant, Published lifecycle, registry e risultato e nega override
-  payload/query/header/metadata, modulo non allowlisted, key mancante, duplicate, exception e fake OCE;
-- remediation targeted gate corrente: build Release zero warning/errori; 21/21 unit seam,
-  11/11 hosted non-PostgreSQL più 1 conditional e 32/32 architecture PASS; suite ordinaria 546
-  totali (518 PASS, 28 PostgreSQL conditional), PostgreSQL 18 148/148, Admin 28 unit + 37 UI mock
-  + 2 a11y, `FULLSTACK-01`, docs/secret/vulnerability scan e SBOM container da 165 pacchetti PASS.
-  Core export ed exact-head CI sono gate di handoff sul commit candidato; merge non autorizzato;
+  attraversa HTTP/BGW1, principal, grant, Published lifecycle, registry e risultato; il full path
+  handshake→admission autenticata→sessione promossa→composed SOAP HTTPS gira anche sul vero store
+  PostgreSQL con editor/approver distinti. Race deterministici A→B negano handshake con provider/
+  rete/sessione a zero e business SOAP senza dispatch/reacquire, incluso cambio strategy key;
+- remediation targeted gate corrente: 83/83 unit session/composed/opaque/configuration, 2/2 race
+  A→B e 2/2 negative constructor graph PASS; hosted seam 18 totali (16 PASS, 2 PostgreSQL
+  conditional), 32/32 architecture e build Release zero warning/errori. Suite ordinaria 551
+  totali (522 PASS, 29 PostgreSQL conditional), gate PostgreSQL 18 153/153, Admin 28 unit +
+  37 UI mock + 2 a11y e `FULLSTACK-01` PASS; M3 split-host regressions, docs, secret scan,
+  vulnerability inventory, SBOM container da 165 pacchetti e Core export verificato PASS.
+  Exact-head CI resta il gate di handoff sul commit candidato; merge non autorizzato;
 - decisione: ADR-0023 e `docs/implementation/WAVE1-CONNECTOR-EXECUTION-SEAM.md`.
 
 ### M6 — Certificate, Signing and outbound mTLS primitives

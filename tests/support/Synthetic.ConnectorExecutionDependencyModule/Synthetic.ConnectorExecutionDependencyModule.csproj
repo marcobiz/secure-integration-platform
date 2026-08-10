@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>SecureIntegration.Synthetic.ConnectorExecutionDependencyModule</AssemblyName>
+    <RootNamespace>SecureIntegration.Synthetic.ConnectorExecutionDependencyModule</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\Gateway\Gateway.Application\Gateway.Application.csproj" />
+  </ItemGroup>
+</Project>

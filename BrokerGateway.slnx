@@ -23,6 +23,8 @@
     <Project Path="samples/DirectGatewayClient/DirectGatewayClient.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/support/Synthetic.ConnectorExecutionCrossModule/Synthetic.ConnectorExecutionCrossModule.csproj" />
+    <Project Path="tests/support/Synthetic.ConnectorExecutionDependencyModule/Synthetic.ConnectorExecutionDependencyModule.csproj" />
     <Project Path="tests/support/Synthetic.ConnectorExecutionModule/Synthetic.ConnectorExecutionModule.csproj" />
     <Project Path="tests/unit/Healthcare.RegionalEPrescription.Tests/Healthcare.RegionalEPrescription.Tests.csproj" />
     <Project Path="tests/unit/Authentication.CertificateSigning.Tests/Authentication.CertificateSigning.Tests.csproj" />

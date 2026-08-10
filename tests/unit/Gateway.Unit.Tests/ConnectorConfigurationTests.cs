@@ -1,6 +1,7 @@
 using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using System.Text.Json;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
@@ -257,6 +258,42 @@ public sealed class ConnectorConfigurationTests
         Assert.Equal("composed-soap", ConnectorExecutionStrategyKeys.Resolve(composed).Value);
         Assert.Equal("X-Session-Reference", composed.ApiKeyHeaderName);
         Assert.Equal("1.0.0", version.Version);
+
+        PublishedConnectorAccessContext access = new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "soap-dispatch");
+        AuthorizedPublishedOperation authorized = await ((IAuthorizedPublishedOperationCatalog)catalog).GetRequiredAuthorizedAsync(
+            "generic-soap", "soap-dispatch", environmentId, access, TestContext.Current.CancellationToken);
+        PublishedConnectorSnapshot snapshot = await store.GetPublishedSnapshotAsync(
+            "generic-soap", environmentId, access, TestContext.Current.CancellationToken)
+            ?? throw new InvalidOperationException("Published composed snapshot was unavailable.");
+        Assert.True(authorized.Authority.Matches(snapshot));
+        Assert.Equal(snapshot.Version.Id, authorized.Authority.VersionId);
+        Assert.Equal(snapshot.Stamp.PublicationRevision, authorized.Authority.PublicationRevision);
+        Assert.Equal(snapshot.Bindings.Revision, authorized.Authority.BindingRevision);
+        Assert.Equal(snapshot.Bindings.ChecksumSha256, authorized.Authority.BindingChecksumSha256);
+        Assert.Equal(snapshot.Stamp.ResourceStampSha256, authorized.Authority.ResourceStampSha256);
+        Assert.Equal(Convert.ToHexString(snapshot.Version.ChecksumSha256), authorized.Authority.CanonicalChecksumSha256);
+        Assert.Equal("soap-dispatch", authorized.Authority.OperationId);
+        Assert.Equal("composed-soap", authorized.Authority.ExecutionStrategyKey.Value);
+        Assert.False(authorized.Authority.Matches(snapshot with
+        {
+            Stamp = snapshot.Stamp with { PublicationRevision = snapshot.Stamp.PublicationRevision + 1 }
+        }));
+        Assert.False(authorized.Authority.Matches(snapshot with
+        {
+            Stamp = snapshot.Stamp with { ResourceStampSha256 = snapshot.Stamp.ResourceStampSha256 + "-rotated" }
+        }));
+        string strategyChangedCanonical = snapshot.Version.CanonicalJson.Replace(
+            "\"operationId\":\"soap-dispatch\",",
+            "\"operationId\":\"soap-dispatch\",\"executionStrategy\":\"synthetic-capability-bridge\",",
+            StringComparison.Ordinal);
+        Assert.False(authorized.Authority.Matches(snapshot with
+        {
+            Version = snapshot.Version with
+            {
+                CanonicalJson = strategyChangedCanonical,
+                ChecksumSha256 = SHA256.HashData(Encoding.UTF8.GetBytes(strategyChangedCanonical))
+            }
+        }));
 
         void AssertInvalid(string candidate, string? expectedCode = null)
         {

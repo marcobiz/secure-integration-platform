@@ -364,7 +364,9 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         Func<CancellationToken, Task>? beforePromotion = null,
         string? runtimeConnection = null,
         string? adminConnection = null,
-        HostedExecutionModuleConfiguration? executionModule = null)
+        HostedExecutionModuleConfiguration? executionModule = null,
+        Func<CancellationToken, Task>? beforeHandshakeFinalAuthorization = null,
+        Func<CancellationToken, Task>? beforeComposedFinalAuthorization = null)
     {
         HostedServerCertificates certificates = HostedServerCertificates.Create(SyntheticHost);
         try
@@ -378,7 +380,8 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
                 certificates.Server, TestContext.Current.CancellationToken);
             try
             {
-                TypedSessionHostFactory factory = new(certificates.Root, certificates.Server, SyntheticHost, beforePromotion, runtimeConnection, adminConnection, executionModule);
+                TypedSessionHostFactory factory = new(certificates.Root, certificates.Server, SyntheticHost, beforePromotion, runtimeConnection, adminConnection,
+                    executionModule, beforeHandshakeFinalAuthorization, beforeComposedFinalAuthorization);
                 return new(certificates, server, factory);
             }
             catch
@@ -676,6 +679,8 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
     private readonly string? runtimeConnection;
     private readonly string? adminConnection;
     private readonly HostedExecutionModuleConfiguration? executionModule;
+    private readonly Func<CancellationToken, Task>? beforeHandshakeFinalAuthorization;
+    private readonly Func<CancellationToken, Task>? beforeComposedFinalAuthorization;
     private readonly RecordingLoggerProvider logger = new();
     private readonly TestClientCertificateStartupFilter certificateFilter = new();
     private readonly FixedSecrets secrets = new();
@@ -687,13 +692,17 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
         Func<CancellationToken, Task>? beforePromotion,
         string? runtimeConnection,
         string? adminConnection,
-        HostedExecutionModuleConfiguration? executionModule)
+        HostedExecutionModuleConfiguration? executionModule,
+        Func<CancellationToken, Task>? beforeHandshakeFinalAuthorization,
+        Func<CancellationToken, Task>? beforeComposedFinalAuthorization)
     {
         this.syntheticHost = syntheticHost;
         this.beforePromotion = beforePromotion;
         this.runtimeConnection = runtimeConnection;
         this.adminConnection = adminConnection;
         this.executionModule = executionModule;
+        this.beforeHandshakeFinalAuthorization = beforeHandshakeFinalAuthorization;
+        this.beforeComposedFinalAuthorization = beforeComposedFinalAuthorization;
         Transport = new(new SystemRestrictedTransport(new X509Certificate2Collection(root), Convert.ToHexString(SHA256.HashData(server.RawData))));
     }
 
@@ -737,7 +746,18 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
                 serviceProvider.GetRequiredService<IGatewayClock>(),
                 serviceProvider.GetRequiredService<ISoapSessionResourceStampProvider>(),
                 serviceProvider.GetRequiredService<IPrivateDestinationAllowance>(),
-                beforePromotion));
+                beforePromotion,
+                beforeHandshakeFinalAuthorization));
+            services.RemoveAll<ComposedSoapExecutionStrategy>();
+            services.AddSingleton(serviceProvider => new ComposedSoapExecutionStrategy(
+                serviceProvider.GetRequiredService<IConnectorConfigurationStore>(),
+                serviceProvider.GetRequiredService<ISecretValueProvider>(),
+                serviceProvider.GetRequiredService<OpaqueSessionLeaseProvider>(),
+                serviceProvider.GetRequiredService<IHostResolver>(),
+                serviceProvider.GetRequiredService<IRestrictedTransport>(),
+                serviceProvider.GetRequiredService<IGatewayClock>(),
+                serviceProvider.GetRequiredService<IPrivateDestinationAllowance>(),
+                beforeComposedFinalAuthorization));
         });
     }
 

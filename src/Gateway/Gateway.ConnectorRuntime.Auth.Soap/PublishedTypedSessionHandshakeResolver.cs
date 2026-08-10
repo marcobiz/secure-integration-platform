@@ -53,11 +53,26 @@ public sealed class PublishedTypedSessionHandshakeResolver
 
         PublishedConnectorAccessContext access = new(principal.InstallationId, principal.TenantId, principal.ApplicationId, invocation.OperationId);
         PublishedConnectorSnapshot expectedSnapshot = await RequiredSnapshotAsync(invocation.ConnectorId, principal.Identity.EnvironmentId, access, cancellationToken).ConfigureAwait(false);
+        return ResolveFromSnapshot(invocation, request, principal, access, expectedSnapshot, publishedAuthority: null);
+    }
+
+    private ResolvedTypedSessionHandshake ResolveFromSnapshot(
+        AuthorizedGatewayInvocation invocation,
+        TypedSessionHandshakeAuthorityRequest request,
+        GatewayClientPrincipal principal,
+        PublishedConnectorAccessContext access,
+        PublishedConnectorSnapshot expectedSnapshot,
+        AuthorizedPublishedExecutionStamp? publishedAuthority)
+    {
+        if (publishedAuthority is not null && !publishedAuthority.Matches(expectedSnapshot))
+            throw TypedSessionHandshakeFailures.AuthorityStale();
         TypedSessionHandshakeAuthorityState expected = Parse(expectedSnapshot, invocation, request, principal);
 
         async Task<TypedSessionHandshakeAuthorityState> Revalidate(CancellationToken token)
         {
             PublishedConnectorSnapshot currentSnapshot = await RequiredSnapshotAsync(invocation.ConnectorId, principal.Identity.EnvironmentId, access, token).ConfigureAwait(false);
+            if (publishedAuthority is not null && !publishedAuthority.Matches(currentSnapshot))
+                throw TypedSessionHandshakeFailures.AuthorityStale();
             TypedSessionHandshakeAuthorityState current = Parse(currentSnapshot, invocation, request, principal);
             if (currentSnapshot.Stamp != expectedSnapshot.Stamp || currentSnapshot.Version.Id != expectedSnapshot.Version.Id ||
                 currentSnapshot.Version.State != ConnectorVersionState.Published || currentSnapshot.Bindings.State != ConnectorBindingState.Active ||
@@ -73,9 +88,11 @@ public sealed class PublishedTypedSessionHandshakeResolver
 
     internal async Task<ResolvedTypedSessionHandshake> ResolveCurrentAsync(
         AuthorizedGatewayInvocation invocation,
+        AuthorizedPublishedExecutionStamp publishedAuthority,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(invocation);
+        ArgumentNullException.ThrowIfNull(publishedAuthority);
         GatewayClientPrincipal principal = invocation.Principal;
         PublishedConnectorAccessContext access = new(
             principal.InstallationId,
@@ -87,6 +104,8 @@ public sealed class PublishedTypedSessionHandshakeResolver
             principal.Identity.EnvironmentId,
             access,
             cancellationToken).ConfigureAwait(false);
+        if (!publishedAuthority.Matches(snapshot))
+            throw TypedSessionHandshakeFailures.AuthorityStale();
         string profileId;
         try
         {
@@ -102,7 +121,7 @@ public sealed class PublishedTypedSessionHandshakeResolver
             throw TypedSessionHandshakeFailures.AuthorityRejected();
         }
 
-        return await ResolveAsync(invocation, new(profileId), cancellationToken).ConfigureAwait(false);
+        return ResolveFromSnapshot(invocation, new(profileId), principal, access, snapshot, publishedAuthority);
     }
 
     private async Task<PublishedConnectorSnapshot> RequiredSnapshotAsync(

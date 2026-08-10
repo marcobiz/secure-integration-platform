@@ -18,6 +18,7 @@ public sealed class SoapSessionClient
     private readonly ISoapSessionResourceStampProvider resourceStamps;
     private readonly IPrivateDestinationAllowance? privateDestinationAllowance;
     private readonly Func<CancellationToken, Task>? beforeAdmissionPromotion;
+    private readonly Func<CancellationToken, Task>? beforeHandshakeFinalAuthorization;
     private readonly SoapSessionCache cache = new();
     private readonly SemaphoreSlim[] acquisitionLocks = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1, 1)).ToArray();
 
@@ -31,6 +32,7 @@ public sealed class SoapSessionClient
         this.resourceStamps = resourceStamps ?? throw new ArgumentNullException(nameof(resourceStamps));
         this.privateDestinationAllowance = privateDestinationAllowance;
         beforeAdmissionPromotion = null;
+        beforeHandshakeFinalAuthorization = null;
         OpaqueSessionLeases = new SoapOpaqueSessionLeaseProvider(cache);
     }
 
@@ -41,10 +43,12 @@ public sealed class SoapSessionClient
         IGatewayClock clock,
         ISoapSessionResourceStampProvider resourceStamps,
         IPrivateDestinationAllowance? privateDestinationAllowance,
-        Func<CancellationToken, Task>? beforeAdmissionPromotion)
+        Func<CancellationToken, Task>? beforeAdmissionPromotion,
+        Func<CancellationToken, Task>? beforeHandshakeFinalAuthorization = null)
         : this(secrets, resolver, transport, clock, resourceStamps, privateDestinationAllowance)
     {
         this.beforeAdmissionPromotion = beforeAdmissionPromotion;
+        this.beforeHandshakeFinalAuthorization = beforeHandshakeFinalAuthorization;
     }
 
     /// <summary>Controlled adapter from the qualified SOAP lifecycle to provider-neutral opaque-session capabilities.</summary>
@@ -78,7 +82,7 @@ public sealed class SoapSessionClient
             if (cached is not null)
                 return new(TypedSessionHandshakeResultKind.Issued, cached.Value.Reference, null, null, cached.Value.ExpiresAt, null);
 
-            TypedSessionHandshakeAdapterOutcome outcome = await SendTypedHandshakeAsync(current, cancellationToken).ConfigureAwait(false);
+            TypedSessionHandshakeAdapterOutcome outcome = await SendTypedHandshakeAsync(resolvedHandshake, expected, current, cancellationToken).ConfigureAwait(false);
             current = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
             await ValidateResourceStampAsync(current.ExecutionContext, cancellationToken).ConfigureAwait(false);
             DateTimeOffset now = clock.UtcNow;
@@ -387,6 +391,8 @@ public sealed class SoapSessionClient
     }
 
     private async Task<TypedSessionHandshakeAdapterOutcome> SendTypedHandshakeAsync(
+        ResolvedTypedSessionHandshake resolvedHandshake,
+        TypedSessionHandshakeAuthorityState expected,
         TypedSessionHandshakeAuthorityState state,
         CancellationToken cancellationToken)
     {
@@ -407,6 +413,14 @@ public sealed class SoapSessionClient
         if (addresses.Length == 0 || addresses.Any(address => RestrictedEgressService.IsForbiddenAddress(address) && privateDestinationAllowance?.IsAllowed(state.Endpoint.Endpoint.DnsSafeHost, address) != true))
             throw new SoapAuthException("SOAP-EGRESS-DESTINATION-DENIED");
 
+        if (beforeHandshakeFinalAuthorization is not null)
+            await beforeHandshakeFinalAuthorization(cancellationToken).ConfigureAwait(false);
+
+        // Resource/provider/DNS preparation is complete. Revalidate the entire initially-authorized
+        // Published authority immediately before the first network/session side effect.
+        state = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+        await ValidateResourceStampAsync(state.ExecutionContext, cancellationToken).ConfigureAwait(false);
+        state = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
         TimeSpan configuredTimeout = TimeSpan.FromMilliseconds(operation.TimeoutMilliseconds);
         TimeSpan remaining = context.Deadline - clock.UtcNow;
         if (remaining <= TimeSpan.Zero) throw new SoapAuthException("SOAP-DEADLINE-EXPIRED");

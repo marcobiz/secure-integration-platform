@@ -73,7 +73,9 @@ public sealed class ComposedSoapExecutionStrategy : IConnectorExecutionStrategy,
         try
         {
             OpaqueSessionAuthorizedInvocation invocation = new(execution.Invocation.Principal, execution.ConnectorId, execution.OperationId);
-            ComposedSoapResolvedExecutionContext resolved = await authority.ResolveAsync(invocation, new(operation.AuthenticationPolicyId), cancellationToken).ConfigureAwait(false);
+            ComposedSoapResolvedExecutionContext resolved = requireSelectedKey
+                ? await authority.ResolveAsync(invocation, new(operation.AuthenticationPolicyId), cancellationToken).ConfigureAwait(false)
+                : await authority.ResolveAuthorizedAsync(invocation, new(operation.AuthenticationPolicyId), execution.PublishedAuthority, cancellationToken).ConfigureAwait(false);
             if (!string.Equals(resolved.State.SessionAuthority.ConnectorVersion, operation.Version, StringComparison.Ordinal) ||
                 !string.Equals(resolved.State.SessionAuthority.ProfileId, operation.SessionProfileId, StringComparison.Ordinal))
                 throw AuthenticationFailure();
@@ -87,6 +89,7 @@ public sealed class ComposedSoapExecutionStrategy : IConnectorExecutionStrategy,
             throw exception.Code switch
             {
                 "SOAP-EGRESS-DESTINATION-DENIED" => new GatewayException("BGW-EGRESS-DESTINATION-DENIED", 403),
+                "SOAP-AUTHORITY-STALE" when !requireSelectedKey => new GatewayException("BGW-CONNECTOR-CONFIGURATION-STALE", 503, true),
                 "SOAP-RESPONSE-TOO-LARGE" => new GatewayException("BGW-EGRESS-RESPONSE-TOO-LARGE", 502),
                 "SOAP-TRANSPORT-FAILED" or "SOAP-TIMEOUT" => new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502),
                 "SOAP-REQUEST-INVALID" or "SOAP-XML-INVALID" => new GatewayException("BGW-PROTOCOL-PAYLOAD", 400),

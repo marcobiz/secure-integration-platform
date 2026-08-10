@@ -28,10 +28,12 @@ public sealed class TypedSessionHandshakeRuntime(
 
     internal async Task<TypedSessionHandshakeResult> AcquireAuthorizedAsync(
         AuthorizedGatewayInvocation invocation,
+        AuthorizedPublishedExecutionStamp publishedAuthority,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(invocation);
-        ResolvedTypedSessionHandshake resolved = await resolver.ResolveCurrentAsync(invocation, cancellationToken).ConfigureAwait(false);
+        ArgumentNullException.ThrowIfNull(publishedAuthority);
+        ResolvedTypedSessionHandshake resolved = await resolver.ResolveCurrentAsync(invocation, publishedAuthority, cancellationToken).ConfigureAwait(false);
         return await sessions.AcquireTypedSessionAsync(resolved, cancellationToken).ConfigureAwait(false);
     }
 

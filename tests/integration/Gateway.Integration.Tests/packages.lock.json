@@ -629,6 +629,19 @@
           "SecureIntegration.Providers.Abstractions": "[1.0.0, )"
         }
       },
+      "SecureIntegration.Synthetic.ConnectorExecutionCrossModule": {
+        "type": "Project",
+        "dependencies": {
+          "SecureIntegration.Gateway.Application": "[1.0.0, )",
+          "SecureIntegration.Synthetic.ConnectorExecutionDependencyModule": "[1.0.0, )"
+        }
+      },
+      "SecureIntegration.Synthetic.ConnectorExecutionDependencyModule": {
+        "type": "Project",
+        "dependencies": {
+          "SecureIntegration.Gateway.Application": "[1.0.0, )"
+        }
+      },
       "SecureIntegration.Synthetic.ConnectorExecutionModule": {
         "type": "Project",
         "dependencies": {

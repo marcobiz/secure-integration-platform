@@ -36,6 +36,20 @@ public sealed class PublishedComposedSoapAuthorityResolver
     public async Task<ComposedSoapResolvedExecutionContext> ResolveAsync(
         OpaqueSessionAuthorizedInvocation invocation,
         OpaqueSessionHttpAuthorityRequest request,
+        CancellationToken cancellationToken) =>
+        await ResolveCoreAsync(invocation, request, publishedAuthority: null, cancellationToken).ConfigureAwait(false);
+
+    internal async Task<ComposedSoapResolvedExecutionContext> ResolveAuthorizedAsync(
+        OpaqueSessionAuthorizedInvocation invocation,
+        OpaqueSessionHttpAuthorityRequest request,
+        AuthorizedPublishedExecutionStamp publishedAuthority,
+        CancellationToken cancellationToken) =>
+        await ResolveCoreAsync(invocation, request, publishedAuthority, cancellationToken).ConfigureAwait(false);
+
+    private async Task<ComposedSoapResolvedExecutionContext> ResolveCoreAsync(
+        OpaqueSessionAuthorizedInvocation invocation,
+        OpaqueSessionHttpAuthorityRequest request,
+        AuthorizedPublishedExecutionStamp? publishedAuthority,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(invocation);
@@ -43,7 +57,9 @@ public sealed class PublishedComposedSoapAuthorityResolver
         OpaqueSessionResolvedExecutionContext sessionContext;
         try
         {
-            sessionContext = await sessionAuthorities.ResolveAsync(invocation, request, OpaqueSessionAuthorityProfileKind.ComposedSoapBasic, cancellationToken).ConfigureAwait(false);
+            sessionContext = publishedAuthority is null
+                ? await sessionAuthorities.ResolveAsync(invocation, request, OpaqueSessionAuthorityProfileKind.ComposedSoapBasic, cancellationToken).ConfigureAwait(false)
+                : await sessionAuthorities.ResolveAuthorizedAsync(invocation, request, OpaqueSessionAuthorityProfileKind.ComposedSoapBasic, publishedAuthority, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { throw; }
         catch (OpaqueSessionAuthException exception) { throw Map(exception); }
