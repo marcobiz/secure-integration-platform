@@ -158,14 +158,17 @@ promotion, source substitution, invocation A/B e matrice provenance/revision/con
 public material, oltre al flip/restore deterministico di `TrustedClaims` durante la firma.
 
 `SEC-W1-HS-001` mappa `TM-065` sui test Published adapter ID/type request/response/validation,
-four-eyes digest, real store/authorizer/registry, Core-owned restricted HTTPS e credential binding,
-cross-context/profile e public API senza selector adapter/endpoint/credential.
+four-eyes digest, Core-owned restricted HTTPS e credential binding, e sul named production-host E2E
+che attraversa `Program`, HTTP, `AuthenticateAsync`, grant, PostgreSQL store e registry DI; i replay
+cross-Tenant/Application/Installation hanno grant valido e zero validator network.
 `SEC-W1-HS-002` mappa `TM-066` sulle matrici strict nested response, DTD/QName/Body,
 request byte bound, text/CDATA/attribute individuali e aggregate prima dell'adapter, e real HTTPS.
 `SEC-W1-HS-003` mappa `TM-067` sui test wrong/reused/expired intent, presentation principal-bound,
 proof/candidate/context/generation replay, simultaneous double completion, validator failure,
 real/fake cancellation, remote expiry, rotate/disable durante validation e nella final window,
-store mutation generation, 256-entry lazy sweep, candidate zeroing/redaction e production E2E.
+store mutation generation, 256-entry lazy sweep, candidate zeroing/redaction e production E2E. La
+race PostgreSQL aggiuntiva sospende esattamente prima della CAS e usa publish/disable reali sullo
+stesso `RoutingConnectorConfigurationStore`, con validator count uno e promotion count zero.
 
 ## Criteri di revisione
 

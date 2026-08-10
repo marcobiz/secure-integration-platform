@@ -6,8 +6,11 @@ This report covers only the generic Core capability described by ADR-0022. It do
 production connector, a deployment environment, a distributed cache or generic XML scripting.
 
 - Base: `705e9d4bd203ca7b902ad0aeedc9d4402f9f4452`.
-- Independently reviewed head: `8f6218599dc7fb454a8a542184ae7ce816856c96`.
+- Original independently reviewed head: `8f6218599dc7fb454a8a542184ae7ce816856c96`.
 - Targeted remediation product commit: `45605a9fb3085d83af3b2d9d50e8b08f4a987f65`.
+- Previous targeted re-review head: `e48c1eee4d83f76630ed8cdc1f358d91f6d1f6f1`.
+- Final test/evidence remediation commit: `95eeaf5d6e2c2170570f48e7570f90b8dfb4e646`.
+- `PRODUCTION_CODE_CHANGED`: **NO**. The final remediation changes test/harness and evidence only.
 - Branch/PR: `wave1/auth-session-handshake`, PR #23; open and unmerged.
 
 No Sistema TS, PR #22 dispatch composition, arbitrary XML framework, second session cache,
@@ -23,7 +26,17 @@ healthcare production connector or commercial adapter is introduced.
 | P1 no production composition/store path | FIXED | API composition registers real authorizer, Published resolver/stamp provider, bounded exact registry, restricted SOAP client and runtime. PostgreSQL four-eyes/runtime locator plus production restricted-HTTPS admission and subsequent business use PASS. |
 | P2 fake cancellation crosses extension boundary | FIXED | Request/response/validation adapters preserve only a genuinely cancelled caller/effective token, rethrow a normalized OCE without extension message/inner, and map fake OCE/other exceptions to stable sanitized codes. |
 | P2 no individual XML value bound | FIXED | The first hardened scan chunk-reads and caps each text, CDATA and attribute value at 16,384 characters before `XDocument`; below-limit, over-limit and aggregate-limit matrices prove adapter invocation/no-invocation behavior. |
-| P2 concurrency/replay/final-race coverage | FIXED | Barrier/hook tests cover simultaneous completion, proof/candidate/intent/profile/context/generation replay, validation-window rotation and the post-final-await mutation window without sleep. |
+| P2 concurrency/replay/final-race coverage | FIXED | Unit authority tests retain simultaneous completion, proof/candidate/intent/profile/context/generation replay and final-window precision. The final remediation adds production-host cross-context replay and PostgreSQL store races without sleep or direct invalidation. |
+
+## Final targeted re-review findings
+
+| Remaining finding on `e48c1eee` | Result | Exact final evidence |
+|---|---|---|
+| P2 production presentation E2E | **FIXED** | `Wave1_IT_PRODUCTION_HOST_authenticated_routes_store_registry_admission_replay_and_session_use` starts the actual `Program`, sends HTTP through acquire/completion, executes `AuthenticateAsync`, current grants, PostgreSQL Published resolution, DI adapters, restricted HTTPS validation, HTTP cache reuse and subsequent SOAP business use. |
+| P2 production-store concurrency/replay evidence | **FIXED** | `Wave1_IT_PRODUCTION_STORE_final_race_uses_same_PostgreSQL_authority_and_denies_promotion` uses the host's `RoutingConnectorConfigurationStore` and resolver. Real publish and resource-disable variants occur after one validator success and before CAS; both deny promotion and replay with zero additional network. The hosted test separately denies valid-grant cross-Tenant, cross-Application and cross-Installation principals before validator network. |
+
+The old `Wave1_IT_Internal_composition_*` tests remain useful but are explicitly classified as
+`INTERNAL_COMPOSITION_TEST`; they are not production-host or production-store evidence.
 
 ## Architecture and authority
 
@@ -36,6 +49,13 @@ healthcare production connector or commercial adapter is introduced.
   HTTPS request and hardened parse.
 - The bounded explicit composition registry accepts at most 256 entries per adapter role and uses
   exact logical ID/type keys without reflection, assembly scanning or caller-provided CLR types.
+- The canonical host test uses `WebApplicationFactory<Program>` and the production DI graph. A
+  test-only certificate feature bridge compensates only for `TestServer` lacking a TLS handshake;
+  the presented certificate must still resolve in the production registry and the request must pass
+  the real BGW1 timestamp, nonce, content-digest and P-256 signature checks in `AuthenticateAsync`.
+- Connector setup uses the PostgreSQL admin/runtime routing pair, validation, distinct editor and
+  approver roles, checksum-specific approval and `PublishApprovedAsync`. The runtime request then
+  resolves the same current Published version through the runtime data source.
 - The authenticated runtime completion resolves all intent authority from the existing bounded
   SOAP cache, enforces only the closed `InteractiveHandoff` provenance, reauthorizes the current
   principal/grant and constructs the internal owned candidate. The API request buffer and candidate
@@ -49,26 +69,56 @@ healthcare production connector or commercial adapter is introduced.
   generation. The process-local authority matches this existing single-node cache; scale-out would
   require a separately reviewed distributed cache and linearization authority.
 
-## Local qualification on the product commit
+## Hosted path and exact race
+
+- Acquire enters the mapped HTTP route, authenticates the registered certificate-bound identity,
+  checks the exact operation grant, resolves the Published typed profile and composition-root
+  adapters, sends one real restricted-HTTPS `CreateSession`, and returns only the opaque intent.
+- Completion enters the mapped presentation route, reauthenticates, resolves intent authority
+  server-side, sends one real restricted-HTTPS `ValidateSession`, and returns an opaque session.
+  A second signed acquire returns the same promoted opaque reference with no network. The same
+  production `SoapSessionClient` then performs the synthetic session-authenticated business request.
+- Independently enrolled cross-context principals all have an otherwise valid operation grant. A
+  relationally valid cross-Tenant or cross-Application identity necessarily has its own Installation;
+  the third case changes only Installation under the original Tenant/Application. All three deny
+  before outbound validation, so Gateway validation count and synthetic validator count remain zero.
+- The race hook is after the final awaited Published/resource revalidation and immediately before
+  `TryPromoteIfCurrent`. T2 uses either four-eyes publication of version 2 or a real provider-resource
+  disable through the same routing store. T1 resumes with validator count one, but the store generation
+  has advanced, the CAS denies, cache/session promotion remains zero and replay makes no network call.
+- Candidate canaries are absent from success/error HTTP bodies, captured logs, exception
+  serialization and metadata-only PostgreSQL audit output.
+
+## Evidence classification
+
+| Classification | Named evidence | Claim |
+|---|---|---|
+| `UNIT_AUTHORITY_TEST` | `TypedSessionHandshakeTests` | Fast exact proof of adapter, cache, proof, concurrency and authority invariants. |
+| `INTERNAL_COMPOSITION_TEST` | `Wave1_IT_Internal_composition_*` | Manually composed real-HTTPS/store checks; not a `Program`/HTTP proof. |
+| `PRODUCTION_HOST_E2E` | `Wave1_IT_PRODUCTION_HOST_authenticated_routes_store_registry_admission_replay_and_session_use` | Actual host, authenticated routes, PostgreSQL, DI registry, acquire/completion/reuse/business path and hosted redaction. |
+| `PRODUCTION_STORE_RACE` | `Wave1_IT_PRODUCTION_STORE_final_race_uses_same_PostgreSQL_authority_and_denies_promotion` | Same production routing store/resolver/authority; publish and disable variants at the exact final linearization window. |
+
+## Local qualification on product plus final test/evidence commit
 
 | Suite | Result | Coverage |
 |---|---:|---|
 | `TypedSessionHandshakeTests` | 41 PASS | authority, adapters, XML, cancellation, presentation, atomicity, concurrency, replay, bounds and redaction |
 | focused typed plus SOAP boundary unit filter | 57 PASS | typed remediation plus unchanged scalar boundary regression |
-| typed real-HTTPS integration | 4 PASS | direct/external handshake, production success/business reuse, and production authority negatives |
-| typed API authentication/redaction | 1 PASS | acquire/completion require authenticated principal and never echo candidate |
+| typed hosted/integration filter | 8 PASS | 4 existing real-HTTPS/internal cases, 1 API authentication case, 1 production-host E2E and 2 production-store race variants |
+| final production-host/store cases | 3 PASS | hosted acquire/completion/replay/session use plus Published-revision and resource-disable final races |
 | SOAP architecture filter | 4 PASS | provider neutrality, one cache, pure validation adapter and mutation CAS/lease boundary |
 | complete Architecture suite | 24 PASS | Core/provider/auth and vertical boundaries |
 | legacy SOAP plus Connector configuration unit | 35 PASS | scalar M6 and configuration compatibility |
 | legacy SOAP real-HTTPS integration | 5 PASS | Login/Challenge/Business/Logout and hardening compatibility |
-| ordinary solution suite | 453 total: 441 PASS, 12 PostgreSQL-conditional SKIP | all solution projects; zero failures |
-| Gateway integration on fresh PostgreSQL 18 | 109 PASS, 0 SKIP | migration checksum/idempotency, non-superuser Admin role, four-eyes and runtime locator |
+| ordinary solution suite | 456 total: 441 PASS, 15 PostgreSQL-conditional SKIP | all solution projects; zero failures; three new canonical cases move to PASS in the PostgreSQL gate |
+| Gateway integration on fresh PostgreSQL 18 | 112 PASS, 0 SKIP | prior 109 plus production-host E2E and two production-store race variants; non-superuser Admin/runtime roles |
 | Release restore/build | PASS, 0 warnings, 0 errors | pinned .NET SDK and locked dependency graph |
-| Admin Web | lint/API drift PASS; 28 unit, 37 UI mock, 2 accessibility, 1 full-stack PASS | production build, lifecycle, redaction and cleanup; npm audit zero vulnerabilities |
+| Admin Web | lint/API/runtime drift PASS; 28 unit, 37 UI mock, 2 accessibility, 1 canonical full-stack PASS | production build, lifecycle and redaction; Playwright used one worker, zero retries/flaky tests, then cleaned the stack; npm audit zero vulnerabilities |
 | documentation validation and conservative secret scan | PASS | repository docs and tracked/untracked candidate content |
+| Gitleaks v8.27.2 | PASS | complete final-remediation delta from `e48c1eee`; 66.99 KB scanned, no leaks |
 | SPDX SBOM generation/validation | PASS | .NET, Admin Web and Gateway container; 165 container packages indexed |
 | vulnerable package scan | PASS | no vulnerable direct or transitive NuGet packages reported |
-| open-source Core export | PASS on `45605a9fb3085d83af3b2d9d50e8b08f4a987f65` | 380 files; clean-room scan/build/test/Admin/license checks; manifest SHA-256 `FD2CCA693FE181D51A7FFA8110A1BCADACA156EFA5DB0AE14929AFDDC31C398A` |
+| open-source Core export | PASS on product commit `45605a9fb3085d83af3b2d9d50e8b08f4a987f65`; exact concluding-head rerun follows the evidence commit | prior 380-file clean-room scan/build/test/Admin/license proof remains valid for unchanged product; the final export path/hash is recorded in PR evidence |
 | PR #23 exact-head CI | PENDING publication | must pass on the concluding documentation commit before targeted re-review |
 
 ## Visible failed attempts and remediation
@@ -92,7 +142,23 @@ healthcare production connector or commercial adapter is introduced.
 - SBOM validation/generation passed, while Docker Scout warned that one external temporary archive
   was still open during its own best-effort deletion. This did not affect the generated SPDX result;
   repository artifacts and container resources are cleaned separately.
+- The first final-remediation hosted run attempted four-eyes publication on the development
+  in-memory store and was correctly denied with `BGW-ADMIN-ATOMIC-PUBLISH-REQUIRES-POSTGRES`.
+  Canonical hosted evidence was therefore moved to PostgreSQL rather than weakening publication.
+- The first PostgreSQL project-wide run after the targeted cases reused a populated schema; the
+  one-shot Admin bootstrap test failed at login. The canonical fresh-schema precondition was
+  restored by dropping only the disposable test schema and reapplying all migrations; the complete
+  project then passed 112/112.
+- Adding two PostgreSQL test classes first failed the isolation-policy allowlist. The policy was
+  updated to enumerate the two deliberate shared-database classes while retaining global test
+  parallelism; the complete PostgreSQL project rerun passed.
+- A direct `npm run test:e2e` without the required full-stack services failed visibly with
+  `ECONNREFUSED`. The repository's canonical `Invoke-M5FullStack.ps1` wrapper subsequently started
+  the production stack and passed `FULLSTACK-01` 1/1 with zero retry/flaky results and redaction
+  validation. Its first invocation also exposed a missing pinned-SDK `PATH`; rerunning the wrapper
+  with the repository SDK environment corrected the harness environment, not product behavior.
 
-The product commit is locally qualified and exported. The concluding evidence commit must retain
-green exact-head CI before handoff. Independent targeted re-review remains required, and no merge is
-authorized by this report.
+The product commit remains unchanged. The final test/evidence commit is locally qualified; the
+concluding documentation commit must retain green exact-head CI and receive a new exact-head Core
+export before handoff. Independent targeted re-review remains required, and no merge is authorized
+by this report.

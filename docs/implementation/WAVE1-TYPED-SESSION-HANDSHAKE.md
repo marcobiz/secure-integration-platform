@@ -117,6 +117,19 @@ simultaneous double completion; 256-key cap/lazy sweep; redaction; real TLS; sub
 architecture neutrality; production composition/store/four-eyes/authorizer/registry execution; and
 the complete legacy SOAP regression. Concurrency tests use barriers/hooks rather than sleep.
 
+The canonical production proof is
+`Wave1_IT_PRODUCTION_HOST_authenticated_routes_store_registry_admission_replay_and_session_use`.
+It starts the application through `WebApplicationFactory<Program>`, sends HTTP requests through the
+mapped acquire/completion routes, presents a registered synthetic certificate to `TestServer`, and
+still executes the production `AuthenticateAsync` BGW1 signature/digest/nonce checks. It uses the
+PostgreSQL `RoutingConnectorConfigurationStore`, four-eyes application services and the
+composition-root adapter registry. A second named theory,
+`Wave1_IT_PRODUCTION_STORE_final_race_uses_same_PostgreSQL_authority_and_denies_promotion`, pauses only
+at the existing test hook after the last asynchronous revalidation and before the synchronous CAS;
+real publish and provider-resource-disable mutations advance the same store authority and deny
+promotion without timing or direct invalidation calls. Older manually composed tests remain useful
+`INTERNAL_COMPOSITION_TEST` coverage and are no longer described as production-host evidence.
+
 The local full-suite, PostgreSQL 18, scan, SBOM and vulnerability evidence is recorded in the
 testing report. Core export, exact-head CI and independent review are qualified only after the
 thematic commits and branch publication; no merge is part of this implementation step.
