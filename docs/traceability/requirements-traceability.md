@@ -306,9 +306,11 @@ available. Generic M6 auth tests are regression evidence only, not regional supp
 | Official-current registry | `docs/connectors/healthcare/sistema-ts-eprescription/official-source-registry.md` | PASS documentation freeze |
 | National SAC business contracts | Official specification 1.5.1 and 2026-04-28 kit digests; exact WSDL/action/XSD roots recorded | CONFIRMED, not implemented |
 | SAC/SAR server-owned routing | `docs/connectors/healthcare/sistema-ts-eprescription/spec.md` | DOCUMENTED, no regional adapter |
-| Basic and opaque ID-session | Current MFA 1.1 plus ID-session WSDL `create`/`revoke`/`checkToken`; mandatory SSN `RICETTA-DEM`/`EROGATORE` create fields and production out-of-band delivery | CONFIRMED; current lifecycle cannot express check-then-promote completion |
+| Basic and opaque ID-session | Current MFA 1.1 plus ID-session WSDL `create`/`revoke`/`checkToken`; mandatory SSN identity plus `RICETTA-DEM`/`EROGATORE` fields and production out-of-band delivery | CONFIRMED; admission/promotion exists, but the compiled adapter context has no provider-resolved STS identity inputs |
 | HTTP `Authorization2F` placement | Generic fixed-scheme projection integrated in Foundation | PASS generic prerequisite |
-| SOAP/session one-shot composition | Source/API audit: opaque projection cannot add the frozen SOAP 1.1 `SOAPAction`; SOAP lifecycle login is empty/scalar-only and cannot promote an externally delivered opaque artifact | BLOCKED_BY_GENERIC_PRIMITIVE |
+| SOAP/session one-shot composition | Baseline `3f8667b` typed handshake, external admission, shared lifecycle and composed SOAP | PASS generic prerequisite |
+| Vertical adapter registration | Production host registry is synthetic-only; execution-module registrar commits strategies and module-owned dependencies, not typed adapter contracts | HARD STOP; freeze-policy criterion C required to avoid Gateway.Api-to-Healthcare or test-only composition |
+| Server-owned STS create/checkToken inputs | Public typed request contexts expose authenticated Core IDs and Published checksum, not STS `userId`, encrypted identifier, CF or organization codes | HARD STOP; caller values, hardcoding and direct provider access prohibited |
 | Synthetic server and connector security suite | Gate review | NOT STARTED by hard stop |
 | Accreditation and live conformance | Gate review | BLOCKED_BY_ACCREDITATION |
 

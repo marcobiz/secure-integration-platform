@@ -1,9 +1,10 @@
 # SistemaTSEPrescriptionConnector - Wave 1 specification freeze
 
-Status: **BLOCKED_BY_GENERIC_PRIMITIVE - NO-GO for implementation**
+Status: **NOT_READY - FROZEN-SURFACE HARD STOP**
 
 Freeze date: 2026-08-08
 Implementation-resumption audit: 2026-08-09
+Connector-first audit: 2026-08-10 against exact baseline `3f8667b7cb9678d6efb670f1c192cc227228ab1f`
 
 Target pack: `ConnectorPacks.Healthcare`
 
@@ -15,19 +16,25 @@ accepted that freeze without replacement. The generic opaque-session HTTP projec
 supports the fixed server-owned `Authorization2F: Bearer` placement, so the earlier header
 placement gap is closed.
 
-Implementation nevertheless remains blocked by two newly demonstrated generic composition
-gaps. The official SAC `create` request requires the server-owned `RICETTA-DEM` context and
-`EROGATORE` application plus identity fields, while production returns only an acknowledgement
-and delivers the ID-session out of band. The current SOAP lifecycle sends an empty login body,
-cannot parse the official nested response, and can promote only a session returned by a SOAP
-challenge-completion response; it cannot validate and promote an opaque artifact supplied
-through the transport-neutral interaction channel. Separately, the one-shot opaque-session
-HTTP dispatcher cannot apply the standard SOAP 1.1 `SOAPAction` header required by every
-frozen business WSDL.
+Baseline `3f8667b` closes the previously recorded lifecycle and dispatch gaps: typed compiled
+handshake adapters, authenticated external admission, atomic promotion into the shared lifecycle,
+composed Basic plus opaque-session SOAP and an exact-authority execution bridge are present.
+The connector-first audit nevertheless found that the frozen public surface cannot host the
+official adapter without bypassing qualified custody. `ConnectorExecutionModuleLoader` registers
+only `IConnectorExecutionStrategy`; the production `TypedSessionHandshakeAdapterRegistry` is
+constructed from three Gateway.Api synthetic instances and consumes no module-owned adapter.
+In addition, `TypedSessionHandshakeRequestContext` exposes Core identities and Published metadata
+only. It has no provider-resolved source for the mandatory STS `userId`, encrypted
+`identificativo`, `cfUtente`, `codRegione`, `codAslAo` and `codSsa` values documented for
+`RICETTA-DEM`/`EROGATORE`.
 
-A connector-local cache, raw-header transport wrapper or synthetic simplification would bypass
-the qualified security boundary. The new-generic-gap hard stop therefore applies before DTO,
-serializer, runtime composition or synthetic connector implementation.
+Caller-supplied values, hardcoded tenant credentials, direct provider access from Healthcare,
+Gateway.Api-to-Healthcare references or test-only DI replacement would each bypass or misrepresent
+the qualified production boundary. The hard stop therefore applies before DTO, serializer,
+runtime composition or synthetic connector implementation. This is not `BLOCKED_BY_SPEC`: the
+official fields and wire structure are known. Resumption requires a separately qualified Core
+surface under freeze-policy criterion C, because otherwise an existing custody boundary must be
+bypassed.
 
 ## Confirmed national business scope
 
@@ -105,38 +112,24 @@ Expiry must come from the current service response/profile. The test-only wildca
 is not a production session and is never a fallback. Rotation, disable, expiry, wrong
 profile and replay fail closed. No session value may enter logs, audit, errors or responses.
 
-### Blocking generic composition gaps
+### Frozen-surface hard stop after generic composition remediation
 
-The previously missing fixed HTTP-session placement is present in
-`Gateway.ConnectorRuntime.Auth.Http/OpaqueSessions`. It is not sufficient to express the
-complete official SAC flow:
+The typed/nested XML, external-admission and composed-SOAP runtime primitives are now present.
+Two production composition requirements remain inexpressible:
 
-- `SoapSessionClient.AcquireSessionAsync` invokes the compiled login with an empty value map,
-  but the SSN MFA profile makes `contesto=RICETTA-DEM` and `applicazione=EROGATORE` mandatory;
-- the official `CreateAuthRes` contains nested `info`, `errori` and test-only `comunicazioni`
-  structures, while the M6 login decoder accepts only unique scalar children;
-- production `create` acknowledges delivery through a certified out-of-band channel and does
-  not return the ID-session; the current interaction completion can store only a session
-  returned by another SOAP response and has no check-then-promote operation for a user-supplied
-  opaque artifact;
-- `OpaqueSessionHttpClient` creates the final request and projects exactly one approved session
-  header, but exposes no server-owned SOAP HTTP policy input, so the required SOAP 1.1
-  `SOAPAction` cannot be composed into the same one-shot restricted dispatch.
+- a module-loaded strategy cannot contribute `ITypedSessionHandshakeRequestAdapter`,
+  `ITypedSessionHandshakeResponseAdapter` or `ITypedExternalSessionValidationAdapter` to the
+  production registry through `IConnectorExecutionStrategyRegistrar`;
+- a compiled request/validation adapter cannot consume the exact server-owned STS identity and
+  encrypted identifier values. The public contexts expose no narrow provider-resolved input and
+  accepting a caller dictionary or generic XML/request map is explicitly prohibited.
 
-These are generic SOAP/session orchestration concerns rather than Sistema TS semantics. They
-also arise for any SOAP service combining an out-of-band opaque credential with fixed standard
-SOAP HTTP headers, so implementing them inside the Healthcare pack would reverse ownership.
-
-The prerequisite for resuming this wave is a separately authorized Core change that:
-
-- accepts only compiled/provider-resolved login values and typed nested response rules;
-- models transport-neutral delivery of an opaque artifact, validates it against the current
-  profile and promotes it into the existing bounded session cache without exposing its value;
-- composes version-specific SOAP HTTP policy, including fixed `SOAPAction`, with the existing
-  server-owned opaque-session projection in one restricted dispatch;
-- accepts no header, endpoint, method, session value or profile authority from the caller;
-- preserves generation, credential/binding/endpoint/profile revision checks and redaction;
-- includes positive and negative architecture, replay, substitution, cancellation and log tests.
+The prerequisite for resuming this wave is a separately authorized and independently qualified
+Core change that registers module-owned compiled adapters without a host-to-vertical dependency
+and supplies only approved, binding-scoped server values without exporting raw provider access or
+a generic transformation map. It must preserve the existing Published stamp, resource revisions,
+zeroization, redaction, one-shot transport and shared lifecycle. No Healthcare session cache or
+parallel authority model is acceptable.
 
 ## Business state and reconciliation
 
@@ -158,14 +151,14 @@ The current official RBE dispenser material separately confirms retrieve/take-in
 dispense/close, suspend and cancel/correct families. RBE remains an explicit capability
 family of the future connector, with separate DTOs and operation semantics. It is not
 combined with SSN messages and is not implemented in this wave. Shared Basic/ID-session
-custody may be reused only after the blocking primitive is qualified.
+custody may be reused only after the frozen-surface blocker is qualified.
 
 ## Synthetic server and security tests
 
 No Sistema TS synthetic server or connector-specific executable tests were created.
-Doing so before the required session-interaction and SOAP HTTP composition exist would create
-a misleading, non-runnable profile. Existing M6 synthetic tests continue to qualify only the
-generic primitives; they are not Sistema TS conformance evidence.
+Doing so before the production host can register the vertical adapters and resolve their mandatory
+server-owned inputs would create a misleading, non-runnable profile. Existing generic synthetic
+tests qualify only the underlying primitives; they are not Sistema TS conformance evidence.
 
 When the prerequisite is available, the connector gate must add the positive lifecycle
 and every negative case listed in the Wave 1 request, including caller header injection,

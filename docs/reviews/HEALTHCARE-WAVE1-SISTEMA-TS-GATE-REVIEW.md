@@ -1,10 +1,12 @@
 # Healthcare Wave 1 - Sistema TS gate review
 
-Review date: 2026-08-09
+Review date: 2026-08-10
 
-Resumed starting HEAD: `12d98d175d163bc4e73c9510b867b5c68af337c0`
+Original PR #15 HEAD: `1e4d2dca93c2bfa926c68eaa4a55caf1252981f5`
 
-Foundation merge-base: `705e9d4bd203ca7b902ad0aeedc9d4402f9f4452`
+Qualified baseline: `3f8667b7cb9678d6efb670f1c192cc227228ab1f`
+
+Post-rebase documentation HEAD before this audit: `a89849a7a6f5c0f841382e8573d6513636bc519a`
 
 Branch: `wave1/sistema-ts-eprescription`
 
@@ -13,15 +15,17 @@ Branch: `wave1/sistema-ts-eprescription`
 **NO-GO for `SistemaTSEPrescriptionConnector` implementation.**
 
 The official-current source freeze remains complete and the national SAC business contracts
-are identifiable. The Wave 1 Foundation closes the earlier fixed `Authorization2F` placement
-gap, but the complete profile still cannot be composed through the qualified generic APIs.
+are identifiable. Exact baseline `3f8667b` closes the previously recorded generic lifecycle and
+dispatch gaps: compiled typed XML, authenticated external admission, atomic promotion into the
+shared cache, composed SOAP and the exact-authority external strategy bridge are present.
 
-Official SSN MFA requires server-owned `RICETTA-DEM` and `EROGATORE` values in `create`.
-Production acknowledges the request and delivers the ID-session out of band. The M6 lifecycle
-always sends an empty login value map, accepts only scalar login-response children and can cache
-only a session returned by a SOAP completion response. It cannot check and promote an opaque
-artifact supplied through the transport-neutral interaction. The final opaque-session dispatcher
-also cannot add the fixed SOAP 1.1 `SOAPAction` required by the business WSDLs.
+The production vertical is still inexpressible through that frozen surface. The module loader
+registers only execution strategies while the host constructs its adapter registry from
+Gateway.Api synthetic instances. More importantly, the compiled request context has no
+provider-resolved source for the mandatory STS `userId`, encrypted identifier, tax identifier
+and organization codes. The official manual requires those values for the
+`RICETTA-DEM`/`EROGATORE` create and checkToken messages. Caller input, hardcoding, direct provider
+access or a test-host DI replacement would violate or misrepresent server-side custody.
 
 ## Requested output
 
@@ -32,14 +36,14 @@ also cannot add the fixed SOAP 1.1 `SOAPAction` required by the business WSDLs.
 | Unconfirmed/deferred operations | deferred/offline, reports, history, prescription-side and regional operations |
 | SAC routing model | documented as `NationalSac` vs server-owned `RegionalReference(profileId)`; no code added |
 | SOAP contracts | current official identities and digests frozen; no generated code or invented XML |
-| MFA/session model | official `create`, out-of-band delivery, `checkToken`, `revoke` and `Authorization2F` recorded; current Core composition gap demonstrated |
+| MFA/session model | official `create`, out-of-band delivery, `checkToken`, `revoke` and `Authorization2F` recorded; generic lifecycle now available, vertical registration/provider-input hard stop demonstrated |
 | Business workflow | authoritative state retained upstream; only future correlation/idempotency/reconciliation metadata allowed |
 | RBE | current official family confirmed separately; not implemented or semantically merged |
 | Synthetic server | not implemented because a runnable official session/SOAP composition is absent |
 | Security tests | zero connector-specific tests added; no connector execution surface was introduced |
 | Product test total | 0 new product tests; existing M6 totals are not counted as Sistema TS evidence |
 | Live/accreditation evidence | none; no external call or onboarding claim |
-| Release decision | BLOCKED_BY_GENERIC_PRIMITIVE until typed login/out-of-band promotion and SOAP 1.1 one-shot composition are separately authorized and qualified |
+| Release decision | NOT_READY; a separately authorized Core change is required under freeze-policy criterion C before a truthful production connector can be implemented |
 
 ## Implemented confirmed scope
 
@@ -49,8 +53,8 @@ also cannot add the fixed SOAP 1.1 `SOAPAction` required by the business WSDLs.
 - lightweight current-source recheck with seven matching fresh artifact digests;
 - confirmed/unconfirmed operation inventory;
 - provider-neutral SAC/SAR routing decision;
-- proof that the earlier HTTP placement gap is closed and exact identification of the remaining
-  generic composition gaps;
+- proof that lifecycle/dispatch prerequisites are closed and exact identification of the remaining
+  production module-registration and provider-resolved-input gaps;
 - public-safe provisioning and accreditation blockers.
 
 It does not mean a connector, DTO, serializer, synthetic server, Published definition or
@@ -58,18 +62,23 @@ external conformance implementation exists.
 
 ## Blockers
 
-### BLOCKED_BY_GENERIC_PRIMITIVE
+### FROZEN-SURFACE HARD STOP
 
-The required generic work is broader than the now-integrated fixed session-header placement:
+The remaining problem is narrower than the remediated generic runtime:
 
-- server-owned typed login values and bounded nested response handling;
-- transport-neutral validation and promotion of an out-of-band opaque session into the existing
-  generation/revision-bound cache;
-- fixed SOAP 1.1 HTTP policy composed with opaque-session projection in the same one-shot
-  restricted dispatch.
+- `ConnectorExecutionModuleLoader` registers an external type only as
+  `IConnectorExecutionStrategy`; `Program` builds `TypedSessionHandshakeAdapterRegistry` from
+  three synthetic Gateway.Api adapters and never consumes module-owned adapter implementations;
+- `TypedSessionHandshakeRequestContext` and `ExternalSessionValidationRequestContext` provide
+  authenticated Core identity, profile and checksum plus the opaque candidate, but no approved
+  binding-scoped values for the required STS identity fields;
+- Basic resolution is internal to the HTTP authenticator and cannot legitimately be repurposed
+  by Healthcare as XML field access.
 
-It must be implemented and qualified in Core under separate authorization before this wave can
-resume. A Healthcare cache, raw-header transport wrapper or simplified synthetic contract is
+Continuing would require Gateway.Api-to-Healthcare coupling, test-only replacement, credential
+hardcoding/caller trust or direct provider access. Each option bypasses an already-qualified Core
+boundary, satisfying freeze-policy criterion C for a separately reviewed Core change. A Healthcare
+cache, raw-header transport wrapper, generic request map or simplified synthetic contract remains
 prohibited.
 
 ### BLOCKED_BY_ACCREDITATION
@@ -80,7 +89,7 @@ not been performed. These remain separate even after the product code can be imp
 ## Gate evidence
 
 Documentation validation, secret scan and `git diff --check` are the applicable local
-gate for this documentation-only hard-stop update. On 2026-08-09:
+gate for this documentation-only hard-stop update. On 2026-08-10:
 
 - `./eng/validate-docs.ps1`: PASS;
 - `./eng/scan-secrets.ps1`: PASS;

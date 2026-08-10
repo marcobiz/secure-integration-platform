@@ -10,7 +10,7 @@ The task calls this work “M6 Healthcare Characterization”. The repository ro
 
 | Priority | Connector | Reuse | Breadth/value | Specification clarity | Synthetic testability | Decision |
 |---:|---|---|---|---|---|---|
-| 1 | `sistema-ts-eprescription` | National SAC dispenser contracts confirmed; SAR protocol variants excluded | High national prescription coverage | Official WSDL/XSD and MFA current; header projection present, but out-of-band session promotion and SOAP 1.1 HTTP composition are missing | High after generic prerequisites | Wave 1 hard stop |
+| 1 | `sistema-ts-eprescription` | National SAC dispenser contracts confirmed; SAR protocol variants excluded | High national prescription coverage | Official WSDL/XSD and MFA current; lifecycle/dispatch prerequisites present, but module adapter registration and provider-resolved STS request inputs are absent | High after frozen-surface remediation | Wave 1 hard stop |
 | 2 | `lombardia-oauth-helper` | High for OAuth token/session patterns | High regional prescription + FSE value | Medium-low: helper and source-profile conflict remain | High for helper/OAuth state machine | Wave 1, conditional |
 | 3 | `fvg-pkce-jwt` | High for PKCE/code handoff and RS256 | Strong FSE profile and reusable browser flow | Medium: high-level flow clear, claims/API missing | High for PKCE/token/JWT policy negatives | Wave 2 |
 | 4 | `umbria-mtls-jwt` | High for purpose-separated mTLS/signing | Strong FSE/mTLS/JWT coverage | Medium: certificate roles clear, claims/API missing | High with ephemeral certificates/keys | Wave 2, conditional on key custody |
@@ -94,7 +94,7 @@ Provider access remains capability-specific: secret retrieval, client-certificat
 | Tests | Not started by hard stop; future suite must cover lifecycle, redaction, XML, routing, replay, substitution and business transitions |
 | Execution | **GATEWAY** for National/SAC; regional execution remains a server-owned profile reference only |
 | Synthetic implementation | Not started because the official authentication profile cannot be expressed by M6 |
-| Production blocker | `BLOCKED_BY_GENERIC_PRIMITIVE`: typed server-owned login, validated out-of-band session promotion and SOAP 1.1 HTTP policy in the one-shot projection; accreditation remains separate |
+| Production blocker | `NOT_READY` on baseline `3f8667b`: admission/composed SOAP are available, but the module seam cannot register its compiled adapters and the typed request context cannot receive the required STS provider-resolved identity values; accreditation remains separate |
 
 ### Connector 2 - `lombardia-oauth-helper`
 
