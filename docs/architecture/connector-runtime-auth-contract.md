@@ -180,10 +180,12 @@ transport invocation. No authenticated `HttpRequestMessage`, raw session or atta
 ## Wave 1 typed composed SOAP production dispatch
 
 Production gateway dispatch does not expose the lower-level capability selectors. After installation
-scope, exact grant and current Published operation resolution, `RestrictedEgressService` selects exactly
-one `IGatewayOperationExecutionStrategy` whose kind equals the Published authentication kind. The
-authorized handoff has no public constructor. A missing or duplicate registration fails closed and never
-falls back to the ordinary REST sender.
+scope, exact grant and current Published operation resolution, `RestrictedEgressService` derives a
+server-owned `ConnectorExecutionStrategyKey` and resolves exactly one
+`IConnectorExecutionStrategy`. Authentication kind remains an independent outbound policy. The
+authorized handoff has no public constructor. A missing or duplicate registration fails closed and an
+explicit unknown key never falls back to the ordinary REST sender. Definitions without a key retain
+their server-side legacy mapping.
 
 The composed strategy takes policy and session-profile identifiers from the Published operation and the
 current opaque-session reference from the server-owned cache. The gateway caller supplies only the

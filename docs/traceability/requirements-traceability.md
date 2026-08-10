@@ -244,6 +244,23 @@ was reused without a new subsystem.
 | Provider-neutral Core, one authoritative lifecycle and no generic XML/session-insertion framework | `Wave1_CT_Typed_handshake_and_external_admission_are_Published_compiled_vertical_neutral_and_reuse_the_single_cache`; `Wave1_CT_Gateway_composition_aliases_business_leases_to_the_singleton_SOAP_session_lifecycle`; hosted DI identity assertion | PASS local |
 | TM-065/TM-066/TM-067 | `SEC-W1-HS-001/002/003` named matrices above | PASS local; independent review pending |
 
+## Wave 1 provider-neutral Connector execution seam
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| Strong Published execution key distinct from authentication kind | `Wave1_CT_execution_strategy_key_is_schema_validated_canonical_and_checksum_bound`; `Wave1_UT_explicit_execution_key_is_independent_from_authentication_kind`; approval artifact assertion in the production-host test | PASS local |
+| Legacy default, opaque-session and composed SOAP mapping without rewrite | `M5_UT_Approval_review_is_semantic_canonical_and_contains_no_credential_value`; `Wave1_CT_opaque_and_composed_SOAP_profiles_are_schema_catalog_and_checksum_publishable`; existing ordinary/opaque/composed regression suites | PASS local |
+| Grant and Published authority before exact-one lookup | `Wave1_UT_runtime_selects_the_exact_qualified_strategy_only_after_principal_grant_and_operation_resolution`; `Wave1_CT_runtime_grants_and_resolves_Published_authority_before_exact_key_selection` | PASS local |
+| Missing/unknown key denied without default/network; duplicate key fails startup | `Wave1_SEC_invalid_grant_and_missing_strategy_deny_before_strategy_or_network`; `Wave1_SEC_explicit_unknown_key_never_falls_back_to_default_HTTP`; `Wave1_SEC_duplicate_strategy_key_fails_during_composition`; hosted duplicate-module test | PASS local |
+| Non-forgeable context and owned immutable payload | `Wave1_CT_qualified_execution_handoff_is_non_forgeable_and_hides_payload_and_operation_authority`; `Wave1_SEC_authorized_payload_is_an_owned_read_only_snapshot`; production-host server-derived context assertions | PASS local |
+| External neutral assembly, no friend access, restricted registrar | `Wave1_CT_external_execution_module_uses_only_public_provider_neutral_contracts_without_friend_access`; `Wave1_CT_execution_contract_is_narrow_and_does_not_expose_DI_transport_or_provider_authority` | PASS local |
+| Explicit deployment allowlist and no discovery/framework | `Wave1_CT_module_loading_is_explicit_exact_bounded_and_never_discovers_assemblies`; `Wave1_SEC_execution_strategy_registry_is_bounded_and_not_runtime_growing` | PASS local |
+| Caller cannot override selection | `Wave1_IT_PRODUCTION_HOST_external_module_crosses_real_BGW1_grant_Published_registry_and_result` sends conflicting payload, query, header and metadata values | PASS local |
+| Production host and real Published lifecycle | `Wave1_IT_PRODUCTION_HOST_external_module_crosses_real_BGW1_grant_Published_registry_and_result`; PostgreSQL variant exercises store, editor/distinct approver, publish and invocation | PASS local; PostgreSQL gate conditional |
+| Stable extension failures and real/fake cancellation | `Wave1_SEC_strategy_exception_and_fake_cancellation_are_sanitized_but_real_cancellation_is_preserved`; production-host canary assertions | PASS local |
+| Generic Core starts without optional modules and has no reverse dependency | ordinary host/suite; `Wave1_CT_generic_seam_and_Core_solution_have_no_vertical_dependency_or_logic`; Core export gate | PASS local; final export pending |
+| TM-068/TM-069/TM-070/TM-071 | `SEC-W1-EXEC-001/002/003/004` named matrices above | PASS local; independent review pending |
+
 ## Healthcare Wave 1 — Regional ePrescription foundation
 
 | Requirement | Automated evidence | Status |

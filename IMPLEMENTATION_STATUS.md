@@ -20,6 +20,7 @@ Aggiornato: 2026-08-10
 | Wave 1 — Generic opaque-session HTTP projection | Remediation local product gate PASS; CI exact-head e targeted re-review pending | 312 suite ordinaria (302 PASS, 10 PG conditional); targeted 49 unit (34 generic + 15 SOAP), 10 integration (5 generic + 5 SOAP), 17 architecture e 11/11 PostgreSQL 18 PASS; handoff non-forgeable da Published state, cache SOAP M6 ripristinata, final race zero-network |
 | Wave 1 — Typed composed SOAP authenticated dispatch | Remediation product gate locale PASS; CI exact-head e re-review pending | strategia runtime production exact-kind post grant/Published, Basic helper non esportato, compatibilità Connector v1 preservata; 433 ordinary PASS + 23 PG conditional, 124/124 Gateway integration con PostgreSQL, 99 unit mirati, 20 real-HTTPS regression, 11/11 store→publish→runtime→TLS, 24 architecture e `FULLSTACK-01` PASS; nessun connector production |
 | Wave 1 — Typed SOAP session handshake + authorized external admission | Shared-lifecycle wiring remediation qualificata localmente; CI exact-head e targeted re-review pending | PR #23 commit `f08eb9762fcc21dc7d6d7ba236cf6a80840dfac9`: `OpaqueSessionLeaseProvider` è l'alias del lifecycle singleton posseduto da `SoapSessionClient`; vero host `Program`/HTTP/BGW1/Published/`ComposedSoapExecutionStrategy` riusa la sessione promossa senza reacquire; 120 unit session/composed, 38 integration mirati, 509 ordinary e 10×133 PostgreSQL integration PASS |
+| Wave 1 — Provider-neutral Connector execution seam | Implementato sul branch; full gate, CI exact-head e review indipendente pending | execution key Published distinta dall'auth kind; mapping legacy senza republish; registry bounded exact-one; allowlist deployment exact path/identity/type senza scanning; modulo sintetico esterno senza friend access; production host BGW1/grant/Published E2E e boundary negative PASS mirati |
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | Wave 1 - Generic JWT/X.509 extensions | Remediation mirata local gate PASS; CI exact-head e rereview pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 304 ordinary, 71 PostgreSQL relevant, scan/SBOM/vulnerability/Core export PASS |
 | Healthcare Wave 1 — Regional ePrescription | Foundation compilata; profili regionali non pubblicabili | capability opaca Core post-auth con stato/grant verificati indipendentemente dalle credenziali, adapter al vero store Published, schema estensioni e safe-code allowlist server-owned, isolamento cross-profile; 14 test pack + 4 architecture PASS locali; Lombardia ed Emilia-Romagna `BLOCKED_BY_SPEC` |
@@ -162,7 +163,7 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 ### Wave 1 — Typed composed SOAP authenticated dispatch
 
 - `PublishedComposedSoapAuthorityResolver` compone principal/grant, snapshot Published, endpoint/operation, tre logical secret binding esistenti, placement session e metadata SOAP in una capability senza costruttore pubblico;
-- `RestrictedEgressService` seleziona dopo grant e risoluzione Published una sola `IGatewayOperationExecutionStrategy` per l'authentication kind esatto; strategia mancante o duplicata è negata senza fallback e senza rete;
+- `RestrictedEgressService` seleziona dopo grant e risoluzione Published una sola `IConnectorExecutionStrategy` tramite execution key server-owned; authentication kind resta indipendente e strategia mancante o duplicata è negata senza fallback e senza rete;
 - `SoapHttpRequestMetadata` deriva `text/xml` + SOAPAction quoted per SOAP 1.1 oppure `application/soap+xml` con parametro action per SOAP 1.2; caller e runtime payload non possono fornire header/action/version;
 - Basic viene risolto sul solo request interno tramite helper e binding internal non esportati; provider/resource/version/revision/checksum/stamp restano dipendenze esatte; la sessione production è presa dalla cache server-owned e usa lease/generation/expiry M6; Authorization, SOAPAction e Content-Type non sono placement custom valide;
 - final revalidation Published/resource/session immediatamente prima di `SendSoapAsync`; rotate Basic/session, endpoint/revision e action policy producono zero rete nei test deterministici e real HTTPS;
@@ -186,6 +187,26 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 - il composition root mantiene `SoapSessionClient` singleton e registra `OpaqueSessionLeaseProvider` come alias di `SoapSessionClient.OpaqueSessionLeases`: handshake, admission, AP-02, opaque HTTP e composed SOAP osservano la stessa cache/generation; non esiste una seconda registrazione `SoapSessionCache`;
 - evidenza shared-lifecycle remediation: 120 unit session/composed/opaque/legacy e 38 integration mirati PASS, 3/3 guardie architecture mirate e 26/26 architecture complete, suite ordinaria 509 totali (482 PASS, 27 PostgreSQL conditional), PostgreSQL 18 canonico 10×133 PASS più 80/80 matrici concorrenti, Admin 28 unit + 37 UI mock + 2 a11y + full-stack 1/1 senza retry, build Release zero warning/errori; document/secret/vulnerability scan e SBOM completo con 165 pacchetti container PASS. Gitleaks e Core export exact-head sono eseguiti sul commit documentale e registrati nell'evidence esterna; CI e targeted re-review restano gate di handoff, merge non autorizzato;
 - decisione e report: ADR-0022, `docs/implementation/WAVE1-TYPED-SESSION-HANDSHAKE.md` e `docs/testing/WAVE1-TYPED-SESSION-HANDSHAKE-REPORT.md`.
+
+### Wave 1 — Provider-neutral Connector execution seam
+
+- execution strategy key tipizzata, schema/canonical checksum/four-eyes bound e distinta da
+  `GatewayAuthenticationKind`; definizioni legacy mappate server-side senza rewrite o republish;
+- registry exact-one bounded: duplicate key fallisce startup, missing/unknown nega senza fallback;
+  grant e risoluzione Published precedono selection/handoff;
+- `AuthorizedConnectorExecution` public-read/internal-construct espone solo identity e operation
+  server-derived, correlation, auth/key/content type e payload owned/read-only;
+- modulo startup esplicito deployment-owned con path assoluto canonico, assembly full identity, type
+  e module ID esatti; registrar ristretto a tipi module-owned, nessuno scanning/hotload/service locator;
+- assembly sintetico separato usa solo contratti pubblici e nessun friend access; production-host E2E
+  attraversa HTTP/BGW1, principal, grant, Published lifecycle, registry e risultato e nega override
+  payload/query/header/metadata, modulo non allowlisted, key mancante, duplicate, exception e fake OCE;
+- gate locale: build Release zero warning/errori; 137 test mirati unit regression, 4 hosted mirati
+  (3 PASS + 1 PostgreSQL conditional) e 31 architecture PASS; suite ordinaria 532 totali
+  (504 PASS + 28 PostgreSQL conditional); PostgreSQL 18 139/139 PASS senza skip; Admin 28 unit,
+  37 browser mock, 2 accessibility e `FULLSTACK-01` 1/1 con redaction/cleanup PASS; docs, secret,
+  license e vulnerability scan PASS. SBOM, Gitleaks, Core export exact-head e CI restano gate finali;
+- decisione: ADR-0023 e `docs/implementation/WAVE1-CONNECTOR-EXECUTION-SEAM.md`.
 
 ### M6 — Certificate, Signing and outbound mTLS primitives
 
