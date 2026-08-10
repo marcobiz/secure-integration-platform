@@ -631,7 +631,9 @@ public sealed class WindowsBrokerIntegrationTests
         await using NamedPipeBrokerServer server = new(options, new ApplicationAuthorizer(options.Applications), new BrokerRequestDispatcher(application), selectedAudit);
         using CancellationTokenSource stopped = new();
         Task running = server.RunAsync(stopped.Token);
-        BrokerClient client = new(new BrokerClientOptions { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId, OperationTimeout = operationTimeout ?? TimeSpan.FromSeconds(5) });
+        BrokerClientOptions clientOptions = new() { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId };
+        if (operationTimeout is not null) clientOptions.OperationTimeout = operationTimeout.Value;
+        BrokerClient client = new(clientOptions);
         try { await test(client, pipeName); }
         finally
         {
