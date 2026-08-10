@@ -187,6 +187,18 @@ authorized handoff has no public constructor. A missing or duplicate registratio
 explicit unknown key never falls back to the ordinary REST sender. Definitions without a key retain
 their server-side legacy mapping.
 
+Each strategy declares a closed set of supported outbound authentication kinds. The startup registry
+validates and snapshots that set, and Core rejects an incompatible Published kind before invoking the
+strategy. An external module cannot preserve a caller-chosen `GatewayException`; only internally marked
+Core strategies and exact authority-bound capability failures retain qualified host codes.
+
+For compiled runtimes that need the existing typed-session bootstrap or composed SOAP path, the
+handoff exposes a narrow one-shot bridge bound to that exact invocation. It takes no identity, profile,
+endpoint, credential, provider or service selector, cannot be publicly constructed and cannot be
+retained for another invocation. The external runtime therefore participates without a friend grant
+while the existing Published resolver, external-admission boundary, restricted transport and single
+SOAP session lifecycle remain authoritative.
+
 The composed strategy takes policy and session-profile identifiers from the Published operation and the
 current opaque-session reference from the server-owned cache. The gateway caller supplies only the
 bounded operation payload. `ServerBoundBasicAuthentication`, `ResolvedBasicCredentialBinding` and the
