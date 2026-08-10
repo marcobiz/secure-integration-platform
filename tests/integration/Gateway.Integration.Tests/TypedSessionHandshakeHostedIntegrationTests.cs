@@ -1,5 +1,7 @@
+using System.Collections;
 using System.Globalization;
 using System.Net;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -12,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
 using SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
@@ -24,6 +27,8 @@ namespace SecureIntegration.Gateway.Integration.Tests;
 [Collection(PostgreSqlSharedDatabaseGroup.Name)]
 public sealed class TypedSessionHandshakeHostedIntegrationTests
 {
+    private static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web);
+
     [Fact]
     public async Task Wave1_IT_PRODUCTION_HOST_authenticated_routes_store_registry_admission_replay_and_session_use()
     {
@@ -39,6 +44,7 @@ public sealed class TypedSessionHandshakeHostedIntegrationTests
         await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(candidate, runtimeConnection: runtimeRole.ConnectionString,
             adminConnection: adminConnection);
         Assert.IsType<RoutingConnectorConfigurationStore>(fixture.Store);
+        Assert.Same(fixture.Sessions.OpaqueSessionLeases, fixture.Factory.Services.GetRequiredService<OpaqueSessionLeaseProvider>());
         string connectorId = "typed-hosted-" + Guid.NewGuid().ToString("N");
         Guid environmentId = await fixture.CreateEnvironmentAsync();
         Guid tenantA = await fixture.CreateTenantAsync("tenant-a");
@@ -102,6 +108,13 @@ public sealed class TypedSessionHandshakeHostedIntegrationTests
         Assert.Equal(1, fixture.Server.Counters.ValidateSession);
         Assert.Equal(1, fixture.Sessions.CachedSessionCount);
 
+        long promotedGeneration = fixture.CaptureCurrentSessionGeneration();
+        int acquisitionBeforeBusiness = fixture.Transport.AcquisitionRequests;
+        int validationBeforeBusiness = fixture.Transport.ValidationRequests;
+        int businessBefore = fixture.Transport.BusinessRequests;
+        int genericBefore = fixture.Transport.GenericRequests;
+        int secretResolutionsBefore = fixture.Factory.Secrets.TotalRequests;
+
         int outboundBeforeReuse = fixture.Transport.TotalSoapRequests;
         using HttpResponseMessage reuseResponse = await fixture.SendSignedAsync(identityA, HttpMethod.Post,
             $"/v1/connectors/{connectorId}/operations/session-bootstrap/session-handshakes/typed-session:acquire", []);
@@ -111,9 +124,37 @@ public sealed class TypedSessionHandshakeHostedIntegrationTests
         Assert.Equal(completed.SessionReference, reused.SessionReference);
         Assert.Equal(outboundBeforeReuse, fixture.Transport.TotalSoapRequests);
 
-        SoapBusinessResult business = await fixture.InvokeBusinessAsync(identityA, connectorId, completed.SessionReference!);
-        Assert.Equal("accepted", business.Values["result"]);
-        Assert.Equal(1, fixture.Server.Counters.Business);
+        byte[] businessRequest = HostedTypedSessionFixture.BusinessInvocationBody();
+        using HttpResponseMessage businessResponse = await fixture.SendSignedAsync(identityA, HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{HostedTypedSessionFixture.BusinessOperationId}:invoke", businessRequest);
+        string businessBody = await businessResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        string businessProblemCode = businessResponse.StatusCode == HttpStatusCode.OK
+            ? "none"
+            : JsonDocument.Parse(businessBody).RootElement.GetProperty("code").GetString() ?? "missing";
+        Assert.True(businessResponse.StatusCode == HttpStatusCode.OK,
+            $"Hosted business invocation failed safely: status={(int)businessResponse.StatusCode}, code={businessProblemCode}, " +
+            $"acquisition={fixture.Transport.AcquisitionRequests}, validation={fixture.Transport.ValidationRequests}, " +
+            $"business={fixture.Transport.BusinessRequests}, generic={fixture.Transport.GenericRequests}, secretResolutions={fixture.Factory.Secrets.TotalRequests}.");
+        GatewayInvokeResponse business = JsonSerializer.Deserialize<GatewayInvokeResponse>(businessBody, WebJson)
+            ?? throw new InvalidOperationException("Hosted business response was empty.");
+        Assert.Equal("1.0.0", business.ConnectorVersion);
+        Assert.Contains("BusinessOperationResponse", Encoding.UTF8.GetString(Convert.FromBase64String(business.Result.Data)), StringComparison.Ordinal);
+        Assert.Equal(promotedGeneration, fixture.CaptureCurrentSessionGeneration());
+        Assert.Equal(acquisitionBeforeBusiness, fixture.Transport.AcquisitionRequests);
+        Assert.Equal(validationBeforeBusiness, fixture.Transport.ValidationRequests);
+        Assert.Equal(businessBefore + 1, fixture.Transport.BusinessRequests);
+        Assert.Equal(genericBefore, fixture.Transport.GenericRequests);
+        Assert.Equal(secretResolutionsBefore + 2, fixture.Factory.Secrets.TotalRequests);
+        Assert.Equal(1, fixture.Factory.AuthenticatedBusinessRequests);
+        Assert.Equal(1, fixture.Server.Counters.Composed);
+        Assert.Equal(1, fixture.Server.Counters.ComposedAccepted);
+        Assert.Equal(0, fixture.Server.Counters.BasicRejected);
+        Assert.Equal(0, fixture.Server.Counters.OpaqueSessionRejected);
+        Assert.Equal(0, fixture.Server.Counters.SoapPolicyRejected);
+        Assert.Equal(0, fixture.Server.Counters.Business);
+        Assert.DoesNotContain(candidate, businessBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(HostedTypedSessionFixture.SyntheticUsername, businessBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(HostedTypedSessionFixture.SyntheticPassword, businessBody, StringComparison.Ordinal);
 
         string unknownConnectorId = "typed-hosted-unknown-" + Guid.NewGuid().ToString("N");
         string unknownDefinition = HostedTypedSessionFixture.Definition(unknownConnectorId, "1.0.0")
@@ -134,7 +175,11 @@ public sealed class TypedSessionHandshakeHostedIntegrationTests
         Assert.DoesNotContain(candidate, logs, StringComparison.Ordinal);
         Assert.DoesNotContain(candidate, audit, StringComparison.Ordinal);
         Assert.DoesNotContain(candidate, unknownBody, StringComparison.Ordinal);
-        Assert.Equal(7, fixture.Factory.AuthenticatedBoundaryRequests);
+        Assert.DoesNotContain(HostedTypedSessionFixture.SyntheticUsername, logs, StringComparison.Ordinal);
+        Assert.DoesNotContain(HostedTypedSessionFixture.SyntheticPassword, logs, StringComparison.Ordinal);
+        Assert.DoesNotContain(HostedTypedSessionFixture.SyntheticUsername, audit, StringComparison.Ordinal);
+        Assert.DoesNotContain(HostedTypedSessionFixture.SyntheticPassword, audit, StringComparison.Ordinal);
+        Assert.True(fixture.Factory.AuthenticatedBoundaryRequests >= fixture.Factory.AuthenticatedBusinessRequests);
     }
 }
 
@@ -252,7 +297,8 @@ internal sealed record HostedConnectorAuthority(
     ConnectorVersionResource Validated,
     AdminAccessContext Approver,
     ProviderResourceCatalogRecord Username,
-    ProviderResourceCatalogRecord Password);
+    ProviderResourceCatalogRecord Password,
+    ProviderResourceCatalogRecord Session);
 
 internal sealed record HostedHandshakeResult(string Kind, string? IntentReference, string? SessionReference)
 {
@@ -281,10 +327,13 @@ internal sealed class HostedIdentity(X509Certificate2 certificate, RegisteredIns
 internal sealed class HostedTypedSessionFixture : IAsyncDisposable
 {
     private const string SyntheticHost = "typed-session.synthetic.test";
+    internal const string SyntheticUsername = "synthetic-user";
+    internal const string SyntheticPassword = "synthetic-password";
+    internal const string BusinessOperationId = "session-business";
     private readonly HostedServerCertificates certificates;
     private readonly HttpClient api;
     private readonly List<HostedIdentity> identities = [];
-    private readonly Dictionary<string, (ProviderResourceCatalogRecord Username, ProviderResourceCatalogRecord Password)> resources = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (ProviderResourceCatalogRecord Username, ProviderResourceCatalogRecord Password, ProviderResourceCatalogRecord Session)> resources = new(StringComparer.Ordinal);
 
     private HostedTypedSessionFixture(HostedServerCertificates certificates, SyntheticSoapServerInstance server, TypedSessionHostFactory factory)
     {
@@ -314,7 +363,11 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         try
         {
             SyntheticSoapServerInstance server = await SyntheticSoapServerHost.StartAsync(
-                new("synthetic-user", "synthetic-password", false, TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2), true, candidate),
+                new(SyntheticUsername, SyntheticPassword, false, TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2), true, candidate)
+                {
+                    OpaqueSessionHeaderName = "X-Session-Reference",
+                    OpaqueSessionValue = candidate
+                },
                 certificates.Server, TestContext.Current.CancellationToken);
             try
             {
@@ -334,11 +387,41 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         }
     }
 
-    internal static string Definition(string connectorId, string version)
-    {
-        string source = ConnectorRuntime.Auth.Soap.TypedSessionHandshakeRealHttpIntegrationTests.ProductionDefinition(connectorId);
-        return version == "1.0.0" ? source : source.Replace("\"version\":\"1.0.0\"", $"\"version\":\"{version}\"", StringComparison.Ordinal);
-    }
+    internal static string Definition(string connectorId, string version) => $$$"""
+        {
+          "schemaVersion":"1.0","connectorId":"{{{connectorId}}}","version":"{{{version}}}","displayName":"Typed hosted production path",
+          "bindings":{"endpoints":[{"name":"soap"}],"secrets":[{"name":"username","kind":"username"},{"name":"password","kind":"password"},{"name":"session","kind":"opaque"}]},
+          "operations":[
+            {
+              "operationId":"session-bootstrap","endpointBinding":"soap","method":"POST","path":"/service",
+              "request":{"contentType":"text/xml","maximumBytes":32768},"response":{"maximumBytes":32768},
+              "authentication":{"kind":"basic","usernameBinding":"username","passwordBinding":"password"},
+              "typedSessionHandshake":{
+                "profileId":"typed-session","soapVersion":"1.1","action":"urn:synthetic:CreateSession",
+                "requestElement":{"localName":"CreateSessionRequest","namespaceUri":"urn:synthetic:typed-session"},
+                "responseElement":{"localName":"CreateSessionResponse","namespaceUri":"urn:synthetic:typed-session"},
+                "requestAdapter":{"id":"synthetic-create-session-request","type":"compiled-typed-request"},
+                "responseAdapter":{"id":"synthetic-create-session-response","type":"compiled-typed-response"},
+                "sessionLifetimeSeconds":300,
+                "externalAdmission":{
+                  "validator":{"id":"synthetic-session-validator","type":"compiled-typed-validator"},"endpointBinding":"soap","path":"/service",
+                  "soapVersion":"1.1","action":"urn:synthetic:ValidateSession",
+                  "requestElement":{"localName":"ValidateSessionRequest","namespaceUri":"urn:synthetic:typed-session"},
+                  "responseElement":{"localName":"ValidateSessionResponse","namespaceUri":"urn:synthetic:typed-session"},
+                  "intentLifetimeSeconds":60,"timeoutMs":5000,"maximumRequestBytes":32768,"maximumResponseBytes":32768
+                }
+              },
+              "timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[],"idempotent":false,"maximumRetries":0
+            },
+            {
+              "operationId":"session-business","endpointBinding":"soap","method":"POST","path":"/composed",
+              "request":{"contentType":"text/xml","maximumBytes":32768},"response":{"maximumBytes":32768},
+              "authentication":{"kind":"soapBasicOpaqueSession","policyId":"typed-session-business-policy","sessionProfileId":"typed-session","usernameBinding":"username","passwordBinding":"password","secretBinding":"session","headerName":"X-Session-Reference","valueFormat":"rawOpaqueValue","soapHttp":{"version":"1.1","action":"urn:synthetic:BusinessOperation"}},
+              "timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[],"idempotent":false,"maximumRetries":0
+            }
+          ]
+        }
+        """;
 
     internal async Task<Guid> CreateEnvironmentAsync()
     {
@@ -408,8 +491,12 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
     {
         IAdminGatewayRegistry registry = Factory.Services.GetRequiredService<IAdminGatewayRegistry>();
         foreach (HostedIdentity identity in grantedIdentities)
+        {
             await registry.AddGrantAsync(new(Guid.NewGuid(), identity.Identity.InstallationId, identity.Identity.TenantId, connectorId,
                 "session-bootstrap", true, Factory.Clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
+            await registry.AddGrantAsync(new(Guid.NewGuid(), identity.Identity.InstallationId, identity.Identity.TenantId, connectorId,
+                BusinessOperationId, true, Factory.Clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
+        }
     }
 
     internal async Task<HostedConnectorAuthority> PrepareConnectorVersionAsync(
@@ -422,12 +509,17 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         {
             string suffix = Guid.NewGuid().ToString("N");
             ProviderResourceCatalogRecord username = await Store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic",
-                "typed-user-" + suffix, ProviderResourceType.Secret, "Typed username", environmentId, connectorId, "session-bootstrap",
+                "typed-user-" + suffix, ProviderResourceType.Secret, "Typed username", environmentId, connectorId, "*",
                 "synthetic://typed-user-" + suffix, ProviderResourceStatus.Active, null, 0, null, null, string.Empty, Factory.Clock.UtcNow), TestContext.Current.CancellationToken);
             ProviderResourceCatalogRecord password = await Store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic",
-                "typed-password-" + suffix, ProviderResourceType.Secret, "Typed password", environmentId, connectorId, "session-bootstrap",
+                "typed-password-" + suffix, ProviderResourceType.Secret, "Typed password", environmentId, connectorId, "*",
                 "synthetic://typed-password-" + suffix, ProviderResourceStatus.Active, null, 0, null, null, string.Empty, Factory.Clock.UtcNow), TestContext.Current.CancellationToken);
-            resources.Add(connectorId, connectorResources = (username, password));
+            ProviderResourceCatalogRecord session = await Store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic",
+                "typed-session-" + suffix, ProviderResourceType.Secret, "Typed opaque session authority", environmentId, connectorId, BusinessOperationId,
+                "synthetic://typed-session-" + suffix, ProviderResourceStatus.Active, null, 0, null, null, string.Empty, Factory.Clock.UtcNow), TestContext.Current.CancellationToken);
+            Assert.Equal(username.Revision, password.Revision);
+            Assert.Equal(username.Revision, session.Revision);
+            resources.Add(connectorId, connectorResources = (username, password, session));
         }
 
         ConnectorAdministrationService administration = Factory.Services.GetRequiredService<ConnectorAdministrationService>();
@@ -449,7 +541,8 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
             new Dictionary<string, ProviderResourceReference>
             {
                 ["username"] = new(connectorResources.Username.ProviderId, connectorResources.Username.ResourceId, connectorResources.Username.ResourceType),
-                ["password"] = new(connectorResources.Password.ProviderId, connectorResources.Password.ResourceId, connectorResources.Password.ResourceType)
+                ["password"] = new(connectorResources.Password.ProviderId, connectorResources.Password.ResourceId, connectorResources.Password.ResourceType),
+                ["session"] = new(connectorResources.Session.ProviderId, connectorResources.Session.ResourceId, connectorResources.Session.ResourceType)
             }, null, null, version), editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
         ConnectorApprovalRecord requested = await approvals.RequestAsync(connectorId, version, editor, Guid.NewGuid(), TestContext.Current.CancellationToken);
         ApprovalReviewResult review = await approvals.ReviewAsync(connectorId, version, approver, TestContext.Current.CancellationToken);
@@ -457,7 +550,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
             new(requested.Id, review.DigestSha256, "synthetic hosted approval"), approver, Guid.NewGuid(), TestContext.Current.CancellationToken);
         Assert.Equal(ConnectorApprovalStatus.Approved, approved.Status);
         Assert.NotEqual(editor.Principal.Id, approved.ApprovedBy);
-        return new(connectorId, version, environmentId, validated, approver, connectorResources.Username, connectorResources.Password);
+        return new(connectorId, version, environmentId, validated, approver, connectorResources.Username, connectorResources.Password, connectorResources.Session);
     }
 
     internal async Task PublishAsync(HostedConnectorAuthority authority, long expectedPublicationRevision)
@@ -489,7 +582,36 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         request.Headers.TryAddWithoutValidation("X-BG-Nonce", headers.Nonce);
         request.Headers.TryAddWithoutValidation("X-BG-Content-SHA256", headers.ContentSha256);
         request.Headers.TryAddWithoutValidation("X-BG-Signature", headers.Signature);
+        if (target.EndsWith(":invoke", StringComparison.Ordinal))
+            request.Headers.TryAddWithoutValidation("traceparent", "00-11111111111111111111111111111111-2222222222222222-01");
         return await api.SendAsync(request, TestContext.Current.CancellationToken);
+    }
+
+    internal static byte[] BusinessInvocationBody()
+    {
+        const string envelope = "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\"><soap:Body><op:BusinessOperation xmlns:op=\"urn:synthetic:session\"><op:Payload>normal</op:Payload></op:BusinessOperation></soap:Body></soap:Envelope>";
+        return JsonSerializer.SerializeToUtf8Bytes(new GatewayInvokeRequest("1.0", new("text/xml", "utf8", envelope), Guid.NewGuid()));
+    }
+
+    internal long CaptureCurrentSessionGeneration()
+    {
+        FieldInfo cacheField = typeof(SoapSessionClient).GetField("cache", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("SOAP cache field unavailable to the test evidence harness.");
+        object cache = cacheField.GetValue(Sessions) ?? throw new InvalidOperationException("SOAP cache unavailable to the test evidence harness.");
+        FieldInfo entriesField = cache.GetType().GetField("entries", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("SOAP cache entries unavailable to the test evidence harness.");
+        IEnumerable entries = (IEnumerable)(entriesField.GetValue(cache) ?? throw new InvalidOperationException("SOAP cache entries unavailable to the test evidence harness."));
+        List<long> currentGenerations = [];
+        foreach (object entry in entries)
+        {
+            object state = entry.GetType().GetProperty("Value")?.GetValue(entry)
+                ?? throw new InvalidOperationException("SOAP cache state unavailable to the test evidence harness.");
+            object? current = state.GetType().GetProperty("Current")?.GetValue(state);
+            if (current is not null)
+                currentGenerations.Add((long)(current.GetType().GetProperty("Generation")?.GetValue(current)
+                    ?? throw new InvalidOperationException("SOAP session generation unavailable to the test evidence harness.")));
+        }
+        return Assert.Single(currentGenerations);
     }
 
     internal async Task<GatewayClientPrincipal> AuthenticateForInternalUseAsync(HostedIdentity identity)
@@ -498,17 +620,6 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         RuntimeSignatureHeaders headers = Sign(identity.Certificate, "POST", target, []);
         return await Factory.Services.GetRequiredService<RuntimeIdentityService>().AuthenticateAsync(identity.Certificate, "POST", target, headers, ReadOnlyMemory<byte>.Empty,
             Guid.NewGuid(), TestContext.Current.CancellationToken);
-    }
-
-    internal async Task<SoapBusinessResult> InvokeBusinessAsync(HostedIdentity identity, string connectorId, string sessionReference)
-    {
-        GatewayClientPrincipal principal = await AuthenticateForInternalUseAsync(identity);
-        AuthorizedGatewayInvocation invocation = await Factory.Services.GetRequiredService<IGatewayInvocationAuthorizer>()
-            .AuthorizeAsync(principal, connectorId, "session-bootstrap", TestContext.Current.CancellationToken);
-        ResolvedTypedSessionHandshake resolved = await Factory.Services.GetRequiredService<PublishedTypedSessionHandshakeResolver>()
-            .ResolveAsync(invocation, new("typed-session"), TestContext.Current.CancellationToken);
-        return await Sessions.InvokeAsync(resolved.State.ExecutionContext, resolved.State.Endpoint, BusinessProfile(),
-            new Dictionary<string, string> { ["payload"] = "normal" }, new(sessionReference), TestContext.Current.CancellationToken);
     }
 
     internal async Task<string> SerializeAuditAsync(Guid tenantId)
@@ -532,18 +643,6 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         return new(timestamp, nonce, contentHash, signature);
     }
 
-    private static SoapSessionProfile BusinessProfile()
-    {
-        const string legacyNamespace = "urn:synthetic:session";
-        SoapOperationProfile login = new("unused-login", SoapEnvelopeVersion.Soap11, "urn:synthetic:Login",
-            new("Login", legacyNamespace), new("LoginResponse", legacyNamespace));
-        SoapOperationProfile business = new("session-bootstrap", SoapEnvelopeVersion.Soap11, "urn:synthetic:BusinessOperation",
-            new("BusinessOperation", legacyNamespace), new("BusinessOperationResponse", legacyNamespace),
-            [new("payload", new("Payload", legacyNamespace))], [new("result", new("Result", legacyNamespace))]);
-        return new("typed-session", new("provider/username", "provider/password"), login, new("SessionId", legacyNamespace),
-            new("Session", legacyNamespace), [business], TimeSpan.FromMinutes(5), []);
-    }
-
     public async ValueTask DisposeAsync()
     {
         api.Dispose();
@@ -563,6 +662,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
     private readonly string? adminConnection;
     private readonly RecordingLoggerProvider logger = new();
     private readonly TestClientCertificateStartupFilter certificateFilter = new();
+    private readonly FixedSecrets secrets = new();
 
     internal TypedSessionHostFactory(
         X509Certificate2 root,
@@ -582,6 +682,8 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
     internal CountingRestrictedTransport Transport { get; }
     internal IReadOnlyCollection<string> Logs => logger.Messages;
     internal int AuthenticatedBoundaryRequests => certificateFilter.Requests;
+    internal int AuthenticatedBusinessRequests => certificateFilter.BusinessRequests;
+    internal FixedSecrets Secrets => secrets;
     internal IGatewayClock Clock => Services.GetRequiredService<IGatewayClock>();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -598,7 +700,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
             services.RemoveAll<IRestrictedTransport>();
             services.AddSingleton<IRestrictedTransport>(Transport);
             services.RemoveAll<ISecretValueProvider>();
-            services.AddSingleton<ISecretValueProvider, FixedSecrets>();
+            services.AddSingleton<ISecretValueProvider>(secrets);
             services.AddSingleton<IPrivateDestinationAllowance>(new LoopbackAllowance(syntheticHost));
             services.AddSingleton<IStartupFilter>(certificateFilter);
             services.AddSingleton<ILoggerProvider>(logger);
@@ -625,17 +727,30 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
             string.Equals(host, candidateHost, StringComparison.OrdinalIgnoreCase) && IPAddress.IsLoopback(address);
     }
 
-    private sealed class FixedSecrets : ISecretValueProvider
+    internal sealed class FixedSecrets : ISecretValueProvider
     {
-        public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken) =>
-            Task.FromResult(logicalReference.Contains("user", StringComparison.OrdinalIgnoreCase) ? "synthetic-user" : "synthetic-password");
+        private int totalRequests;
+        internal int TotalRequests => Volatile.Read(ref totalRequests);
+
+        public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref totalRequests);
+            if (logicalReference.Contains("user", StringComparison.OrdinalIgnoreCase))
+                return Task.FromResult(HostedTypedSessionFixture.SyntheticUsername);
+            if (logicalReference.Contains("password", StringComparison.OrdinalIgnoreCase))
+                return Task.FromResult(HostedTypedSessionFixture.SyntheticPassword);
+            throw new InvalidOperationException("Unexpected synthetic secret binding.");
+        }
     }
 }
 
 internal sealed class TestClientCertificateStartupFilter : IStartupFilter
 {
     private int requests;
+    private int businessRequests;
     internal int Requests => Volatile.Read(ref requests);
+    internal int BusinessRequests => Volatile.Read(ref businessRequests);
 
     public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => application =>
     {
@@ -651,9 +766,13 @@ internal sealed class TestClientCertificateStartupFilter : IStartupFilter
             X509Certificate2 certificate = X509CertificateLoader.LoadCertificate(Convert.FromBase64String(encoded[0]!));
             context.Connection.ClientCertificate = certificate;
             Interlocked.Increment(ref requests);
+            bool businessRequest = context.Request.Path.StartsWithSegments("/v1/connectors", StringComparison.Ordinal) &&
+                context.Request.Path.Value?.EndsWith(":invoke", StringComparison.Ordinal) == true;
             try
             {
                 await continuation();
+                if (businessRequest && context.Response.StatusCode is >= 200 and < 300)
+                    Interlocked.Increment(ref businessRequests);
             }
             finally
             {
@@ -668,20 +787,31 @@ internal sealed class TestClientCertificateStartupFilter : IStartupFilter
 internal sealed class CountingRestrictedTransport(IRestrictedTransport inner) : IRestrictedTransport
 {
     private int totalSoapRequests;
+    private int acquisitionRequests;
     private int validationRequests;
+    private int businessRequests;
+    private int genericRequests;
     internal int TotalSoapRequests => Volatile.Read(ref totalSoapRequests);
+    internal int AcquisitionRequests => Volatile.Read(ref acquisitionRequests);
     internal int ValidationRequests => Volatile.Read(ref validationRequests);
+    internal int BusinessRequests => Volatile.Read(ref businessRequests);
+    internal int GenericRequests => Volatile.Read(ref genericRequests);
 
     public Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate,
-        TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken) =>
-        inner.SendAsync(request, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, cancellationToken);
+        TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref genericRequests);
+        return inner.SendAsync(request, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, cancellationToken);
+    }
 
     public Task<ExternalResponse> SendSoapAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, TimeSpan timeout,
         long maximumResponseBytes, CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref totalSoapRequests);
         string action = request.Headers.TryGetValues("SOAPAction", out IEnumerable<string>? values) ? string.Join(',', values) : string.Empty;
+        if (action.Contains("CreateSession", StringComparison.Ordinal)) Interlocked.Increment(ref acquisitionRequests);
         if (action.Contains("ValidateSession", StringComparison.Ordinal)) Interlocked.Increment(ref validationRequests);
+        if (action.Contains("BusinessOperation", StringComparison.Ordinal)) Interlocked.Increment(ref businessRequests);
         return inner.SendSoapAsync(request, approvedAddresses, timeout, maximumResponseBytes, cancellationToken);
     }
 }

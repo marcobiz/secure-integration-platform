@@ -100,6 +100,17 @@ public sealed class SoapAuthBoundaryTests
     }
 
     [Fact]
+    public void Wave1_CT_Gateway_composition_aliases_business_leases_to_the_singleton_SOAP_session_lifecycle()
+    {
+        string host = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "Program.cs"));
+
+        Assert.Contains("AddSingleton(services => new SoapSessionClient", host, StringComparison.Ordinal);
+        Assert.Contains("services.GetRequiredService<SoapSessionClient>().OpaqueSessionLeases", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("AddSingleton<SoapSessionCache>", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("new SoapOpaqueSessionLeaseProvider", host, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Wave1_CT_Typed_handshake_and_external_admission_are_Published_compiled_vertical_neutral_and_reuse_the_single_cache()
     {
         string soapRoot = Path.Combine(Root, "src", "Gateway", "Gateway.ConnectorRuntime.Auth.Soap");

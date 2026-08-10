@@ -144,8 +144,7 @@ if (providerServices.CertificateMetadata is not null) builder.Services.AddSingle
 if (providerServices.SigningKeys is not null) builder.Services.AddSingleton(providerServices.SigningKeys);
 if (providerServices.Mac is not null) builder.Services.AddSingleton(providerServices.Mac);
 
-builder.Services.AddSingleton<SoapSessionCache>();
-builder.Services.AddSingleton<OpaqueSessionLeaseProvider>(services => new SoapOpaqueSessionLeaseProvider(services.GetRequiredService<SoapSessionCache>()));
+builder.Services.AddSingleton<OpaqueSessionLeaseProvider>(services => services.GetRequiredService<SoapSessionClient>().OpaqueSessionLeases);
 builder.Services.AddSingleton<IGatewayOperationExecutionStrategy>(services => new OpaqueSessionHttpExecutionStrategy(
     services.GetRequiredService<IConnectorConfigurationStore>(), services.GetRequiredService<OpaqueSessionLeaseProvider>(),
     services.GetRequiredService<IHostResolver>(), services.GetRequiredService<IRestrictedTransport>(), services.GetRequiredService<IGatewayClock>(),
