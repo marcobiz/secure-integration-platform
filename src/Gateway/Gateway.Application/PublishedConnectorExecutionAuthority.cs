@@ -105,7 +105,8 @@ internal sealed record AuthorizedPublishedExecutionStamp(
 
 internal sealed record AuthorizedPublishedOperation(
     GatewayOperationDefinition Operation,
-    AuthorizedPublishedExecutionStamp Authority);
+    AuthorizedPublishedExecutionStamp Authority,
+    AuthorizedPublishedExtensionConfiguration ExtensionConfiguration);
 
 internal interface IAuthorizedPublishedOperationCatalog
 {

@@ -11,6 +11,7 @@ namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 /// </summary>
 public sealed class SoapSessionClient
 {
+    private readonly ISecretValueProvider secrets;
     private readonly ServerBoundBasicAuthentication basicAuthentication;
     private readonly IHostResolver resolver;
     private readonly IRestrictedTransport transport;
@@ -25,7 +26,8 @@ public sealed class SoapSessionClient
     /// <summary>Creates the session client from provider-neutral secret and restricted-egress capabilities.</summary>
     public SoapSessionClient(ISecretValueProvider secrets, IHostResolver resolver, IRestrictedTransport transport, IGatewayClock clock, ISoapSessionResourceStampProvider resourceStamps, IPrivateDestinationAllowance? privateDestinationAllowance = null)
     {
-        basicAuthentication = new ServerBoundBasicAuthentication(secrets ?? throw new ArgumentNullException(nameof(secrets)));
+        this.secrets = secrets ?? throw new ArgumentNullException(nameof(secrets));
+        basicAuthentication = new ServerBoundBasicAuthentication(this.secrets);
         this.resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
         this.transport = transport ?? throw new ArgumentNullException(nameof(transport));
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
@@ -144,7 +146,7 @@ public sealed class SoapSessionClient
             ExternalSessionValidationResult validation;
             try
             {
-                validation = await SendExternalValidationAsync(current, candidate, reserved.Provenance, cancellationToken).ConfigureAwait(false)
+                validation = await SendExternalValidationAsync(resolvedHandshake, expected, current, candidate, reserved.Provenance, cancellationToken).ConfigureAwait(false)
                     ?? throw TypedSessionHandshakeFailures.ValidationFailed();
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
@@ -400,7 +402,30 @@ public sealed class SoapSessionClient
         SoapOperationProfile operation = state.Operation;
         EnsureDeadline(context);
         await ValidateResourceStampAsync(context, cancellationToken).ConfigureAwait(false);
-        byte[] envelope = TypedSessionHandshakeXmlBoundary.SerializeRequest(state, cancellationToken);
+
+        if (beforeHandshakeFinalAuthorization is not null)
+            await beforeHandshakeFinalAuthorization(cancellationToken).ConfigureAwait(false);
+
+        // Deny a publication transition before any adapter-input or Basic credential provider call.
+        state = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+        await ValidateResourceStampAsync(state.ExecutionContext, cancellationToken).ConfigureAwait(false);
+        state = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+        AuthorizedConnectorBindingInputs serverOwnedInputs = await ResolveBindingInputsAsync(
+            state.RequestBindingInputs, resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+        byte[] envelope;
+        try
+        {
+            // If publication changed while an input provider call was in flight, deny before
+            // composing the request or resolving any subsequent credential/provider input.
+            state = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+            await ValidateResourceStampAsync(state.ExecutionContext, cancellationToken).ConfigureAwait(false);
+            state = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+            envelope = TypedSessionHandshakeXmlBoundary.SerializeRequest(state, serverOwnedInputs, cancellationToken);
+        }
+        finally
+        {
+            serverOwnedInputs.Clear();
+        }
         using HttpRequestMessage request = new(HttpMethod.Post, state.Endpoint.Endpoint);
         request.Headers.TryAddWithoutValidation("X-Correlation-ID", context.CorrelationId.ToString("D"));
         TypedSessionHandshakeXmlBoundary.ApplyHttpHeaders(request, operation, envelope);
@@ -412,9 +437,6 @@ public sealed class SoapSessionClient
         catch (Exception) { throw new SoapAuthException("SOAP-EGRESS-DESTINATION-DENIED"); }
         if (addresses.Length == 0 || addresses.Any(address => RestrictedEgressService.IsForbiddenAddress(address) && privateDestinationAllowance?.IsAllowed(state.Endpoint.Endpoint.DnsSafeHost, address) != true))
             throw new SoapAuthException("SOAP-EGRESS-DESTINATION-DENIED");
-
-        if (beforeHandshakeFinalAuthorization is not null)
-            await beforeHandshakeFinalAuthorization(cancellationToken).ConfigureAwait(false);
 
         // Resource/provider/DNS preparation is complete. Revalidate the entire initially-authorized
         // Published authority immediately before the first network/session side effect.
@@ -451,6 +473,8 @@ public sealed class SoapSessionClient
     }
 
     private async Task<ExternalSessionValidationResult> SendExternalValidationAsync(
+        ResolvedTypedSessionHandshake resolvedHandshake,
+        TypedSessionHandshakeAuthorityState expected,
         TypedSessionHandshakeAuthorityState state,
         ExternalSessionCandidate candidate,
         ExternalSessionProvenance provenance,
@@ -461,7 +485,20 @@ public sealed class SoapSessionClient
         Uri endpoint = state.AdmissionEndpoint ?? throw TypedSessionHandshakeFailures.AdmissionNotSupported();
         EnsureDeadline(context);
         await ValidateResourceStampAsync(context, cancellationToken).ConfigureAwait(false);
-        byte[] envelope = TypedSessionHandshakeXmlBoundary.SerializeValidationRequest(state, candidate, provenance, cancellationToken);
+        AuthorizedConnectorBindingInputs serverOwnedInputs = await ResolveBindingInputsAsync(
+            state.AdmissionBindingInputs, resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+        byte[] envelope;
+        try
+        {
+            state = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+            await ValidateResourceStampAsync(state.ExecutionContext, cancellationToken).ConfigureAwait(false);
+            state = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+            envelope = TypedSessionHandshakeXmlBoundary.SerializeValidationRequest(state, candidate, provenance, serverOwnedInputs, cancellationToken);
+        }
+        finally
+        {
+            serverOwnedInputs.Clear();
+        }
         using HttpRequestMessage request = new(HttpMethod.Post, endpoint);
         request.Headers.TryAddWithoutValidation("X-Correlation-ID", context.CorrelationId.ToString("D"));
         TypedSessionHandshakeXmlBoundary.ApplyHttpHeaders(request, operation, envelope);
@@ -475,6 +512,12 @@ public sealed class SoapSessionClient
         catch (Exception) { throw new SoapAuthException("SOAP-EGRESS-DESTINATION-DENIED"); }
         if (addresses.Length == 0 || addresses.Any(address => RestrictedEgressService.IsForbiddenAddress(address) && privateDestinationAllowance?.IsAllowed(endpoint.DnsSafeHost, address) != true))
             throw new SoapAuthException("SOAP-EGRESS-DESTINATION-DENIED");
+
+        // All server-owned input/provider/DNS preparation is complete. Revalidate exact Published
+        // authority immediately before the first external validation side effect.
+        state = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+        await ValidateResourceStampAsync(state.ExecutionContext, cancellationToken).ConfigureAwait(false);
+        state = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
 
         TimeSpan configuredTimeout = TimeSpan.FromMilliseconds(operation.TimeoutMilliseconds);
         TimeSpan remaining = context.Deadline - clock.UtcNow;
@@ -521,6 +564,48 @@ public sealed class SoapSessionClient
         catch (OperationCanceledException) { throw; }
         catch (SoapAuthException) { throw; }
         catch (Exception) { throw TypedSessionHandshakeFailures.AuthorityRejected(); }
+    }
+
+    private async Task<AuthorizedConnectorBindingInputs> ResolveBindingInputsAsync(
+        IReadOnlyList<ServerOwnedBindingInputReference> references,
+        ResolvedTypedSessionHandshake resolvedHandshake,
+        TypedSessionHandshakeAuthorityState expected,
+        CancellationToken cancellationToken)
+    {
+        Dictionary<string, string> resolved = new(StringComparer.Ordinal);
+        try
+        {
+            foreach (ServerOwnedBindingInputReference reference in references)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string value = await secrets.GetSecretAsync(reference.ProviderReference, cancellationToken).ConfigureAwait(false);
+                if (!resolved.TryAdd(reference.Name, value))
+                    throw TypedSessionHandshakeFailures.BindingInputRejected();
+                // A provider lookup is an external effect. Prove A still current before a later
+                // lookup can begin, so a transition observed during this call cannot fan out.
+                TypedSessionHandshakeAuthorityState current = await RevalidateTypedAsync(
+                    resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+                await ValidateResourceStampAsync(current.ExecutionContext, cancellationToken).ConfigureAwait(false);
+                _ = await RevalidateTypedAsync(resolvedHandshake, expected, cancellationToken).ConfigureAwait(false);
+            }
+            return new AuthorizedConnectorBindingInputs(resolved);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+        catch (SoapAuthException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            throw TypedSessionHandshakeFailures.BindingInputUnavailable();
+        }
+        finally
+        {
+            resolved.Clear();
+        }
     }
 
     private static DateTimeOffset ComputeExpiry(DateTimeOffset now, TimeSpan localMaximum, DateTimeOffset? remoteExpiry)

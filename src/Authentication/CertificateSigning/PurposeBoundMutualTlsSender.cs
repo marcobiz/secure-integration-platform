@@ -88,7 +88,15 @@ public sealed class PurposeBoundMutualTlsSender(
             if (addresses.Length == 0 || addresses.Any(address => IsForbiddenAddress(address) && privateDestinationAllowance?.IsAllowed(currentPolicy.Endpoint.DnsSafeHost, address) != true))
                 throw new AuthenticationPrimitiveException("BGW-AUTH-MTLS-DESTINATION-DENIED");
 
-            ClientCertificateHealth health = certificate.NotAfter.ToUniversalTime() <= clock.UtcNow.Add(currentPolicy.NearExpiryWarningWindow)
+            // DNS resolution is asynchronous and therefore another policy/publication transition
+            // window. Re-resolve exact authority after DNS and before the transport side effect.
+            ServerOwnedMutualTlsPolicySnapshot finalPolicy = await ResolvePolicyAsync(context, policyId, cancellationToken).ConfigureAwait(false);
+            BoundAuthenticationResource finalResource = await ResolveBindingAsync(context, finalPolicy, cancellationToken).ConfigureAwait(false);
+            if (!SameAuthorization(currentPolicy, finalPolicy, currentResource, finalResource))
+                throw new AuthenticationPrimitiveException("BGW-AUTH-MTLS-AUTHORIZATION-STALE");
+            ValidateRequest(finalPolicy, request);
+
+            ClientCertificateHealth health = certificate.NotAfter.ToUniversalTime() <= clock.UtcNow.Add(finalPolicy.NearExpiryWarningWindow)
                 ? ClientCertificateHealth.NearExpiry
                 : ClientCertificateHealth.Healthy;
             MutualTlsCertificateLease certificateLease = new(certificate);
@@ -96,10 +104,10 @@ public sealed class PurposeBoundMutualTlsSender(
                 request,
                 addresses,
                 certificateLease,
-                currentPolicy.Timeout,
-                currentPolicy.MaximumResponseBytes,
+                finalPolicy.Timeout,
+                finalPolicy.MaximumResponseBytes,
                 cancellationToken).ConfigureAwait(false);
-            return new(response, health, metadata.Version, currentResource.CatalogRevision);
+            return new(response, health, metadata.Version, finalResource.CatalogRevision);
         }
     }
 

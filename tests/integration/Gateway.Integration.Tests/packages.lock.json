@@ -568,6 +568,7 @@
         "type": "Project",
         "dependencies": {
           "Microsoft.AspNetCore.Authentication.OpenIdConnect": "[10.0.10, )",
+          "SecureIntegration.Authentication.CertificateSigning": "[1.0.0, )",
           "SecureIntegration.Gateway.Application": "[1.0.0, )",
           "SecureIntegration.Gateway.ConnectorRuntime.Auth.Http": "[1.0.0, )",
           "SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap": "[1.0.0, )",
@@ -645,7 +646,8 @@
       "SecureIntegration.Synthetic.ConnectorExecutionModule": {
         "type": "Project",
         "dependencies": {
-          "SecureIntegration.Gateway.Application": "[1.0.0, )"
+          "SecureIntegration.Gateway.Application": "[1.0.0, )",
+          "SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap": "[1.0.0, )"
         }
       },
       "JsonSchema.Net": {

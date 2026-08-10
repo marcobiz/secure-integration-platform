@@ -18,6 +18,7 @@ public sealed class PostgreSqlIsolationPolicyTests
         string[] expected =
         [
             nameof(AdminApiPostgreSqlSecurityTests),
+            nameof(AuthorizedVerticalCapabilityHostedIntegrationTests),
             nameof(ConnectorExecutionSeamHostedIntegrationTests),
             nameof(PostgresIsolationTests),
             nameof(ProductionComposedSoapRuntimeIntegrationTests),

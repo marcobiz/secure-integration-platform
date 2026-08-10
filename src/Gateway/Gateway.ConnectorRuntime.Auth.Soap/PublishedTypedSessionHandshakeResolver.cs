@@ -178,7 +178,8 @@ public sealed class PublishedTypedSessionHandshakeResolver
             JsonElement responseAdapterElement = profile.GetProperty("responseAdapter");
             string responseAdapterId = responseAdapterElement.GetProperty("id").GetString()!;
             string responseAdapterType = responseAdapterElement.GetProperty("type").GetString()!;
-            ITypedSessionHandshakeRequestAdapter requestAdapter = adapters.Request(requestAdapterId, requestAdapterType);
+            RegisteredRequestAdapter requestRegistration = adapters.Request(requestAdapterId, requestAdapterType);
+            ITypedSessionHandshakeRequestAdapter requestAdapter = requestRegistration.Adapter;
             ITypedSessionHandshakeResponseAdapter responseAdapter = adapters.Response(responseAdapterId, responseAdapterType);
 
             SoapEnvelopeVersion soapVersion = profile.GetProperty("soapVersion").GetString() switch
@@ -224,7 +225,15 @@ public sealed class PublishedTypedSessionHandshakeResolver
                 throw TypedSessionHandshakeFailures.AuthorityRejected();
             }
 
+            IReadOnlyList<ServerOwnedBindingInputReference> requestBindingInputs = ResolveBindingInputs(
+                profile,
+                requestRegistration.RequiredServerOwnedInputs,
+                snapshot,
+                invocation,
+                credentialResources);
+
             ITypedExternalSessionValidationAdapter? validationAdapter = null;
+            IReadOnlyList<ServerOwnedBindingInputReference> admissionBindingInputs = [];
             Uri? admissionEndpoint = null;
             SoapOperationProfile? admissionOperation = null;
             TimeSpan admissionIntentLifetime = default;
@@ -236,7 +245,15 @@ public sealed class PublishedTypedSessionHandshakeResolver
                 JsonElement validatorElement = admission.GetProperty("validator");
                 validatorId = validatorElement.GetProperty("id").GetString()!;
                 validatorType = validatorElement.GetProperty("type").GetString()!;
-                validationAdapter = adapters.Validation(validatorId, validatorType);
+                RegisteredValidationAdapter validationRegistration = adapters.Validation(validatorId, validatorType)
+                    ?? throw TypedSessionHandshakeFailures.AdapterUnavailable();
+                validationAdapter = validationRegistration.Adapter;
+                admissionBindingInputs = ResolveBindingInputs(
+                    admission,
+                    validationRegistration.RequiredServerOwnedInputs,
+                    snapshot,
+                    invocation,
+                    credentialResources);
                 admissionEndpointBindingId = admission.GetProperty("endpointBinding").GetString()!;
                 if (!snapshot.Bindings.Endpoints.TryGetValue(admissionEndpointBindingId, out Uri? validationBase))
                     throw TypedSessionHandshakeFailures.AuthorityRejected();
@@ -275,6 +292,8 @@ public sealed class PublishedTypedSessionHandshakeResolver
                 admissionOperation?.RequestElement.LocalName, admissionOperation?.ResponseElement.NamespaceUri,
                 admissionOperation?.ResponseElement.LocalName, admissionOperation?.TimeoutMilliseconds,
                 admissionOperation?.MaximumRequestBytes, admissionOperation?.MaximumResponseBytes,
+                string.Join('|', requestBindingInputs.Select(value => value.Name + ":" + value.LogicalBindingId)),
+                string.Join('|', admissionBindingInputs.Select(value => value.Name + ":" + value.LogicalBindingId)),
                 timeoutMilliseconds, handshakeOperation.MaximumRequestBytes, handshakeOperation.MaximumResponseBytes);
             string fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintInput)));
             ConnectorAuthExecutionContext execution = new(principal.TenantId, principal.InstallationId, principal.ApplicationId, principal.Identity.EnvironmentId,
@@ -290,12 +309,14 @@ public sealed class PublishedTypedSessionHandshakeResolver
                 Operation = handshakeOperation,
                 BasicCredential = basic,
                 RequestAdapter = requestAdapter,
+                RequestBindingInputs = requestBindingInputs,
                 ResponseAdapter = responseAdapter,
                 LocalMaximumSessionLifetime = TimeSpan.FromSeconds(profile.GetProperty("sessionLifetimeSeconds").GetInt32()),
                 PublishedPolicyChecksum = policyChecksum,
                 ResourceStamp = snapshot.Stamp.ResourceStampSha256,
                 SecurityFingerprint = fingerprint,
                 AdmissionValidationAdapter = validationAdapter,
+                AdmissionBindingInputs = admissionBindingInputs,
                 AdmissionEndpoint = admissionEndpoint,
                 AdmissionOperation = admissionOperation,
                 AdmissionIntentLifetime = admissionIntentLifetime,
@@ -318,6 +339,40 @@ public sealed class PublishedTypedSessionHandshakeResolver
             !string.Equals(resource.OperationScope, invocation.OperationId, StringComparison.Ordinal) && !string.Equals(resource.OperationScope, "*", StringComparison.Ordinal))
             throw TypedSessionHandshakeFailures.AuthorityRejected();
         return resource;
+    }
+
+    private static ServerOwnedBindingInputReference[] ResolveBindingInputs(
+        JsonElement owner,
+        IReadOnlySet<string> requiredNames,
+        PublishedConnectorSnapshot snapshot,
+        AuthorizedGatewayInvocation invocation,
+        List<ProviderResourceBinding> resources)
+    {
+        if (!owner.TryGetProperty("serverOwnedInputs", out JsonElement configured))
+        {
+            if (requiredNames.Count != 0) throw TypedSessionHandshakeFailures.AuthorityRejected();
+            return [];
+        }
+        if (configured.ValueKind != JsonValueKind.Array || configured.GetArrayLength() > AuthorizedConnectorBindingInputs.MaximumInputs)
+            throw TypedSessionHandshakeFailures.AuthorityRejected();
+
+        Dictionary<string, ServerOwnedBindingInputReference> resolved = new(StringComparer.Ordinal);
+        foreach (JsonElement input in configured.EnumerateArray())
+        {
+            string name = input.GetProperty("name").GetString()!;
+            string logicalBindingId = input.GetProperty("secretBinding").GetString()!;
+            if (!requiredNames.Contains(name) || resolved.ContainsKey(name))
+                throw TypedSessionHandshakeFailures.AuthorityRejected();
+            ProviderResourceBinding resource = RequiredSecret(snapshot, logicalBindingId, invocation);
+            if (!snapshot.SecretProviderReferences.TryGetValue(logicalBindingId, out string? providerReference) ||
+                string.IsNullOrWhiteSpace(providerReference))
+                throw TypedSessionHandshakeFailures.AuthorityRejected();
+            resolved.Add(name, new(name, logicalBindingId, providerReference));
+            resources.Add(resource);
+        }
+        if (resolved.Count != requiredNames.Count || requiredNames.Any(name => !resolved.ContainsKey(name)))
+            throw TypedSessionHandshakeFailures.AuthorityRejected();
+        return resolved.Values.OrderBy(value => value.Name, StringComparer.Ordinal).ToArray();
     }
 
     private static bool Https(Uri endpoint) => endpoint.IsAbsoluteUri && endpoint.Scheme == Uri.UriSchemeHttps &&

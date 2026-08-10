@@ -26,6 +26,9 @@ public sealed record SyntheticSoapServerOptions(
 
     /// <summary>Expected opaque value for the composed SOAP endpoint.</summary>
     public string? OpaqueSessionValue { get; init; }
+
+    /// <summary>Optional exact server-owned organization value required by external adapters.</summary>
+    public string? ServerOwnedOrganizationCode { get; init; }
 }
 
 /// <summary>Thread-safe counters exposed only to the synthetic test harness.</summary>
@@ -160,7 +163,7 @@ public static class SyntheticSoapServerHost
 
             if (parsed.Operation == "CreateSession")
             {
-                if (!ValidCreateSessionRequest(parsed.Payload)) { response.StatusCode = StatusCodes.Status400BadRequest; return; }
+                if (!ValidCreateSessionRequest(parsed.Payload, options.ServerOwnedOrganizationCode)) { response.StatusCode = StatusCodes.Status400BadRequest; return; }
                 if (options.RequireExternalAdmission)
                 {
                     string externalRequired = $"<s:CreateSessionResponse xmlns:s=\"{TypedSessionNamespace}\"><s:Result><s:Status>external_admission_required</s:Status><s:Admission><s:Provenance>interactive_handoff</s:Provenance></s:Admission></s:Result></s:CreateSessionResponse>";
@@ -175,7 +178,7 @@ public static class SyntheticSoapServerHost
             }
             if (parsed.Operation == "ValidateSession")
             {
-                string? candidate = ReadValidationCandidate(parsed.Payload);
+                string? candidate = ReadValidationCandidate(parsed.Payload, options.ServerOwnedOrganizationCode);
                 if (candidate is null || !Fixed(candidate, options.ExternalSessionCandidate))
                 {
                     string rejected = $"<s:ValidateSessionResponse xmlns:s=\"{TypedSessionNamespace}\"><s:Validation><s:Status>rejected</s:Status></s:Validation></s:ValidateSessionResponse>";
@@ -403,32 +406,36 @@ public static class SyntheticSoapServerHost
 
     private static string ResponseElement(string response, string field, string value) => $"<op:{response} xmlns:op=\"{OperationNamespace}\"><op:{field}>{WebUtility.HtmlEncode(value)}</op:{field}></op:{response}>";
 
-    private static bool ValidCreateSessionRequest(XElement request)
+    private static bool ValidCreateSessionRequest(XElement request, string? expectedOrganizationCode)
     {
         XNamespace session = TypedSessionNamespace;
         if (request.Name != session + "CreateSessionRequest" || request.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration)) return false;
         XElement[] root = request.Elements().ToArray();
         if (root.Length != 1 || root[0].Name != session + "ClientContext") return false;
         XElement[] context = root[0].Elements().ToArray();
-        if (context.Length != 2 || context[0].Name != session + "Identity" || context[1].Name != session + "Policy") return false;
+        int policyIndex = expectedOrganizationCode is null ? 1 : 2;
+        if (context.Length != policyIndex + 1 || context[0].Name != session + "Identity" || context[policyIndex].Name != session + "Policy" ||
+            (expectedOrganizationCode is not null && (context[1].Name != session + "OrganizationCode" || context[1].HasElements || !Fixed(context[1].Value, expectedOrganizationCode)))) return false;
         XElement[] identity = context[0].Elements().ToArray();
-        XElement[] policy = context[1].Elements().ToArray();
+        XElement[] policy = context[policyIndex].Elements().ToArray();
         return identity.Select(value => value.Name).SequenceEqual([session + "Tenant", session + "Installation", session + "Application"]) &&
             identity.All(value => !value.HasElements && !string.IsNullOrWhiteSpace(value.Value)) &&
             policy.Select(value => value.Name).SequenceEqual([session + "Profile", session + "PublishedChecksum"]) &&
             Fixed(policy[0].Value, "typed-session") && policy[1].Value.Length == 64;
     }
 
-    private static string? ReadValidationCandidate(XElement request)
+    private static string? ReadValidationCandidate(XElement request, string? expectedOrganizationCode)
     {
         XNamespace session = TypedSessionNamespace;
         if (request.Name != session + "ValidateSessionRequest" || request.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration)) return null;
         XElement[] root = request.Elements().ToArray();
         if (root.Length != 1 || root[0].Name != session + "Candidate") return null;
         XElement[] candidate = root[0].Elements().ToArray();
-        return candidate.Length == 2 && candidate[0].Name == session + "Provenance" && candidate[1].Name == session + "OpaqueValue" &&
-            Fixed(candidate[0].Value, "interactive_handoff") && !candidate[1].HasElements
-            ? candidate[1].Value
+        int valueIndex = expectedOrganizationCode is null ? 1 : 2;
+        return candidate.Length == valueIndex + 1 && candidate[0].Name == session + "Provenance" && candidate[valueIndex].Name == session + "OpaqueValue" &&
+            (expectedOrganizationCode is null || candidate[1].Name == session + "OrganizationCode" && !candidate[1].HasElements && Fixed(candidate[1].Value, expectedOrganizationCode)) &&
+            Fixed(candidate[0].Value, "interactive_handoff") && !candidate[valueIndex].HasElements
+            ? candidate[valueIndex].Value
             : null;
     }
     private static string NewSession(ConcurrentDictionary<string, DateTimeOffset> sessions, TimeSpan lifetime) { string value = Opaque(); sessions[value] = DateTimeOffset.UtcNow.Add(lifetime); return value; }

@@ -11,10 +11,14 @@ internal static class TypedSessionHandshakeXmlBoundary
 {
     private static readonly UTF8Encoding Utf8 = new(false, true);
 
-    internal static byte[] SerializeRequest(TypedSessionHandshakeAuthorityState state, CancellationToken cancellationToken)
+    internal static byte[] SerializeRequest(
+        TypedSessionHandshakeAuthorityState state,
+        AuthorizedConnectorBindingInputs serverOwnedInputs,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(state);
-        byte[] fragment = SerializeAdapterFragment(state, cancellationToken);
+        ArgumentNullException.ThrowIfNull(serverOwnedInputs);
+        byte[] fragment = SerializeAdapterFragment(state, serverOwnedInputs, cancellationToken);
         XDocument fragmentDocument = SoapXmlBoundary.LoadHardened(fragment, state.Operation.MaximumRequestBytes, cancellationToken);
         XElement wrapper = fragmentDocument.Root ?? throw TypedSessionHandshakeFailures.AdapterRejected();
         if (wrapper.Name != XName.Get("AdapterPayload", "urn:secure-integration:typed-session-handshake:internal") ||
@@ -72,8 +76,10 @@ internal static class TypedSessionHandshakeXmlBoundary
         TypedSessionHandshakeAuthorityState state,
         ExternalSessionCandidate candidate,
         ExternalSessionProvenance provenance,
+        AuthorizedConnectorBindingInputs serverOwnedInputs,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(serverOwnedInputs);
         SoapOperationProfile operation = state.AdmissionOperation ?? throw TypedSessionHandshakeFailures.AdmissionNotSupported();
         ITypedExternalSessionValidationAdapter adapter = state.AdmissionValidationAdapter ?? throw TypedSessionHandshakeFailures.AdmissionNotSupported();
         try
@@ -85,7 +91,7 @@ internal static class TypedSessionHandshakeXmlBoundary
                 try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    adapter.WriteValidationRequest(writer, new(state, candidate, provenance));
+                    adapter.WriteValidationRequest(writer, new(state, candidate, provenance, serverOwnedInputs));
                     cancellationToken.ThrowIfCancellationRequested();
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
@@ -164,7 +170,10 @@ internal static class TypedSessionHandshakeXmlBoundary
         }
     }
 
-    private static byte[] SerializeAdapterFragment(TypedSessionHandshakeAuthorityState state, CancellationToken cancellationToken)
+    private static byte[] SerializeAdapterFragment(
+        TypedSessionHandshakeAuthorityState state,
+        AuthorizedConnectorBindingInputs serverOwnedInputs,
+        CancellationToken cancellationToken)
     {
         try
         {
@@ -175,7 +184,7 @@ internal static class TypedSessionHandshakeXmlBoundary
                 try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    state.RequestAdapter.WriteRequest(writer, new(state));
+                    state.RequestAdapter.WriteRequest(writer, new(state, serverOwnedInputs));
                     cancellationToken.ThrowIfCancellationRequested();
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }

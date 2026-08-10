@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Collections.Frozen;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Xml;
@@ -30,6 +31,8 @@ public interface ITypedSessionHandshakeRequestAdapter
     string AdapterId { get; }
     /// <summary>Closed logical adapter type selected by the Published profile. This is not a CLR reflection type.</summary>
     string AdapterType { get; }
+    /// <summary>Static bounded names that must be mapped to approved server-owned bindings by the Published profile.</summary>
+    IReadOnlySet<string> RequiredServerOwnedInputs => TypedSessionHandshakeAdapterDefaults.NoServerOwnedInputs;
     /// <summary>Writes only the structured children of the exact request element opened by hardened Core.</summary>
     void WriteRequest(XmlWriter writer, TypedSessionHandshakeRequestContext context);
 }
@@ -55,6 +58,8 @@ public interface ITypedExternalSessionValidationAdapter
     string AdapterId { get; }
     /// <summary>Closed logical adapter type selected by the Published validation profile.</summary>
     string AdapterType { get; }
+    /// <summary>Static bounded names that must be mapped to approved server-owned bindings by the Published validation profile.</summary>
+    IReadOnlySet<string> RequiredServerOwnedInputs => TypedSessionHandshakeAdapterDefaults.NoServerOwnedInputs;
     /// <summary>Writes typed children inside the exact validation request element opened by Core.</summary>
     void WriteValidationRequest(XmlWriter writer, ExternalSessionValidationRequestContext context);
     /// <summary>Maps an already bounded and structurally validated exact response payload to a closed result.</summary>
@@ -64,7 +69,11 @@ public interface ITypedExternalSessionValidationAdapter
 /// <summary>Immutable, resolved request inputs derived only from authenticated and Published server state.</summary>
 public sealed class TypedSessionHandshakeRequestContext
 {
-    internal TypedSessionHandshakeRequestContext(TypedSessionHandshakeAuthorityState state) => State = state;
+    internal TypedSessionHandshakeRequestContext(TypedSessionHandshakeAuthorityState state, AuthorizedConnectorBindingInputs serverOwnedInputs)
+    {
+        State = state;
+        ServerOwnedInputs = serverOwnedInputs;
+    }
 
     internal TypedSessionHandshakeAuthorityState State { get; }
     /// <summary>Authenticated Tenant identity.</summary>
@@ -85,6 +94,8 @@ public sealed class TypedSessionHandshakeRequestContext
     public Guid CorrelationId => State.ExecutionContext.CorrelationId;
     /// <summary>Checksum of the immutable Published Connector definition.</summary>
     public string PublishedPolicyChecksum => State.PublishedPolicyChecksum;
+    /// <summary>Exact immutable input set resolved from Published-approved provider bindings for this adapter call.</summary>
+    public AuthorizedConnectorBindingInputs ServerOwnedInputs { get; }
 
     /// <inheritdoc />
     public override string ToString() => $"TypedSessionHandshakeRequestContext(ConnectorId={ConnectorId}, OperationId={OperationId}, ProfileId={ProfileId}, CorrelationId={CorrelationId:D})";
@@ -303,7 +314,11 @@ public sealed class ExternalSessionValidationRequestContext
 {
     private readonly ExternalSessionCandidate candidate;
 
-    internal ExternalSessionValidationRequestContext(TypedSessionHandshakeAuthorityState state, ExternalSessionCandidate candidate, ExternalSessionProvenance provenance)
+    internal ExternalSessionValidationRequestContext(
+        TypedSessionHandshakeAuthorityState state,
+        ExternalSessionCandidate candidate,
+        ExternalSessionProvenance provenance,
+        AuthorizedConnectorBindingInputs serverOwnedInputs)
     {
         this.candidate = candidate;
         TenantId = state.ExecutionContext.TenantId;
@@ -316,6 +331,7 @@ public sealed class ExternalSessionValidationRequestContext
         CorrelationId = state.ExecutionContext.CorrelationId;
         Provenance = provenance;
         PublishedPolicyChecksum = state.PublishedPolicyChecksum;
+        ServerOwnedInputs = serverOwnedInputs;
     }
 
     /// <summary>Owned sensitive bytes valid only for the duration of the adapter call.</summary>
@@ -341,6 +357,8 @@ public sealed class ExternalSessionValidationRequestContext
     public ExternalSessionProvenance Provenance { get; }
     /// <summary>Published immutable definition checksum.</summary>
     public string PublishedPolicyChecksum { get; }
+    /// <summary>Exact immutable input set resolved from Published-approved provider bindings for this validator call.</summary>
+    public AuthorizedConnectorBindingInputs ServerOwnedInputs { get; }
 
     /// <inheritdoc />
     public override string ToString() => $"ExternalSessionValidationRequestContext(ConnectorId={ConnectorId}, OperationId={OperationId}, ProfileId={ProfileId}, CorrelationId={CorrelationId:D}, Redacted=True)";
@@ -436,9 +454,9 @@ public sealed class ResolvedTypedSessionHandshake
 /// <summary>Server-side registry for compiled adapters. Published profiles select exact ID/type pairs.</summary>
 public sealed class TypedSessionHandshakeAdapterRegistry
 {
-    private readonly Dictionary<(string Id, string Type), ITypedSessionHandshakeRequestAdapter> requests;
+    private readonly Dictionary<(string Id, string Type), RegisteredRequestAdapter> requests;
     private readonly Dictionary<(string Id, string Type), ITypedSessionHandshakeResponseAdapter> responses;
-    private readonly Dictionary<(string Id, string Type), ITypedExternalSessionValidationAdapter> validationAdapters;
+    private readonly Dictionary<(string Id, string Type), RegisteredValidationAdapter> validationAdapters;
 
     /// <summary>Creates an immutable bounded registry during trusted server composition.</summary>
     public TypedSessionHandshakeAdapterRegistry(
@@ -446,20 +464,58 @@ public sealed class TypedSessionHandshakeAdapterRegistry
         IEnumerable<ITypedSessionHandshakeResponseAdapter> responseAdapters,
         IEnumerable<ITypedExternalSessionValidationAdapter>? admissionValidationAdapters = null)
     {
-        requests = Index(requestAdapters, value => value.AdapterId, value => value.AdapterType, "request");
+        requests = IndexRequests(requestAdapters);
         responses = Index(responseAdapters, value => value.AdapterId, value => value.AdapterType, "response");
-        validationAdapters = Index(admissionValidationAdapters ?? [], value => value.AdapterId, value => value.AdapterType, "validationAdapter");
+        validationAdapters = IndexValidation(admissionValidationAdapters ?? []);
         if (requests.Count > 256 || responses.Count > 256 || validationAdapters.Count > 256) throw TypedSessionHandshakeFailures.Configuration();
     }
 
-    internal ITypedSessionHandshakeRequestAdapter Request(string id, string type) => requests.TryGetValue((id, type), out ITypedSessionHandshakeRequestAdapter? value)
+    internal RegisteredRequestAdapter Request(string id, string type) => requests.TryGetValue((id, type), out RegisteredRequestAdapter? value)
         ? value : throw TypedSessionHandshakeFailures.AdapterUnavailable();
     internal ITypedSessionHandshakeResponseAdapter Response(string id, string type) => responses.TryGetValue((id, type), out ITypedSessionHandshakeResponseAdapter? value)
         ? value : throw TypedSessionHandshakeFailures.AdapterUnavailable();
-    internal ITypedExternalSessionValidationAdapter? Validation(string? id, string? type) => id is null && type is null
+    internal RegisteredValidationAdapter? Validation(string? id, string? type) => id is null && type is null
         ? null
-        : id is not null && type is not null && validationAdapters.TryGetValue((id, type), out ITypedExternalSessionValidationAdapter? value)
+        : id is not null && type is not null && validationAdapters.TryGetValue((id, type), out RegisteredValidationAdapter? value)
             ? value : throw TypedSessionHandshakeFailures.AdapterUnavailable();
+
+    private static Dictionary<(string Id, string Type), RegisteredRequestAdapter> IndexRequests(
+        IEnumerable<ITypedSessionHandshakeRequestAdapter> values)
+    {
+        Dictionary<(string Id, string Type), RegisteredRequestAdapter> result = [];
+        foreach (ITypedSessionHandshakeRequestAdapter value in values ?? throw new ArgumentNullException(nameof(values)))
+        {
+            FrozenSet<string> required = RequiredInputs(value.RequiredServerOwnedInputs);
+            if (!TypedSessionHandshakeValidation.Identifier(value.AdapterId) || !TypedSessionHandshakeValidation.Identifier(value.AdapterType) ||
+                !result.TryAdd((value.AdapterId, value.AdapterType), new(value, required)))
+                throw TypedSessionHandshakeFailures.Configuration();
+        }
+        return result;
+    }
+
+    private static Dictionary<(string Id, string Type), RegisteredValidationAdapter> IndexValidation(
+        IEnumerable<ITypedExternalSessionValidationAdapter> values)
+    {
+        Dictionary<(string Id, string Type), RegisteredValidationAdapter> result = [];
+        foreach (ITypedExternalSessionValidationAdapter value in values ?? throw new ArgumentNullException(nameof(values)))
+        {
+            FrozenSet<string> required = RequiredInputs(value.RequiredServerOwnedInputs);
+            if (!TypedSessionHandshakeValidation.Identifier(value.AdapterId) || !TypedSessionHandshakeValidation.Identifier(value.AdapterType) ||
+                !result.TryAdd((value.AdapterId, value.AdapterType), new(value, required)))
+                throw TypedSessionHandshakeFailures.Configuration();
+        }
+        return result;
+    }
+
+    private static FrozenSet<string> RequiredInputs(IReadOnlySet<string>? values)
+    {
+        string[] snapshot = values?.ToArray() ?? throw TypedSessionHandshakeFailures.Configuration();
+        if (snapshot.Length > AuthorizedConnectorBindingInputs.MaximumInputs || snapshot.Any(value => !TypedSessionHandshakeValidation.Identifier(value)))
+            throw TypedSessionHandshakeFailures.Configuration();
+        FrozenSet<string> required = snapshot.ToFrozenSet(StringComparer.Ordinal);
+        if (required.Count != snapshot.Length) throw TypedSessionHandshakeFailures.Configuration();
+        return required;
+    }
 
     private static Dictionary<(string Id, string Type), T> Index<T>(IEnumerable<T> values, Func<T, string> id, Func<T, string> type, string parameter)
     {
@@ -485,12 +541,14 @@ internal sealed class TypedSessionHandshakeAuthorityState
     internal required SoapOperationProfile Operation { get; init; }
     internal required ResolvedBasicCredentialBinding? BasicCredential { get; init; }
     internal required ITypedSessionHandshakeRequestAdapter RequestAdapter { get; init; }
+    internal required IReadOnlyList<ServerOwnedBindingInputReference> RequestBindingInputs { get; init; }
     internal required ITypedSessionHandshakeResponseAdapter ResponseAdapter { get; init; }
     internal required TimeSpan LocalMaximumSessionLifetime { get; init; }
     internal required string PublishedPolicyChecksum { get; init; }
     internal required string ResourceStamp { get; init; }
     internal required string SecurityFingerprint { get; init; }
     internal ITypedExternalSessionValidationAdapter? AdmissionValidationAdapter { get; init; }
+    internal IReadOnlyList<ServerOwnedBindingInputReference> AdmissionBindingInputs { get; init; } = [];
     internal Uri? AdmissionEndpoint { get; init; }
     internal SoapOperationProfile? AdmissionOperation { get; init; }
     internal TimeSpan AdmissionIntentLifetime { get; init; }
@@ -500,6 +558,19 @@ internal sealed class TypedSessionHandshakeAuthorityState
     internal SoapSessionCacheKey CacheKey => new(ExecutionContext.TenantId, ExecutionContext.InstallationId, ExecutionContext.ApplicationId,
         ExecutionContext.EnvironmentId, ExecutionContext.ConnectorId, ExecutionContext.ConnectorVersion, ExecutionContext.BindingRevision,
         ExecutionContext.EndpointRevision, ExecutionContext.CredentialRevision, ProfileId);
+}
+
+internal sealed record RegisteredRequestAdapter(
+    ITypedSessionHandshakeRequestAdapter Adapter,
+    IReadOnlySet<string> RequiredServerOwnedInputs);
+
+internal sealed record RegisteredValidationAdapter(
+    ITypedExternalSessionValidationAdapter Adapter,
+    IReadOnlySet<string> RequiredServerOwnedInputs);
+
+internal static class TypedSessionHandshakeAdapterDefaults
+{
+    internal static readonly IReadOnlySet<string> NoServerOwnedInputs = Array.Empty<string>().ToFrozenSet(StringComparer.Ordinal);
 }
 
 internal static class TypedSessionHandshakeValidation
@@ -524,4 +595,6 @@ internal static class TypedSessionHandshakeFailures
     internal static SoapAuthException ValidationRejected() => new("SOAP-ADMISSION-VALIDATION-REJECTED");
     internal static SoapAuthException ValidationFailed() => new("SOAP-ADMISSION-VALIDATION-FAILED");
     internal static SoapAuthException RemoteExpiryInvalid() => new("SOAP-ADMISSION-REMOTE-EXPIRY-INVALID");
+    internal static SoapAuthException BindingInputRejected() => new("SOAP-TYPED-BINDING-INPUT-REJECTED");
+    internal static SoapAuthException BindingInputUnavailable() => new("SOAP-TYPED-BINDING-INPUT-UNAVAILABLE");
 }

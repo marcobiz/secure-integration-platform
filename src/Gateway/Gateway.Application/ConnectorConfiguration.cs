@@ -306,10 +306,23 @@ public static class ConnectorOperationBindings
         if (operation.TryGetProperty("typedSessionHandshake", out JsonElement handshake) &&
             handshake.TryGetProperty("externalAdmission", out JsonElement admission))
             authorityEndpoints.Add(admission.GetProperty("endpointBinding").GetString()!);
+        if (operation.TryGetProperty("typedSessionHandshake", out handshake))
+        {
+            AddServerOwnedInputs(handshake, secrets);
+            if (handshake.TryGetProperty("externalAdmission", out admission)) AddServerOwnedInputs(admission, secrets);
+        }
+        if (operation.TryGetProperty("authorizedCapabilities", out JsonElement capabilities))
+            certificates.Add(capabilities.GetProperty("signing").GetProperty("keyBinding").GetString()!);
         return new(operationId, operation.GetProperty("endpointBinding").GetString()!,
             authorityEndpoints.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             secrets.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             certificates.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray());
+
+        static void AddServerOwnedInputs(JsonElement container, List<string> target)
+        {
+            if (!container.TryGetProperty("serverOwnedInputs", out JsonElement inputs)) return;
+            foreach (JsonElement input in inputs.EnumerateArray()) target.Add(input.GetProperty("secretBinding").GetString()!);
+        }
     }
 }
 
@@ -395,19 +408,16 @@ public static class ConnectorApprovalArtifacts
             authorityEndpoints.Add(new("session-admission-validation", ReviewEndpoint(logical, binding, admissionEndpoint, ["POST"], "deny")));
         }
         List<ApprovalSecretReview> secrets = [];
-        foreach (string property in new[] { "usernameBinding", "passwordBinding", "secretBinding" })
+        foreach (string logical in dependencies.SecretBindingIds)
         {
-            if (!authentication.TryGetProperty(property, out JsonElement logicalElement)) continue;
-            string logical = logicalElement.GetString()!;
             if (!binding.SecretResources.TryGetValue(logical, out ProviderResourceBinding? resource)) throw new GatewayException("BGW-CONNECTOR-SECRET-BINDING-MISSING", 503);
             secrets.Add(new(logical, binding.Revision, resource.ProviderDisplayName, resource.ProviderType, resource.ProviderId, resource.ResourceId, resource.ResourceType.ToString(), resource.Version,
                 resource.CatalogRevision, resource.PublicMetadataRevision, binding.EnvironmentId.ToString("D"), resource.ConnectorScope, resource.OperationScope,
                 resource.CatalogChecksumSha256, Component(logical, resource), binding.ChecksumSha256));
         }
         List<ApprovalCertificateReview> certificates = [];
-        if (authentication.TryGetProperty("certificateBinding", out JsonElement certificateElement))
+        foreach (string logical in dependencies.CertificateBindingIds)
         {
-            string logical = certificateElement.GetString()!;
             if (!binding.CertificateResources.TryGetValue(logical, out ProviderResourceBinding? resource)) throw new GatewayException("BGW-CONNECTOR-CERTIFICATE-BINDING-MISSING", 503);
             CertificatePublicMetadata metadata = resource.CertificateMetadata ?? throw new GatewayException("BGW-PROVIDER-CERTIFICATE-METADATA-REQUIRED", 409);
             certificates.Add(new(logical, binding.Revision, resource.ProviderDisplayName, resource.ProviderType, resource.ProviderId, resource.ResourceId,
@@ -640,7 +650,14 @@ public sealed class ConnectorDefinitionValidator
                 if (!MediaTypeHeaderValue.TryParse(contentType, out MediaTypeHeaderValue? parsedContentType) ||
                     !string.Equals(parsedContentType.MediaType, expectedMediaType, StringComparison.OrdinalIgnoreCase))
                     issues.Add(new("BGW-CONNECTOR-TYPED-HANDSHAKE-CONTENT-TYPE", $"$.operations[{index}].request.contentType"));
+                ValidateServerOwnedInputs(handshake, secrets, issues, $"$.operations[{index}].typedSessionHandshake");
+                if (handshake.TryGetProperty("externalAdmission", out admission))
+                    ValidateServerOwnedInputs(admission, secrets, issues, $"$.operations[{index}].typedSessionHandshake.externalAdmission");
             }
+            if (operation.TryGetProperty("extensionConfiguration", out JsonElement extensionConfiguration))
+                ValidateExtensionConfiguration(extensionConfiguration, issues, $"$.operations[{index}].extensionConfiguration");
+            if (operation.TryGetProperty("authorizedCapabilities", out JsonElement capabilities))
+                ValidateAuthorizedCapabilities(operation, authentication, capabilities, secrets, issues, index);
             bool idempotent = operation.TryGetProperty("idempotent", out JsonElement idempotentElement) && idempotentElement.GetBoolean();
             int retries = operation.TryGetProperty("maximumRetries", out JsonElement retriesElement) ? retriesElement.GetInt32() : 0;
             if (retries > 0 && !idempotent) issues.Add(new("BGW-CONNECTOR-RETRY-REQUIRES-IDEMPOTENCY", $"$.operations[{index}].maximumRetries"));
@@ -653,6 +670,69 @@ public sealed class ConnectorDefinitionValidator
             ValidateAuthentication(operation, authentication, secrets, issues, index);
             index++;
         }
+    }
+
+    private static void ValidateServerOwnedInputs(
+        JsonElement container,
+        Dictionary<string, string> secrets,
+        List<ConnectorValidationIssue> issues,
+        string location)
+    {
+        if (!container.TryGetProperty("serverOwnedInputs", out JsonElement inputs)) return;
+        HashSet<string> names = new(StringComparer.Ordinal);
+        int inputIndex = 0;
+        foreach (JsonElement input in inputs.EnumerateArray())
+        {
+            string name = input.GetProperty("name").GetString()!;
+            string binding = input.GetProperty("secretBinding").GetString()!;
+            if (!names.Add(name)) issues.Add(new("BGW-CONNECTOR-SERVER-INPUT-DUPLICATE", $"{location}.serverOwnedInputs[{inputIndex}].name"));
+            if (!secrets.TryGetValue(binding, out string? kind) || !string.Equals(kind, "opaque", StringComparison.Ordinal))
+                issues.Add(new("BGW-CONNECTOR-SERVER-INPUT-BINDING-INVALID", $"{location}.serverOwnedInputs[{inputIndex}].secretBinding"));
+            inputIndex++;
+        }
+    }
+
+    private static void ValidateExtensionConfiguration(
+        JsonElement configuration,
+        List<ConnectorValidationIssue> issues,
+        string location)
+    {
+        int bytes = Encoding.UTF8.GetByteCount(configuration.GetRawText());
+        int nodes = 0;
+        if (bytes > AuthorizedPublishedExtensionConfiguration.MaximumJsonBytes || !Visit(configuration, 1, ref nodes))
+            issues.Add(new("BGW-CONNECTOR-EXTENSION-CONFIGURATION-BOUNDS", location));
+
+        static bool Visit(JsonElement value, int depth, ref int nodes)
+        {
+            nodes++;
+            if (depth > AuthorizedPublishedExtensionConfiguration.MaximumDepth || nodes > 256) return false;
+            if (value.ValueKind == JsonValueKind.Object)
+                foreach (JsonProperty property in value.EnumerateObject())
+                    if (!Visit(property.Value, depth + 1, ref nodes)) return false;
+            if (value.ValueKind == JsonValueKind.Array)
+                foreach (JsonElement item in value.EnumerateArray())
+                    if (!Visit(item, depth + 1, ref nodes)) return false;
+            return true;
+        }
+    }
+
+    private static void ValidateAuthorizedCapabilities(
+        JsonElement operation,
+        JsonElement authentication,
+        JsonElement capabilities,
+        Dictionary<string, string> secrets,
+        List<ConnectorValidationIssue> issues,
+        int operationIndex)
+    {
+        string location = $"$.operations[{operationIndex}].authorizedCapabilities";
+        if (!string.Equals(authentication.GetProperty("kind").GetString(), "mtls", StringComparison.Ordinal))
+            issues.Add(new("BGW-CONNECTOR-CAPABILITY-AUTH-INVALID", $"$.operations[{operationIndex}].authentication.kind"));
+        if (!operation.TryGetProperty("executionStrategy", out _))
+            issues.Add(new("BGW-CONNECTOR-CAPABILITY-STRATEGY-REQUIRED", $"$.operations[{operationIndex}].executionStrategy"));
+        JsonElement signing = capabilities.GetProperty("signing");
+        string keyBinding = signing.GetProperty("keyBinding").GetString()!;
+        if (!secrets.TryGetValue(keyBinding, out string? kind) || !string.Equals(kind, "clientCertificate", StringComparison.Ordinal))
+            issues.Add(new("BGW-CONNECTOR-CAPABILITY-SIGNING-BINDING-INVALID", $"{location}.signing.keyBinding"));
     }
 
     private static Dictionary<string, string> UniqueBindings(JsonElement values, List<ConnectorValidationIssue> issues, string category, bool includeKind = false)
@@ -831,10 +911,9 @@ public sealed class ConnectorAdministrationService(
             {
                 string operationId = operation.GetProperty("operationId").GetString()!;
                 JsonElement authentication = operation.GetProperty("authentication");
-                foreach (string property in new[] { "usernameBinding", "passwordBinding", "secretBinding", "certificateBinding" })
+                OperationBindingDependencies dependencies = ConnectorOperationBindings.Required(reference.CanonicalJson, operationId);
+                foreach (string logical in dependencies.SecretBindingIds.Concat(dependencies.CertificateBindingIds))
                 {
-                    if (!authentication.TryGetProperty(property, out JsonElement logicalElement)) continue;
-                    string logical = logicalElement.GetString()!;
                     if (!operationScopes.TryGetValue(logical, out HashSet<string>? scopes)) operationScopes.Add(logical, scopes = new(StringComparer.Ordinal));
                     scopes.Add(operationId);
                 }
@@ -986,7 +1065,13 @@ public sealed class PublishedConnectorCatalog(
                     : null);
             _ = new GatewayOperationCatalog([definition]);
             ConnectorExecutionStrategyKey strategyKey = ConnectorExecutionStrategyKeys.Resolve(definition);
-            operations.Add(operationId, new(definition, AuthorizedPublishedExecutionStamp.Capture(snapshot, snapshot.Bindings.EnvironmentId, definition, strategyKey)));
+            byte[] extensionConfiguration = operation.TryGetProperty("extensionConfiguration", out JsonElement extension)
+                ? Encoding.UTF8.GetBytes(extension.GetRawText())
+                : "{}"u8.ToArray();
+            operations.Add(operationId, new(
+                definition,
+                AuthorizedPublishedExecutionStamp.Capture(snapshot, snapshot.Bindings.EnvironmentId, definition, strategyKey),
+                new AuthorizedPublishedExtensionConfiguration(extensionConfiguration)));
         }
         return new(snapshot.Stamp, clock.UtcNow.Add(ttl), operations);
     }

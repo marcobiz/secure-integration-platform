@@ -10,7 +10,8 @@ namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 /// </summary>
 internal sealed class AuthorizedConnectorCapabilityDispatcher(
     TypedSessionHandshakeRuntime handshakes,
-    ComposedSoapExecutionStrategy composedSoap) : IAuthorizedConnectorCapabilityDispatcher
+    ComposedSoapExecutionStrategy composedSoap,
+    IAuthorizedVerticalCapabilityRuntime verticalCapabilities) : IAuthorizedConnectorCapabilityDispatcher
 {
     private static readonly JsonSerializerOptions ResultJson = CreateResultJson();
 
@@ -31,6 +32,17 @@ internal sealed class AuthorizedConnectorCapabilityDispatcher(
         {
             throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-STALE", 503, true);
         }
+        catch (SoapAuthException exception) when (exception.Code is
+            "SOAP-TYPED-BINDING-INPUT-UNAVAILABLE" or
+            "SOAP-TRANSPORT-FAILED" or
+            "SOAP-TIMEOUT")
+        {
+            throw new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502);
+        }
+        catch (SoapAuthException)
+        {
+            throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+        }
     }
 
     public Task<QualifiedGatewayExecutionResult> ExecuteComposedSoapAsync(
@@ -39,6 +51,26 @@ internal sealed class AuthorizedConnectorCapabilityDispatcher(
     {
         ArgumentNullException.ThrowIfNull(execution);
         return composedSoap.ExecuteAuthorizedCapabilityAsync(execution, cancellationToken);
+    }
+
+    public Task<string> CreateSignedTokenAsync(
+        AuthorizedConnectorExecution execution,
+        IReadOnlyDictionary<string, JsonElement> claims,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(execution);
+        ArgumentNullException.ThrowIfNull(claims);
+        return verticalCapabilities.CreateSignedTokenAsync(execution, claims, cancellationToken);
+    }
+
+    public Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
+        AuthorizedConnectorExecution execution,
+        AuthorizedConnectorRestrictedTransportRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(execution);
+        ArgumentNullException.ThrowIfNull(request);
+        return verticalCapabilities.ExecuteRestrictedTransportAsync(execution, request, cancellationToken);
     }
 
     private static JsonSerializerOptions CreateResultJson()

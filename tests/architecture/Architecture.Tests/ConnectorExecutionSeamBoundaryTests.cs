@@ -15,18 +15,21 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         string[] references = project.Descendants("ProjectReference")
             .Select(element => (string?)element.Attribute("Include") ?? string.Empty)
             .ToArray();
-        Assert.Single(references);
-        Assert.EndsWith("Gateway.Application.csproj", references[0], StringComparison.Ordinal);
+        Assert.Equal(2, references.Length);
+        Assert.Contains(references, value => value.EndsWith("Gateway.Application.csproj", StringComparison.Ordinal));
+        Assert.Contains(references, value => value.EndsWith("Gateway.ConnectorRuntime.Auth.Soap.csproj", StringComparison.Ordinal));
 
         string source = string.Join('\n', Directory.EnumerateFiles(supportRoot, "*.cs").Select(File.ReadAllText));
         Assert.DoesNotContain("InternalsVisibleTo", source, StringComparison.Ordinal);
         Assert.DoesNotContain("System.Reflection", source, StringComparison.Ordinal);
         Assert.DoesNotContain("IServiceCollection", source, StringComparison.Ordinal);
         Assert.DoesNotContain("AuthenticateAsync", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("ISecretValueProvider", source, StringComparison.Ordinal);
         Assert.DoesNotContain("IClientCertificateProvider", source, StringComparison.Ordinal);
         Assert.Contains("execution.Capabilities.ExecuteTypedSessionHandshakeAsync", source, StringComparison.Ordinal);
         Assert.Contains("execution.Capabilities.ExecuteComposedSoapAsync", source, StringComparison.Ordinal);
+        Assert.Contains("execution.Capabilities.CreateSignedTokenAsync", source, StringComparison.Ordinal);
+        Assert.Contains("execution.Capabilities.ExecuteRestrictedTransportAsync", source, StringComparison.Ordinal);
+        Assert.Contains("SyntheticSecretProviderDependencyStrategy", source, StringComparison.Ordinal);
         Assert.Contains("SyntheticServiceProviderDependencyModule", source, StringComparison.Ordinal);
         Assert.Contains("SyntheticStrategyCollectionDependencyModule", source, StringComparison.Ordinal);
 
@@ -119,7 +122,7 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         string runtime = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "OperationServices.cs"));
 
         Assert.Contains("private sealed class AuthorizedConnectorCapabilityBridge", contracts, StringComparison.Ordinal);
-        Assert.Contains("Interlocked.CompareExchange(ref consumed, 1, 0)", contracts, StringComparison.Ordinal);
+        Assert.Contains("Interlocked.CompareExchange(ref consumedCapabilities, updated, observed)", contracts, StringComparison.Ordinal);
         Assert.Contains("ReferenceEquals(Current.Value, this)", contracts, StringComparison.Ordinal);
         Assert.Contains("execution.Owns(exception)", runtime, StringComparison.Ordinal);
         Assert.Contains("AcquireAuthorizedAsync", dispatcher, StringComparison.Ordinal);
@@ -130,6 +133,31 @@ public sealed class ConnectorExecutionSeamBoundaryTests
             "IConnectorConfigurationStore", "IRestrictedTransport", "Uri ", "string profileId", "string endpoint"
         })
             Assert.DoesNotContain(forbidden, contracts, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Wave1_CT_capability_completion_has_no_token_provider_store_or_authenticated_HTTP_escape()
+    {
+        string publicContracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "AuthorizedVerticalCapabilityContracts.cs"));
+        string bindingInputs = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.ConnectorRuntime.Auth.Soap", "AuthorizedConnectorBindingInputs.cs"));
+        string hostRuntime = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "AuthorizedVerticalCapabilityRuntime.cs"));
+        string migration = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0012_connector_capability_locator_scope.sql"));
+
+        Assert.Contains("internal string CompactToken", publicContracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public string CompactToken", publicContracts, StringComparison.Ordinal);
+        Assert.Contains("internal ReadOnlyMemory<byte> Body", publicContracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpRequestMessage", publicContracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("Uri", publicContracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("Provider", publicContracts, StringComparison.Ordinal);
+        Assert.Contains("public void WriteRequiredXmlValue", bindingInputs, StringComparison.Ordinal);
+        Assert.DoesNotContain("public string Get", bindingInputs, StringComparison.Ordinal);
+        Assert.DoesNotContain("public string ProviderReference", bindingInputs, StringComparison.Ordinal);
+        Assert.Contains("execution.PublishedAuthority.Matches(snapshot)", hostRuntime, StringComparison.Ordinal);
+        Assert.Contains("PurposeBoundMutualTlsSender", hostRuntime, StringComparison.Ordinal);
+        Assert.Contains("Rs256JwtSigner", hostRuntime, StringComparison.Ordinal);
+        Assert.Contains("authorizedCapabilities' -> 'signing' ->> 'keyBinding'", migration, StringComparison.Ordinal);
+        Assert.Contains("typedSessionHandshake' -> 'serverOwnedInputs'", migration, StringComparison.Ordinal);
+        Assert.Contains("installation_connector_grant", migration, StringComparison.Ordinal);
     }
 
     [Fact]

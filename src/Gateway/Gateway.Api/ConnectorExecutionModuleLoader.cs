@@ -4,6 +4,7 @@ using System.Reflection.PortableExecutable;
 using System.Runtime.Loader;
 using Microsoft.Extensions.DependencyInjection;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 
 namespace SecureIntegration.Gateway.Api;
 
@@ -219,7 +220,11 @@ internal static class ConnectorExecutionModuleLoader
         private readonly List<ServiceDescriptor> descriptors = [];
         private readonly Dictionary<Type, Type> moduleServices = [];
         private readonly List<Type> implementations = [];
+        private readonly HashSet<Type> adapterImplementations = [];
         private int validatedNodes;
+        private int requestAdapterCount;
+        private int responseAdapterCount;
+        private int validationAdapterCount;
 
         internal ConnectorExecutionStrategyRegistrar(IServiceCollection services, Assembly moduleAssembly)
         {
@@ -253,6 +258,15 @@ internal static class ConnectorExecutionModuleLoader
             StrategyCount++;
         }
 
+        public void AddTypedSessionHandshakeRequestAdapter<TAdapter>() where TAdapter : class =>
+            RegisterAdapter(typeof(ITypedSessionHandshakeRequestAdapter), typeof(TAdapter), ref requestAdapterCount);
+
+        public void AddTypedSessionHandshakeResponseAdapter<TAdapter>() where TAdapter : class =>
+            RegisterAdapter(typeof(ITypedSessionHandshakeResponseAdapter), typeof(TAdapter), ref responseAdapterCount);
+
+        public void AddExternalSessionValidationAdapter<TAdapter>() where TAdapter : class =>
+            RegisterAdapter(typeof(ITypedExternalSessionValidationAdapter), typeof(TAdapter), ref validationAdapterCount);
+
         internal void ValidateAndCommit()
         {
             HashSet<Type> validated = [];
@@ -275,6 +289,19 @@ internal static class ConnectorExecutionModuleLoader
                 throw new InvalidOperationException("Connector execution module service registration is invalid or duplicated.");
             descriptors.Add(ServiceDescriptor.Singleton(service, implementation));
             implementations.Add(implementation);
+        }
+
+        private void RegisterAdapter(Type contract, Type implementation, ref int categoryCount)
+        {
+            RequireRegistrationCapacity();
+            RequireModuleOwned(implementation);
+            RequireConstructible(implementation);
+            if (!contract.IsAssignableFrom(implementation) || categoryCount >= MaximumStrategiesPerModule ||
+                !adapterImplementations.Add(implementation))
+                throw new InvalidOperationException("Connector execution module adapter registration is invalid, duplicated or full.");
+            descriptors.Add(ServiceDescriptor.Singleton(contract, implementation));
+            implementations.Add(implementation);
+            categoryCount++;
         }
 
         private void ValidateConstructorGraph(

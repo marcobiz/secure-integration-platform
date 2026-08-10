@@ -6,5 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\Gateway\Gateway.Application\Gateway.Application.csproj" />
+    <ProjectReference Include="..\..\..\src\Gateway\Gateway.ConnectorRuntime.Auth.Soap\Gateway.ConnectorRuntime.Auth.Soap.csproj" />
   </ItemGroup>
 </Project>

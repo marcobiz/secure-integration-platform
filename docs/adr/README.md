@@ -27,3 +27,4 @@ Formato: contesto, decisione, conseguenze e alternative. Tutti gli ADR elencati 
 | [0021](0021-regional-eprescription-commonality.md) | Regional ePrescription commonality and profile boundary |
 | [0022](0022-typed-session-handshake-and-external-admission.md) | Typed session handshake and authorized external admission |
 | [0023](0023-provider-neutral-connector-execution-seam.md) | Provider-neutral Connector execution seam |
+| [0024](0024-connector-capability-completion.md) | Connector capability completion |

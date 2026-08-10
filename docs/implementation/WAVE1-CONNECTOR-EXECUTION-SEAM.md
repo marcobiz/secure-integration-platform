@@ -52,7 +52,7 @@ runtime installation, remote resolution, reload, unload or tenant-specific activ
 ## Authorized capability bridge
 
 `AuthorizedConnectorExecution.Capabilities` is the only sanctioned delegation path from an
-external strategy to existing qualified capabilities. Its public interface has exactly two methods:
+external strategy to existing qualified capabilities. ADR-0023 initially admitted two methods:
 
 - `ExecuteTypedSessionHandshakeAsync(CancellationToken)` validates the current store state against
   the initially authorized Published operation, derives its profile and reuses
@@ -65,6 +65,11 @@ transport or an arbitrary capability key. The concrete bridge is private, constr
 handoff, active only inside the owning strategy call and consumed once. A mutable active-scope check
 plus exact bridge identity prevents a retained bridge from being invoked by a later execution,
 including an inherited asynchronous execution context.
+
+ADR-0024 adds only the signing and restricted-transport methods required by the qualified
+capability-completion case. They preserve the same current-scope/exact-stamp enforcement and expose
+no selectors; their complete API inventory and verification are in
+`WAVE1-CONNECTOR-CAPABILITY-COMPLETION.md`.
 
 The internal stamp binds Connector/version IDs, semantic version, publication revision, canonical
 definition checksum, binding ID/revision/checksum, resource stamp, operation checksum,
@@ -115,7 +120,7 @@ referenced key.
 | `IConnectorExecutionModule.Id` and `RegisterExecutionStrategies` | explicit startup hook | gets only the restricted registrar and is invoked once at startup |
 | `IConnectorExecutionStrategyRegistrar.AddSingleton` overloads and `AddStrategy` | register module-owned dependencies and strategies | implementation rejects non-module-owned types and bounds registrations |
 | `AuthorizedConnectorExecution` identity/version/operation/correlation/auth/key/content-type/length getters, `OpenPayloadStream` and `Capabilities` | read safe facts/business payload and invoke only sanctioned current-operation capabilities | no public constructor/factory/setter; payload is copied; the private bridge is scope-bound and one-shot |
-| `IAuthorizedConnectorCapabilityBridge.ExecuteTypedSessionHandshakeAsync` and `ExecuteComposedSoapAsync` | reuse the two existing qualified host capabilities without friend access | no selector parameters or exported implementation; exact current authority only |
+| `IAuthorizedConnectorCapabilityBridge.ExecuteTypedSessionHandshakeAsync` and `ExecuteComposedSoapAsync` | reuse the two original qualified host capabilities without friend access | no selector parameters or exported implementation; exact current authority only |
 | `GatewayOperationDefinition.ExecutionStrategy` | carry the already parsed Published choice through the internal catalog/runtime boundary | record is existing server-side catalog data; caller wire contracts cannot populate it |
 | `GatewayOperationConfiguration.ExecutionStrategy` | bind an explicitly configured development/runtime catalog entry | startup configuration only; validated into the same key type |
 | `GatewayHostOptions.ExecutionModules`; `GatewayExecutionModuleOptions` and its four properties | bind the deployment allowlist | startup configuration only; the loader revalidates every field before loading |

@@ -162,7 +162,14 @@ public sealed class RestrictedEgressService
         ConnectorExecutionStrategyKey strategyKey = ConnectorExecutionStrategyKeys.Resolve(operation);
         ConnectorExecutionStrategyRegistration registration = executionStrategyRegistry.Required(strategyKey, operation.Authentication);
         AuthorizedGatewayInvocation invocation = new(authenticated, connectorId, operationId);
-        AuthorizedConnectorExecution execution = new(invocation, operation, strategyKey, body, capabilityDispatcher, published?.Authority);
+        AuthorizedConnectorExecution execution = new(
+            invocation,
+            operation,
+            strategyKey,
+            body,
+            capabilityDispatcher,
+            published?.Authority,
+            published?.ExtensionConfiguration);
         QualifiedGatewayExecutionResult result;
         try
         {

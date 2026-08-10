@@ -107,10 +107,13 @@ internal sealed class StaticHostResolver(params IPAddress[] addresses) : IAuthen
 {
     public int Calls { get; private set; }
 
+    public Action? OnResolve { get; init; }
+
     public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Calls++;
+        OnResolve?.Invoke();
         return Task.FromResult(addresses);
     }
 }

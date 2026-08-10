@@ -21,6 +21,7 @@ Aggiornato: 2026-08-10
 | Wave 1 — Typed composed SOAP authenticated dispatch | Remediation product gate locale PASS; CI exact-head e re-review pending | strategia runtime production exact-kind post grant/Published, Basic helper non esportato, compatibilità Connector v1 preservata; 433 ordinary PASS + 23 PG conditional, 124/124 Gateway integration con PostgreSQL, 99 unit mirati, 20 real-HTTPS regression, 11/11 store→publish→runtime→TLS, 24 architecture e `FULLSTACK-01` PASS; nessun connector production |
 | Wave 1 — Typed SOAP session handshake + authorized external admission | Shared-lifecycle wiring remediation qualificata localmente; CI exact-head e targeted re-review pending | PR #23 commit `f08eb9762fcc21dc7d6d7ba236cf6a80840dfac9`: `OpaqueSessionLeaseProvider` è l'alias del lifecycle singleton posseduto da `SoapSessionClient`; vero host `Program`/HTTP/BGW1/Published/`ComposedSoapExecutionStrategy` riusa la sessione promossa senza reacquire; 120 unit session/composed, 38 integration mirati, 509 ordinary e 10×133 PostgreSQL integration PASS |
 | Wave 1 — Provider-neutral Connector execution seam | Ultima remediation mirata implementata; full gate/CI exact-head e targeted re-review pending | bridge no-IVT vincolato allo snapshot Published iniziale con stale A→B zero-effect; full lifecycle PostgreSQL aggiunto; negativi cross-module/ciclo descriptor-atomic; loader invariato |
+| Wave 1 — Connector capability completion | Implementata; qualificazione exact-head/CI e review indipendente pending | tre adapter esistenti registrabili da modulo esterno, input server-owned exact-Published, profilo verticale bounded, signing RS256/x5c opaco e restricted HTTPS/mTLS invocation-bound; E2E reali in-memory e PostgreSQL 18 PASS senza connector production |
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | Wave 1 - Generic JWT/X.509 extensions | Remediation mirata local gate PASS; CI exact-head e rereview pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 304 ordinary, 71 PostgreSQL relevant, scan/SBOM/vulnerability/Core export PASS |
 | Healthcare Wave 1 — Regional ePrescription | Foundation compilata; profili regionali non pubblicabili | capability opaca Core post-auth con stato/grant verificati indipendentemente dalle credenziali, adapter al vero store Published, schema estensioni e safe-code allowlist server-owned, isolamento cross-profile; 14 test pack + 4 architecture PASS locali; Lombardia ed Emilia-Romagna `BLOCKED_BY_SPEC` |
@@ -224,6 +225,34 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
   vulnerability inventory, SBOM container da 165 pacchetti e Core export verificato PASS.
   Exact-head CI resta il gate di handoff sul commit candidato; merge non autorizzato;
 - decisione: ADR-0023 e `docs/implementation/WAVE1-CONNECTOR-EXECUTION-SEAM.md`.
+
+### Wave 1 — Connector capability completion
+
+- `AuthorizedConnectorExecution` proietta una copia bounded dell'esatto
+  `extensionConfiguration` Published senza esporre stamp, store o autorità di mutazione;
+- il registrar ristretto ammette soltanto i tre contratti adapter già consumati dal runtime typed
+  session (request, response, external validation); ownership del modulo, duplicati, limiti e grafo
+  costruttori restano fail-closed prima del commit DI;
+- request e validator dichiarano nomi statici bounded; il profilo Published li associa uno-a-uno a
+  binding opachi approvati. Core risolve i locator e fornisce una view non costruibile con sola
+  scrittura XML nominata, senza getter stringa/provider reference;
+- il bridge privato aggiunge signing RS256 e restricted transport mTLS one-shot. Claim, policy,
+  binding, SPKI, x5c, endpoint, metodo, header Authorization, certificato, timeout e response bound
+  restano server-owned; il token compatto non è leggibile e vale solo sullo stesso bridge;
+- la migration additiva `0012_connector_capability_locator_scope.sql` estende il locator PostgreSQL
+  soltanto ai binding di signing e input dichiarati dalla stessa operation Published e conserva
+  principal/grant/scope/revision/checksum e privilegi runtime least-privilege;
+- i test sintetici neutrali provano il lifecycle external adapter→input server-owned→handshake→
+  admission→shared session→composed SOAP e il flusso Published profile→RS256/x5c→mTLS→restricted
+  HTTPS. Entrambi attraversano anche PostgreSQL 18, editor/approver distinti, publication, BGW1,
+  grant e reale effetto esterno;
+- negativi mirati coprono spoof caller, mapping missing/extra/duplicate, adapter duplicate/wrong
+  module, provider/store/transport DI, claim non ammessa, endpoint/key/certificate/profile arbitrari,
+  retained bridge e race A→B durante input, signing/public material e dopo DNS prima del transport;
+- nessun connector sanitario/commerciale, provider, adapter family ipotetica, generic store/provider
+  capability, signing oracle, arbitrary authenticated HTTP o public certificate view è stato aggiunto;
+- decisione e inventory: ADR-0024 e
+  `docs/implementation/WAVE1-CONNECTOR-CAPABILITY-COMPLETION.md`.
 
 ### M6 — Certificate, Signing and outbound mTLS primitives
 

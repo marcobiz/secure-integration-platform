@@ -3,6 +3,7 @@ using System.Net;
 using System.Reflection;
 using System.Security.Cryptography.X509Certificates;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
 using SecureIntegration.Providers.Abstractions;
@@ -67,13 +68,32 @@ public sealed class RuntimeExecutionStrategyTests
         Assert.DoesNotContain(typeof(AuthorizedConnectorExecution).GetMethods(BindingFlags.Public | BindingFlags.Static), method => method.Name.Contains("Create", StringComparison.Ordinal));
         Assert.Equal(typeof(IAuthorizedConnectorCapabilityBridge), typeof(AuthorizedConnectorExecution).GetProperty(nameof(AuthorizedConnectorExecution.Capabilities))!.PropertyType);
         Assert.Equal(
-            [nameof(IAuthorizedConnectorCapabilityBridge.ExecuteComposedSoapAsync), nameof(IAuthorizedConnectorCapabilityBridge.ExecuteTypedSessionHandshakeAsync)],
+            [nameof(IAuthorizedConnectorCapabilityBridge.CreateSignedTokenAsync), nameof(IAuthorizedConnectorCapabilityBridge.ExecuteComposedSoapAsync),
+                nameof(IAuthorizedConnectorCapabilityBridge.ExecuteRestrictedTransportAsync), nameof(IAuthorizedConnectorCapabilityBridge.ExecuteTypedSessionHandshakeAsync)],
             typeof(IAuthorizedConnectorCapabilityBridge).GetMethods().Select(method => method.Name).Order(StringComparer.Ordinal).ToArray());
-        Assert.All(typeof(IAuthorizedConnectorCapabilityBridge).GetMethods(), method =>
-        {
-            Assert.Equal(typeof(Task<QualifiedGatewayExecutionResult>), method.ReturnType);
-            Assert.Equal([typeof(CancellationToken)], method.GetParameters().Select(parameter => parameter.ParameterType).ToArray());
-        });
+        Assert.Equal(typeof(Task<AuthorizedConnectorSignedToken>), typeof(IAuthorizedConnectorCapabilityBridge).GetMethod(nameof(IAuthorizedConnectorCapabilityBridge.CreateSignedTokenAsync))!.ReturnType);
+        Assert.Equal(typeof(Task<QualifiedGatewayExecutionResult>), typeof(IAuthorizedConnectorCapabilityBridge).GetMethod(nameof(IAuthorizedConnectorCapabilityBridge.ExecuteRestrictedTransportAsync))!.ReturnType);
+        Assert.Empty(typeof(AuthorizedConnectorSignedToken).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+        Assert.Empty(typeof(AuthorizedConnectorSignedToken).GetProperties(BindingFlags.Public | BindingFlags.Instance));
+        Assert.Empty(typeof(AuthorizedPublishedExtensionConfiguration).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+        Assert.Equal([nameof(AuthorizedPublishedExtensionConfiguration.JsonLength)],
+            typeof(AuthorizedPublishedExtensionConfiguration).GetProperties(BindingFlags.Public | BindingFlags.Instance).Select(value => value.Name));
+        Assert.Equal([nameof(AuthorizedPublishedExtensionConfiguration.OpenJsonStream), nameof(AuthorizedPublishedExtensionConfiguration.ToString)],
+            typeof(AuthorizedPublishedExtensionConfiguration).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                .Where(value => !value.IsSpecialName).Select(value => value.Name).Order(StringComparer.Ordinal));
+        ConstructorInfo transportRequest = Assert.Single(typeof(AuthorizedConnectorRestrictedTransportRequest).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+        Assert.Equal([typeof(ReadOnlyMemory<byte>), typeof(AuthorizedConnectorSignedToken)],
+            transportRequest.GetParameters().Select(value => value.ParameterType));
+        Assert.Equal([nameof(AuthorizedConnectorRestrictedTransportRequest.BodyLength)],
+            typeof(AuthorizedConnectorRestrictedTransportRequest).GetProperties(BindingFlags.Public | BindingFlags.Instance).Select(value => value.Name));
+        Assert.Empty(typeof(AuthorizedConnectorBindingInputs).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+        Assert.Equal([nameof(AuthorizedConnectorBindingInputs.Count)],
+            typeof(AuthorizedConnectorBindingInputs).GetProperties(BindingFlags.Public | BindingFlags.Instance).Select(value => value.Name));
+        Assert.Equal([nameof(AuthorizedConnectorBindingInputs.Contains), nameof(AuthorizedConnectorBindingInputs.ToString), nameof(AuthorizedConnectorBindingInputs.WriteRequiredXmlValue)],
+            typeof(AuthorizedConnectorBindingInputs).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+                .Where(value => !value.IsSpecialName).Select(value => value.Name).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(typeof(IAuthorizedConnectorCapabilityBridge).GetMethods().SelectMany(method => method.GetParameters()), parameter =>
+            parameter.Name is "endpoint" or "provider" or "key" or "certificate" or "profileId");
         Assert.DoesNotContain(typeof(AuthorizedConnectorExecution).Assembly.GetExportedTypes(), type =>
             type != typeof(IAuthorizedConnectorCapabilityBridge) && typeof(IAuthorizedConnectorCapabilityBridge).IsAssignableFrom(type));
     }

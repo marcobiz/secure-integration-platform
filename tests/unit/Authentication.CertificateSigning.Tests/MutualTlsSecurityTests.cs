@@ -40,7 +40,7 @@ public sealed class MutualTlsSecurityTests
         Assert.Equal(1, result.CatalogRevision);
         Assert.Equal(["mtls-r1"], tracking.MetadataReferences);
         Assert.Equal(["mtls-r1"], tracking.CertificateReferences);
-        Assert.Equal(2, bindings.Calls);
+        Assert.Equal(3, bindings.Calls);
         Assert.Equal(1, transport.Calls);
         Assert.True(transport.CertificateHadPrivateKey);
     }
@@ -256,6 +256,32 @@ public sealed class MutualTlsSecurityTests
 
         Assert.Equal("BGW-AUTH-RESOURCE-DISABLED", failure.Code);
         Assert.Equal(0, hosts.Calls);
+        Assert.Equal(0, transport.Calls);
+    }
+
+    [Fact]
+    public async Task Wave1_MTLS_disable_after_DNS_and_before_transport_causes_zero_dispatch()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
+        AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.MutualTlsProfileId);
+        ServerOwnedMutualTlsPolicySnapshot policy = AuthenticationTestData.MutualTlsPolicy(context, material.ClientCertificateRevision1);
+        BoundAuthenticationResource active = AuthenticationTestData.MutualTlsBinding(context, material.ClientCertificateRevision1, "mtls-r1", policy);
+        MutableBindingResolver bindings = new(active);
+        MutablePolicySource policies = AuthenticationTestData.Policies(context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        InMemoryProvider provider = AuthenticationTestData.Provider(material);
+        StaticHostResolver hosts = new(IPAddress.Parse("203.0.113.20"))
+        {
+            OnResolve = () => bindings.Current = active with { Status = AuthenticationResourceStatus.Disabled }
+        };
+        TrackingTransport transport = new();
+        PurposeBoundMutualTlsSender sender = new(policies, bindings, provider, provider, hosts, transport, new FixedClock(Now));
+        using HttpRequestMessage request = new(HttpMethod.Get, context.Endpoint);
+
+        AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() =>
+            sender.SendAsync(context, AuthenticationTestData.MutualTlsProfileId, request, TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-AUTH-RESOURCE-DISABLED", failure.Code);
+        Assert.Equal(1, hosts.Calls);
         Assert.Equal(0, transport.Calls);
     }
 

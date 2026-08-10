@@ -20,6 +20,7 @@ using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
 using SecureIntegration.M6.SyntheticSoapServer;
 using SecureIntegration.Providers.Abstractions;
+using SecureIntegration.Providers.Synthetic;
 using Xunit;
 
 namespace SecureIntegration.Gateway.Integration.Tests;
@@ -65,9 +66,9 @@ public sealed class TypedSessionHandshakeHostedIntegrationTests
                 TestContext.Current.CancellationToken));
 
         TypedSessionHandshakeAdapterRegistry adapters = fixture.Factory.Services.GetRequiredService<TypedSessionHandshakeAdapterRegistry>();
-        Assert.Equal("SyntheticTypedSessionRequestAdapter", adapters.Request("synthetic-create-session-request", "compiled-typed-request").GetType().Name);
+        Assert.Equal("SyntheticTypedSessionRequestAdapter", adapters.Request("synthetic-create-session-request", "compiled-typed-request").Adapter.GetType().Name);
         Assert.Equal("SyntheticTypedSessionResponseAdapter", adapters.Response("synthetic-create-session-response", "compiled-typed-response").GetType().Name);
-        Assert.Equal("SyntheticExternalSessionValidationAdapter", adapters.Validation("synthetic-session-validator", "compiled-typed-validator")!.GetType().Name);
+        Assert.Equal("SyntheticExternalSessionValidationAdapter", adapters.Validation("synthetic-session-validator", "compiled-typed-validator")!.Adapter.GetType().Name);
 
         using HttpResponseMessage acquireResponse = await fixture.SendSignedAsync(identityA, HttpMethod.Post,
             $"/v1/connectors/{connectorId}/operations/session-bootstrap/session-handshakes/typed-session:acquire", []);
@@ -300,11 +301,31 @@ internal sealed record HostedConnectorAuthority(
     ProviderResourceCatalogRecord Password,
     ProviderResourceCatalogRecord Session);
 
+internal sealed record HostedCapabilityAuthority(
+    string ConnectorId,
+    string Version,
+    Guid EnvironmentId,
+    ConnectorVersionResource Validated,
+    AdminAccessContext Approver,
+    ProviderResourceCatalogRecord SigningCertificate,
+    ProviderResourceCatalogRecord ClientCertificate);
+
 internal sealed record HostedExecutionModuleConfiguration(
     string ModuleId,
     string AssemblyPath,
     string AssemblyFullName,
     string ModuleType);
+
+internal sealed record HostedCapabilityProvider(
+    IClientCertificateProvider ClientCertificates,
+    IKeyOperationProvider KeyOperations,
+    ICertificateMetadataProvider CertificateMetadata,
+    ICertificatePublicMaterialProvider CertificatePublicMaterial,
+    X509Certificate2 RootCertificate)
+{
+    internal HostedCapabilityProvider(InMemoryProvider provider, X509Certificate2 rootCertificate)
+        : this(provider, provider, provider, provider, rootCertificate) { }
+}
 
 internal sealed record HostedHandshakeResult(string Kind, string? IntentReference, string? SessionReference)
 {
@@ -335,11 +356,12 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
     private const string SyntheticHost = "typed-session.synthetic.test";
     internal const string SyntheticUsername = "synthetic-user";
     internal const string SyntheticPassword = "synthetic-password";
+    internal const string SyntheticOrganizationCode = "core-owned-organization";
     internal const string BusinessOperationId = "session-business";
     private readonly HostedServerCertificates certificates;
     private readonly HttpClient api;
     private readonly List<HostedIdentity> identities = [];
-    private readonly Dictionary<string, (ProviderResourceCatalogRecord Username, ProviderResourceCatalogRecord Password, ProviderResourceCatalogRecord Session)> resources = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, (ProviderResourceCatalogRecord Username, ProviderResourceCatalogRecord Password, ProviderResourceCatalogRecord Session, ProviderResourceCatalogRecord Organization)> resources = new(StringComparer.Ordinal);
 
     private HostedTypedSessionFixture(HostedServerCertificates certificates, SyntheticSoapServerInstance server, TypedSessionHostFactory factory)
     {
@@ -366,7 +388,8 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         string? adminConnection = null,
         HostedExecutionModuleConfiguration? executionModule = null,
         Func<CancellationToken, Task>? beforeHandshakeFinalAuthorization = null,
-        Func<CancellationToken, Task>? beforeComposedFinalAuthorization = null)
+        Func<CancellationToken, Task>? beforeComposedFinalAuthorization = null,
+        HostedCapabilityProvider? capabilityProvider = null)
     {
         HostedServerCertificates certificates = HostedServerCertificates.Create(SyntheticHost);
         try
@@ -375,13 +398,14 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
                 new(SyntheticUsername, SyntheticPassword, false, TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2), true, candidate)
                 {
                     OpaqueSessionHeaderName = "X-Session-Reference",
-                    OpaqueSessionValue = candidate
+                    OpaqueSessionValue = candidate,
+                    ServerOwnedOrganizationCode = executionModule is null ? null : SyntheticOrganizationCode
                 },
                 certificates.Server, TestContext.Current.CancellationToken);
             try
             {
                 TypedSessionHostFactory factory = new(certificates.Root, certificates.Server, SyntheticHost, beforePromotion, runtimeConnection, adminConnection,
-                    executionModule, beforeHandshakeFinalAuthorization, beforeComposedFinalAuthorization);
+                    executionModule, beforeHandshakeFinalAuthorization, beforeComposedFinalAuthorization, capabilityProvider);
                 return new(certificates, server, factory);
             }
             catch
@@ -528,9 +552,13 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
             ProviderResourceCatalogRecord session = await Store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic",
                 "typed-session-" + suffix, ProviderResourceType.Secret, "Typed opaque session authority", environmentId, connectorId, sessionOperationScope ?? BusinessOperationId,
                 "synthetic://typed-session-" + suffix, ProviderResourceStatus.Active, null, 0, null, null, string.Empty, Factory.Clock.UtcNow), TestContext.Current.CancellationToken);
+            ProviderResourceCatalogRecord organization = await Store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic",
+                "typed-organization-" + suffix, ProviderResourceType.Secret, "Typed server-owned organization", environmentId, connectorId, "session-bootstrap",
+                "synthetic://typed-organization-" + suffix, ProviderResourceStatus.Active, null, 0, null, null, string.Empty, Factory.Clock.UtcNow), TestContext.Current.CancellationToken);
             Assert.Equal(username.Revision, password.Revision);
             Assert.Equal(username.Revision, session.Revision);
-            resources.Add(connectorId, connectorResources = (username, password, session));
+            Assert.Equal(username.Revision, organization.Revision);
+            resources.Add(connectorId, connectorResources = (username, password, session, organization));
         }
 
         ConnectorAdministrationService administration = Factory.Services.GetRequiredService<ConnectorAdministrationService>();
@@ -545,6 +573,8 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         AdminAccessContext approver = new(approverPrincipal, await security.GetAssignmentsAsync(approverPrincipal.Id, TestContext.Current.CancellationToken));
 
         using JsonDocument document = JsonDocument.Parse(definition ?? Definition(connectorId, version));
+        bool requiresOrganization = document.RootElement.GetProperty("bindings").GetProperty("secrets").EnumerateArray()
+            .Any(value => string.Equals(value.GetProperty("name").GetString(), "organization", StringComparison.Ordinal));
         ConnectorVersionResource imported = await administration.ImportAsync(document.RootElement, null, editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
         ConnectorVersionResource validated = await administration.ValidateStoredAsync(connectorId, version, imported.RowVersion, editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
         _ = await administration.PutBindingsAsync(connectorId, new(environmentId,
@@ -554,7 +584,12 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
                 ["username"] = new(connectorResources.Username.ProviderId, connectorResources.Username.ResourceId, connectorResources.Username.ResourceType),
                 ["password"] = new(connectorResources.Password.ProviderId, connectorResources.Password.ResourceId, connectorResources.Password.ResourceType),
                 ["session"] = new(connectorResources.Session.ProviderId, connectorResources.Session.ResourceId, connectorResources.Session.ResourceType)
-            }, null, null, version), editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
+            }.Concat(requiresOrganization
+                ? new Dictionary<string, ProviderResourceReference>
+                {
+                    ["organization"] = new(connectorResources.Organization.ProviderId, connectorResources.Organization.ResourceId, connectorResources.Organization.ResourceType)
+                }
+                : []).ToDictionary(value => value.Key, value => value.Value, StringComparer.Ordinal), null, null, version), editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
         ConnectorApprovalRecord requested = await approvals.RequestAsync(connectorId, version, editor, Guid.NewGuid(), TestContext.Current.CancellationToken);
         ApprovalReviewResult review = await approvals.ReviewAsync(connectorId, version, approver, TestContext.Current.CancellationToken);
         ConnectorApprovalRecord approved = await approvals.ApproveAsync(connectorId, version,
@@ -565,6 +600,80 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
     }
 
     internal async Task PublishAsync(HostedConnectorAuthority authority, long expectedPublicationRevision)
+    {
+        ConnectorVersionResource published = await Factory.Services.GetRequiredService<ConnectorAdministrationService>().PublishAsync(
+            authority.ConnectorId, authority.Version, authority.Validated.RowVersion, expectedPublicationRevision,
+            authority.Approver.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
+        Assert.Equal(ConnectorVersionState.Published, published.State);
+    }
+
+    internal async Task<HostedCapabilityAuthority> PrepareCapabilityConnectorVersionAsync(
+        string connectorId,
+        string version,
+        Guid environmentId,
+        Uri endpoint,
+        string definition,
+        ICertificateMetadataProvider provider,
+        string signingProviderReference,
+        string clientCertificateProviderReference)
+    {
+        ProviderResourceCatalogRecord signing = await RegisterCertificateAsync(
+            "capability-signing-" + Guid.NewGuid().ToString("N"), "Synthetic signing certificate", signingProviderReference);
+        ProviderResourceCatalogRecord clientCertificate = await RegisterCertificateAsync(
+            "capability-mtls-" + Guid.NewGuid().ToString("N"), "Synthetic mTLS certificate", clientCertificateProviderReference);
+
+        ConnectorAdministrationService administration = Factory.Services.GetRequiredService<ConnectorAdministrationService>();
+        IAdminSecurityStore security = Factory.Services.GetRequiredService<IAdminSecurityStore>();
+        ConnectorApprovalService approvals = Factory.Services.GetRequiredService<ConnectorApprovalService>();
+        string actorSuffix = Guid.NewGuid().ToString("N");
+        AdminPrincipalRecord editorPrincipal = await security.EnsurePrincipalAsync(
+            new("https://hosted-capability.invalid", "editor-" + actorSuffix, "Editor", null), TestContext.Current.CancellationToken);
+        AdminPrincipalRecord approverPrincipal = await security.EnsurePrincipalAsync(
+            new("https://hosted-capability.invalid", "approver-" + actorSuffix, "Approver", null), TestContext.Current.CancellationToken);
+        _ = await security.AssignRoleAsync(editorPrincipal.Id, AdminRole.ConnectorEditor, null, editorPrincipal.Id, Guid.NewGuid(), Factory.Clock.UtcNow, TestContext.Current.CancellationToken);
+        _ = await security.AssignRoleAsync(approverPrincipal.Id, AdminRole.ConnectorApprover, null, approverPrincipal.Id, Guid.NewGuid(), Factory.Clock.UtcNow, TestContext.Current.CancellationToken);
+        AdminAccessContext editor = new(editorPrincipal, await security.GetAssignmentsAsync(editorPrincipal.Id, TestContext.Current.CancellationToken));
+        AdminAccessContext approver = new(approverPrincipal, await security.GetAssignmentsAsync(approverPrincipal.Id, TestContext.Current.CancellationToken));
+
+        using JsonDocument document = JsonDocument.Parse(definition);
+        ConnectorVersionResource imported = await administration.ImportAsync(document.RootElement, null, editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionResource validated = await administration.ValidateStoredAsync(connectorId, version, imported.RowVersion, editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await administration.PutBindingsAsync(connectorId, new(
+            environmentId,
+            new Dictionary<string, string> { ["service"] = endpoint.AbsoluteUri },
+            new Dictionary<string, ProviderResourceReference>(),
+            CertificateResources: new Dictionary<string, ProviderResourceReference>
+            {
+                ["signing-certificate"] = new(signing.ProviderId, signing.ResourceId, signing.ResourceType, signing.Version, signing.PublicMetadataRevision),
+                ["mtls-certificate"] = new(clientCertificate.ProviderId, clientCertificate.ResourceId, clientCertificate.ResourceType, clientCertificate.Version, clientCertificate.PublicMetadataRevision)
+            },
+            ConnectorVersion: version), editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorApprovalRecord requested = await approvals.RequestAsync(connectorId, version, editor, Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ApprovalReviewResult review = await approvals.ReviewAsync(connectorId, version, approver, TestContext.Current.CancellationToken);
+        Assert.Equal(2, Assert.Single(review.Artifact.Operations).CertificateBindings.Count);
+        ConnectorApprovalRecord approved = await approvals.ApproveAsync(connectorId, version,
+            new(requested.Id, review.DigestSha256, "synthetic capability approval"), approver, Guid.NewGuid(), TestContext.Current.CancellationToken);
+        Assert.Equal(ConnectorApprovalStatus.Approved, approved.Status);
+        Assert.NotEqual(editor.Principal.Id, approved.ApprovedBy);
+        return new(connectorId, version, environmentId, validated, approver, signing, clientCertificate);
+
+        async Task<ProviderResourceCatalogRecord> RegisterCertificateAsync(
+            string resourceId,
+            string displayName,
+            string providerReference)
+        {
+            ProviderCertificatePublicMetadata metadata = await provider.GetPublicMetadataAsync(providerReference, TestContext.Current.CancellationToken);
+            CertificatePublicMetadata publicMetadata = new(metadata.FingerprintSha256, metadata.Subject, metadata.Issuer,
+                metadata.NotBefore, metadata.NotAfter, metadata.KeyAlgorithm, metadata.PublicKeySize, metadata.Version);
+            return await Store.RegisterProviderResourceAsync(new(
+                Guid.NewGuid(), "synthetic-capability", "Synthetic capability provider", "synthetic", resourceId,
+                ProviderResourceType.ClientCertificate, displayName, environmentId, connectorId, "signed-submit",
+                providerReference, ProviderResourceStatus.Active, metadata.Version, 0, 1, publicMetadata,
+                string.Empty, Factory.Clock.UtcNow), TestContext.Current.CancellationToken);
+        }
+    }
+
+    internal async Task PublishAsync(HostedCapabilityAuthority authority, long expectedPublicationRevision)
     {
         ConnectorVersionResource published = await Factory.Services.GetRequiredService<ConnectorAdministrationService>().PublishAsync(
             authority.ConnectorId, authority.Version, authority.Validated.RowVersion, expectedPublicationRevision,
@@ -681,6 +790,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
     private readonly HostedExecutionModuleConfiguration? executionModule;
     private readonly Func<CancellationToken, Task>? beforeHandshakeFinalAuthorization;
     private readonly Func<CancellationToken, Task>? beforeComposedFinalAuthorization;
+    private readonly HostedCapabilityProvider? capabilityProvider;
     private readonly RecordingLoggerProvider logger = new();
     private readonly TestClientCertificateStartupFilter certificateFilter = new();
     private readonly FixedSecrets secrets = new();
@@ -694,7 +804,8 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
         string? adminConnection,
         HostedExecutionModuleConfiguration? executionModule,
         Func<CancellationToken, Task>? beforeHandshakeFinalAuthorization,
-        Func<CancellationToken, Task>? beforeComposedFinalAuthorization)
+        Func<CancellationToken, Task>? beforeComposedFinalAuthorization,
+        HostedCapabilityProvider? capabilityProvider)
     {
         this.syntheticHost = syntheticHost;
         this.beforePromotion = beforePromotion;
@@ -703,7 +814,11 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
         this.executionModule = executionModule;
         this.beforeHandshakeFinalAuthorization = beforeHandshakeFinalAuthorization;
         this.beforeComposedFinalAuthorization = beforeComposedFinalAuthorization;
-        Transport = new(new SystemRestrictedTransport(new X509Certificate2Collection(root), Convert.ToHexString(SHA256.HashData(server.RawData))));
+        this.capabilityProvider = capabilityProvider;
+        X509Certificate2Collection trust = new(root);
+        if (capabilityProvider is not null) trust.Add(capabilityProvider.RootCertificate);
+        Transport = new(new SystemRestrictedTransport(trust,
+            capabilityProvider is null ? Convert.ToHexString(SHA256.HashData(server.RawData)) : null));
     }
 
     internal CountingRestrictedTransport Transport { get; }
@@ -711,6 +826,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
     internal int AuthenticatedBoundaryRequests => certificateFilter.Requests;
     internal int AuthenticatedBusinessRequests => certificateFilter.BusinessRequests;
     internal FixedSecrets Secrets => secrets;
+    internal Func<CancellationToken, Task>? BeforeHostResolution { get; set; }
     internal IGatewayClock Clock => Services.GetRequiredService<IGatewayClock>();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -730,12 +846,27 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
         builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<IHostResolver>();
-            services.AddSingleton<IHostResolver, LoopbackResolver>();
+            services.AddSingleton<IHostResolver>(new LoopbackResolver(cancellationToken =>
+                BeforeHostResolution?.Invoke(cancellationToken) ?? Task.CompletedTask));
             services.RemoveAll<IRestrictedTransport>();
             services.AddSingleton<IRestrictedTransport>(Transport);
             services.RemoveAll<ISecretValueProvider>();
             services.AddSingleton<ISecretValueProvider>(secrets);
-            services.AddSingleton<IPrivateDestinationAllowance>(new LoopbackAllowance(syntheticHost));
+            if (capabilityProvider is not null)
+            {
+                services.RemoveAll<IClientCertificateProvider>();
+                services.AddSingleton(capabilityProvider.ClientCertificates);
+                services.RemoveAll<IKeyOperationProvider>();
+                services.AddSingleton(capabilityProvider.KeyOperations);
+                services.RemoveAll<ICertificateMetadataProvider>();
+                services.AddSingleton(capabilityProvider.CertificateMetadata);
+                services.RemoveAll<ICertificatePublicMaterialProvider>();
+                services.AddSingleton(capabilityProvider.CertificatePublicMaterial);
+            }
+            services.AddSingleton<IPrivateDestinationAllowance>(new LoopbackAllowance(
+                capabilityProvider is null
+                    ? new HashSet<string>([syntheticHost], StringComparer.OrdinalIgnoreCase)
+                    : new HashSet<string>([syntheticHost, "localhost"], StringComparer.OrdinalIgnoreCase)));
             services.AddSingleton<IStartupFilter>(certificateFilter);
             services.AddSingleton<ILoggerProvider>(logger);
             services.RemoveAll<SoapSessionClient>();
@@ -761,30 +892,42 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
         });
     }
 
-    private sealed class LoopbackResolver : IHostResolver
+    private sealed class LoopbackResolver(Func<CancellationToken, Task> beforeReturn) : IHostResolver
     {
-        public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) => Task.FromResult(new[] { IPAddress.Loopback });
+        public async Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await beforeReturn(cancellationToken).ConfigureAwait(false);
+            return [IPAddress.Loopback];
+        }
     }
 
-    private sealed class LoopbackAllowance(string host) : IPrivateDestinationAllowance
+    private sealed class LoopbackAllowance(IReadOnlySet<string> hosts) : IPrivateDestinationAllowance
     {
         public bool IsAllowed(string candidateHost, IPAddress address) =>
-            string.Equals(host, candidateHost, StringComparison.OrdinalIgnoreCase) && IPAddress.IsLoopback(address);
+            hosts.Contains(candidateHost) && IPAddress.IsLoopback(address);
     }
 
     internal sealed class FixedSecrets : ISecretValueProvider
     {
         private int totalRequests;
         internal int TotalRequests => Volatile.Read(ref totalRequests);
+        internal Func<CancellationToken, Task>? BeforeOrganizationReturn { get; set; }
 
-        public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken)
+        public async Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref totalRequests);
             if (logicalReference.Contains("user", StringComparison.OrdinalIgnoreCase))
-                return Task.FromResult(HostedTypedSessionFixture.SyntheticUsername);
+                return HostedTypedSessionFixture.SyntheticUsername;
             if (logicalReference.Contains("password", StringComparison.OrdinalIgnoreCase))
-                return Task.FromResult(HostedTypedSessionFixture.SyntheticPassword);
+                return HostedTypedSessionFixture.SyntheticPassword;
+            if (logicalReference.Contains("organization", StringComparison.OrdinalIgnoreCase))
+            {
+                if (BeforeOrganizationReturn is not null)
+                    await BeforeOrganizationReturn(cancellationToken).ConfigureAwait(false);
+                return HostedTypedSessionFixture.SyntheticOrganizationCode;
+            }
             throw new InvalidOperationException("Unexpected synthetic secret binding.");
         }
     }

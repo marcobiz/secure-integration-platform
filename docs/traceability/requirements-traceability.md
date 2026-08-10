@@ -264,6 +264,24 @@ was reused without a new subsystem.
 | Generic Core starts without optional modules and has no reverse dependency | ordinary host/suite; `Wave1_CT_generic_seam_and_Core_solution_have_no_vertical_dependency_or_logic`; Core export gate | PASS local; exact-candidate export is a handoff gate |
 | TM-068/TM-069/TM-070/TM-071/TM-072/TM-073/TM-074 | `SEC-W1-EXEC-001/002/003/004/005/006/007` named matrices above | PASS local; PostgreSQL/CI exact-head and independent review pending |
 
+## Wave 1 Connector capability completion
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| Exact bounded Published vertical configuration, no caller selector or second authority | `Wave1_CT_Published_capability_profile_is_strict_bounded_and_dependency_complete`; `Wave1_CT_qualified_execution_handoff_is_non_forgeable_and_hides_payload_and_operation_authority`; hosted payload/metadata/extension spoof assertions | PASS local |
+| External registration of only existing request/response/validator adapters | `Wave1_CT_external_module_registers_the_three_existing_typed_adapter_contracts`; `Wave1_SEC_duplicate_wrong_module_and_direct_authority_adapter_modules_fail_at_startup`; constructor graph regressions | PASS local |
+| Exact adapter ID/type and required input set, no fallback | existing Published adapter mismatch unit matrix; `Wave1_SEC_external_adapter_required_server_owned_inputs_match_Published_exactly` missing/unexpected theory; neutral hosted lifecycle | PASS local |
+| Server-owned binding inputs are opaque, dependency/four-eyes covered and caller cannot supply them | `Wave1_CT_server_owned_adapter_inputs_participate_in_operation_dependencies`; duplicate/non-opaque negative; public API reflection inventory; hosted caller payload/extension spoof with exact upstream organization assertion | PASS local |
+| Provider-input failure/cancellation/timeout and adapter failure remain sanitized | typed-session real/fake cancellation and timeout suites; capability dispatcher mapping; hosted missing/unexpected zero-provider/zero-network assertions | PASS local |
+| Invocation-bound RS256 signing with exact key/purpose/policy/claims and no signing oracle | `Wave1_IT_PRODUCTION_HOST_in_memory_Published_profile_signs_x5c_and_dispatches_real_mTLS`; denied-claim zero-network continuation; M6 wrong-key/purpose/policy/replay matrix; public API selector/opaque-token assertions | PASS local |
+| Authorized public certificate data only when needed | x5c leaf-first chain is composed inside the existing signer and observed at the sanctioned endpoint; opaque signed result has no public token or certificate property | NOT REQUIRED as separate API; PASS internal composition |
+| Exact Published restricted HTTPS/mTLS without URI/header/certificate selectors | neutral real mTLS hosted E2E; caller endpoint/profile/certificate spoof; `M6_MTLS_endpoint_substitution_is_denied_before_handshake`; public API/architecture boundary | PASS local |
+| Exact A authority and no side effect for A→B | handshake/input preparation A→B permits only the already in-flight lookup and performs no later provider/network/session effect; `Wave1_disable_during_public_material_flow_never_returns_a_token`; `Wave1_MTLS_disable_after_DNS_and_before_transport_causes_zero_dispatch` | PASS local |
+| Capability lifetime, retained bridge and host/external error separation | existing retained/reuse hosted bridge tests; per-capability one-shot reflection/architecture assertions; forged error/fake OCE regressions | PASS local |
+| Real PostgreSQL 18 least-privilege locator and canonical host path for both capability families | migration `0012_connector_capability_locator_scope.sql`; `Wave1_IT_PRODUCTION_HOST_PostgreSQL_full_external_no_IVT_bridge_lifecycle_uses_real_Published_authority_and_HTTPS`; `Wave1_IT_PRODUCTION_HOST_PostgreSQL18_Published_profile_signs_x5c_and_dispatches_real_mTLS` | PASS local on PostgreSQL 18.4 |
+| No provider/store/transport DI, IVT, vertical logic or hypothetical capability | module constructor negative matrix; `Wave1_CT_external_execution_module_uses_only_public_provider_neutral_contracts_without_friend_access`; `Wave1_CT_capability_completion_has_no_token_provider_store_or_authenticated_HTTP_escape`; Core export | PASS local; export exact-head rerun pending |
+| TM-075/TM-076/TM-077/TM-078 | `SEC-W1-CAP-001/002/003/004` mappings in the threat model | PASS local; full gate/CI and independent review pending |
+
 ## Healthcare Wave 1 — Regional ePrescription foundation
 
 | Requirement | Automated evidence | Status |

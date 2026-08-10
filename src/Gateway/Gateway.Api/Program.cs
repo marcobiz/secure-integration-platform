@@ -15,6 +15,7 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Npgsql;
+using SecureIntegration.Authentication.CertificateSigning;
 using SecureIntegration.Gateway.Api;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
@@ -141,6 +142,7 @@ builder.Services.AddSingleton(providerServices.ClientCertificates);
 builder.Services.AddSingleton(providerServices.Health);
 builder.Services.AddSingleton(providerServices.CapabilitySource);
 if (providerServices.CertificateMetadata is not null) builder.Services.AddSingleton(providerServices.CertificateMetadata);
+if (providerServices.CertificatePublicMaterial is not null) builder.Services.AddSingleton(providerServices.CertificatePublicMaterial);
 if (providerServices.SigningKeys is not null) builder.Services.AddSingleton(providerServices.SigningKeys);
 if (providerServices.Mac is not null) builder.Services.AddSingleton(providerServices.Mac);
 
@@ -154,6 +156,9 @@ builder.Services.AddSingleton<ComposedSoapExecutionStrategy>(services => new Com
     services.GetRequiredService<IHostResolver>(), services.GetRequiredService<IRestrictedTransport>(), services.GetRequiredService<IGatewayClock>(),
     services.GetService<IPrivateDestinationAllowance>()));
 builder.Services.AddSingleton<IConnectorExecutionStrategy>(services => services.GetRequiredService<ComposedSoapExecutionStrategy>());
+builder.Services.AddSingleton<ITypedSessionHandshakeRequestAdapter, SyntheticTypedSessionRequestAdapter>();
+builder.Services.AddSingleton<ITypedSessionHandshakeResponseAdapter, SyntheticTypedSessionResponseAdapter>();
+builder.Services.AddSingleton<ITypedExternalSessionValidationAdapter, SyntheticExternalSessionValidationAdapter>();
 ConnectorExecutionModuleLoader.Register(builder.Services, hostOptions.ExecutionModules);
 
 byte[] activationKey;
@@ -172,10 +177,10 @@ builder.Services.AddSingleton<InstallationEnrollmentService>();
 builder.Services.AddSingleton<RuntimeIdentityService>();
 builder.Services.AddSingleton<IGatewayInvocationAuthorizer, GatewayInvocationAuthorizer>();
 builder.Services.AddSingleton<ISoapSessionResourceStampProvider, PublishedSoapSessionResourceStampProvider>();
-builder.Services.AddSingleton(_ => new TypedSessionHandshakeAdapterRegistry(
-    [new SyntheticTypedSessionRequestAdapter()],
-    [new SyntheticTypedSessionResponseAdapter()],
-    [new SyntheticExternalSessionValidationAdapter()]));
+builder.Services.AddSingleton(services => new TypedSessionHandshakeAdapterRegistry(
+    services.GetServices<ITypedSessionHandshakeRequestAdapter>(),
+    services.GetServices<ITypedSessionHandshakeResponseAdapter>(),
+    services.GetServices<ITypedExternalSessionValidationAdapter>()));
 builder.Services.AddSingleton<PublishedTypedSessionHandshakeResolver>();
 builder.Services.AddSingleton(services => new SoapSessionClient(
     services.GetRequiredService<ISecretValueProvider>(),
@@ -185,6 +190,16 @@ builder.Services.AddSingleton(services => new SoapSessionClient(
     services.GetRequiredService<ISoapSessionResourceStampProvider>(),
     services.GetService<IPrivateDestinationAllowance>()));
 builder.Services.AddSingleton<TypedSessionHandshakeRuntime>();
+builder.Services.AddSingleton<IAuthorizedVerticalCapabilityRuntime>(services => new AuthorizedVerticalCapabilityRuntime(
+    services.GetRequiredService<IConnectorConfigurationStore>(),
+    services.GetService<IKeyOperationProvider>(),
+    services.GetRequiredService<IClientCertificateProvider>(),
+    services.GetService<ICertificateMetadataProvider>(),
+    services.GetService<ICertificatePublicMaterialProvider>(),
+    services.GetRequiredService<IHostResolver>(),
+    services.GetRequiredService<IRestrictedTransport>(),
+    services.GetRequiredService<IGatewayClock>(),
+    services.GetService<IPrivateDestinationAllowance>()));
 builder.Services.AddSingleton<AuthorizedConnectorCapabilityDispatcher>();
 builder.Services.AddSingleton<RestrictedEgressService>(services => new RestrictedEgressService(
     services.GetRequiredService<IGatewayRegistry>(),
@@ -967,7 +982,7 @@ static ProviderServices CreateProviderServices(GatewayProviderOptions options, I
     if (!environment.IsDevelopment() && !environment.IsEnvironment("Testing"))
         throw new InvalidOperationException("A configured provider pack is required outside Development/Testing.");
     InMemoryProvider inMemory = new(new Dictionary<string, string>());
-    return new ProviderServices(inMemory, inMemory, inMemory, inMemory, CertificateMetadata: inMemory, CertificatePublicMaterial: inMemory);
+    return new ProviderServices(inMemory, inMemory, inMemory, inMemory, SigningKeys: inMemory, CertificateMetadata: inMemory, CertificatePublicMaterial: inMemory);
 }
 
 static async Task<GatewayClientPrincipal> AuthenticateAsync(HttpContext context, RuntimeIdentityService service, ReadOnlyMemory<byte> body, Guid correlationId, CancellationToken cancellationToken)

@@ -9,6 +9,7 @@
     <ProjectReference Include="..\Gateway.Infrastructure\Gateway.Infrastructure.csproj" />
     <ProjectReference Include="..\Gateway.ConnectorRuntime.Auth.Http\Gateway.ConnectorRuntime.Auth.Http.csproj" />
     <ProjectReference Include="..\Gateway.ConnectorRuntime.Auth.Soap\Gateway.ConnectorRuntime.Auth.Soap.csproj" />
+    <ProjectReference Include="..\..\Authentication\CertificateSigning\Authentication.CertificateSigning.csproj" />
     <ProjectReference Include="..\..\Providers\Synthetic\Providers.Synthetic.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
   </ItemGroup>

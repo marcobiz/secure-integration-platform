@@ -84,6 +84,8 @@
           "pattern": "^[a-z][a-z0-9._-]*[a-z0-9]$|^[a-z]$"
         },
         "typedSessionHandshake": { "$ref": "#/$defs/typedSessionHandshake" },
+        "extensionConfiguration": { "$ref": "#/$defs/extensionConfiguration" },
+        "authorizedCapabilities": { "$ref": "#/$defs/authorizedCapabilities" },
         "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 },
         "redirectPolicy": { "const": "deny" },
         "allowedClientHeaders": {
@@ -246,6 +248,7 @@
         "responseElement": { "$ref": "#/$defs/xmlQualifiedName" },
         "requestAdapter": { "$ref": "#/$defs/compiledAdapter" },
         "responseAdapter": { "$ref": "#/$defs/compiledAdapter" },
+        "serverOwnedInputs": { "$ref": "#/$defs/serverOwnedInputs" },
         "sessionLifetimeSeconds": { "type": "integer", "minimum": 60, "maximum": 604800 },
         "externalAdmission": {
           "type": "object",
@@ -253,6 +256,7 @@
           "required": ["validator", "endpointBinding", "path", "soapVersion", "action", "requestElement", "responseElement", "intentLifetimeSeconds", "timeoutMs", "maximumRequestBytes", "maximumResponseBytes"],
           "properties": {
             "validator": { "$ref": "#/$defs/compiledAdapter" },
+            "serverOwnedInputs": { "$ref": "#/$defs/serverOwnedInputs" },
             "endpointBinding": { "$ref": "#/$defs/identifier" },
             "path": {
               "type": "string",
@@ -270,6 +274,98 @@
             "maximumResponseBytes": { "type": "integer", "minimum": 256, "maximum": 16777216 }
           }
         }
+      }
+    },
+    "serverOwnedInputs": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "secretBinding"],
+        "properties": {
+          "name": { "$ref": "#/$defs/identifier" },
+          "secretBinding": { "$ref": "#/$defs/identifier" }
+        }
+      }
+    },
+    "extensionConfiguration": {
+      "type": "object",
+      "maxProperties": 32,
+      "propertyNames": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+      "additionalProperties": { "$ref": "#/$defs/extensionValue" }
+    },
+    "extensionValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        { "type": "string", "maxLength": 4096, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]*$" },
+        {
+          "type": "array",
+          "maxItems": 32,
+          "items": { "$ref": "#/$defs/extensionValue" }
+        },
+        {
+          "type": "object",
+          "maxProperties": 32,
+          "propertyNames": { "type": "string", "minLength": 1, "maxLength": 100, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+          "additionalProperties": { "$ref": "#/$defs/extensionValue" }
+        }
+      ]
+    },
+    "authorizedCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["signing", "restrictedTransport"],
+      "properties": {
+        "signing": { "$ref": "#/$defs/invocationSigning" },
+        "restrictedTransport": { "$ref": "#/$defs/invocationRestrictedTransport" }
+      }
+    },
+    "invocationSigning": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileId", "revision", "keyBinding", "publicKeySpkiSha256", "issuer", "audience", "subject", "allowedClaims", "tokenLifetimeSeconds", "clockSkewSeconds", "certificateHeader", "temporalClaims", "minimumRsaKeySize"],
+      "properties": {
+        "profileId": { "$ref": "#/$defs/identifier" },
+        "revision": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "keyBinding": { "$ref": "#/$defs/identifier" },
+        "publicKeySpkiSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "issuer": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$" },
+        "audience": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$" },
+        "subject": { "enum": ["installation", "application", "tenant", "fixed"] },
+        "fixedSubject": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\u0000-\\u001F\\u007F-\\u009F]+$" },
+        "allowedClaims": {
+          "type": "array",
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[A-Za-z][A-Za-z0-9._-]*$" }
+        },
+        "tokenLifetimeSeconds": { "type": "integer", "minimum": 1, "maximum": 3600 },
+        "clockSkewSeconds": { "type": "integer", "minimum": 0, "maximum": 300 },
+        "certificateHeader": { "enum": ["none", "leaf", "chain"] },
+        "temporalClaims": { "enum": ["iat-exp", "iat-nbf-exp"] },
+        "minimumRsaKeySize": { "type": "integer", "minimum": 2048, "maximum": 16384 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "subject": { "const": "fixed" } }, "required": ["subject"] },
+          "then": { "properties": { "fixedSubject": true }, "required": ["fixedSubject"] },
+          "else": { "properties": { "fixedSubject": false } }
+        }
+      ]
+    },
+    "invocationRestrictedTransport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileId", "revision", "clientCertificateSpkiSha256", "authorization", "nearExpirySeconds"],
+      "properties": {
+        "profileId": { "$ref": "#/$defs/identifier" },
+        "revision": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "clientCertificateSpkiSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
+        "authorization": { "const": "signedTokenBearer" },
+        "nearExpirySeconds": { "type": "integer", "minimum": 0, "maximum": 300 }
       }
     },
     "compiledAdapter": {

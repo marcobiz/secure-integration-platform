@@ -59,6 +59,9 @@ public sealed class InMemoryProvider :
     /// <inheritdoc />
     public async Task<ProviderCertificatePublicMetadata> GetPublicMetadataAsync(string logicalReference, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (signingKeyHandles is not null && signingKeyHandles.TryGetValue(logicalReference, out X509Certificate2? signingCertificate))
+            return PublicMetadata(signingCertificate);
         using X509Certificate2 certificate = await GetClientCertificateAsync(logicalReference, cancellationToken).ConfigureAwait(false);
         return PublicMetadata(certificate);
     }

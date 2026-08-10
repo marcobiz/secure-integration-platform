@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using System.Text.Json;
 
 namespace SecureIntegration.Gateway.Application;
 
@@ -75,13 +76,15 @@ public sealed class AuthorizedConnectorExecution
         ConnectorExecutionStrategyKey executionStrategyKey,
         ReadOnlySpan<byte> payload,
         IAuthorizedConnectorCapabilityDispatcher? capabilityDispatcher = null,
-        AuthorizedPublishedExecutionStamp? publishedAuthority = null)
+        AuthorizedPublishedExecutionStamp? publishedAuthority = null,
+        AuthorizedPublishedExtensionConfiguration? extensionConfiguration = null)
     {
         Invocation = invocation;
         Operation = operation;
         ExecutionStrategyKey = executionStrategyKey;
         this.payload = payload.ToArray();
         this.publishedAuthority = publishedAuthority;
+        this.extensionConfiguration = extensionConfiguration?.Copy() ?? AuthorizedPublishedExtensionConfiguration.Empty();
         capabilities = new(this, capabilityDispatcher);
     }
 
@@ -115,6 +118,12 @@ public sealed class AuthorizedConnectorExecution
     /// </summary>
     public IAuthorizedConnectorCapabilityBridge Capabilities => capabilities;
 
+    /// <summary>
+    /// Opens the immutable bounded extension configuration copied from the exact Published
+    /// operation initially authorized by Core. No store handle or authority stamp is returned.
+    /// </summary>
+    public AuthorizedPublishedExtensionConfiguration OpenPublishedExtensionConfiguration() => extensionConfiguration.Copy();
+
     /// <summary>Opens an independent read-only view over the immutable authorized payload snapshot.</summary>
     public Stream OpenPayloadStream() => new MemoryStream(payload, writable: false);
 
@@ -125,6 +134,7 @@ public sealed class AuthorizedConnectorExecution
         throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-STALE", 503, true);
 
     private readonly AuthorizedPublishedExecutionStamp? publishedAuthority;
+    private readonly AuthorizedPublishedExtensionConfiguration extensionConfiguration;
 
     internal IDisposable EnterCapabilityScope() => capabilities.EnterExecutionScope();
 
@@ -137,13 +147,45 @@ public sealed class AuthorizedConnectorExecution
     {
         private static readonly AsyncLocal<AuthorizedConnectorCapabilityBridge?> Current = new();
         private int active;
-        private int consumed;
+        private int consumedCapabilities;
+
+        private const int TypedSessionHandshakeCapability = 1;
+        private const int ComposedSoapCapability = 2;
+        private const int SigningCapability = 4;
+        private const int RestrictedTransportCapability = 8;
 
         public Task<QualifiedGatewayExecutionResult> ExecuteTypedSessionHandshakeAsync(CancellationToken cancellationToken) =>
-            InvokeAsync(static (value, handoff, token) => value.ExecuteTypedSessionHandshakeAsync(handoff, token), cancellationToken);
+            InvokeAsync(TypedSessionHandshakeCapability,
+                static (value, handoff, token) => value.ExecuteTypedSessionHandshakeAsync(handoff, token), cancellationToken);
 
         public Task<QualifiedGatewayExecutionResult> ExecuteComposedSoapAsync(CancellationToken cancellationToken) =>
-            InvokeAsync(static (value, handoff, token) => value.ExecuteComposedSoapAsync(handoff, token), cancellationToken);
+            InvokeAsync(ComposedSoapCapability,
+                static (value, handoff, token) => value.ExecuteComposedSoapAsync(handoff, token), cancellationToken);
+
+        public async Task<AuthorizedConnectorSignedToken> CreateSignedTokenAsync(
+            IReadOnlyDictionary<string, JsonElement> claims,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(claims);
+            Dictionary<string, JsonElement> snapshot = new(StringComparer.Ordinal);
+            foreach ((string name, JsonElement value) in claims)
+                if (name is null || !snapshot.TryAdd(name, value.Clone()))
+                    throw Failure(new GatewayException("BGW-EGRESS-AUTHENTICATION", 409));
+            string compactToken = await InvokeAsync(SigningCapability,
+                (value, handoff, token) => value.CreateSignedTokenAsync(handoff, snapshot, token), cancellationToken).ConfigureAwait(false);
+            return new(this, compactToken);
+        }
+
+        public Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
+            AuthorizedConnectorRestrictedTransportRequest request,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            if (!request.SignedToken.IsOwnedBy(this))
+                throw Failure(new GatewayException("BGW-EGRESS-AUTHENTICATION", 409));
+            return InvokeAsync(RestrictedTransportCapability,
+                (value, handoff, token) => value.ExecuteRestrictedTransportAsync(handoff, request, token), cancellationToken);
+        }
 
         internal IDisposable EnterExecutionScope()
         {
@@ -154,12 +196,13 @@ public sealed class AuthorizedConnectorExecution
             return new ExecutionScope(this, previous);
         }
 
-        private async Task<QualifiedGatewayExecutionResult> InvokeAsync(
-            Func<IAuthorizedConnectorCapabilityDispatcher, AuthorizedConnectorExecution, CancellationToken, Task<QualifiedGatewayExecutionResult>> invoke,
+        private async Task<TResult> InvokeAsync<TResult>(
+            int capability,
+            Func<IAuthorizedConnectorCapabilityDispatcher, AuthorizedConnectorExecution, CancellationToken, Task<TResult>> invoke,
             CancellationToken cancellationToken)
         {
             if (Volatile.Read(ref active) != 1 || !ReferenceEquals(Current.Value, this) ||
-                Interlocked.CompareExchange(ref consumed, 1, 0) != 0 || dispatcher is null)
+                !TryConsume(capability) || dispatcher is null)
                 throw Failure(new GatewayException("BGW-EGRESS-AUTHENTICATION", 409));
 
             try
@@ -184,6 +227,20 @@ public sealed class AuthorizedConnectorExecution
             }
         }
 
+        private bool TryConsume(int capability)
+        {
+            int observed;
+            int updated;
+            do
+            {
+                observed = Volatile.Read(ref consumedCapabilities);
+                if ((observed & capability) != 0) return false;
+                updated = observed | capability;
+            }
+            while (Interlocked.CompareExchange(ref consumedCapabilities, updated, observed) != observed);
+            return true;
+        }
+
         private AuthorizedConnectorCapabilityFailureException Failure(GatewayException failure) => new(this, failure);
 
         private sealed class ExecutionScope(
@@ -203,7 +260,7 @@ public sealed class AuthorizedConnectorExecution
 }
 
 /// <summary>
-/// Invocation-bound bridge to the two existing qualified server capabilities required by compiled
+/// Invocation-bound bridge to the qualified server capabilities required by compiled
 /// Connector runtimes. It is not a provider, transport, catalog or service-resolution facade.
 /// </summary>
 public interface IAuthorizedConnectorCapabilityBridge
@@ -212,6 +269,20 @@ public interface IAuthorizedConnectorCapabilityBridge
     Task<QualifiedGatewayExecutionResult> ExecuteTypedSessionHandshakeAsync(CancellationToken cancellationToken);
     /// <summary>Executes the current Published operation through the composed SOAP capability.</summary>
     Task<QualifiedGatewayExecutionResult> ExecuteComposedSoapAsync(CancellationToken cancellationToken);
+    /// <summary>
+    /// Creates one bounded RS256 token using only the current Published signing policy and its
+    /// allowlisted scalar claims. No policy, key, provider, algorithm or purpose selector exists.
+    /// </summary>
+    Task<AuthorizedConnectorSignedToken> CreateSignedTokenAsync(
+        IReadOnlyDictionary<string, JsonElement> claims,
+        CancellationToken cancellationToken);
+    /// <summary>
+    /// Sends one bounded body to the exact current Published endpoint with the exact server-owned
+    /// mTLS identity and the signed token produced by this same invocation.
+    /// </summary>
+    Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
+        AuthorizedConnectorRestrictedTransportRequest request,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>One exact deployment-registered execution strategy.</summary>
@@ -239,6 +310,12 @@ public interface IConnectorExecutionStrategyRegistrar
         where TImplementation : class, TService;
     /// <summary>Registers one module-owned execution strategy using constructor injection.</summary>
     void AddStrategy<TStrategy>() where TStrategy : class, IConnectorExecutionStrategy;
+    /// <summary>Registers one module-owned implementation of the existing typed-session request adapter contract.</summary>
+    void AddTypedSessionHandshakeRequestAdapter<TAdapter>() where TAdapter : class;
+    /// <summary>Registers one module-owned implementation of the existing typed-session response adapter contract.</summary>
+    void AddTypedSessionHandshakeResponseAdapter<TAdapter>() where TAdapter : class;
+    /// <summary>Registers one module-owned implementation of the existing external-session validator contract.</summary>
+    void AddExternalSessionValidationAdapter<TAdapter>() where TAdapter : class;
 }
 
 /// <summary>Explicit startup-only module that registers known execution strategies and their own services.</summary>
@@ -366,6 +443,29 @@ internal interface IAuthorizedConnectorCapabilityDispatcher
 
     Task<QualifiedGatewayExecutionResult> ExecuteComposedSoapAsync(
         AuthorizedConnectorExecution execution,
+        CancellationToken cancellationToken);
+
+    Task<string> CreateSignedTokenAsync(
+        AuthorizedConnectorExecution execution,
+        IReadOnlyDictionary<string, JsonElement> claims,
+        CancellationToken cancellationToken);
+
+    Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
+        AuthorizedConnectorExecution execution,
+        AuthorizedConnectorRestrictedTransportRequest request,
+        CancellationToken cancellationToken);
+}
+
+internal interface IAuthorizedVerticalCapabilityRuntime
+{
+    Task<string> CreateSignedTokenAsync(
+        AuthorizedConnectorExecution execution,
+        IReadOnlyDictionary<string, JsonElement> claims,
+        CancellationToken cancellationToken);
+
+    Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
+        AuthorizedConnectorExecution execution,
+        AuthorizedConnectorRestrictedTransportRequest request,
         CancellationToken cancellationToken);
 }
 
