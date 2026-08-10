@@ -145,14 +145,15 @@ if (providerServices.SigningKeys is not null) builder.Services.AddSingleton(prov
 if (providerServices.Mac is not null) builder.Services.AddSingleton(providerServices.Mac);
 
 builder.Services.AddSingleton<OpaqueSessionLeaseProvider>(services => services.GetRequiredService<SoapSessionClient>().OpaqueSessionLeases);
-builder.Services.AddSingleton<IGatewayOperationExecutionStrategy>(services => new OpaqueSessionHttpExecutionStrategy(
+builder.Services.AddSingleton<IConnectorExecutionStrategy>(services => new OpaqueSessionHttpExecutionStrategy(
     services.GetRequiredService<IConnectorConfigurationStore>(), services.GetRequiredService<OpaqueSessionLeaseProvider>(),
     services.GetRequiredService<IHostResolver>(), services.GetRequiredService<IRestrictedTransport>(), services.GetRequiredService<IGatewayClock>(),
     services.GetService<IPrivateDestinationAllowance>()));
-builder.Services.AddSingleton<IGatewayOperationExecutionStrategy>(services => new ComposedSoapExecutionStrategy(
+builder.Services.AddSingleton<IConnectorExecutionStrategy>(services => new ComposedSoapExecutionStrategy(
     services.GetRequiredService<IConnectorConfigurationStore>(), services.GetRequiredService<ISecretValueProvider>(), services.GetRequiredService<OpaqueSessionLeaseProvider>(),
     services.GetRequiredService<IHostResolver>(), services.GetRequiredService<IRestrictedTransport>(), services.GetRequiredService<IGatewayClock>(),
     services.GetService<IPrivateDestinationAllowance>()));
+ConnectorExecutionModuleLoader.Register(builder.Services, hostOptions.ExecutionModules);
 
 byte[] activationKey;
 string? encodedActivationKey = hostOptions.ActivationHmacKeyBase64;
@@ -193,6 +194,7 @@ else
 builder.Services.AddSingleton<ConnectorAdministrationService>();
 
 WebApplication app = builder.Build();
+_ = app.Services.GetRequiredService<RestrictedEgressService>();
 if (hostOptions.Provider.Resources.Count > 0)
 {
     IConnectorConfigurationStore catalog = app.Services.GetRequiredService<IConnectorConfigurationStore>();

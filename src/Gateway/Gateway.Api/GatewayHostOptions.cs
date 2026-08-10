@@ -20,10 +20,25 @@ public sealed class GatewayHostOptions
     public bool TrustPlatformClientCertificateForwarding { get; init; }
     /// <summary>Server-owned operation allowlist.</summary>
     public List<GatewayOperationConfiguration> Operations { get; init; } = [];
+    /// <summary>Explicit deployment-owned execution modules loaded once during startup.</summary>
+    public List<GatewayExecutionModuleOptions> ExecutionModules { get; init; } = [];
     /// <summary>Published Connector cache TTL. A store stamp is still checked on every invocation.</summary>
     public int ConnectorCacheTtlSeconds { get; init; } = 30;
     /// <summary>Authentication configuration for the provider-neutral Admin API.</summary>
     public GatewayAdminOptions Admin { get; init; } = new();
+}
+
+/// <summary>Exact startup allowlist entry for one trusted Connector execution module.</summary>
+public sealed class GatewayExecutionModuleOptions
+{
+    /// <summary>Expected canonical module identifier.</summary>
+    public required string ModuleId { get; init; }
+    /// <summary>Canonical absolute path to the deployment-installed assembly.</summary>
+    public required string AssemblyPath { get; init; }
+    /// <summary>Exact assembly full name, including version, culture and public-key token.</summary>
+    public required string AssemblyFullName { get; init; }
+    /// <summary>Exact public type implementing the startup module contract.</summary>
+    public required string ModuleType { get; init; }
 }
 
 /// <summary>Provider-neutral composition settings. Provider-specific values remain owned by the pack.</summary>
@@ -143,10 +158,13 @@ public sealed class GatewayOperationConfiguration
     public bool Idempotent { get; init; }
     /// <summary>Maximum retry count for transient transport failures.</summary>
     public int MaximumRetries { get; init; }
+    /// <summary>Optional explicit server-owned execution strategy key.</summary>
+    public string? ExecutionStrategy { get; init; }
 
     /// <summary>Creates the validated application definition.</summary>
     public GatewayOperationDefinition ToDefinition() => new(
         ConnectorId, OperationId, Version, new Uri(Endpoint, UriKind.Absolute), new HttpMethod(Method), RequestContentType,
         Authentication, UsernameSecretReference, PasswordSecretReference, ApiKeySecretReference, ApiKeyHeaderName,
-        ClientCertificateReference, TimeoutMilliseconds, MaximumRequestBytes, MaximumResponseBytes, Idempotent, MaximumRetries);
+        ClientCertificateReference, TimeoutMilliseconds, MaximumRequestBytes, MaximumResponseBytes, Idempotent, MaximumRetries,
+        ExecutionStrategy: ExecutionStrategy is null ? null : ConnectorExecutionStrategyKey.Parse(ExecutionStrategy));
 }

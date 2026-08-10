@@ -417,7 +417,8 @@ public static class ConnectorApprovalArtifacts
                 binding.EnvironmentId.ToString("D"), resource.ConnectorScope, resource.OperationScope, resource.CatalogChecksumSha256,
                 Component(logical, resource), binding.ChecksumSha256));
         }
-        return new(operationId, binding.EnvironmentId.ToString("D"), "gateway-server-side", effective.Scheme.ToUpperInvariant(), dependencies, endpoint, authorityEndpoints, secrets, certificates);
+        return new(operationId, binding.EnvironmentId.ToString("D"), ConnectorExecutionStrategyKeys.Resolve(operation).Value,
+            effective.Scheme.ToUpperInvariant(), dependencies, endpoint, authorityEndpoints, secrets, certificates);
     }
 
     private static ApprovalEndpointReview ReviewEndpoint(string logicalId, ConnectorBindingSet binding, Uri endpoint, IReadOnlyList<string> methods, string redirectPolicy) =>
@@ -963,7 +964,10 @@ public sealed class PublishedConnectorCatalog(
                 operation.GetProperty("timeoutMs").GetInt32(), request.GetProperty("maximumBytes").GetInt64(), response.GetProperty("maximumBytes").GetInt64(),
                 operation.TryGetProperty("idempotent", out JsonElement idempotent) && idempotent.GetBoolean(), operation.TryGetProperty("maximumRetries", out JsonElement retries) ? retries.GetInt32() : 0,
                 auth.TryGetProperty("policyId", out JsonElement policyId) ? policyId.GetString() : null,
-                auth.TryGetProperty("sessionProfileId", out JsonElement sessionProfileId) ? sessionProfileId.GetString() : null);
+                auth.TryGetProperty("sessionProfileId", out JsonElement sessionProfileId) ? sessionProfileId.GetString() : null,
+                operation.TryGetProperty("executionStrategy", out JsonElement executionStrategy)
+                    ? ConnectorExecutionStrategyKey.Parse(executionStrategy.GetString()!)
+                    : null);
             _ = new GatewayOperationCatalog([definition]);
             operations.Add(operationId, definition);
         }

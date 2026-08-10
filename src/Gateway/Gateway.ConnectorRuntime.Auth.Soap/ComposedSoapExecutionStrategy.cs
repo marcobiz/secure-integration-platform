@@ -5,7 +5,7 @@ using SecureIntegration.Providers.Abstractions;
 namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 
 /// <summary>Production strategy for Basic + typed SOAP metadata + opaque-session dispatch.</summary>
-public sealed class ComposedSoapExecutionStrategy : IGatewayOperationExecutionStrategy
+public sealed class ComposedSoapExecutionStrategy : IConnectorExecutionStrategy
 {
     private readonly PublishedComposedSoapAuthorityResolver authority;
     private readonly ComposedSoapAuthenticatedClient client;
@@ -40,14 +40,15 @@ public sealed class ComposedSoapExecutionStrategy : IGatewayOperationExecutionSt
     }
 
     /// <inheritdoc />
-    public GatewayAuthenticationKind AuthenticationKind => GatewayAuthenticationKind.SoapBasicOpaqueSession;
+    public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("composed-soap");
 
     /// <inheritdoc />
-    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedGatewayOperationExecution execution, CancellationToken cancellationToken)
+    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(execution);
         GatewayOperationDefinition operation = execution.Operation;
-        if (operation.Authentication != AuthenticationKind || operation.Method != HttpMethod.Post || string.IsNullOrWhiteSpace(operation.AuthenticationPolicyId) ||
+        if (operation.Authentication != GatewayAuthenticationKind.SoapBasicOpaqueSession || execution.ExecutionStrategyKey != Key ||
+            operation.Method != HttpMethod.Post || string.IsNullOrWhiteSpace(operation.AuthenticationPolicyId) ||
             string.IsNullOrWhiteSpace(operation.SessionProfileId))
             throw AuthenticationFailure();
 

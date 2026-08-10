@@ -77,6 +77,12 @@
         "request": { "$ref": "#/$defs/messagePolicy" },
         "response": { "$ref": "#/$defs/responsePolicy" },
         "authentication": { "$ref": "#/$defs/authentication" },
+        "executionStrategy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9._-]*[a-z0-9]$|^[a-z]$"
+        },
         "typedSessionHandshake": { "$ref": "#/$defs/typedSessionHandshake" },
         "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 },
         "redirectPolicy": { "const": "deny" },

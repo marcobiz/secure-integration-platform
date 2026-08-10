@@ -89,8 +89,11 @@ public sealed class RestrictedEgressService(
     IRestrictedTransport transport,
     IGatewayClock clock,
     IPrivateDestinationAllowance? privateDestinationAllowance = null,
-    IEnumerable<IGatewayOperationExecutionStrategy>? executionStrategies = null)
+    IEnumerable<IConnectorExecutionStrategy>? executionStrategies = null)
 {
+    private readonly ConnectorExecutionStrategyRegistry executionStrategyRegistry = new(
+        PrependDefault(new DefaultHttpExecutionStrategy(secrets, certificates, resolver, transport, privateDestinationAllowance), executionStrategies));
+
     /// <summary>Authorizes and invokes a server-owned external operation.</summary>
     public async Task<GatewayInvokeResponse> InvokeAsync(GatewayClientPrincipal authenticated, string connectorId, string operationId, GatewayInvokeRequest request, CancellationToken cancellationToken)
     {
@@ -120,70 +123,100 @@ public sealed class RestrictedEgressService(
         catch (FormatException) { throw new GatewayException("BGW-PROTOCOL-PAYLOAD", 400); }
         if (body.LongLength > operation.MaximumRequestBytes)
             throw new GatewayException("BGW-PROTOCOL-PAYLOAD", 413);
-
-        if (operation.Authentication is GatewayAuthenticationKind.OAuthAuthorizationCode or GatewayAuthenticationKind.OAuthClientCredentials or
-            GatewayAuthenticationKind.OpaqueSessionHttp or GatewayAuthenticationKind.SoapBasicOpaqueSession)
+        ConnectorExecutionStrategyKey strategyKey = ConnectorExecutionStrategyKeys.Resolve(operation);
+        IConnectorExecutionStrategy strategy = executionStrategyRegistry.Required(strategyKey);
+        AuthorizedGatewayInvocation invocation = new(authenticated, connectorId, operationId);
+        QualifiedGatewayExecutionResult result;
+        try
         {
-            IGatewayOperationExecutionStrategy[] selected = (executionStrategies ?? []).Where(value => value.AuthenticationKind == operation.Authentication).Take(2).ToArray();
-            if (selected.Length != 1) throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
-            AuthorizedGatewayInvocation invocation = new(authenticated, connectorId, operationId);
-            QualifiedGatewayExecutionResult result = await selected[0].ExecuteAsync(new(invocation, operation, body), cancellationToken).ConfigureAwait(false);
-            if (result.StatusCode is < 100 or > 599 || string.IsNullOrWhiteSpace(result.ContentType) || result.ContentType.Length > 512 || result.Body.LongLength > operation.MaximumResponseBytes)
-                throw new GatewayException("BGW-EGRESS-RESPONSE-TOO-LARGE", 502);
-            await registry.AppendAuditAsync(new GatewayAuditEvent(Guid.NewGuid(), clock.UtcNow, identity.TenantId, "installation", identity.InstallationId.ToString("D"), "operation.invoke", "operation", connectorId + "/" + operationId, request.CorrelationId, "success", "BGW-OPERATION-OK", new Dictionary<string, string> { ["connectorVersion"] = operation.Version, ["statusCategory"] = (result.StatusCode / 100).ToString(System.Globalization.CultureInfo.InvariantCulture) + "xx", ["callerKind"] = identity.InstallationKind.ToString() }), cancellationToken).ConfigureAwait(false);
-            return new GatewayInvokeResponse(request.CorrelationId, operation.Version, new GatewayPayload(result.ContentType, "base64", Convert.ToBase64String(result.Body)));
+            result = await strategy.ExecuteAsync(new(invocation, operation, strategyKey, body), cancellationToken).ConfigureAwait(false);
         }
-
-        IPAddress[] addresses = await resolver.ResolveAsync(operation.Endpoint.DnsSafeHost, cancellationToken).ConfigureAwait(false);
-        if (addresses.Length == 0 || addresses.Any(address => IsForbiddenAddress(address) && privateDestinationAllowance?.IsAllowed(operation.Endpoint.DnsSafeHost, address) != true))
-            throw new GatewayException("BGW-EGRESS-DESTINATION-DENIED", 403);
-
-        int attempts = operation.MaximumRetries + 1;
-        for (int attempt = 1; ; attempt++)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            using HttpRequestMessage outbound = new(operation.Method, operation.Endpoint);
-            outbound.Headers.TryAddWithoutValidation("X-Correlation-ID", request.CorrelationId.ToString("D"));
-            if (operation.Method != HttpMethod.Get)
-                outbound.Content = new ByteArrayContent(body) { Headers = { ContentType = MediaTypeHeaderValue.Parse(operation.RequestContentType) } };
-            X509Certificate2? clientCertificate = null;
-            try
-            {
-                clientCertificate = await ApplyAuthenticationAsync(outbound, operation, cancellationToken).ConfigureAwait(false);
-                ExternalResponse result = await transport.SendAsync(outbound, addresses, clientCertificate, TimeSpan.FromMilliseconds(operation.TimeoutMilliseconds), operation.MaximumResponseBytes, cancellationToken).ConfigureAwait(false);
-                await registry.AppendAuditAsync(new GatewayAuditEvent(Guid.NewGuid(), clock.UtcNow, identity.TenantId, "installation", identity.InstallationId.ToString("D"), "operation.invoke", "operation", connectorId + "/" + operationId, request.CorrelationId, "success", "BGW-OPERATION-OK", new Dictionary<string, string> { ["connectorVersion"] = operation.Version, ["statusCategory"] = (result.StatusCode / 100).ToString(System.Globalization.CultureInfo.InvariantCulture) + "xx", ["callerKind"] = identity.InstallationKind.ToString() }), cancellationToken).ConfigureAwait(false);
-                return new GatewayInvokeResponse(request.CorrelationId, operation.Version, new GatewayPayload(result.ContentType, "base64", Convert.ToBase64String(result.Body)));
-            }
-            catch (Exception exception) when (attempt < attempts && exception is HttpRequestException or TimeoutException)
-            {
-                // Retry only operations explicitly declared idempotent by server configuration.
-            }
-            finally { clientCertificate?.Dispose(); }
+            throw new OperationCanceledException(cancellationToken);
         }
+        catch (GatewayException) { throw; }
+        catch (Exception) { throw new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502); }
+
+        if (result is null || result.Body is null || result.StatusCode is < 100 or > 599 || string.IsNullOrWhiteSpace(result.ContentType) ||
+            result.ContentType.Length > 512 || result.Body.LongLength > operation.MaximumResponseBytes)
+            throw new GatewayException("BGW-EGRESS-RESPONSE-TOO-LARGE", 502);
+        byte[] responseBody = result.Body.ToArray();
+        await registry.AppendAuditAsync(new GatewayAuditEvent(Guid.NewGuid(), clock.UtcNow, identity.TenantId, "installation", identity.InstallationId.ToString("D"), "operation.invoke", "operation", connectorId + "/" + operationId, request.CorrelationId, "success", "BGW-OPERATION-OK", new Dictionary<string, string> { ["connectorVersion"] = operation.Version, ["statusCategory"] = (result.StatusCode / 100).ToString(System.Globalization.CultureInfo.InvariantCulture) + "xx", ["callerKind"] = identity.InstallationKind.ToString() }), cancellationToken).ConfigureAwait(false);
+        return new GatewayInvokeResponse(request.CorrelationId, operation.Version, new GatewayPayload(result.ContentType, "base64", Convert.ToBase64String(responseBody)));
     }
 
-    private async Task<X509Certificate2?> ApplyAuthenticationAsync(HttpRequestMessage request, GatewayOperationDefinition operation, CancellationToken cancellationToken)
+    private static IEnumerable<IConnectorExecutionStrategy> PrependDefault(
+        IConnectorExecutionStrategy defaultStrategy,
+        IEnumerable<IConnectorExecutionStrategy>? configured)
     {
-        switch (operation.Authentication)
+        yield return defaultStrategy;
+        if (configured is null) yield break;
+        foreach (IConnectorExecutionStrategy strategy in configured) yield return strategy;
+    }
+
+    private sealed class DefaultHttpExecutionStrategy(
+        ISecretValueProvider secrets,
+        IClientCertificateProvider certificates,
+        IHostResolver resolver,
+        IRestrictedTransport transport,
+        IPrivateDestinationAllowance? privateDestinationAllowance) : IConnectorExecutionStrategy
+    {
+        public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKeys.DefaultHttp;
+
+        public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
         {
-            case GatewayAuthenticationKind.None:
-                return null;
-            case GatewayAuthenticationKind.Basic:
-                string username = await secrets.GetSecretAsync(operation.UsernameSecretReference!, cancellationToken).ConfigureAwait(false);
-                string password = await secrets.GetSecretAsync(operation.PasswordSecretReference!, cancellationToken).ConfigureAwait(false);
-                request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(username + ":" + password)));
-                return null;
-            case GatewayAuthenticationKind.ApiKey:
-                string key = await secrets.GetSecretAsync(operation.ApiKeySecretReference!, cancellationToken).ConfigureAwait(false);
-                request.Headers.TryAddWithoutValidation(operation.ApiKeyHeaderName!, key);
-                return null;
-            case GatewayAuthenticationKind.MutualTls:
-                return await certificates.GetClientCertificateAsync(operation.ClientCertificateReference!, cancellationToken).ConfigureAwait(false);
-            case GatewayAuthenticationKind.ApiKeyAndMutualTls:
-                string combinedKey = await secrets.GetSecretAsync(operation.ApiKeySecretReference!, cancellationToken).ConfigureAwait(false);
-                request.Headers.TryAddWithoutValidation(operation.ApiKeyHeaderName!, combinedKey);
-                return await certificates.GetClientCertificateAsync(operation.ClientCertificateReference!, cancellationToken).ConfigureAwait(false);
-            default:
-                throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 500);
+            GatewayOperationDefinition operation = execution.Operation;
+            IPAddress[] addresses = await resolver.ResolveAsync(operation.Endpoint.DnsSafeHost, cancellationToken).ConfigureAwait(false);
+            if (addresses.Length == 0 || addresses.Any(address => IsForbiddenAddress(address) && privateDestinationAllowance?.IsAllowed(operation.Endpoint.DnsSafeHost, address) != true))
+                throw new GatewayException("BGW-EGRESS-DESTINATION-DENIED", 403);
+
+            int attempts = operation.MaximumRetries + 1;
+            for (int attempt = 1; ; attempt++)
+            {
+                using HttpRequestMessage outbound = new(operation.Method, operation.Endpoint);
+                outbound.Headers.TryAddWithoutValidation("X-Correlation-ID", execution.CorrelationId.ToString("D"));
+                if (operation.Method != HttpMethod.Get)
+                    outbound.Content = new ByteArrayContent(execution.Payload.ToArray()) { Headers = { ContentType = MediaTypeHeaderValue.Parse(operation.RequestContentType) } };
+                X509Certificate2? clientCertificate = null;
+                try
+                {
+                    clientCertificate = await ApplyAuthenticationAsync(outbound, operation, cancellationToken).ConfigureAwait(false);
+                    ExternalResponse response = await transport.SendAsync(outbound, addresses, clientCertificate, TimeSpan.FromMilliseconds(operation.TimeoutMilliseconds), operation.MaximumResponseBytes, cancellationToken).ConfigureAwait(false);
+                    return new(response.StatusCode, response.ContentType, response.Body);
+                }
+                catch (Exception exception) when (attempt < attempts && exception is HttpRequestException or TimeoutException)
+                {
+                    // Retry only operations explicitly declared idempotent by server configuration.
+                }
+                finally { clientCertificate?.Dispose(); }
+            }
+        }
+
+        private async Task<X509Certificate2?> ApplyAuthenticationAsync(HttpRequestMessage request, GatewayOperationDefinition operation, CancellationToken cancellationToken)
+        {
+            switch (operation.Authentication)
+            {
+                case GatewayAuthenticationKind.None:
+                    return null;
+                case GatewayAuthenticationKind.Basic:
+                    string username = await secrets.GetSecretAsync(operation.UsernameSecretReference!, cancellationToken).ConfigureAwait(false);
+                    string password = await secrets.GetSecretAsync(operation.PasswordSecretReference!, cancellationToken).ConfigureAwait(false);
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes(username + ":" + password)));
+                    return null;
+                case GatewayAuthenticationKind.ApiKey:
+                    string key = await secrets.GetSecretAsync(operation.ApiKeySecretReference!, cancellationToken).ConfigureAwait(false);
+                    request.Headers.TryAddWithoutValidation(operation.ApiKeyHeaderName!, key);
+                    return null;
+                case GatewayAuthenticationKind.MutualTls:
+                    return await certificates.GetClientCertificateAsync(operation.ClientCertificateReference!, cancellationToken).ConfigureAwait(false);
+                case GatewayAuthenticationKind.ApiKeyAndMutualTls:
+                    string combinedKey = await secrets.GetSecretAsync(operation.ApiKeySecretReference!, cancellationToken).ConfigureAwait(false);
+                    request.Headers.TryAddWithoutValidation(operation.ApiKeyHeaderName!, combinedKey);
+                    return await certificates.GetClientCertificateAsync(operation.ClientCertificateReference!, cancellationToken).ConfigureAwait(false);
+                default:
+                    throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 500);
+            }
         }
     }
 

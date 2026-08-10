@@ -3,7 +3,7 @@ using SecureIntegration.Gateway.Application;
 namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
 
 /// <summary>Production strategy for the qualified generic opaque-session HTTP capability.</summary>
-public sealed class OpaqueSessionHttpExecutionStrategy : IGatewayOperationExecutionStrategy
+public sealed class OpaqueSessionHttpExecutionStrategy : IConnectorExecutionStrategy
 {
     private readonly PublishedOpaqueSessionAuthorityResolver authority;
     private readonly OpaqueSessionHttpClient client;
@@ -23,14 +23,15 @@ public sealed class OpaqueSessionHttpExecutionStrategy : IGatewayOperationExecut
     }
 
     /// <inheritdoc />
-    public GatewayAuthenticationKind AuthenticationKind => GatewayAuthenticationKind.OpaqueSessionHttp;
+    public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("opaque-session-http");
 
     /// <inheritdoc />
-    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedGatewayOperationExecution execution, CancellationToken cancellationToken)
+    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(execution);
         GatewayOperationDefinition operation = execution.Operation;
-        if (operation.Authentication != AuthenticationKind || string.IsNullOrWhiteSpace(operation.AuthenticationPolicyId) || string.IsNullOrWhiteSpace(operation.SessionProfileId))
+        if (operation.Authentication != GatewayAuthenticationKind.OpaqueSessionHttp || execution.ExecutionStrategyKey != Key ||
+            string.IsNullOrWhiteSpace(operation.AuthenticationPolicyId) || string.IsNullOrWhiteSpace(operation.SessionProfileId))
             throw AuthenticationFailure();
 
         try

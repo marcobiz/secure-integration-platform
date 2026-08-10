@@ -100,7 +100,8 @@ public sealed record GatewayOperationDefinition(
     bool Idempotent,
     int MaximumRetries = 0,
     string? AuthenticationPolicyId = null,
-    string? SessionProfileId = null);
+    string? SessionProfileId = null,
+    ConnectorExecutionStrategyKey? ExecutionStrategy = null);
 
 /// <summary>Bounded result returned by one server-selected qualified execution strategy.</summary>
 public sealed record QualifiedGatewayExecutionResult(int StatusCode, string ContentType, byte[] Body);
