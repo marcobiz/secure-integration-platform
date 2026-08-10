@@ -17,8 +17,8 @@ public sealed class RuntimeExecutionStrategyTests
     public async Task Wave1_UT_runtime_selects_the_exact_qualified_strategy_only_after_principal_grant_and_operation_resolution(GatewayAuthenticationKind kind)
     {
         RuntimeFixture fixture = await RuntimeFixture.CreateAsync(kind, grant: true);
-        RecordingStrategy exact = new(kind);
-        RecordingStrategy wrong = new(kind == GatewayAuthenticationKind.SoapBasicOpaqueSession ? GatewayAuthenticationKind.OpaqueSessionHttp : GatewayAuthenticationKind.SoapBasicOpaqueSession);
+        RecordingStrategy exact = new(Key(kind));
+        RecordingStrategy wrong = new(Key(kind == GatewayAuthenticationKind.SoapBasicOpaqueSession ? GatewayAuthenticationKind.OpaqueSessionHttp : GatewayAuthenticationKind.SoapBasicOpaqueSession));
         RestrictedEgressService runtime = fixture.Runtime([wrong, exact]);
 
         GatewayInvokeResponse response = await runtime.InvokeAsync(fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, fixture.Request, TestContext.Current.CancellationToken);
@@ -30,32 +30,140 @@ public sealed class RuntimeExecutionStrategyTests
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(true, true)]
-    public async Task Wave1_SEC_invalid_grant_missing_mode_and_duplicate_mode_deny_before_strategy_or_network(bool grant, bool duplicate)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Wave1_SEC_invalid_grant_and_missing_strategy_deny_before_strategy_or_network(bool grant)
     {
         RuntimeFixture fixture = await RuntimeFixture.CreateAsync(GatewayAuthenticationKind.SoapBasicOpaqueSession, grant);
-        RecordingStrategy first = new(duplicate ? GatewayAuthenticationKind.SoapBasicOpaqueSession : GatewayAuthenticationKind.OpaqueSessionHttp);
-        RecordingStrategy second = new(GatewayAuthenticationKind.SoapBasicOpaqueSession);
-        IEnumerable<IGatewayOperationExecutionStrategy> strategies = duplicate ? [first, second] : [first];
-        RestrictedEgressService runtime = fixture.Runtime(strategies);
+        RecordingStrategy wrong = new(ConnectorExecutionStrategyKey.Parse("other-strategy"));
+        RestrictedEgressService runtime = fixture.Runtime([wrong]);
 
         GatewayException failure = await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId,
             fixture.Request, TestContext.Current.CancellationToken));
 
         Assert.Equal(grant ? "BGW-EGRESS-AUTHENTICATION" : "BGW-AUTHZ-OPERATION-DENIED", failure.Code);
-        Assert.Equal(0, first.Calls);
-        Assert.Equal(0, second.Calls);
+        Assert.Equal(0, wrong.Calls);
+        Assert.Equal(0, fixture.Transport.Calls);
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_duplicate_strategy_key_fails_during_composition()
+    {
+        RuntimeFixture fixture = await RuntimeFixture.CreateAsync(GatewayAuthenticationKind.SoapBasicOpaqueSession, grant: true);
+        ConnectorExecutionStrategyKey key = Key(GatewayAuthenticationKind.SoapBasicOpaqueSession);
+        InvalidOperationException failure = Assert.Throws<InvalidOperationException>(() => fixture.Runtime([new RecordingStrategy(key), new RecordingStrategy(key)]));
+        Assert.Equal("Duplicate Connector execution strategy key.", failure.Message);
         Assert.Equal(0, fixture.Transport.Calls);
     }
 
     [Fact]
     public void Wave1_CT_qualified_execution_handoff_is_non_forgeable_and_hides_payload_and_operation_authority()
     {
-        Assert.Empty(typeof(AuthorizedGatewayOperationExecution).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
-        Assert.DoesNotContain(typeof(AuthorizedGatewayOperationExecution).GetProperties(BindingFlags.Public | BindingFlags.Instance), property =>
-            property.Name is "Payload" or "Operation" or "Principal" or "Endpoint" or "AuthenticationKind");
+        Assert.Empty(typeof(AuthorizedConnectorExecution).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+        Assert.DoesNotContain(typeof(AuthorizedConnectorExecution).GetProperties(BindingFlags.Public | BindingFlags.Instance), property =>
+            property.Name is "Payload" or "Operation" or "Principal" or "Endpoint");
+        Assert.All(typeof(AuthorizedConnectorExecution).GetProperties(BindingFlags.Public | BindingFlags.Instance), property => Assert.False(property.CanWrite));
+        Assert.DoesNotContain(typeof(AuthorizedConnectorExecution).GetMethods(BindingFlags.Public | BindingFlags.Static), method => method.Name.Contains("Create", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("UpperCase")]
+    [InlineData("-leading")]
+    [InlineData("trailing-")]
+    [InlineData("contains space")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public void Wave1_UT_execution_strategy_key_is_bounded_exact_lower_case_and_canonical(string invalid)
+    {
+        Assert.False(ConnectorExecutionStrategyKey.TryParse(invalid, out ConnectorExecutionStrategyKey? parsed));
+        Assert.Null(parsed);
+        Assert.Throws<ArgumentException>(() => ConnectorExecutionStrategyKey.Parse(invalid));
+
+        ConnectorExecutionStrategyKey key = ConnectorExecutionStrategyKey.Parse("synthetic-execution.v1");
+        Assert.Equal("synthetic-execution.v1", key.Value);
+        Assert.Equal(key, ConnectorExecutionStrategyKey.Parse(key.ToString()));
+    }
+
+    [Fact]
+    public async Task Wave1_UT_explicit_execution_key_is_independent_from_authentication_kind()
+    {
+        ConnectorExecutionStrategyKey explicitKey = ConnectorExecutionStrategyKey.Parse("synthetic-echo");
+        RuntimeFixture fixture = await RuntimeFixture.CreateAsync(GatewayAuthenticationKind.None, grant: true, explicitKey);
+        RecordingStrategy selected = new(explicitKey);
+        RestrictedEgressService runtime = fixture.Runtime([selected]);
+
+        _ = await runtime.InvokeAsync(fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, fixture.Request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, selected.Calls);
+        Assert.Equal(0, fixture.Transport.Calls);
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_explicit_unknown_key_never_falls_back_to_default_HTTP()
+    {
+        RuntimeFixture fixture = await RuntimeFixture.CreateAsync(
+            GatewayAuthenticationKind.None, grant: true, ConnectorExecutionStrategyKey.Parse("not-installed"));
+        RestrictedEgressService runtime = fixture.Runtime([]);
+
+        GatewayException failure = await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(
+            fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, fixture.Request, TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-EGRESS-AUTHENTICATION", failure.Code);
+        Assert.Equal(0, fixture.Transport.Calls);
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_strategy_exception_and_fake_cancellation_are_sanitized_but_real_cancellation_is_preserved()
+    {
+        ConnectorExecutionStrategyKey key = ConnectorExecutionStrategyKey.Parse("synthetic-boundary");
+        RuntimeFixture fixture = await RuntimeFixture.CreateAsync(GatewayAuthenticationKind.None, grant: true, key);
+
+        GatewayException unexpected = await Assert.ThrowsAsync<GatewayException>(() => fixture.Runtime([new ThrowingStrategy(key)]).InvokeAsync(
+            fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, fixture.Request, TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-EGRESS-UPSTREAM-REJECTED", unexpected.Code);
+        Assert.Equal("BGW-EGRESS-UPSTREAM-REJECTED", unexpected.Message);
+        Assert.Null(unexpected.InnerException);
+
+        GatewayException fakeCancellation = await Assert.ThrowsAsync<GatewayException>(() => fixture.Runtime([new FakeCancellationStrategy(key)]).InvokeAsync(
+            fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, fixture.Request, TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-EGRESS-UPSTREAM-REJECTED", fakeCancellation.Code);
+        Assert.DoesNotContain("synthetic-fake-cancellation-canary", fakeCancellation.ToString(), StringComparison.Ordinal);
+
+        using CancellationTokenSource callerCancellation = new();
+        OperationCanceledException realCancellation = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.Runtime([new CallerCancellationStrategy(key, callerCancellation)]).InvokeAsync(
+            fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, fixture.Request, callerCancellation.Token));
+        Assert.Equal(callerCancellation.Token, realCancellation.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_authorized_payload_is_an_owned_read_only_snapshot()
+    {
+        ConnectorExecutionStrategyKey key = ConnectorExecutionStrategyKey.Parse("synthetic-payload");
+        RuntimeFixture fixture = await RuntimeFixture.CreateAsync(GatewayAuthenticationKind.None, grant: true, key);
+        byte[] callerBuffer = "authorized-snapshot"u8.ToArray();
+        AuthorizedConnectorExecution execution = new(
+            new AuthorizedGatewayInvocation(fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId),
+            fixture.Operation,
+            key,
+            callerBuffer);
+        callerBuffer.AsSpan().Fill((byte)'X');
+
+        await using Stream first = execution.OpenPayloadStream();
+        Assert.False(first.CanWrite);
+        Assert.Throws<NotSupportedException>(() => first.WriteByte((byte)'Y'));
+        Assert.False(Assert.IsType<MemoryStream>(first).TryGetBuffer(out _));
+        using MemoryStream copy = new();
+        await first.CopyToAsync(copy, TestContext.Current.CancellationToken);
+        Assert.Equal("authorized-snapshot", System.Text.Encoding.UTF8.GetString(copy.ToArray()));
+    }
+
+    [Fact]
+    public void Wave1_SEC_execution_strategy_registry_is_bounded_and_not_runtime_growing()
+    {
+        IConnectorExecutionStrategy[] strategies = Enumerable.Range(0, ConnectorExecutionStrategyRegistry.MaximumStrategies + 1)
+            .Select(index => (IConnectorExecutionStrategy)new RecordingStrategy(ConnectorExecutionStrategyKey.Parse($"strategy-{index:D3}")))
+            .ToArray();
+        Assert.Throws<InvalidOperationException>(() => new ConnectorExecutionStrategyRegistry(strategies));
     }
 
     private sealed class RuntimeFixture
@@ -65,10 +173,11 @@ public sealed class RuntimeExecutionStrategyTests
         private readonly InMemoryGatewayRegistry registry;
         private readonly GatewayOperationCatalog catalog;
 
-        private RuntimeFixture(InMemoryGatewayRegistry registry, GatewayOperationCatalog catalog, GatewayClientPrincipal principal, GatewayInvokeRequest request)
+        private RuntimeFixture(InMemoryGatewayRegistry registry, GatewayOperationCatalog catalog, GatewayOperationDefinition operation, GatewayClientPrincipal principal, GatewayInvokeRequest request)
         {
             this.registry = registry;
             this.catalog = catalog;
+            Operation = operation;
             Principal = principal;
             Request = request;
         }
@@ -76,11 +185,15 @@ public sealed class RuntimeExecutionStrategyTests
         internal RecordingTransport Transport { get; } = new();
         internal GatewayClientPrincipal Principal { get; }
         internal GatewayInvokeRequest Request { get; }
+        internal GatewayOperationDefinition Operation { get; }
 
-        internal RestrictedEgressService Runtime(IEnumerable<IGatewayOperationExecutionStrategy> strategies) =>
+        internal RestrictedEgressService Runtime(IEnumerable<IConnectorExecutionStrategy> strategies) =>
             new(registry, catalog, new NeverSecrets(), new NeverCertificates(), new PublicResolver(), Transport, new FixedClock(), null, strategies);
 
-        internal static async Task<RuntimeFixture> CreateAsync(GatewayAuthenticationKind kind, bool grant)
+        internal static async Task<RuntimeFixture> CreateAsync(
+            GatewayAuthenticationKind kind,
+            bool grant,
+            ConnectorExecutionStrategyKey? executionStrategy = null)
         {
             DateTimeOffset now = FixedClock.Now;
             Guid tenantId = Guid.NewGuid(); Guid applicationId = Guid.NewGuid(); Guid environmentId = Guid.NewGuid(); Guid installationId = Guid.NewGuid();
@@ -94,24 +207,55 @@ public sealed class RuntimeExecutionStrategyTests
                 kind == GatewayAuthenticationKind.SoapBasicOpaqueSession ? "text/xml" : "application/json", kind,
                 kind == GatewayAuthenticationKind.SoapBasicOpaqueSession ? "user-ref" : null,
                 kind == GatewayAuthenticationKind.SoapBasicOpaqueSession ? "password-ref" : null,
-                "session-ref", "X-Session-Reference", null, 5_000, 4096, 4096, false, 0, "qualified-policy", "qualified-session");
+                "session-ref", "X-Session-Reference", null, 5_000, 4096, 4096, false, 0, "qualified-policy", "qualified-session", executionStrategy);
             RegisteredInstallationIdentity identity = new(installationId, tenantId, applicationId, environmentId, TenantStatus.Active, ApplicationStatus.Active, InstallationStatus.Active,
                 Guid.NewGuid(), CredentialStatus.Active, [1, 2, 3], now.AddMinutes(-1), now.AddHours(1), "3.0.0", null);
             GatewayInvokeRequest request = new("1.0", new(kind == GatewayAuthenticationKind.SoapBasicOpaqueSession ? "text/xml" : "application/json", "utf8", "<request/>"), Guid.NewGuid());
-            return new(registry, new([operation]), new(identity, request.CorrelationId), request);
+            return new(registry, new([operation]), operation, new(identity, request.CorrelationId), request);
         }
     }
 
-    private sealed class RecordingStrategy(GatewayAuthenticationKind kind) : IGatewayOperationExecutionStrategy
+    private static ConnectorExecutionStrategyKey Key(GatewayAuthenticationKind kind) => ConnectorExecutionStrategyKey.Parse(kind switch
     {
-        public GatewayAuthenticationKind AuthenticationKind => kind;
+        GatewayAuthenticationKind.SoapBasicOpaqueSession => "composed-soap",
+        GatewayAuthenticationKind.OpaqueSessionHttp => "opaque-session-http",
+        _ => throw new InvalidOperationException()
+    });
+
+    private sealed class RecordingStrategy(ConnectorExecutionStrategyKey key) : IConnectorExecutionStrategy
+    {
+        public ConnectorExecutionStrategyKey Key => key;
         public int Calls { get; private set; }
-        public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedGatewayOperationExecution execution, CancellationToken cancellationToken)
+        public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
         {
             Calls++;
             Assert.Equal(RuntimeFixture.ConnectorId, execution.ConnectorId);
             Assert.Equal(RuntimeFixture.OperationId, execution.OperationId);
             return Task.FromResult(new QualifiedGatewayExecutionResult(200, "application/octet-stream", "qualified"u8.ToArray()));
+        }
+    }
+
+    private sealed class ThrowingStrategy(ConnectorExecutionStrategyKey key) : IConnectorExecutionStrategy
+    {
+        public ConnectorExecutionStrategyKey Key => key;
+        public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("synthetic-extension-diagnostic-canary");
+    }
+
+    private sealed class FakeCancellationStrategy(ConnectorExecutionStrategyKey key) : IConnectorExecutionStrategy
+    {
+        public ConnectorExecutionStrategyKey Key => key;
+        public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
+            throw new OperationCanceledException("synthetic-fake-cancellation-canary", new CancellationToken(canceled: true));
+    }
+
+    private sealed class CallerCancellationStrategy(ConnectorExecutionStrategyKey key, CancellationTokenSource callerCancellation) : IConnectorExecutionStrategy
+    {
+        public ConnectorExecutionStrategyKey Key => key;
+        public Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
+        {
+            callerCancellation.Cancel();
+            throw new OperationCanceledException(cancellationToken);
         }
     }
 

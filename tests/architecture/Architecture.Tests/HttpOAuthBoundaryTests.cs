@@ -77,9 +77,13 @@ public sealed class HttpOAuthBoundaryTests
         Assert.DoesNotMatch(new Regex(@"public\s+[^\r\n(]+\([^)]*(?:codeVerifier|codeChallenge|clientSecret|tokenEndpoint|secretReference)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase), contracts + client + resolver);
 
         string builtInPipeline = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "OperationServices.cs"));
-        int oauthDenial = builtInPipeline.IndexOf("operation.Authentication is GatewayAuthenticationKind.OAuthAuthorizationCode", StringComparison.Ordinal);
+        int executionKeyResolution = builtInPipeline.IndexOf("ConnectorExecutionStrategyKeys.Resolve(operation)", StringComparison.Ordinal);
+        int exactStrategyLookup = builtInPipeline.IndexOf("executionStrategyRegistry.Required(strategyKey)", StringComparison.Ordinal);
         int dnsResolution = builtInPipeline.IndexOf("resolver.ResolveAsync(operation.Endpoint.DnsSafeHost", StringComparison.Ordinal);
-        Assert.InRange(oauthDenial, 0, dnsResolution - 1);
+        Assert.InRange(executionKeyResolution, 0, exactStrategyLookup - 1);
+        Assert.InRange(exactStrategyLookup, executionKeyResolution + 1, dnsResolution - 1);
+        Assert.DoesNotContain("oauth-authorization-code", builtInPipeline, StringComparison.Ordinal);
+        Assert.DoesNotContain("oauth-client-credentials", builtInPipeline, StringComparison.Ordinal);
     }
 
     [Fact]

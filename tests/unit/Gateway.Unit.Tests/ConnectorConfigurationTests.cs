@@ -29,6 +29,31 @@ public sealed class ConnectorConfigurationTests
     }
 
     [Fact]
+    public void Wave1_CT_execution_strategy_key_is_schema_validated_canonical_and_checksum_bound()
+    {
+        ConnectorDefinitionValidator validator = new();
+        using JsonDocument sample = Sample();
+        ValidatedConnectorDefinition legacy = validator.ValidateRequired(sample.RootElement);
+        string explicitJson = sample.RootElement.GetRawText().Replace(
+            "\"timeoutMs\": 30000",
+            "\"executionStrategy\": \"synthetic-external\",\r\n      \"timeoutMs\": 30000",
+            StringComparison.Ordinal);
+        using JsonDocument explicitDefinition = JsonDocument.Parse(explicitJson);
+        ValidatedConnectorDefinition validated = validator.ValidateRequired(explicitDefinition.RootElement);
+
+        Assert.NotEqual(legacy.ChecksumSha256, validated.ChecksumSha256);
+        Assert.Contains("\"executionStrategy\":\"synthetic-external\"", validated.CanonicalJson, StringComparison.Ordinal);
+        AssertInvalid(explicitJson.Replace("synthetic-external", "Synthetic-External", StringComparison.Ordinal));
+        AssertInvalid(explicitJson.Replace("synthetic-external", "synthetic/external", StringComparison.Ordinal));
+
+        void AssertInvalid(string candidate)
+        {
+            using JsonDocument document = JsonDocument.Parse(candidate);
+            Assert.False(validator.Validate(document.RootElement).Valid);
+        }
+    }
+
+    [Fact]
     public void M4_CT_Invalid_schema_version_binding_header_and_retry_are_rejected()
     {
         ConnectorDefinitionValidator validator = new();
@@ -209,6 +234,9 @@ public sealed class ConnectorConfigurationTests
         ConnectorVersionRecord stored = await store.GetVersionAsync(version.ConnectorId, version.Version, TestContext.Current.CancellationToken) ?? throw new InvalidOperationException();
         ConnectorBindingSet publishedBinding = Assert.Single((await store.ListBindingsPageAsync(stored.Id, 0, 10, environmentId, TestContext.Current.CancellationToken)).Items);
         ApprovalReviewResult review = ConnectorApprovalArtifacts.Create(stored, [publishedBinding]);
+        Assert.Equal(
+            ["opaque-session-http", "composed-soap"],
+            review.Artifact.Operations.Select(value => value.ExecutionStrategy).ToArray());
         ValidatedConnectorDefinition changedDefinition = validator.ValidateRequired(actionChanged.RootElement);
         ApprovalReviewResult changedReview = ConnectorApprovalArtifacts.Create(stored with
         {
@@ -223,6 +251,10 @@ public sealed class ConnectorConfigurationTests
         GatewayOperationDefinition composed = await catalog.GetRequiredAsync("generic-soap", "soap-dispatch", environmentId, TestContext.Current.CancellationToken);
         Assert.Equal(GatewayAuthenticationKind.OpaqueSessionHttp, opaque.Authentication);
         Assert.Equal(GatewayAuthenticationKind.SoapBasicOpaqueSession, composed.Authentication);
+        Assert.Null(opaque.ExecutionStrategy);
+        Assert.Null(composed.ExecutionStrategy);
+        Assert.Equal("opaque-session-http", ConnectorExecutionStrategyKeys.Resolve(opaque).Value);
+        Assert.Equal("composed-soap", ConnectorExecutionStrategyKeys.Resolve(composed).Value);
         Assert.Equal("X-Session-Reference", composed.ApiKeyHeaderName);
         Assert.Equal("1.0.0", version.Version);
 
@@ -508,6 +540,7 @@ public sealed class ConnectorConfigurationTests
         ApprovalOperationReview operation = Assert.Single(review.Artifact.Operations);
         ApprovalSecretReview secret = Assert.Single(operation.SecretBindings);
         Assert.Equal("submit", operation.BindingDependencies.OperationId);
+        Assert.Equal("default-http", operation.ExecutionStrategy);
         Assert.Equal("sample-vendor-endpoint", operation.BindingDependencies.EndpointBindingId);
         Assert.Equal(["sample-vendor-api-key"], operation.BindingDependencies.SecretBindingIds);
         Assert.Equal(["sample-vendor-client-certificate"], operation.BindingDependencies.CertificateBindingIds);

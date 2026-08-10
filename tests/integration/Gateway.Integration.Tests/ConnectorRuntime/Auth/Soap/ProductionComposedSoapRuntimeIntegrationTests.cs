@@ -206,7 +206,7 @@ public sealed class ProductionComposedSoapRuntimeIntegrationTests
                 IPrivateDestinationAllowance? allowance = mutation == "ssrf" ? null : new ExactLoopbackAllowance(publishedEndpoint.DnsSafeHost);
                 OpaqueSessionLeaseProvider leases = new SoapOpaqueSessionLeaseProvider(cache);
                 ComposedSoapExecutionStrategy composed = new(store, secrets, leases, resolver, transport, clock, allowance, finalHook);
-                IGatewayOperationExecutionStrategy[] strategies = mutation == "wrong-capability-mode"
+                IConnectorExecutionStrategy[] strategies = mutation == "wrong-capability-mode"
                     ? [new OpaqueSessionHttpExecutionStrategy(store, leases, resolver, transport, clock, allowance)]
                     : [composed];
                 RestrictedEgressService runtime = new(registry, catalog, secrets, new NeverCertificates(), resolver, transport, clock, allowance, strategies);

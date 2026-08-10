@@ -300,6 +300,12 @@ internal sealed record HostedConnectorAuthority(
     ProviderResourceCatalogRecord Password,
     ProviderResourceCatalogRecord Session);
 
+internal sealed record HostedExecutionModuleConfiguration(
+    string ModuleId,
+    string AssemblyPath,
+    string AssemblyFullName,
+    string ModuleType);
+
 internal sealed record HostedHandshakeResult(string Kind, string? IntentReference, string? SessionReference)
 {
     internal static HostedHandshakeResult Parse(string json)
@@ -357,7 +363,8 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         string candidate,
         Func<CancellationToken, Task>? beforePromotion = null,
         string? runtimeConnection = null,
-        string? adminConnection = null)
+        string? adminConnection = null,
+        HostedExecutionModuleConfiguration? executionModule = null)
     {
         HostedServerCertificates certificates = HostedServerCertificates.Create(SyntheticHost);
         try
@@ -371,7 +378,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
                 certificates.Server, TestContext.Current.CancellationToken);
             try
             {
-                TypedSessionHostFactory factory = new(certificates.Root, certificates.Server, SyntheticHost, beforePromotion, runtimeConnection, adminConnection);
+                TypedSessionHostFactory factory = new(certificates.Root, certificates.Server, SyntheticHost, beforePromotion, runtimeConnection, adminConnection, executionModule);
                 return new(certificates, server, factory);
             }
             catch
@@ -503,7 +510,8 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         string connectorId,
         string version,
         Guid environmentId,
-        string? definition = null)
+        string? definition = null,
+        string? sessionOperationScope = null)
     {
         if (!resources.TryGetValue(connectorId, out var connectorResources))
         {
@@ -515,7 +523,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
                 "typed-password-" + suffix, ProviderResourceType.Secret, "Typed password", environmentId, connectorId, "*",
                 "synthetic://typed-password-" + suffix, ProviderResourceStatus.Active, null, 0, null, null, string.Empty, Factory.Clock.UtcNow), TestContext.Current.CancellationToken);
             ProviderResourceCatalogRecord session = await Store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic",
-                "typed-session-" + suffix, ProviderResourceType.Secret, "Typed opaque session authority", environmentId, connectorId, BusinessOperationId,
+                "typed-session-" + suffix, ProviderResourceType.Secret, "Typed opaque session authority", environmentId, connectorId, sessionOperationScope ?? BusinessOperationId,
                 "synthetic://typed-session-" + suffix, ProviderResourceStatus.Active, null, 0, null, null, string.Empty, Factory.Clock.UtcNow), TestContext.Current.CancellationToken);
             Assert.Equal(username.Revision, password.Revision);
             Assert.Equal(username.Revision, session.Revision);
@@ -573,7 +581,12 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         }, TestContext.Current.CancellationToken);
     }
 
-    internal async Task<HttpResponseMessage> SendSignedAsync(HostedIdentity identity, HttpMethod method, string target, byte[] body)
+    internal async Task<HttpResponseMessage> SendSignedAsync(
+        HostedIdentity identity,
+        HttpMethod method,
+        string target,
+        byte[] body,
+        IReadOnlyDictionary<string, string>? additionalHeaders = null)
     {
         using HttpRequestMessage request = new(method, target) { Content = new ByteArrayContent(body) };
         RuntimeSignatureHeaders headers = Sign(identity.Certificate, method.Method, target, body);
@@ -582,8 +595,10 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         request.Headers.TryAddWithoutValidation("X-BG-Nonce", headers.Nonce);
         request.Headers.TryAddWithoutValidation("X-BG-Content-SHA256", headers.ContentSha256);
         request.Headers.TryAddWithoutValidation("X-BG-Signature", headers.Signature);
-        if (target.EndsWith(":invoke", StringComparison.Ordinal))
+        if (target.Split('?', 2)[0].EndsWith(":invoke", StringComparison.Ordinal))
             request.Headers.TryAddWithoutValidation("traceparent", "00-11111111111111111111111111111111-2222222222222222-01");
+        if (additionalHeaders is not null)
+            foreach ((string name, string value) in additionalHeaders) request.Headers.TryAddWithoutValidation(name, value);
         return await api.SendAsync(request, TestContext.Current.CancellationToken);
     }
 
@@ -660,6 +675,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
     private readonly Func<CancellationToken, Task>? beforePromotion;
     private readonly string? runtimeConnection;
     private readonly string? adminConnection;
+    private readonly HostedExecutionModuleConfiguration? executionModule;
     private readonly RecordingLoggerProvider logger = new();
     private readonly TestClientCertificateStartupFilter certificateFilter = new();
     private readonly FixedSecrets secrets = new();
@@ -670,12 +686,14 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
         string syntheticHost,
         Func<CancellationToken, Task>? beforePromotion,
         string? runtimeConnection,
-        string? adminConnection)
+        string? adminConnection,
+        HostedExecutionModuleConfiguration? executionModule)
     {
         this.syntheticHost = syntheticHost;
         this.beforePromotion = beforePromotion;
         this.runtimeConnection = runtimeConnection;
         this.adminConnection = adminConnection;
+        this.executionModule = executionModule;
         Transport = new(new SystemRestrictedTransport(new X509Certificate2Collection(root), Convert.ToHexString(SHA256.HashData(server.RawData))));
     }
 
@@ -689,10 +707,17 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
-        builder.UseSetting("Gateway:Admin:Mode", "Disabled");
-        builder.UseSetting("Gateway:Admin:RequireFourEyes", "true");
+        builder.UseSetting("Gateway:Admin:Mode", runtimeConnection is null ? "DevelopmentAuth" : "Disabled");
+        builder.UseSetting("Gateway:Admin:RequireFourEyes", runtimeConnection is null ? "false" : "true");
         if (runtimeConnection is not null) builder.UseSetting("ConnectionStrings:GatewayDatabase", runtimeConnection);
         if (adminConnection is not null) builder.UseSetting("ConnectionStrings:GatewayAdminDatabase", adminConnection);
+        if (executionModule is not null)
+        {
+            builder.UseSetting("Gateway:ExecutionModules:0:ModuleId", executionModule.ModuleId);
+            builder.UseSetting("Gateway:ExecutionModules:0:AssemblyPath", executionModule.AssemblyPath);
+            builder.UseSetting("Gateway:ExecutionModules:0:AssemblyFullName", executionModule.AssemblyFullName);
+            builder.UseSetting("Gateway:ExecutionModules:0:ModuleType", executionModule.ModuleType);
+        }
         builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<IHostResolver>();

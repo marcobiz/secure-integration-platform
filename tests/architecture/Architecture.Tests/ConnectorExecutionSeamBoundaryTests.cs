@@ -1,0 +1,140 @@
+using System.Xml.Linq;
+using Xunit;
+
+namespace SecureIntegration.Architecture.Tests;
+
+public sealed class ConnectorExecutionSeamBoundaryTests
+{
+    private static readonly string Root = FindRepositoryRoot();
+
+    [Fact]
+    public void Wave1_CT_external_execution_module_uses_only_public_provider_neutral_contracts_without_friend_access()
+    {
+        string supportRoot = Path.Combine(Root, "tests", "support", "Synthetic.ConnectorExecutionModule");
+        XDocument project = XDocument.Load(Path.Combine(supportRoot, "Synthetic.ConnectorExecutionModule.csproj"));
+        string[] references = project.Descendants("ProjectReference")
+            .Select(element => (string?)element.Attribute("Include") ?? string.Empty)
+            .ToArray();
+        Assert.Single(references);
+        Assert.EndsWith("Gateway.Application.csproj", references[0], StringComparison.Ordinal);
+
+        string source = string.Join('\n', Directory.EnumerateFiles(supportRoot, "*.cs").Select(File.ReadAllText));
+        Assert.DoesNotContain("InternalsVisibleTo", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("System.Reflection", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("IServiceProvider", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("IServiceCollection", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("AuthenticateAsync", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ISecretValueProvider", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("IClientCertificateProvider", source, StringComparison.Ordinal);
+
+        string applicationFriends = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "AssemblyInfo.cs"));
+        Assert.DoesNotContain("Synthetic.ConnectorExecutionModule", applicationFriends, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Wave1_CT_execution_contract_is_narrow_and_does_not_expose_DI_transport_or_provider_authority()
+    {
+        string contracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"));
+        Assert.Contains("public sealed class AuthorizedConnectorExecution", contracts, StringComparison.Ordinal);
+        Assert.Contains("internal AuthorizedConnectorExecution(", contracts, StringComparison.Ordinal);
+        Assert.Contains("public Stream OpenPayloadStream()", contracts, StringComparison.Ordinal);
+        Assert.Contains("new MemoryStream(payload, writable: false)", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public AuthorizedConnectorExecution(", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("IServiceCollection", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("IServiceProvider", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpRequestMessage", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("ISecretValueProvider", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("IClientCertificateProvider", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("byte[] Payload", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public ReadOnlyMemory<byte>", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public Memory<byte>", contracts, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Wave1_CT_runtime_grants_and_resolves_Published_authority_before_exact_key_selection()
+    {
+        string runtime = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "OperationServices.cs"));
+        int grant = runtime.IndexOf("registry.IsGrantedAsync", StringComparison.Ordinal);
+        int published = runtime.IndexOf("catalog.GetRequiredAsync", StringComparison.Ordinal);
+        int derive = runtime.IndexOf("ConnectorExecutionStrategyKeys.Resolve(operation)", StringComparison.Ordinal);
+        int lookup = runtime.IndexOf("executionStrategyRegistry.Required(strategyKey)", StringComparison.Ordinal);
+        int handoff = runtime.IndexOf("strategy.ExecuteAsync(new(invocation, operation, strategyKey, body)", StringComparison.Ordinal);
+
+        Assert.True(grant >= 0 && published > grant && derive > published && lookup > derive && handoff > lookup);
+        string selection = runtime[grant..handoff];
+        Assert.DoesNotContain("GatewayAuthenticationKind.OpaqueSessionHttp", selection, StringComparison.Ordinal);
+        Assert.DoesNotContain("GatewayAuthenticationKind.SoapBasicOpaqueSession", selection, StringComparison.Ordinal);
+        Assert.DoesNotContain("CanHandle", selection, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Wave1_CT_module_loading_is_explicit_exact_bounded_and_never_discovers_assemblies()
+    {
+        string loader = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "ConnectorExecutionModuleLoader.cs"));
+        string options = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "GatewayHostOptions.cs"));
+        string host = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "Program.cs"));
+
+        Assert.Contains("MaximumModules = 32", loader, StringComparison.Ordinal);
+        Assert.Contains("Path.IsPathFullyQualified", loader, StringComparison.Ordinal);
+        Assert.Contains("Path.GetFullPath", loader, StringComparison.Ordinal);
+        Assert.Contains("AssemblyName.GetAssemblyName(canonicalPath)", loader, StringComparison.Ordinal);
+        Assert.Contains("LoadFromAssemblyPath(canonicalPath)", loader, StringComparison.Ordinal);
+        Assert.Contains("Path.GetFullPath(assembly.Location)", loader, StringComparison.Ordinal);
+        Assert.Contains("assembly.GetType(configured.ModuleType", loader, StringComparison.Ordinal);
+        Assert.Contains("MaximumStrategiesPerModule = 64", loader, StringComparison.Ordinal);
+        Assert.Contains("type.Assembly != moduleAssembly", loader, StringComparison.Ordinal);
+        Assert.Contains("AssemblyPath", options, StringComparison.Ordinal);
+        Assert.Contains("AssemblyFullName", options, StringComparison.Ordinal);
+        Assert.Contains("ModuleType", options, StringComparison.Ordinal);
+        Assert.Contains("ConnectorExecutionModuleLoader.Register", host, StringComparison.Ordinal);
+
+        foreach (string forbidden in new[]
+        {
+            "Directory.GetFiles", "Directory.EnumerateFiles", "AppDomain.CurrentDomain", "GetAssemblies(",
+            "EnumerateFileSystemEntries", "*.dll", "Assembly.Load("
+        })
+            Assert.DoesNotContain(forbidden, loader, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Wave1_CT_generic_seam_and_Core_solution_have_no_vertical_dependency_or_logic()
+    {
+        string[] files =
+        [
+            Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"),
+            Path.Combine(Root, "src", "Gateway", "Gateway.Application", "OperationServices.cs"),
+            Path.Combine(Root, "src", "Gateway", "Gateway.Api", "ConnectorExecutionModuleLoader.cs"),
+            Path.Combine(Root, "src", "Gateway", "Gateway.Api", "GatewayHostOptions.cs"),
+            Path.Combine(Root, "tests", "support", "Synthetic.ConnectorExecutionModule", "SyntheticExecutionModule.cs")
+        ];
+        string[] forbidden =
+        [
+            "F" + "SE", "Sistema" + "TS", "SO" + "GEI", "farma" + "cia", "health" + "care",
+            "C" + "GM", "Winges" + "far", "dr" + "CLOUD"
+        ];
+        foreach (string file in files)
+        {
+            string source = File.ReadAllText(file);
+            foreach (string value in forbidden) Assert.DoesNotContain(value, source, StringComparison.OrdinalIgnoreCase);
+        }
+
+        string coreSolution = File.ReadAllText(Path.Combine(Root, "BrokerGateway.Core.slnx"));
+        string applicationProject = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "Gateway.Application.csproj"));
+        string exportAllowlist = File.ReadAllText(Path.Combine(Root, "eng", "open-source-core.allowlist"));
+        Assert.DoesNotContain("ConnectorPacks." + "Healthcare", coreSolution, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ConnectorPacks." + "Healthcare", applicationProject, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("tests/support/Synthetic.ConnectorExecutionModule/", exportAllowlist, StringComparison.Ordinal);
+        Assert.Contains("ConnectorExecutionSeamBoundaryTests.cs", exportAllowlist, StringComparison.Ordinal);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        DirectoryInfo? current = new(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "BrokerGateway.Core.slnx"))) return current.FullName;
+            current = current.Parent;
+        }
+        throw new InvalidOperationException("Repository root not found.");
+    }
+}

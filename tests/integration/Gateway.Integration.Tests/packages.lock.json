@@ -629,6 +629,12 @@
           "SecureIntegration.Providers.Abstractions": "[1.0.0, )"
         }
       },
+      "SecureIntegration.Synthetic.ConnectorExecutionModule": {
+        "type": "Project",
+        "dependencies": {
+          "SecureIntegration.Gateway.Application": "[1.0.0, )"
+        }
+      },
       "JsonSchema.Net": {
         "type": "CentralTransitive",
         "requested": "[9.4.0, )",

@@ -22,6 +22,7 @@
     <Project Path="samples/DirectGatewayClient/DirectGatewayClient.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/support/Synthetic.ConnectorExecutionModule/Synthetic.ConnectorExecutionModule.csproj" />
     <Project Path="tests/unit/Authentication.CertificateSigning.Tests/Authentication.CertificateSigning.Tests.csproj" />
     <Project Path="tests/architecture/Architecture.Tests/Architecture.Tests.csproj" />
     <Project Path="tests/unit/Broker.Core.Tests/Broker.Core.Tests.csproj" />

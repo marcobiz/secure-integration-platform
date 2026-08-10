@@ -64,6 +64,7 @@ src/Shared/
 tests/architecture/Architecture.Tests/AdminOpenApiParityTests.cs
 tests/architecture/Architecture.Tests/Architecture.Tests.csproj
 tests/architecture/Architecture.Tests/CiSecurityTests.cs
+tests/architecture/Architecture.Tests/ConnectorExecutionSeamBoundaryTests.cs
 tests/architecture/Architecture.Tests/HttpOAuthBoundaryTests.cs
 tests/architecture/Architecture.Tests/packages.lock.json
 tests/architecture/Architecture.Tests/ProviderBoundaryTests.cs
@@ -71,6 +72,7 @@ tests/architecture/Architecture.Tests/ProvisionerSecurityTests.cs
 tests/architecture/Architecture.Tests/SoapAuthBoundaryTests.cs
 tests/e2e/
 tests/integration/
+tests/support/Synthetic.ConnectorExecutionModule/
 tests/unit/Authentication.CertificateSigning.Tests/
 tests/unit/Broker.Core.Tests/
 tests/unit/Gateway.Unit.Tests/
