@@ -19,7 +19,9 @@ public sealed class PostgreSqlIsolationPolicyTests
         [
             nameof(AdminApiPostgreSqlSecurityTests),
             nameof(PostgresIsolationTests),
-            nameof(ProductionComposedSoapRuntimeIntegrationTests)
+            nameof(ProductionComposedSoapRuntimeIntegrationTests),
+            nameof(TypedSessionHandshakeHostedIntegrationTests),
+            nameof(TypedSessionHandshakePostgresRaceIntegrationTests)
         ];
 
         Assert.Equal(expected, actual);

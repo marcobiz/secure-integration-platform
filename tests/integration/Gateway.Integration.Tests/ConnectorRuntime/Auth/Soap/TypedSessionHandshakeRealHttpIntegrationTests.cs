@@ -71,7 +71,7 @@ public sealed class TypedSessionHandshakeRealHttpIntegrationTests
     }
 
     [Fact]
-    public async Task Wave1_IT_Production_composition_store_authorizer_registry_and_real_restricted_HTTPS_complete_external_admission()
+    public async Task Wave1_IT_Internal_composition_store_authorizer_registry_and_real_restricted_HTTPS_complete_external_admission()
     {
         await using TypedRuntimeApiFactory factory = new();
         using HttpClient api = factory.CreateClient();
@@ -171,7 +171,7 @@ public sealed class TypedSessionHandshakeRealHttpIntegrationTests
     }
 
     [Fact]
-    public async Task Wave1_IT_Production_runtime_denies_adapter_version_endpoint_and_resource_authority_changes_before_validation_network()
+    public async Task Wave1_IT_Internal_composition_runtime_denies_adapter_version_endpoint_and_resource_authority_changes_before_validation_network()
     {
         await using TypedRuntimeApiFactory factory = new();
         TypedSessionHandshakeAdapterRegistry adapters = factory.Services.GetRequiredService<TypedSessionHandshakeAdapterRegistry>();
