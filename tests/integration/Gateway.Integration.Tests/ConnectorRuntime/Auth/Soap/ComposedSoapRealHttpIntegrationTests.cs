@@ -125,14 +125,21 @@ public sealed class ComposedSoapRealHttpIntegrationTests
     [Fact]
     public async Task Wave1_IT_real_HTTPS_composed_response_stall_after_request_observed_honors_timeout_and_dispatches_once()
     {
+        // Five seconds gives loopback connect, TLS, request upload and full Kestrel validation a
+        // reliable CI budget. The separate twenty-second watchdog guards only the test awaits and
+        // is never passed to the production invocation as caller cancellation.
+        TimeSpan productTimeout = TimeSpan.FromSeconds(5);
+        TimeSpan outerWatchdogTimeout = TimeSpan.FromSeconds(20);
         using CertificateFixture certificates = CertificateFixture.Create();
         await using SyntheticSoapServerInstance server = await StartServerAsync(certificates);
-        ResponsePhaseDeadlineController responseDeadline = new(TestContext.Current.CancellationToken);
         await using RealComposedFixture fixture = await RealComposedFixture.CreateAsync(
-            server.Endpoint, certificates, SoapEnvelopeVersion.Soap11, responseDeadline: responseDeadline);
+            server.Endpoint, certificates, SoapEnvelopeVersion.Soap11, timeout: productTimeout);
+        using CancellationTokenSource callerCancellation = new();
+        using CancellationTokenSource outerWatchdog = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        outerWatchdog.CancelAfter(outerWatchdogTimeout);
 
-        Task<ComposedSoapHttpResponse> pending = fixture.SendAsync("response-stalled", TestContext.Current.CancellationToken);
-        await server.Counters.WaitForComposedAcceptedAsync(TestContext.Current.CancellationToken);
+        Task<ComposedSoapHttpResponse> pending = fixture.SendAsync("response-stalled", callerCancellation.Token);
+        await server.Counters.WaitForComposedAcceptedAsync(outerWatchdog.Token);
 
         Assert.Equal(1, server.Counters.Composed);
         Assert.Equal(1, server.Counters.ComposedAccepted);
@@ -140,10 +147,13 @@ public sealed class ComposedSoapRealHttpIntegrationTests
         Assert.Equal(0, fixture.Transport.GenericDispatches);
         Assert.False(pending.IsCompleted);
 
-        responseDeadline.Expire();
-        SoapAuthException timeoutFailure = await Assert.ThrowsAsync<SoapAuthException>(() => pending);
+        // The synthetic response remains gated. Only the finite timeout supplied through the real
+        // composed client and SystemRestrictedTransport is allowed to terminate this invocation.
+        SoapAuthException timeoutFailure = await Assert.ThrowsAsync<SoapAuthException>(() => pending.WaitAsync(outerWatchdog.Token));
 
         Assert.Equal("SOAP-TIMEOUT", timeoutFailure.Code);
+        Assert.False(callerCancellation.IsCancellationRequested);
+        Assert.False(outerWatchdog.IsCancellationRequested);
         Assert.DoesNotContain(RealComposedFixture.Password, timeoutFailure.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(RealComposedFixture.UpstreamSession, timeoutFailure.ToString(), StringComparison.Ordinal);
         Assert.Equal(1, server.Counters.Composed);
@@ -202,11 +212,11 @@ public sealed class ComposedSoapRealHttpIntegrationTests
         private readonly OpaqueSessionReference session;
 
         private RealComposedFixture(Uri endpoint, CertificateFixture certificates, SoapEnvelopeVersion version, bool wrongBasic, TimeSpan timeout,
-            Func<CancellationToken, Task>? beforeFinalAuthorization, ResponsePhaseDeadlineController? responseDeadline)
+            Func<CancellationToken, Task>? beforeFinalAuthorization)
         {
             this.version = version;
             SystemRestrictedTransport restricted = new(new X509Certificate2Collection(certificates.Root), Convert.ToHexString(SHA256.HashData(certificates.Server.RawData)));
-            Transport = new(restricted, responseDeadline);
+            Transport = new(restricted);
             Secrets = new(wrongBasic);
             Snapshots = new(environmentId, endpoint, version, timeout, clock);
             soap = new(Secrets, new LoopbackResolver(), Transport, clock, new MatchingStampProvider(), new LoopbackAllowance());
@@ -220,8 +230,8 @@ public sealed class ComposedSoapRealHttpIntegrationTests
         internal MutableSnapshots Snapshots { get; }
 
         internal static Task<RealComposedFixture> CreateAsync(Uri endpoint, CertificateFixture certificates, SoapEnvelopeVersion version, bool wrongBasic = false,
-            TimeSpan? timeout = null, Func<CancellationToken, Task>? beforeFinalAuthorization = null, ResponsePhaseDeadlineController? responseDeadline = null) =>
-            Task.FromResult(new RealComposedFixture(endpoint, certificates, version, wrongBasic, timeout ?? TimeSpan.FromSeconds(2), beforeFinalAuthorization, responseDeadline));
+            TimeSpan? timeout = null, Func<CancellationToken, Task>? beforeFinalAuthorization = null) =>
+            Task.FromResult(new RealComposedFixture(endpoint, certificates, version, wrongBasic, timeout ?? TimeSpan.FromSeconds(2), beforeFinalAuthorization));
 
         internal async Task<ComposedSoapHttpResponse> SendAsync(string payload, CancellationToken cancellationToken)
         {
@@ -335,40 +345,7 @@ public sealed class ComposedSoapRealHttpIntegrationTests
             "synthetic-composed", "business", "per-run", revision, null, null, "catalog-" + revision);
     }
 
-    private sealed class ResponsePhaseDeadlineController(CancellationToken testCancellation)
-    {
-        private readonly TaskCompletionSource<bool> expiration = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        internal void Expire() => expiration.TrySetResult(true);
-
-        internal async Task<ExternalResponse> SendAsync(IRestrictedTransport restricted, HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses,
-            long maximumResponseBytes, CancellationToken productDeadline)
-        {
-            _ = productDeadline;
-            using CancellationTokenSource controlledDeadline = CancellationTokenSource.CreateLinkedTokenSource(testCancellation);
-            // The separate product-deadline test covers the real wall-clock contract. This test-only
-            // controller prevents that deadline from racing request observation, then expires the
-            // transport deadline only after the real HTTPS handler has validated the composed request.
-            Task<ExternalResponse> pending = restricted.SendSoapAsync(
-                request, approvedAddresses, Timeout.InfiniteTimeSpan, maximumResponseBytes, controlledDeadline.Token);
-            Task expirationRequested = expiration.Task.WaitAsync(testCancellation);
-            try
-            {
-                if (await Task.WhenAny(pending, expirationRequested).ConfigureAwait(false) == pending)
-                    return await pending.ConfigureAwait(false);
-
-                await expirationRequested.ConfigureAwait(false);
-                controlledDeadline.Cancel();
-                return await pending.ConfigureAwait(false);
-            }
-            finally
-            {
-                await controlledDeadline.CancelAsync().ConfigureAwait(false);
-            }
-        }
-    }
-
-    private sealed class RoutingTransport(IRestrictedTransport restricted, ResponsePhaseDeadlineController? responseDeadline) : IRestrictedTransport
+    private sealed class RoutingTransport(IRestrictedTransport restricted) : IRestrictedTransport
     {
         private int genericDispatches;
         private int composedDispatches;
@@ -391,9 +368,7 @@ public sealed class ComposedSoapRealHttpIntegrationTests
                 return Task.FromResult(new ExternalResponse(200, "text/xml; charset=utf-8", Encoding.UTF8.GetBytes(response)));
             }
             Interlocked.Increment(ref composedDispatches);
-            return responseDeadline is null
-                ? restricted.SendSoapAsync(request, approvedAddresses, timeout, maximumResponseBytes, cancellationToken)
-                : responseDeadline.SendAsync(restricted, request, approvedAddresses, maximumResponseBytes, cancellationToken);
+            return restricted.SendSoapAsync(request, approvedAddresses, timeout, maximumResponseBytes, cancellationToken);
         }
     }
 
