@@ -68,7 +68,7 @@ $adminPassword = $null
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { Invoke-Checked 'chmod' @('0777', $rawRoot) }
 Invoke-Checked 'docker' (ComposeArguments @('config', '--quiet'))
 $up = @('up', '--detach')
-if (-not $SkipBuild) { $up = @('up', '--build', '--detach') }
+if (-not $SkipBuild) { $up = @('up', '--build', '--pull', 'always', '--detach') }
 Invoke-Checked 'docker' (ComposeArguments $up)
 
 $deadline = [DateTimeOffset]::UtcNow.AddMinutes(6)

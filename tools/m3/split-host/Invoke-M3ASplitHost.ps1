@@ -462,7 +462,7 @@ if ($Phase -eq 'Prepare') {
         Set-M3ANetworkFirewallRuleState -StatePath $networkStatePath -FirewallRule $firewallName
         Assert-FirewallRuleEnforced -Selection $firewallSelection -HostAddress $HostHyperVAddress -RemoteAddress $VmAddress -Port $GatewayPort
         Invoke-NativeChecked -FilePath 'docker.exe' -Arguments (Get-ComposeArguments -Arguments @('config', '--quiet'))
-        Invoke-NativeChecked -FilePath 'docker.exe' -Arguments (Get-ComposeArguments -Arguments @('up', '--build', '--detach'))
+        Invoke-NativeChecked -FilePath 'docker.exe' -Arguments (Get-ComposeArguments -Arguments @('up', '--build', '--pull', 'always', '--detach'))
         Wait-Gateway -Address ("https://${HostHyperVAddress}:${GatewayPort}/health/ready")
         Wait-ComposeServiceState -Service 'gateway' -ExpectedState 'running' -ExpectedHealth 'healthy'
         Wait-ComposeServiceState -Service 'postgres' -ExpectedState 'running' -ExpectedHealth 'healthy'

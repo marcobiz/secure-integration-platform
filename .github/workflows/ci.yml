@@ -26,6 +26,9 @@ jobs:
           global-json-file: global.json
           cache: true
           cache-dependency-path: '**/packages.lock.json'
+      - name: Validate immutable .NET container base images
+        shell: pwsh
+        run: ./eng/validate-container-base-images.ps1 -SelfTest
       - name: Restore tools
         run: dotnet tool restore
       - name: Build
@@ -192,14 +195,17 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ env.CANDIDATE_COMMIT_SHA }}
+      - name: Validate immutable .NET container base images
+        shell: pwsh
+        run: ./eng/validate-container-base-images.ps1
       - name: Build Gateway container
         id: image
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT_SHA"
-          docker build --label "org.opencontainers.image.revision=$CANDIDATE_COMMIT_SHA" -f src/Gateway/Gateway.Api/Dockerfile -t broker-gateway:m2 .
-          docker build --label "org.opencontainers.image.revision=$CANDIDATE_COMMIT_SHA" -f src/Gateway/Gateway.Migrations/Dockerfile -t broker-gateway-migrations:m2 .
+          docker build --pull --label "org.opencontainers.image.revision=$CANDIDATE_COMMIT_SHA" -f src/Gateway/Gateway.Api/Dockerfile -t broker-gateway:m2 .
+          docker build --pull --label "org.opencontainers.image.revision=$CANDIDATE_COMMIT_SHA" -f src/Gateway/Gateway.Migrations/Dockerfile -t broker-gateway-migrations:m2 .
           image_digest="$(docker image inspect broker-gateway:m2 --format '{{.Id}}')"
           migration_digest="$(docker image inspect broker-gateway-migrations:m2 --format '{{.Id}}')"
           [[ "$image_digest" == sha256:* ]]
@@ -266,6 +272,9 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ env.CANDIDATE_COMMIT_SHA }}
+      - name: Validate immutable .NET container base images
+        shell: pwsh
+        run: ./eng/validate-container-base-images.ps1
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
@@ -294,7 +303,7 @@ jobs:
           split_config="$(M3_GATEWAY_BIND_IP=192.0.2.10 M3_GATEWAY_PORT=28443 docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml config --format json)"
           jq -e '.services.gateway.ports[0].host_ip == "192.0.2.10" and .services.gateway.ports[0].published == "28443"' <<<"$split_config"
           jq -e '[.services.postgres,.services.vault,.services.vendor] | all(.ports[0].host_ip == "127.0.0.1")' <<<"$split_config"
-          docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml up --build --detach
+          docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml up --build --pull always --detach
           for attempt in {1..90}; do
             gateway_container="$(docker compose --env-file "$env_file" -f deploy/m3/docker-compose.m3a.yml ps -q gateway)"
             gateway_health="$(docker inspect "$gateway_container" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}')"
@@ -442,6 +451,9 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ env.CANDIDATE_COMMIT_SHA }}
+      - name: Validate immutable .NET container base images
+        shell: pwsh
+        run: ./eng/validate-container-base-images.ps1
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json

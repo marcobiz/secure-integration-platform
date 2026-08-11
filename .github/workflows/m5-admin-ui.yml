@@ -81,6 +81,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - name: Validate immutable .NET container base images
+        shell: pwsh
+        run: ./eng/validate-container-base-images.ps1
       - uses: actions/setup-dotnet@v5
         with: { global-json-file: global.json, cache: true, cache-dependency-path: '**/packages.lock.json' }
       - uses: actions/setup-node@v6
@@ -178,11 +181,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - name: Validate immutable .NET container base images
+        shell: pwsh
+        run: ./eng/validate-container-base-images.ps1
       - name: Build and inspect Gateway image
         shell: bash
         run: |
           set -euo pipefail
-          docker build --label "org.opencontainers.image.revision=$CANDIDATE_COMMIT_SHA" -f src/Gateway/Gateway.Api/Dockerfile -t secure-integration-gateway:m5 .
+          docker build --pull --label "org.opencontainers.image.revision=$CANDIDATE_COMMIT_SHA" -f src/Gateway/Gateway.Api/Dockerfile -t secure-integration-gateway:m5 .
           test -n "$(docker image inspect secure-integration-gateway:m5 --format '{{.Config.User}}')"
           test "$(docker image inspect secure-integration-gateway:m5 --format '{{.Config.User}}')" != "0"
           docker run -d --name gateway-m5 --read-only --tmpfs /tmp -p 18080:8080 -e ASPNETCORE_ENVIRONMENT=Development secure-integration-gateway:m5
@@ -197,6 +203,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - name: Validate immutable .NET container base images
+        shell: pwsh
+        run: ./eng/validate-container-base-images.ps1
       - uses: actions/setup-dotnet@v5
         with: { global-json-file: global.json }
       - uses: actions/setup-node@v6
@@ -259,6 +268,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with: { ref: '${{ env.CANDIDATE_COMMIT_SHA }}' }
+      - name: Validate immutable .NET container base images
+        shell: pwsh
+        run: ./eng/validate-container-base-images.ps1
       - uses: actions/setup-dotnet@v5
         with: { global-json-file: global.json }
       - uses: actions/setup-node@v6

@@ -122,7 +122,7 @@ try {
     $installed = Import-Certificate -FilePath $certificatePath -CertStoreLocation Cert:\LocalMachine\Root
     $installedRootThumbprint = $installed.Thumbprint
 
-    Invoke-M3Native -FilePath 'docker.exe' -Arguments @('compose', '--env-file', $environmentFile, '-f', $composeFile, 'up', '--build', '--detach')
+    Invoke-M3Native -FilePath 'docker.exe' -Arguments @('compose', '--env-file', $environmentFile, '-f', $composeFile, 'up', '--build', '--pull', 'always', '--detach')
     $provisioningPath = Join-Path $rawRoot 'provisioning.json'
     Wait-M3Gateway -ProvisioningPath $provisioningPath
     $provisioning = Get-Content -LiteralPath $provisioningPath -Raw | ConvertFrom-Json
