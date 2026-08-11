@@ -9,6 +9,16 @@ public sealed class HealthcarePackBoundaryTests
     private static readonly string Root = FindRepositoryRoot();
 
     [Fact]
+    public void HC_W1_ARCH_Core_export_allowlist_does_not_capture_vertical_integration_tests()
+    {
+        string allowlist = File.ReadAllText(Path.Combine(Root, "eng", "open-source-core.allowlist"));
+
+        Assert.DoesNotContain("tests/integration/", allowlist.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
+        Assert.Contains("tests/integration/Broker.Integration.Tests/", allowlist, StringComparison.Ordinal);
+        Assert.Contains("tests/integration/Gateway.Integration.Tests/", allowlist, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void HC_W1_ARCH_Core_does_not_reference_Healthcare_pack()
     {
         string coreSolutionPath = Path.Combine(Root, "BrokerGateway.Core.slnx");
