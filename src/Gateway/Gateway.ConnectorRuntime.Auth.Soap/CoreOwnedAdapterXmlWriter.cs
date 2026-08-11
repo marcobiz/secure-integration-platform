@@ -65,8 +65,8 @@ internal sealed class CoreOwnedAdapterXmlWriter(XmlWriter inner) : XmlWriter
     public override void WriteFullEndElement() => Write(inner.WriteFullEndElement);
     public override void WriteProcessingInstruction(string name, string? text) =>
         Write(() => inner.WriteProcessingInstruction(name, text));
-    public override void WriteRaw(char[] buffer, int index, int count) => Write(() => inner.WriteRaw(buffer, index, count));
-    public override void WriteRaw(string data) => Write(() => inner.WriteRaw(data));
+    public override void WriteRaw(char[] buffer, int index, int count) => DenyRaw();
+    public override void WriteRaw(string data) => DenyRaw();
 
     public override void WriteStartAttribute(string? prefix, string localName, string? ns)
     {
@@ -117,5 +117,14 @@ internal sealed class CoreOwnedAdapterXmlWriter(XmlWriter inner) : XmlWriter
     private void EnsureActive()
     {
         if (!active) throw TypedSessionHandshakeFailures.BindingInputRejected();
+    }
+
+    private void DenyRaw()
+    {
+        lock (synchronization)
+        {
+            EnsureActive();
+            throw TypedSessionHandshakeFailures.BindingInputRejected();
+        }
     }
 }
