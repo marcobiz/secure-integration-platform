@@ -326,9 +326,17 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 - migration additiva `0014_typed_composed_soap_request_inputs.sql` estende soltanto il locator
   operation-scoped all'esatto nuovo path e conserva owner, `SECURITY DEFINER`, `search_path`, grant,
   RLS e non-enumerabilità; `0012` e `0013` restano immutate;
-- evidenza mirata corrente: 31/31 unit composed/configuration, 41/41 hosted execution seam ordinari e
-  15/15 architecture PASS. PostgreSQL 18 senza skip, full repository, Admin/full-stack, Core export,
-  scans/SBOM, exact-head CI e review indipendente sono ancora gate da registrare sul final candidate;
+- evidenza mirata: 31/31 unit composed/configuration, 41/41 hosted execution seam ordinari e 15/15
+  architecture PASS. Il gate completo registra build Release zero-warning/error, 223/223 Gateway
+  unit e 158 Gateway integration ordinarie con 30 casi PostgreSQL condizionali; il gate dedicato
+  PostgreSQL 18.4 esegue 188/188 Gateway integration con zero skip, migration `0014` fresh/no-op e
+  least privilege runtime verificato;
+- Admin registra 28/28 Vitest, drift API/runtime con negative control, build, 2/2 a11y, 37/37 browser
+  mock e `FULLSTACK-01` 1/1 con redazione e cleanup PASS. Document validation, repository secret scan,
+  Gitleaks full-history, vulnerability inventory, SBOM container da 165 package e Core export da 423
+  file con build/test/frontend/license/boundary/secret gate sono PASS sul candidate locale;
+- exact-head CI e l'unica review Core security indipendente restano i gate di handoff sulla PR;
+  merge non autorizzato;
 - decisione e inventory: ADR-0026 e
   `docs/implementation/WAVE1-AUTHORIZED-TYPED-COMPOSED-SOAP-REQUEST.md`.
 
