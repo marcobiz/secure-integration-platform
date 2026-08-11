@@ -31,6 +31,7 @@ access or arbitrary authenticated request construction to a module would violate
   A callback-scoped synchronized proxy serializes every adapter writer action with binding emission.
   Binding values can be emitted only as element text, never into attributes, so `XmlLang`,
   `XmlSpace`, namespace declarations and `LookupPrefix` cannot become plaintext/equality oracles.
+  Both `WriteRaw` overloads are denied so adapter-visible state cannot diverge from lexical output.
 - Core resolves only the operation dependencies in Published A, checks A after every provider await,
   clears transient payload/input buffers, hardens the adapter fragment, adds the exact SOAP
   Envelope/Body/QName and freezes the result as a bounded exact-byte snapshot.

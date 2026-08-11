@@ -107,18 +107,19 @@ approver, publication, grant, runtime locator, server-owned input resolution and
   and `Wave1_SEC_typed_composed_adapter_preserves_only_the_actually_cancelled_caller_token`;
 - binding plaintext-oracle denial through the synchronized Core writer proxy:
   `Wave1_SEC_external_no_IVT_binding_plaintext_writer_state_oracles_are_denied_with_zero_transport`
-  covers direct `XmlLang` retrieval and namespace/`LookupPrefix` equality probing;
+  covers direct `XmlLang` retrieval, namespace/`LookupPrefix` equality probing and raw lexical-state
+  desynchronization; both `WriteRaw` overloads are denied by the proxy;
 - final freshness:
   `Wave1_SEC_external_bridge_typed_composed_SOAP_bound_to_A_denies_mutated_B_after_composition_before_dispatch`;
 - legacy compatibility:
   `Wave1_E2E_PostgreSQL18_legacy_composed_profile_preserves_original_caller_envelope_without_republish_when_configured`.
 
-Targeted worktree evidence is 31/31 composed/configuration unit tests, 43/43 ordinary hosted
+Targeted worktree evidence is 31/31 composed/configuration unit tests, 44/44 ordinary hosted
 execution-seam tests and 15/15 relevant architecture tests. The full local gate is also green:
 
 - Release build with zero warnings/errors, `Gateway.Unit.Tests` 223/223 and the ordinary
-  `Gateway.Integration.Tests` 160 PASS with 30 PostgreSQL-conditional skips;
-- dedicated PostgreSQL 18.4 `Gateway.Integration.Tests` 190/190 with zero skips, migration `0014`
+  `Gateway.Integration.Tests` 161 PASS with 30 PostgreSQL-conditional skips;
+- dedicated PostgreSQL 18.4 `Gateway.Integration.Tests` 191/191 with zero skips, migration `0014`
   fresh apply plus second no-op apply, explicit runtime least privilege and both canonical typed and
   historical legacy hosted paths;
 - Admin 28/28 Vitest, API/runtime drift checks with the runtime negative control, production build,

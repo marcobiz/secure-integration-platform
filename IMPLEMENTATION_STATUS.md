@@ -322,17 +322,18 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
   token effettivo;
 - un proxy writer Core callback-scoped e sincronizzato serializza ogni writer action con l'emissione
   binding e consente il valore solo come element text: attributi stateful (`xml:lang`/`xml:space`) e
-  namespace/`LookupPrefix` non possono diventare plaintext o equality oracle;
+  namespace/`LookupPrefix` non possono diventare plaintext o equality oracle; entrambe le overload
+  `WriteRaw` sono negate per impedire desincronizzazione fra stato e output lessicale;
 - ogni provider await rivalida A e il controllo finale copre adapter, mapping, binding/resource,
   endpoint, Basic, sessione, action, policy e strategy. Race deterministici dopo composizione su
   adapter/mapping/QName/binding/resource/action/endpoint/strategy non adottano B e producono zero rete;
 - migration additiva `0014_typed_composed_soap_request_inputs.sql` estende soltanto il locator
   operation-scoped all'esatto nuovo path e conserva owner, `SECURITY DEFINER`, `search_path`, grant,
   RLS e non-enumerabilità; `0012` e `0013` restano immutate;
-- evidenza mirata: 31/31 unit composed/configuration, 43/43 hosted execution seam ordinari e 15/15
+- evidenza mirata: 31/31 unit composed/configuration, 44/44 hosted execution seam ordinari e 15/15
   architecture PASS. Il gate completo registra build Release zero-warning/error, 223/223 Gateway
-  unit e 160 Gateway integration ordinarie con 30 casi PostgreSQL condizionali; il gate dedicato
-  PostgreSQL 18.4 esegue 190/190 Gateway integration con zero skip, migration `0014` fresh/no-op e
+  unit e 161 Gateway integration ordinarie con 30 casi PostgreSQL condizionali; il gate dedicato
+  PostgreSQL 18.4 esegue 191/191 Gateway integration con zero skip, migration `0014` fresh/no-op e
   least privilege runtime verificato;
 - Admin registra 28/28 Vitest, drift API/runtime con negative control, build, 2/2 a11y, 37/37 browser
   mock e `FULLSTACK-01` 1/1 con redazione e cleanup PASS. Document validation, repository secret scan,
