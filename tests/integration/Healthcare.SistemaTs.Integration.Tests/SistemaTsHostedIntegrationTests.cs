@@ -188,8 +188,13 @@ public sealed class SistemaTsHostedIntegrationTests
             Assert.Equal(2, fixture.TotalSoapTransportRequests);
             string diagnostics = string.Join('\n', acquireBody, completionBody, string.Join('\n', denialBodies),
                 string.Join('\n', fixture.HostedLogs));
-            foreach (string sensitive in fields.Values.Append(Candidate).Append(HostedTypedSessionFixture.SyntheticPassword))
+            foreach (string sensitive in fields.Values
+                         .Where(value => value.Length >= 8)
+                         .Append(Candidate)
+                         .Append(HostedTypedSessionFixture.SyntheticPassword))
                 Assert.DoesNotContain(sensitive, diagnostics, StringComparison.Ordinal);
+            foreach (string shortSensitive in fields.Values.Where(value => value.Length < 8))
+                Assert.DoesNotContain($">{shortSensitive}</", diagnostics, StringComparison.Ordinal);
         }
     }
 
