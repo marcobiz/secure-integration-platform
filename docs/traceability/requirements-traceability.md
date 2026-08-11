@@ -304,18 +304,23 @@ available. Generic M6 auth tests are regression evidence only, not regional supp
 | Requirement | Evidence | Status |
 |---|---|---|
 | Official-current registry | `docs/connectors/healthcare/sistema-ts-eprescription/official-source-registry.md` | PASS documentation freeze |
-| National SAC business contracts | Official specification 1.5.1 and 2026-04-28 kit digests; exact WSDL/action/XSD roots recorded | CONFIRMED, not implemented |
+| National SAC business contracts | Frozen XSD-sequence catalog plus `sistema-ts.connector.json`; hosted exact-wire `visualizzaErogato` | PASS implementation; live conformance pending |
 | SAC/SAR server-owned routing | `docs/connectors/healthcare/sistema-ts-eprescription/spec.md` | DOCUMENTED, no regional adapter |
-| Basic and opaque ID-session | Current MFA 1.1 plus ID-session WSDL `create`/`revoke`/`checkToken`; mandatory SSN identity plus `RICETTA-DEM`/`EROGATORE` fields and production out-of-band delivery | CONFIRMED; admission/promotion exists, but the compiled adapter context has no provider-resolved STS identity inputs |
+| Basic and opaque ID-session | `HC_W1_SISTEMATS_CT_module_and_adapter_metadata_are_exact_and_constructor_closed`; hosted exact-wire create/completion/checkToken lifecycle | PASS |
 | HTTP `Authorization2F` placement | Generic fixed-scheme projection integrated in Foundation | PASS generic prerequisite |
 | SOAP/session one-shot composition | Baseline `3f8667b` typed handshake, external admission, shared lifecycle and composed SOAP | PASS generic prerequisite |
-| Vertical adapter registration | Production host registry is synthetic-only; execution-module registrar commits strategies and module-owned dependencies, not typed adapter contracts | HARD STOP; freeze-policy criterion C required to avoid Gateway.Api-to-Healthcare or test-only composition |
-| Server-owned STS create/checkToken inputs | Public typed request contexts expose authenticated Core IDs and Published checksum, not STS `userId`, encrypted identifier, CF or organization codes | HARD STOP; caller values, hardcoding and direct provider access prohibited |
-| Synthetic server and connector security suite | Gate review | NOT STARTED by hard stop |
+| Vertical adapter registration | `HC_W1_SISTEMATS_CT_module_registers_exact_strategy_and_adapters_without_host_access`; hosted explicit module load | PASS, no IVT/host dependency |
+| Server-owned STS create/checkToken inputs | exact 7/4 Published mappings; generic exact-set missing/unexpected Core regressions plus connector hosted caller-spoof test | PASS |
+| Nested response/checkToken semantics | exact data-type structures, duplicate/DTD negatives, remote expiry and rejection tests | PASS |
+| Shared admission/session lifecycle | connector hosted E2E plus existing cross-context replay, expiry, generation, rotate/disable suites | PASS deterministic |
+| Business Basic + Authorization2F + SOAPAction | connector HTTPS server exact assertions and `1/1/1`, generic `0`, retry `0` counters | PASS deterministic |
+| Published A and A-to-B stale | existing exact-authority execution/capability race suites, consumed without vertical authority | PASS regression |
+| PostgreSQL hosted canonical path | `HC_W1_SISTEMATS_IT_PostgreSQL18_four_eyes_Published_hosted_full_lifecycle` | PASS local PostgreSQL 18 |
 | Accreditation and live conformance | Gate review | BLOCKED_BY_ACCREDITATION |
 
-The Wave 1 result is a NO-GO for production code. Existing M6 SOAP tests are generic
-primitive evidence and must not be counted as Sistema TS contract or conformance tests.
+The Wave 1 product result is implementation-ready for independent connector review. Existing
+generic suites remain prerequisite regression evidence; only the named Sistema TS tests count as
+connector wire evidence, and none is claimed as live conformance.
 
 ## Security threats
 

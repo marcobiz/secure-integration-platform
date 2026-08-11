@@ -1,10 +1,10 @@
 # SistemaTSEPrescriptionConnector - Wave 1 specification freeze
 
-Status: **NOT_READY - FROZEN-SURFACE HARD STOP**
+Status: **IMPLEMENTATION_READY - INDEPENDENT REVIEW PENDING**
 
 Freeze date: 2026-08-08
-Implementation-resumption audit: 2026-08-09
-Connector-first audit: 2026-08-10 against exact baseline `3f8667b7cb9678d6efb670f1c192cc227228ab1f`
+Implementation-resumption audit: 2026-08-11
+Connector-first implementation baseline: `b1810eda7e96fabfc6e15e608d48867e96cd5a80`
 
 Target pack: `ConnectorPacks.Healthcare`
 
@@ -16,25 +16,16 @@ accepted that freeze without replacement. The generic opaque-session HTTP projec
 supports the fixed server-owned `Authorization2F: Bearer` placement, so the earlier header
 placement gap is closed.
 
-Baseline `3f8667b` closes the previously recorded lifecycle and dispatch gaps: typed compiled
-handshake adapters, authenticated external admission, atomic promotion into the shared lifecycle,
-composed Basic plus opaque-session SOAP and an exact-authority execution bridge are present.
-The connector-first audit nevertheless found that the frozen public surface cannot host the
-official adapter without bypassing qualified custody. `ConnectorExecutionModuleLoader` registers
-only `IConnectorExecutionStrategy`; the production `TypedSessionHandshakeAdapterRegistry` is
-constructed from three Gateway.Api synthetic instances and consumes no module-owned adapter.
-In addition, `TypedSessionHandshakeRequestContext` exposes Core identities and Published metadata
-only. It has no provider-resolved source for the mandatory STS `userId`, encrypted
-`identificativo`, `cfUtente`, `codRegione`, `codAslAo` and `codSsa` values documented for
-`RICETTA-DEM`/`EROGATORE`.
+Baseline `b1810ed` includes the separately qualified capability completion from PR #26: an explicit
+module may register the three existing typed adapter contracts and each adapter receives an exact,
+Published-mapped server-owned input set that can write only through the Core-owned XML writer.
+The former frozen-surface hard stop is therefore closed without a new Core primitive.
 
-Caller-supplied values, hardcoded tenant credentials, direct provider access from Healthcare,
-Gateway.Api-to-Healthcare references or test-only DI replacement would each bypass or misrepresent
-the qualified production boundary. The hard stop therefore applies before DTO, serializer,
-runtime composition or synthetic connector implementation. This is not `BLOCKED_BY_SPEC`: the
-official fields and wire structure are known. Resumption requires a separately qualified Core
-surface under freeze-policy criterion C, because otherwise an existing custody boundary must be
-bypassed.
+`Healthcare.SistemaTs` now registers the exact `healthcare-sistema-ts-eprescription` strategy,
+official `CreateAuthReq`/`CreateAuthRes` and `CheckTokenReq`/`CheckTokenRes` semantics and the four
+frozen SSN dispenser operations. Core continues to own Basic resolution, opaque session custody,
+external-admission intent, atomic promotion, freshness, restricted transport and composed SOAP.
+Healthcare has no provider/store/service-locator access and Gateway.Api has no Healthcare reference.
 
 ## Confirmed national business scope
 
@@ -44,11 +35,11 @@ operations and not an implementation claim.
 
 | Business capability | Official operation | Status for this wave |
 |---|---|---|
-| Retrieve and exclusively take in charge an SSN prescription | `visualizzaErogato` | Contract confirmed; not implemented |
-| Release a prior take-in-charge when the official operation mode permits it | `visualizzaErogato` with the documented operation mode | Contract confirmed; not implemented |
-| Dispense and close, including the documented total, partial and single-dispensation modes | `invioErogato` | Contract confirmed; not implemented |
-| Suspend or revoke suspension | `sospendiErogato` | Contract confirmed; not implemented |
-| Correct or cancel a prior dispensation | `annullaErogato` | Contract confirmed; not implemented |
+| Retrieve and exclusively take in charge an SSN prescription | `visualizzaErogato` | Implemented as `visualizza-erogato` |
+| Release a prior take-in-charge when the official operation mode permits it | `visualizzaErogato` with the documented operation mode | Implemented through the same frozen typed contract |
+| Dispense and close, including documented modes | `invioErogato` | Implemented as `invio-erogato` |
+| Suspend or revoke suspension | `sospendiErogato` | Implemented as `sospendi-erogato` |
+| Correct or cancel a prior dispensation | `annullaErogato` | Implemented as `annulla-erogato` |
 
 Deferred/unconfirmed as public connector operations in this wave:
 
@@ -112,24 +103,14 @@ Expiry must come from the current service response/profile. The test-only wildca
 is not a production session and is never a fallback. Rotation, disable, expiry, wrong
 profile and replay fail closed. No session value may enter logs, audit, errors or responses.
 
-### Frozen-surface hard stop after generic composition remediation
+### Qualified composition
 
-The typed/nested XML, external-admission and composed-SOAP runtime primitives are now present.
-Two production composition requirements remain inexpressible:
-
-- a module-loaded strategy cannot contribute `ITypedSessionHandshakeRequestAdapter`,
-  `ITypedSessionHandshakeResponseAdapter` or `ITypedExternalSessionValidationAdapter` to the
-  production registry through `IConnectorExecutionStrategyRegistrar`;
-- a compiled request/validation adapter cannot consume the exact server-owned STS identity and
-  encrypted identifier values. The public contexts expose no narrow provider-resolved input and
-  accepting a caller dictionary or generic XML/request map is explicitly prohibited.
-
-The prerequisite for resuming this wave is a separately authorized and independently qualified
-Core change that registers module-owned compiled adapters without a host-to-vertical dependency
-and supplies only approved, binding-scoped server values without exporting raw provider access or
-a generic transformation map. It must preserve the existing Published stamp, resource revisions,
-zeroization, redaction, one-shot transport and shared lifecycle. No Healthcare session cache or
-parallel authority model is acceptable.
+The module registers only the existing request, response and validation adapter contracts. Its
+seven create inputs and four checkToken inputs are mapped to `opaque` bindings by the immutable
+Published definition. Values have no plaintext getter and are cleared after the synchronous XML
+callback. Production `create` success always returns `ExternalAdmissionRequired`; even a test-only
+communication cannot issue a session. Authenticated completion validates the UUID candidate with
+official `checkToken`, uses remote expiry and promotes through the one shared Core lifecycle.
 
 ## Business state and reconciliation
 
@@ -155,16 +136,13 @@ custody may be reused only after the frozen-surface blocker is qualified.
 
 ## Synthetic server and security tests
 
-No Sistema TS synthetic server or connector-specific executable tests were created.
-Doing so before the production host can register the vertical adapters and resolve their mandatory
-server-owned inputs would create a misleading, non-runnable profile. Existing generic synthetic
-tests qualify only the underlying primitives; they are not Sistema TS conformance evidence.
-
-When the prerequisite is available, the connector gate must add the positive lifecycle
-and every negative case listed in the Wave 1 request, including caller header injection,
-session spoof/replay, routing and endpoint substitution, stale/disabled credentials, XML
-attacks, Fault ambiguity, timeout/cancellation, egress, response size and invalid business
-transitions.
+`tools/healthcare/SyntheticSistemaTsServer` is a real loopback HTTPS/SOAP authority tied to the
+frozen contract. The canonical hosted tests cross BGW1 authentication, grant, four-eyes Published
+configuration, server-owned inputs, create, authenticated completion, checkToken, shared-session
+reuse and `visualizzaErogato`. Wire counters prove create/checkToken/business `1/1/1`, generic
+fallback `0` and retry `0`. PostgreSQL 18 runs the same path through the real routing store.
+Generic lifecycle/race/cancellation tests remain prerequisite regression evidence and are mapped
+explicitly rather than relabelled as official conformance.
 
 ## Provisioning and accreditation blockers
 

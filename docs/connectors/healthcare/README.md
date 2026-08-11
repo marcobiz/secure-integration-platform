@@ -1,7 +1,7 @@
 # Healthcare connector characterization
 
-This directory contains public-safe characterization, official-source freezes, synthetic test guidance
-and the Wave 1 Regional ePrescription foundation. No production healthcare connector is implemented.
+This directory contains public-safe characterization, official-source freezes, synthetic test guidance,
+the Wave 1 Regional ePrescription foundation and the implementation-ready national Sistema TS connector.
 
 ## Package contents
 
@@ -14,6 +14,7 @@ and the Wave 1 Regional ePrescription foundation. No production healthcare conne
 - [Regional ePrescription Wave 1 foundation](regional-eprescription/README.md)
 - [Sistema TS ePrescription Wave 1 official registry](sistema-ts-eprescription/official-source-registry.md)
 - [Sistema TS ePrescription Wave 1 specification freeze](sistema-ts-eprescription/spec.md)
+- [Sistema TS immutable Published definition](sistema-ts-eprescription/sistema-ts.connector.json)
 - Connector specifications:
   - [SOGEI Basic + session](sogei-basic-session/spec.md)
   - [Lombardia OAuth helper](lombardia-oauth-helper/spec.md)
@@ -21,4 +22,4 @@ and the Wave 1 Regional ePrescription foundation. No production healthcare conne
   - [Umbria mTLS + dual JWT](umbria-mtls-jwt/spec.md)
 - Synthetic vectors: `tests/characterization/healthcare`
 
-`KNOWN` is a historical characterization label, not current official or live-verified evidence. The Sistema TS Wave 1 source questions are resolved from current public material. Baseline `3f8667b` also provides external admission, shared lifecycle, composed SOAP and the provider-neutral execution seam. The connector is nevertheless `NOT_READY`: the production module seam does not register compiled handshake adapters and the typed request context has no provider-resolved source for the official STS identity fields. Supplying those values from the caller, hardcoding them or reading provider secrets directly in Healthcare would violate the qualified custody boundary. Other production profiles remain `NEEDS_PUBLIC_SOURCE` and NO-GO until their own unresolved questions are closed.
+`KNOWN` is a historical characterization label, not current official or live-verified evidence. The Sistema TS Wave 1 source questions are resolved from current public material. Qualified baseline `b1810ed` supplies module-owned adapter registration and exact callback-only server-owned inputs in addition to admission, shared lifecycle, composed SOAP and the provider-neutral execution seam. The Sistema TS implementation consumes those capabilities without a Core or host dependency. Other production profiles remain `NEEDS_PUBLIC_SOURCE` and NO-GO until their own unresolved questions are closed.
