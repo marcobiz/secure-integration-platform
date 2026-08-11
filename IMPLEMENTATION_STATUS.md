@@ -6,6 +6,7 @@ Aggiornato: 2026-08-11
 
 | Ambito richiesto | Stato | Evidenza principale |
 |---|---|---|
+| Release/container supply chain — .NET base-image provenance | Remediation implementata; gate locale ed exact-head CI sono controlli di handoff | 12 `FROM` fissati a tag patch + manifest-list digest; validator Git-tracked fail-closed; build container con pull; failure exact-main `31526932941`/`31526932939` conservate |
 | Wave 1 — Authorized typed composed-SOAP request composition | Freeze-exception Core implementata; full gate locale PASS, CI exact-head e review indipendente pending | adapter request exact Published, payload business read-only, input server-owned write-only senza writer-state oracle, envelope/auth/session/transport Core-owned, legacy unchanged |
 | M0 — fondamenta repository | Implementato; baseline congelata | commit `7f68442`, tag `baseline-m0-m1-vslice-2026-08-03` |
 | M1 — Local Broker minimo | Implementato; **gate live tecnico PASS** | run `m0-m1-20260803-232955`; AC-002/004 PASS-LIVE sul commit testato |
@@ -86,6 +87,30 @@ Esito conclusivo: **GO per M2**. La lineage live è stata integrata linearmente:
 - Basic, API key e mTLS applicati esclusivamente dal Gateway senza esporre secret reference;
 - API health/readiness, Problem Details redatti, Docker non-root/read-only-compatible, health probe e Bicep contract skeleton;
 - architettura, runbook, piano e report in `docs/architecture/m2-gateway-architecture.md`, `docs/operations/M2-GATEWAY-RUNBOOK.md`, `docs/implementation/M2-IMPLEMENTATION-PLAN.md` e `docs/testing/M2-IMPLEMENTATION-REPORT.md`.
+
+### Release/container supply chain — pin delle immagini .NET
+
+- le failure exact-main General `31526932941` e M5/Admin `31526932939` sul commit
+  `33552f1572f649c2ce534484674e0305debb6fde` restano visibili e non sono state
+  nascoste da un rerun same-SHA. La causa deterministica era il movimento del tag SDK
+  `10.0` dal manifest-list digest `sha256:72dd7437…01b0` a un'immagine contenente solo
+  SDK `10.0.400`, incompatibile con `global.json` `10.0.302` + `latestPatch`;
+- tutti e soli i 12 `FROM` .NET dei sei Dockerfile tracciati sono ora riferimenti
+  `exact-tag@sha256:manifest-list-digest`. Le SDK sono `10.0.302` (Debian e
+  Alpine 3.24); ASP.NET e runtime sono `10.0.11` (Debian e Alpine 3.24). Nessuna
+  famiglia o semantica degli stage è cambiata;
+- MCR è stato interrogato nuovamente per ciascun tag: tutti i digest approvati
+  corrispondono e conservano `linux/amd64`, `linux/arm/v7` e `linux/arm64`. Pull ed
+  esecuzione per digest confermano SDK `10.0.302` e runtime/ASP.NET `10.0.11`;
+- `eng/validate-container-base-images.ps1`, compatibile Windows PowerShell 5.1,
+  enumera soltanto i Dockerfile Git-tracked, vieta interpolazione/ARG nei `FROM`,
+  richiede famiglia/tag/digest approvati, confronta i tag SDK con `global.json` e
+  richiede esattamente 12 occorrenze nei sei file attesi. I negative control coprono
+  tag mobile, digest non approvato e mismatch SDK;
+- il build canonico invoca il validator. General CI e le superfici container M5/Admin
+  lo espongono come step nominato prima dei build; i build usano pull esplicito. Ogni
+  successivo aggiornamento dei pin deve ripetere container qualification, security
+  scan e SBOM secondo `docs/deployment/deployment-architecture.md`.
 
 ### M3 — vertical slice production-like
 

@@ -61,16 +61,16 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | AC-015 | `M4_UT_Lifecycle_is_immutable_concurrent_and_rollback_reactivates_prior_publication`, PostgreSQL rollback test |
 | AC-016 | `M4_CT_Sample_conforms_to_Draft_2020_12_and_is_canonical`, invalid schema/version/binding/header/retry/checksum corpus |
 | AC-017 | `M4_UT_Runtime_denies_Draft_Validated_Retired_missing_and_missing_bindings`, stale cache and corrupted store tests |
-| AC-018 | PASS `gateway-container` run `30896803567`: build/esecuzione, non-root, read-only, live/ready, fail-closed, secret scan, SBOM e shutdown |
+| AC-018 | PASS `gateway-container` run `30896803567`: build/esecuzione, non-root, read-only, live/ready, fail-closed, secret scan, SBOM e shutdown; nuova exact-head qualification richiede base image tag+digest, pull e validator `eng/validate-container-base-images.ps1` |
 | AC-019 | ADR-0017 Accepted; MSI install/upgrade/repair/uninstall/reinstall matrix prevista in M9 |
-| AC-020 | `eng/build.ps1`, pinned toolchain e istruzioni root |
+| AC-020 | `eng/build.ps1`, `global.json` SDK `10.0.302`, 12 base image tag+manifest-list digest e negative control del validator fail-closed |
 | AC-021 | primo slice storico; M3A container e Windows Service PASS con evidence redatta correlata; M3B PENDING |
 | AC-022 | SDK plus native/COM compatibility report |
 | AC-023 | E2E storico + M3 synthetic vendor API key/mTLS container PASS; smoke Azure PENDING |
 | AC-024 | Managed Connector example execution |
 | AC-025 | runbook exercise and diagnostics evidence |
 | AC-026 | threat-model review checklist |
-| AC-027 | `eng/generate-sbom.ps1` — SPDX generato e validato |
+| AC-027 | `eng/generate-sbom.ps1` — SPDX generato e validato; ogni rotazione di base image riesegue container SBOM dopo pull |
 | AC-028 | signature/tamper verification suite |
 | AC-029 | pilot rotation/revocation evidence |
 | AC-030 | pilot code/package/network bypass evidence |

@@ -37,13 +37,62 @@ Upgrade conserva state, CNG key e DPAPI blob. Downgrade non compatibile è rifiu
 
 ## Gateway container
 
-- Multi-stage build pinned su .NET 10.
+- Multi-stage build pinned sulla patch .NET approvata tramite tag esatto e digest
+  della manifest list; i tag mobili non sono ammessi.
 - Runtime image chiseled/minimal, non-root e read-only filesystem.
 - Solo directory temporanea dedicata scrivibile.
 - Nessun shell/tool di build nell'immagine runtime.
 - `/health/live` non controlla dipendenze.
 - `/health/ready` controlla DB, Vault metadata e cache config, senza invocare servizi esterni costosi.
 - Migrazioni database come tool/job distinto, non all'avvio.
+
+### Provenance delle base image .NET
+
+`global.json` seleziona SDK `10.0.302` con `rollForward: latestPatch`. Un tag mobile
+come `sdk:10.0` può spostarsi a una feature band successiva e rendere il build
+deterministicamente non eseguibile anche quando commit e lock file non cambiano. Per
+questo ogni `FROM mcr.microsoft.com/dotnet/...` deve usare insieme un tag patch
+leggibile e il digest della manifest list nel formato
+`repository:exact-tag@sha256:manifest-list-digest`; il tag senza digest e il digest
+senza tag sono entrambi vietati.
+
+Pin approvati:
+
+| Famiglia | Riferimento |
+|---|---|
+| SDK non-Alpine | `mcr.microsoft.com/dotnet/sdk:10.0.302@sha256:72dd743782f2ae7e5476fd64f6a460045e3998dc862218b80e6944cba79a01b0` |
+| SDK Alpine | `mcr.microsoft.com/dotnet/sdk:10.0.302-alpine3.24@sha256:979da27fc87dc255f4675b7642556cdcba9307459f8891f85f3cc26edcd7e766` |
+| ASP.NET non-Alpine | `mcr.microsoft.com/dotnet/aspnet:10.0.11@sha256:207cc51496778557731c81ff670333d8ade4a4fec22768fd1be8e78474a84ecf` |
+| Runtime non-Alpine | `mcr.microsoft.com/dotnet/runtime:10.0.11@sha256:acad02eb5c4fbf57d15296f9c08d56cd4036e915bdae5b4dd48a06523d452617` |
+| ASP.NET Alpine | `mcr.microsoft.com/dotnet/aspnet:10.0.11-alpine3.24@sha256:c4b29bf368004ad9076c1ab9bc91fb373561e3905b4345637e14e8b8c57e3be8` |
+| Runtime Alpine | `mcr.microsoft.com/dotnet/runtime:10.0.11-alpine3.24@sha256:216f4e2027da6ae806e0bc4b448669ac0faa00125908e308f31dd70598e58136` |
+
+`eng/validate-container-base-images.ps1` è il controllo canonico fail-closed. Esamina
+i Dockerfile tracciati da Git, confronta le SDK con `global.json`, mantiene l'allowlist
+tag/digest e il mapping esatto delle 12 occorrenze, e rifiuta riferimenti nascosti da
+ARG o interpolazione. `eng/build.ps1` lo esegue sempre e la CI lo espone prima di ogni
+build container interessato.
+
+### Aggiornamento intenzionale dei pin
+
+1. Se cambia l'SDK, approvare prima la modifica separata di `global.json`; altrimenti
+   il tag SDK deve mantenere esattamente `10.0.302`, inclusa ogni variante distro.
+2. Interrogare MCR per il tag patch scelto e registrare il digest della manifest list,
+   non il digest platform-specific. Verificare almeno tutte le architetture già
+   supportate (`linux/amd64`, `linux/arm/v7`, `linux/arm64`).
+3. Eseguire l'immagine con pull forzato e verificare `dotnet --version` oppure
+   `dotnet --list-runtimes`. Aggiornare tag e digest insieme nei Dockerfile e
+   nell'allowlist del validator nello stesso commit reviewable.
+4. Eseguire `eng/validate-container-base-images.ps1 -SelfTest`, quindi costruire tutti
+   i sei Dockerfile con `--pull` e, per la qualificazione, senza affidarsi soltanto
+   alla cache locale.
+5. Rieseguire non-root/read-only, health/readiness, shutdown, TLS, secret scan,
+   vulnerability inventory, SBOM, cleanup e tutti i container/quick-start gate
+   General e M5/Admin sulla nuova exact head.
+
+Non si usa `--pull=false`, non si installa una seconda SDK nel build e non si effettua
+un rerun same-SHA per mascherare un drift già osservato. La failure main che motiva
+l'aggiornamento resta parte dell'evidenza di release.
 
 ## Azure production profile
 
@@ -126,4 +175,3 @@ What-if, lint e policy check precedono ogni apply. Output sensibili non vengono 
 - Bicep e Connector definitions consentono ricostruzione del control plane.
 - Local Broker recovery segue ADR-0014.
 - RPO/RTO contrattuali vengono fissati prima del pilot; il profilo critical abilita HA zone-redundant e strategia cross-region.
-
