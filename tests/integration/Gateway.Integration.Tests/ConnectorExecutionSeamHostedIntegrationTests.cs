@@ -510,15 +510,18 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
     [Theory]
     [InlineData("binding-oracle-xml-lang")]
     [InlineData("binding-oracle-namespace")]
+    [InlineData("binding-oracle-raw-lexical")]
     public async Task Wave1_SEC_external_no_IVT_binding_plaintext_writer_state_oracles_are_denied_with_zero_transport(string payload)
     {
+        const string oracleOrganizationCode = "coreownedorganization";
         SyntheticBindingInputStateOracleProbe.Reset();
         HostedExecutionModuleConfiguration module = Module(
             "synthetic-execution",
             "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticExecutionModule");
         await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
             "unused-binding-oracle-candidate",
-            executionModule: module);
+            executionModule: module,
+            serverOwnedOrganizationCode: oracleOrganizationCode);
         string connectorId = "execution-binding-oracle-" + Guid.NewGuid().ToString("N");
         Guid environmentId = await fixture.CreateEnvironmentAsync();
         Guid tenantId = await fixture.CreateTenantAsync("binding-oracle-tenant");
@@ -544,7 +547,7 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
         Assert.Equal(1, fixture.Factory.Secrets.TotalRequests);
         Assert.Equal(0, fixture.Transport.TotalSoapRequests);
         Assert.DoesNotContain(payload, body + logs, StringComparison.Ordinal);
-        Assert.DoesNotContain(HostedTypedSessionFixture.SyntheticOrganizationCode, body + logs, StringComparison.Ordinal);
+        Assert.DoesNotContain(oracleOrganizationCode, body + logs, StringComparison.Ordinal);
     }
 
     [Theory]

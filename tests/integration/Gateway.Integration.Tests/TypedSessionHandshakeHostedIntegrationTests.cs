@@ -389,8 +389,10 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         HostedExecutionModuleConfiguration? executionModule = null,
         Func<CancellationToken, Task>? beforeHandshakeFinalAuthorization = null,
         Func<CancellationToken, Task>? beforeComposedFinalAuthorization = null,
-        HostedCapabilityProvider? capabilityProvider = null)
+        HostedCapabilityProvider? capabilityProvider = null,
+        string? serverOwnedOrganizationCode = null)
     {
+        string organizationCode = serverOwnedOrganizationCode ?? SyntheticOrganizationCode;
         HostedServerCertificates certificates = HostedServerCertificates.Create(SyntheticHost);
         try
         {
@@ -399,13 +401,13 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
                 {
                     OpaqueSessionHeaderName = "X-Session-Reference",
                     OpaqueSessionValue = candidate,
-                    ServerOwnedOrganizationCode = executionModule is null ? null : SyntheticOrganizationCode
+                    ServerOwnedOrganizationCode = executionModule is null ? null : organizationCode
                 },
                 certificates.Server, TestContext.Current.CancellationToken);
             try
             {
                 TypedSessionHostFactory factory = new(certificates.Root, certificates.Server, SyntheticHost, beforePromotion, runtimeConnection, adminConnection,
-                    executionModule, beforeHandshakeFinalAuthorization, beforeComposedFinalAuthorization, capabilityProvider);
+                    executionModule, beforeHandshakeFinalAuthorization, beforeComposedFinalAuthorization, capabilityProvider, organizationCode);
                 return new(certificates, server, factory);
             }
             catch
@@ -824,7 +826,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
     private readonly HostedCapabilityProvider? capabilityProvider;
     private readonly RecordingLoggerProvider logger = new();
     private readonly TestClientCertificateStartupFilter certificateFilter = new();
-    private readonly FixedSecrets secrets = new();
+    private readonly FixedSecrets secrets;
 
     internal TypedSessionHostFactory(
         X509Certificate2 root,
@@ -836,7 +838,8 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
         HostedExecutionModuleConfiguration? executionModule,
         Func<CancellationToken, Task>? beforeHandshakeFinalAuthorization,
         Func<CancellationToken, Task>? beforeComposedFinalAuthorization,
-        HostedCapabilityProvider? capabilityProvider)
+        HostedCapabilityProvider? capabilityProvider,
+        string organizationCode)
     {
         this.syntheticHost = syntheticHost;
         this.beforePromotion = beforePromotion;
@@ -846,6 +849,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
         this.beforeHandshakeFinalAuthorization = beforeHandshakeFinalAuthorization;
         this.beforeComposedFinalAuthorization = beforeComposedFinalAuthorization;
         this.capabilityProvider = capabilityProvider;
+        secrets = new(organizationCode);
         X509Certificate2Collection trust = new(root);
         if (capabilityProvider is not null) trust.Add(capabilityProvider.RootCertificate);
         Transport = new(new SystemRestrictedTransport(trust,
@@ -940,7 +944,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
             hosts.Contains(candidateHost) && IPAddress.IsLoopback(address);
     }
 
-    internal sealed class FixedSecrets : ISecretValueProvider
+    internal sealed class FixedSecrets(string organizationCode) : ISecretValueProvider
     {
         private int totalRequests;
         internal int TotalRequests => Volatile.Read(ref totalRequests);
@@ -958,7 +962,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
             {
                 if (BeforeOrganizationReturn is not null)
                     await BeforeOrganizationReturn(cancellationToken).ConfigureAwait(false);
-                return HostedTypedSessionFixture.SyntheticOrganizationCode;
+                return organizationCode;
             }
             throw new InvalidOperationException("Unexpected synthetic secret binding.");
         }

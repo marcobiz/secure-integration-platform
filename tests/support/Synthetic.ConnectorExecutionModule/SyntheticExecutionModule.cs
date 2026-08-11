@@ -757,7 +757,7 @@ public sealed class SyntheticExternalTypedComposedSoapRequestAdapter : ITypedCom
             context.ServerOwnedInputs.WriteRequiredXmlValue("organization-code");
             writer.WriteEndAttribute();
             SyntheticBindingInputStateOracleProbe.RecordXmlLang(
-                string.Equals(writer.XmlLang, "core-owned<&organization", StringComparison.Ordinal));
+                string.Equals(writer.XmlLang, "coreownedorganization", StringComparison.Ordinal));
             throw new InvalidOperationException("synthetic-binding-oracle-must-not-complete");
         }
         if (string.Equals(payload, "binding-oracle-namespace", StringComparison.Ordinal))
@@ -766,8 +766,16 @@ public sealed class SyntheticExternalTypedComposedSoapRequestAdapter : ITypedCom
             context.ServerOwnedInputs.WriteRequiredXmlValue("organization-code");
             writer.WriteEndAttribute();
             SyntheticBindingInputStateOracleProbe.RecordNamespace(
-                string.Equals(writer.LookupPrefix("core-owned<&organization"), "probe", StringComparison.Ordinal));
+                string.Equals(writer.LookupPrefix("coreownedorganization"), "probe", StringComparison.Ordinal));
             throw new InvalidOperationException("synthetic-binding-oracle-must-not-complete");
+        }
+        if (string.Equals(payload, "binding-oracle-raw-lexical", StringComparison.Ordinal))
+        {
+            writer.WriteRaw("<probe ");
+            SyntheticBindingInputStateOracleProbe.RecordRawLexicalContext();
+            context.ServerOwnedInputs.WriteRequiredXmlValue("organization-code");
+            writer.WriteRaw("=\"\" coreownedorganization=\"\"/>");
+            return;
         }
 
         writer.WriteElementString("op", "Payload", SyntheticExternalTypedComposedSoapProtocol.Namespace, payload);
@@ -800,12 +808,14 @@ public static class SyntheticBindingInputStateOracleProbe
 {
     private static int xmlLangSucceeded;
     private static int namespaceSucceeded;
+    private static int rawLexicalContextOpened;
 
     /// <summary>Clears qualification-only boolean observations without retaining any value.</summary>
     public static void Reset()
     {
         Volatile.Write(ref xmlLangSucceeded, 0);
         Volatile.Write(ref namespaceSucceeded, 0);
+        Volatile.Write(ref rawLexicalContextOpened, 0);
     }
 
     /// <summary>Records only whether the reserved XML attribute exposed the known synthetic value.</summary>
@@ -814,8 +824,12 @@ public static class SyntheticBindingInputStateOracleProbe
     /// <summary>Records only whether namespace lookup confirmed the known synthetic value.</summary>
     public static void RecordNamespace(bool succeeded) => Volatile.Write(ref namespaceSucceeded, succeeded ? 1 : 0);
 
+    /// <summary>Records whether raw lexical state was opened before a write-only binding emission.</summary>
+    public static void RecordRawLexicalContext() => Volatile.Write(ref rawLexicalContextOpened, 1);
+
     /// <summary>Whether any adapter-visible writer-state oracle succeeded.</summary>
-    public static bool AnySucceeded => Volatile.Read(ref xmlLangSucceeded) != 0 || Volatile.Read(ref namespaceSucceeded) != 0;
+    public static bool AnySucceeded => Volatile.Read(ref xmlLangSucceeded) != 0 ||
+        Volatile.Read(ref namespaceSucceeded) != 0 || Volatile.Read(ref rawLexicalContextOpened) != 0;
 }
 
 /// <summary>External probes for callback lifetime and read-only repeatable business payload views.</summary>

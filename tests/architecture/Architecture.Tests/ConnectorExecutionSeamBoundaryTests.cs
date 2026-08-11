@@ -197,6 +197,8 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         Assert.DoesNotContain("boundWriter.WriteChars", bindingInputs, StringComparison.Ordinal);
         Assert.Contains("attributeOpen || inner.WriteState is not (WriteState.Element or WriteState.Content)", adapterWriter, StringComparison.Ordinal);
         Assert.Contains("lock (synchronization)", adapterWriter, StringComparison.Ordinal);
+        Assert.DoesNotContain("inner.WriteRaw", adapterWriter, StringComparison.Ordinal);
+        Assert.Equal(2, Regex.Count(adapterWriter, @"public override void WriteRaw\([^)]*\) => DenyRaw\(\);"));
         Assert.Contains("writer.WriteStartElement(\"op\", authority.RequestElement.LocalName", boundary, StringComparison.Ordinal);
         Assert.Contains("TypedComposedSoapRequestAdapterRegistry", contracts, StringComparison.Ordinal);
         Assert.Contains("RegisterAdapter(typeof(ITypedComposedSoapRequestAdapter)", loader, StringComparison.Ordinal);
