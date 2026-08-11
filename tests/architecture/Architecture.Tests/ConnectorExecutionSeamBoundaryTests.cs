@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using System.Text.RegularExpressions;
 using Xunit;
 
 namespace SecureIntegration.Architecture.Tests;
@@ -147,7 +148,7 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         string hostRuntime = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "AuthorizedVerticalCapabilityRuntime.cs"));
         string executionContracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"));
         string claimBounds = File.ReadAllText(Path.Combine(Root, "src", "Shared", "Security", "BoundedJwtClaimValidation.cs"));
-        string migration = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0012_connector_capability_locator_scope.sql"));
+        string migration = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0013_authorized_signing_slots.sql"));
 
         Assert.Contains("internal string CompactToken", publicContracts, StringComparison.Ordinal);
         Assert.DoesNotContain("public string CompactToken", publicContracts, StringComparison.Ordinal);
@@ -168,8 +169,43 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         Assert.Contains("PurposeBoundMutualTlsSender", hostRuntime, StringComparison.Ordinal);
         Assert.Contains("Rs256JwtSigner", hostRuntime, StringComparison.Ordinal);
         Assert.Contains("authorizedCapabilities' -> 'signing' ->> 'keyBinding'", migration, StringComparison.Ordinal);
+        Assert.Contains("authorizedCapabilities' -> 'signingSlots'", migration, StringComparison.Ordinal);
+        Assert.Contains("signing_slot -> 'signing' ->> 'keyBinding'", migration, StringComparison.Ordinal);
         Assert.Contains("typedSessionHandshake' -> 'serverOwnedInputs'", migration, StringComparison.Ordinal);
         Assert.Contains("installation_connector_grant", migration, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Wave1_CT_authorized_signing_slots_are_bounded_opaque_slot_bound_and_server_projected()
+    {
+        string executionContracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"));
+        string publicContracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "AuthorizedVerticalCapabilityContracts.cs"));
+        string hostRuntime = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "AuthorizedVerticalCapabilityRuntime.cs"));
+        string schema = File.ReadAllText(Path.Combine(Root, "docs", "connectors", "connector-definition.schema.json"));
+
+        Assert.Contains("public sealed record ConnectorSigningSlotKey", executionContracts, StringComparison.Ordinal);
+        Assert.Contains("internal const int MaximumSlots = 4", executionContracts, StringComparison.Ordinal);
+        Assert.Contains("HashSet<ConnectorSigningSlotKey> consumedSigningSlots", executionContracts, StringComparison.Ordinal);
+        Assert.Contains("!consumedSigningSlots.Add(signingSlot)", executionContracts, StringComparison.Ordinal);
+        Assert.Contains("signingAttempts >= AuthorizedSigningSlots.MaximumSlots", executionContracts, StringComparison.Ordinal);
+        Assert.Contains("new(this, signingSlot, compactToken)", executionContracts, StringComparison.Ordinal);
+        Assert.Contains("signedTokens.ToDictionary", executionContracts, StringComparison.Ordinal);
+        Assert.Contains("internal ConnectorSigningSlotKey SigningSlot", publicContracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public ConnectorSigningSlotKey SigningSlot", publicContracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public string CompactToken", publicContracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public string Header", publicContracts, StringComparison.Ordinal);
+        Assert.Contains("token.SigningSlot != key", hostRuntime, StringComparison.Ordinal);
+        Assert.Contains("profile.SigningSlots.Values.Where(value => value.Required)", hostRuntime, StringComparison.Ordinal);
+        Assert.Contains("SigningTokenProjectionKind.AuthorizationBearer", hostRuntime, StringComparison.Ordinal);
+        Assert.Contains("SigningTokenProjectionKind.SignedTokenHeader", hostRuntime, StringComparison.Ordinal);
+        Assert.Contains("SignedTokenHeadersForbidden", hostRuntime, StringComparison.Ordinal);
+        Assert.Contains("\"maxItems\": 4", schema, StringComparison.Ordinal);
+        Assert.Contains("\"authorizationBearer\"", schema, StringComparison.Ordinal);
+        Assert.Contains("\"signedTokenHeader\"", schema, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpClient", executionContracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpRequestMessage", executionContracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("IKeyOperationProvider", executionContracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("ICertificatePublicMaterialProvider", executionContracts, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -181,16 +217,20 @@ public sealed class ConnectorExecutionSeamBoundaryTests
             Path.Combine(Root, "src", "Gateway", "Gateway.Application", "OperationServices.cs"),
             Path.Combine(Root, "src", "Gateway", "Gateway.Api", "ConnectorExecutionModuleLoader.cs"),
             Path.Combine(Root, "src", "Gateway", "Gateway.Api", "GatewayHostOptions.cs"),
+            Path.Combine(Root, "src", "Gateway", "Gateway.Api", "AuthorizedVerticalCapabilityRuntime.cs"),
+            Path.Combine(Root, "src", "Gateway", "Gateway.Application", "AuthorizedVerticalCapabilityContracts.cs"),
+            Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorConfiguration.cs"),
             Path.Combine(Root, "tests", "support", "Synthetic.ConnectorExecutionModule", "SyntheticExecutionModule.cs")
         ];
         string[] forbidden =
         [
-            "F" + "SE", "Sistema" + "TS", "SO" + "GEI", "farma" + "cia", "health" + "care",
+            "Sistema" + "TS", "SO" + "GEI", "farma" + "cia", "health" + "care",
             "C" + "GM", "Winges" + "far", "dr" + "CLOUD"
         ];
         foreach (string file in files)
         {
             string source = File.ReadAllText(file);
+            Assert.DoesNotMatch(new Regex(@"\bFSE(?:2|-JWT)?\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), source);
             foreach (string value in forbidden) Assert.DoesNotContain(value, source, StringComparison.OrdinalIgnoreCase);
         }
 

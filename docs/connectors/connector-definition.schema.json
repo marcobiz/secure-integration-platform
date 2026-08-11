@@ -317,11 +317,41 @@
     "authorizedCapabilities": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["signing", "restrictedTransport"],
+      "required": ["restrictedTransport"],
       "properties": {
         "signing": { "$ref": "#/$defs/invocationSigning" },
-        "restrictedTransport": { "$ref": "#/$defs/invocationRestrictedTransport" }
-      }
+        "signingSlots": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/invocationSigningSlot" }
+        },
+        "restrictedTransport": { "type": "object" }
+      },
+      "oneOf": [
+        {
+          "required": ["signing"],
+          "not": {
+            "required": ["signingSlots"],
+            "properties": { "signingSlots": true }
+          },
+          "properties": {
+            "signing": true,
+            "restrictedTransport": { "$ref": "#/$defs/legacyInvocationRestrictedTransport" }
+          }
+        },
+        {
+          "required": ["signingSlots"],
+          "not": {
+            "required": ["signing"],
+            "properties": { "signing": true }
+          },
+          "properties": {
+            "signingSlots": true,
+            "restrictedTransport": { "$ref": "#/$defs/invocationRestrictedTransport" }
+          }
+        }
+      ]
     },
     "invocationSigning": {
       "type": "object",
@@ -356,7 +386,37 @@
         }
       ]
     },
-    "invocationRestrictedTransport": {
+    "invocationSigningSlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slot", "required", "signing", "projection"],
+      "properties": {
+        "slot": { "$ref": "#/$defs/signingSlotKey" },
+        "required": { "type": "boolean" },
+        "signing": { "$ref": "#/$defs/invocationSigning" },
+        "projection": { "$ref": "#/$defs/signedTokenProjection" }
+      }
+    },
+    "signedTokenProjection": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "authorizationBearer" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "headerName"],
+          "properties": {
+            "kind": { "const": "signedTokenHeader" },
+            "headerName": { "$ref": "#/$defs/safeSignedTokenHeader" }
+          }
+        }
+      ]
+    },
+    "legacyInvocationRestrictedTransport": {
       "type": "object",
       "additionalProperties": false,
       "required": ["profileId", "revision", "clientCertificateSpkiSha256", "authorization", "nearExpirySeconds"],
@@ -365,6 +425,17 @@
         "revision": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
         "clientCertificateSpkiSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
         "authorization": { "const": "signedTokenBearer" },
+        "nearExpirySeconds": { "type": "integer", "minimum": 0, "maximum": 300 }
+      }
+    },
+    "invocationRestrictedTransport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profileId", "revision", "clientCertificateSpkiSha256", "nearExpirySeconds"],
+      "properties": {
+        "profileId": { "$ref": "#/$defs/identifier" },
+        "revision": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
+        "clientCertificateSpkiSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
         "nearExpirySeconds": { "type": "integer", "minimum": 0, "maximum": 300 }
       }
     },
@@ -405,6 +476,18 @@
       }
     },
     "httpToken": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$" },
+    "signingSlotKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z](?:[a-z0-9._-]{0,62}[a-z0-9])?$"
+    },
+    "safeSignedTokenHeader": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$"
+    },
     "safeOpaqueSessionHeader": {
       "type": "string",
       "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$",

@@ -51,14 +51,20 @@ public sealed class AuthorizedConnectorSignedToken
 {
     private readonly object authority;
 
-    internal AuthorizedConnectorSignedToken(object authority, string compactToken)
+    internal AuthorizedConnectorSignedToken(
+        object authority,
+        ConnectorSigningSlotKey signingSlot,
+        string compactToken)
     {
+        ArgumentNullException.ThrowIfNull(signingSlot);
         if (string.IsNullOrWhiteSpace(compactToken) || compactToken.Length > 64 * 1024 || compactToken.Any(char.IsControl))
             throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
         this.authority = authority;
+        SigningSlot = signingSlot;
         CompactToken = compactToken;
     }
 
+    internal ConnectorSigningSlotKey SigningSlot { get; }
     internal string CompactToken { get; }
 
     internal bool IsOwnedBy(object candidate) => ReferenceEquals(authority, candidate);
@@ -76,12 +82,31 @@ public sealed class AuthorizedConnectorRestrictedTransportRequest
     private const int MaximumBodyBytes = 16 * 1024 * 1024;
     private readonly byte[] body;
 
-    /// <summary>Creates a body that must use a token signed by the same current capability bridge.</summary>
+    /// <summary>
+    /// Creates a body whose signed-token projections are supplied only by the current capability
+    /// bridge from tokens generated for the exact Published signing slots.
+    /// </summary>
+    public AuthorizedConnectorRestrictedTransportRequest(ReadOnlyMemory<byte> body)
+        : this(body, null, true)
+    {
+    }
+
+    /// <summary>
+    /// Creates a body and retains the historical same-invocation token proof. Core still derives
+    /// every actual outbound projection from the exact Published signing slots.
+    /// </summary>
     public AuthorizedConnectorRestrictedTransportRequest(
         ReadOnlyMemory<byte> body,
         AuthorizedConnectorSignedToken signedToken)
+        : this(body, signedToken ?? throw new ArgumentNullException(nameof(signedToken)), true)
     {
-        ArgumentNullException.ThrowIfNull(signedToken);
+    }
+
+    private AuthorizedConnectorRestrictedTransportRequest(
+        ReadOnlyMemory<byte> body,
+        AuthorizedConnectorSignedToken? signedToken,
+        bool _)
+    {
         if (body.Length is < 1 or > MaximumBodyBytes)
             throw new ArgumentOutOfRangeException(nameof(body));
         this.body = body.ToArray();
@@ -92,7 +117,7 @@ public sealed class AuthorizedConnectorRestrictedTransportRequest
     public int BodyLength => body.Length;
 
     internal ReadOnlyMemory<byte> Body => body;
-    internal AuthorizedConnectorSignedToken SignedToken { get; }
+    internal AuthorizedConnectorSignedToken? SignedToken { get; }
 
     /// <inheritdoc />
     public override string ToString() => $"AuthorizedConnectorRestrictedTransportRequest(BodyLength={BodyLength}, Redacted=True)";

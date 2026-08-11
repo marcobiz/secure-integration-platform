@@ -15,6 +15,12 @@ namespace SecureIntegration.Gateway.Api;
 /// </summary>
 internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalCapabilityRuntime
 {
+    private static readonly HashSet<string> SignedTokenHeadersForbidden = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Authorization", "SOAPAction", "Content-Type", "Cookie", "Set-Cookie", "Host", "Content-Length",
+        "Forwarded", "Via", "Expect", "TE", "Trailer", "Proxy-Authorization", "Proxy-Authenticate",
+        "Connection", "Transfer-Encoding", "Upgrade", "X-Correlation-ID", "traceparent", "tracestate", "baggage"
+    };
     private readonly IConnectorConfigurationStore store;
     private readonly IKeyOperationProvider? keyOperations;
     private readonly IClientCertificateProvider certificates;
@@ -51,16 +57,19 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
 
     public async Task<string> CreateSignedTokenAsync(
         AuthorizedConnectorExecution execution,
+        ConnectorSigningSlotKey signingSlot,
         IReadOnlyDictionary<string, JsonElement> claims,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(execution);
+        ArgumentNullException.ThrowIfNull(signingSlot);
         ArgumentNullException.ThrowIfNull(claims);
         try
         {
-            PublishedVerticalAuthority authority = new(store, execution);
+            PublishedVerticalAuthority authority = new(store, execution, signingSlot);
             VerticalProfile profile = await authority.ResolveProfileAsync(cancellationToken).ConfigureAwait(false);
-            AuthenticationExecutionContext context = authority.Context(profile.SigningProfileId);
+            SigningSlotProfile slot = profile.RequiredSigningSlot(signingSlot);
+            AuthenticationExecutionContext context = authority.Context(slot.SigningProfileId);
             Rs256JwtSigner signer = new(
                 authority,
                 authority,
@@ -70,7 +79,7 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
                 certificatePublicMaterial: certificatePublicMaterial);
             JwtBoundClaim[] boundedClaims = claims.OrderBy(value => value.Key, StringComparer.Ordinal)
                 .Select(value => new JwtBoundClaim(value.Key, value.Value)).ToArray();
-            return await signer.SignJwtAsync(context, profile.SigningProfileId, boundedClaims, cancellationToken).ConfigureAwait(false);
+            return await signer.SignJwtAsync(context, slot.SigningProfileId, boundedClaims, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -85,21 +94,40 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
     public async Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
         AuthorizedConnectorExecution execution,
         AuthorizedConnectorRestrictedTransportRequest request,
+        IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> signedTokens,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(execution);
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(signedTokens);
         try
         {
             PublishedVerticalAuthority authority = new(store, execution);
             VerticalProfile profile = await authority.ResolveProfileAsync(cancellationToken).ConfigureAwait(false);
+            ValidateSignedTokens(profile, signedTokens);
             AuthenticationExecutionContext context = authority.Context(profile.TransportProfileId);
             using HttpRequestMessage outbound = new(execution.Operation.Method, execution.Operation.Endpoint)
             {
                 Content = new ByteArrayContent(request.Body.ToArray())
             };
             outbound.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(execution.Operation.RequestContentType);
-            outbound.Headers.Authorization = new AuthenticationHeaderValue("Bearer", request.SignedToken.CompactToken);
+            foreach (SigningSlotProfile slot in profile.SigningSlots.Values.OrderBy(value => value.SigningSlot.Value, StringComparer.Ordinal))
+            {
+                if (!signedTokens.TryGetValue(slot.SigningSlot, out AuthorizedConnectorSignedToken? signedToken))
+                    continue;
+                switch (slot.Projection.Kind)
+                {
+                    case SigningTokenProjectionKind.AuthorizationBearer:
+                        outbound.Headers.Authorization = new AuthenticationHeaderValue("Bearer", signedToken.CompactToken);
+                        break;
+                    case SigningTokenProjectionKind.SignedTokenHeader:
+                        if (!outbound.Headers.TryAddWithoutValidation(slot.Projection.HeaderName!, signedToken.CompactToken))
+                            throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+                        break;
+                    default:
+                        throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+                }
+            }
             outbound.Headers.TryAddWithoutValidation("X-Correlation-ID", execution.CorrelationId.ToString("D"));
 
             PurposeBoundMutualTlsSender sender = new(
@@ -128,6 +156,20 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
         }
     }
 
+    private static void ValidateSignedTokens(
+        VerticalProfile profile,
+        IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> signedTokens)
+    {
+        if (signedTokens.Count > AuthorizedSigningSlots.MaximumSlots)
+            throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+        foreach (SigningSlotProfile required in profile.SigningSlots.Values.Where(value => value.Required))
+            if (!signedTokens.ContainsKey(required.SigningSlot))
+                throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+        foreach ((ConnectorSigningSlotKey key, AuthorizedConnectorSignedToken token) in signedTokens)
+            if (!profile.SigningSlots.ContainsKey(key) || token.SigningSlot != key)
+                throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+    }
+
     private static GatewayException Map(AuthenticationPrimitiveException exception)
     {
         if (exception.Code.Contains("STALE", StringComparison.Ordinal))
@@ -150,7 +192,8 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
 
     private sealed class PublishedVerticalAuthority(
         IConnectorConfigurationStore store,
-        AuthorizedConnectorExecution execution) : IAuthenticationPolicySource, IAuthenticationResourceBindingResolver
+        AuthorizedConnectorExecution execution,
+        ConnectorSigningSlotKey? signingSlot = null) : IAuthenticationPolicySource, IAuthenticationResourceBindingResolver
     {
         internal AuthenticationExecutionContext Context(string profileId) => new(
             execution.TenantId,
@@ -173,8 +216,9 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
             CancellationToken cancellationToken)
         {
             CurrentPublished current = await CurrentAsync(cancellationToken).ConfigureAwait(false);
-            EnsureContext(context, current.Profile.SigningProfileId, policyId);
-            return SigningPolicy(current);
+            SigningSlotProfile slot = current.Profile.RequiredSigningSlot(signingSlot);
+            EnsureContext(context, slot.SigningProfileId, policyId);
+            return SigningPolicy(current, slot);
         }
 
         public async Task<ServerOwnedMutualTlsPolicySnapshot> ResolveMutualTlsAsync(
@@ -194,12 +238,15 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
             CancellationToken cancellationToken)
         {
             CurrentPublished current = await CurrentAsync(cancellationToken).ConfigureAwait(false);
+            SigningSlotProfile? slot = purpose == AuthenticationResourcePurpose.JwtSigning
+                ? current.Profile.RequiredSigningSlot(signingSlot)
+                : null;
             string expectedProfile = purpose == AuthenticationResourcePurpose.JwtSigning
-                ? current.Profile.SigningProfileId
+                ? slot!.SigningProfileId
                 : current.Profile.TransportProfileId;
             EnsureContext(context, expectedProfile, expectedProfile);
             string expectedBinding = purpose == AuthenticationResourcePurpose.JwtSigning
-                ? current.Profile.SigningKeyBinding
+                ? slot!.SigningKeyBinding
                 : current.Profile.ClientCertificateBinding;
             if (!string.Equals(logicalBindingId, expectedBinding, StringComparison.Ordinal) ||
                 !current.Snapshot.Bindings.CertificateResources.TryGetValue(expectedBinding, out ProviderResourceBinding? binding) ||
@@ -209,13 +256,13 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
             CertificatePublicMetadata metadata = binding.CertificateMetadata ??
                 throw new AuthenticationPrimitiveException("BGW-AUTH-RESOURCE-METADATA");
             string spkiSha256 = purpose == AuthenticationResourcePurpose.JwtSigning
-                ? current.Profile.SigningSpkiSha256
+                ? slot!.SigningSpkiSha256
                 : current.Profile.ClientCertificateSpkiSha256;
             string policyChecksum = purpose == AuthenticationResourcePurpose.JwtSigning
-                ? SigningPolicy(current).PolicyChecksumSha256
+                ? SigningPolicy(current, slot!).PolicyChecksumSha256
                 : MutualTlsPolicy(current).PolicyChecksumSha256;
             long policyRevision = purpose == AuthenticationResourcePurpose.JwtSigning
-                ? current.Profile.SigningRevision
+                ? slot!.SigningRevision
                 : current.Profile.TransportRevision;
             return new(
                 expectedBinding,
@@ -276,32 +323,32 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
             }
         }
 
-        private ServerOwnedRs256PolicySnapshot SigningPolicy(CurrentPublished current)
+        private ServerOwnedRs256PolicySnapshot SigningPolicy(CurrentPublished current, SigningSlotProfile slot)
         {
-            ProviderResourceBinding binding = RequiredCertificateBinding(current, current.Profile.SigningKeyBinding);
+            ProviderResourceBinding binding = RequiredCertificateBinding(current, slot.SigningKeyBinding);
             CertificatePublicMetadata metadata = binding.CertificateMetadata!;
             return ServerOwnedRs256PolicySnapshot.Create(
-                current.Profile.SigningProfileId,
-                current.Profile.SigningRevision,
+                slot.SigningProfileId,
+                slot.SigningRevision,
                 current.Snapshot.Version.Id,
                 execution.ConnectorId,
                 execution.OperationId,
                 execution.EnvironmentId,
                 execution.Operation.Endpoint,
-                current.Profile.Issuer,
-                current.Profile.Audience,
-                current.Profile.SubjectPolicy,
-                current.Profile.FixedSubject,
-                current.Profile.AllowedClaims,
-                current.Profile.TokenLifetime,
-                current.Profile.ClockSkew,
-                current.Profile.SigningKeyBinding,
+                slot.Issuer,
+                slot.Audience,
+                slot.SubjectPolicy,
+                slot.FixedSubject,
+                slot.AllowedClaims,
+                slot.TokenLifetime,
+                slot.ClockSkew,
+                slot.SigningKeyBinding,
                 metadata.Version,
                 binding.CatalogRevision,
                 binding.CatalogChecksumSha256,
-                current.Profile.MinimumRsaKeySize,
-                current.Profile.CertificateHeaderMode,
-                current.Profile.TemporalClaimMode);
+                slot.MinimumRsaKeySize,
+                slot.CertificateHeaderMode,
+                slot.TemporalClaimMode);
         }
 
         private ServerOwnedMutualTlsPolicySnapshot MutualTlsPolicy(CurrentPublished current)
@@ -343,11 +390,69 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
 
         private static VerticalProfile ParseProfile(JsonElement operation, JsonElement capabilities)
         {
-            JsonElement signing = capabilities.GetProperty("signing");
             JsonElement restrictedTransport = capabilities.GetProperty("restrictedTransport");
             JsonElement authentication = operation.GetProperty("authentication");
             if (!string.Equals(authentication.GetProperty("kind").GetString(), "mtls", StringComparison.Ordinal)) throw Stale();
+            Dictionary<ConnectorSigningSlotKey, SigningSlotProfile> signingSlots = [];
+            if (capabilities.TryGetProperty("signing", out JsonElement legacySigning))
+            {
+                if (capabilities.TryGetProperty("signingSlots", out _) ||
+                    !string.Equals(restrictedTransport.GetProperty("authorization").GetString(), "signedTokenBearer", StringComparison.Ordinal))
+                    throw Stale();
+                SigningSlotProfile legacy = ParseSigningSlot(
+                    ConnectorSigningSlotKeys.Legacy,
+                    legacySigning,
+                    required: true,
+                    new(SigningTokenProjectionKind.AuthorizationBearer, null));
+                signingSlots.Add(legacy.SigningSlot, legacy);
+            }
+            else
+            {
+                if (!capabilities.TryGetProperty("signingSlots", out JsonElement slots) ||
+                    slots.GetArrayLength() is < 1 or > AuthorizedSigningSlots.MaximumSlots ||
+                    restrictedTransport.TryGetProperty("authorization", out _))
+                    throw Stale();
+                HashSet<string> profileIds = new(StringComparer.Ordinal);
+                HashSet<string> headers = new(StringComparer.OrdinalIgnoreCase);
+                bool authorizationSeen = false;
+                foreach (JsonElement value in slots.EnumerateArray())
+                {
+                    ConnectorSigningSlotKey key = ConnectorSigningSlotKey.Parse(value.GetProperty("slot").GetString()!);
+                    JsonElement projectionValue = value.GetProperty("projection");
+                    string projectionKind = projectionValue.GetProperty("kind").GetString()!;
+                    SigningTokenProjection projection = projectionKind switch
+                    {
+                        "authorizationBearer" when !authorizationSeen =>
+                            new(SigningTokenProjectionKind.AuthorizationBearer, null),
+                        "signedTokenHeader" when IsSafeSignedTokenHeader(projectionValue.GetProperty("headerName").GetString()!) =>
+                            new(SigningTokenProjectionKind.SignedTokenHeader, projectionValue.GetProperty("headerName").GetString()!),
+                        _ => throw Stale()
+                    };
+                    authorizationSeen |= projection.Kind == SigningTokenProjectionKind.AuthorizationBearer;
+                    if (projection.HeaderName is not null && !headers.Add(projection.HeaderName)) throw Stale();
+                    SigningSlotProfile parsed = ParseSigningSlot(
+                        key,
+                        value.GetProperty("signing"),
+                        value.GetProperty("required").GetBoolean(),
+                        projection);
+                    if (!signingSlots.TryAdd(key, parsed) || !profileIds.Add(parsed.SigningProfileId)) throw Stale();
+                }
+            }
             return new(
+                signingSlots.ToFrozenDictionary(),
+                restrictedTransport.GetProperty("profileId").GetString()!,
+                restrictedTransport.GetProperty("revision").GetInt64(),
+                authentication.GetProperty("certificateBinding").GetString()!,
+                restrictedTransport.GetProperty("clientCertificateSpkiSha256").GetString()!,
+                TimeSpan.FromSeconds(restrictedTransport.GetProperty("nearExpirySeconds").GetInt32()));
+        }
+
+        private static SigningSlotProfile ParseSigningSlot(
+            ConnectorSigningSlotKey key,
+            JsonElement signing,
+            bool required,
+            SigningTokenProjection projection) => new(
+                key,
                 signing.GetProperty("profileId").GetString()!,
                 signing.GetProperty("revision").GetInt64(),
                 signing.GetProperty("keyBinding").GetString()!,
@@ -380,15 +485,18 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
                     "iat-nbf-exp" => JwtTemporalClaimMode.IssuedAtNotBeforeExpiration,
                     _ => throw Stale()
                 },
-                restrictedTransport.GetProperty("profileId").GetString()!,
-                restrictedTransport.GetProperty("revision").GetInt64(),
-                authentication.GetProperty("certificateBinding").GetString()!,
-                restrictedTransport.GetProperty("clientCertificateSpkiSha256").GetString()!,
-                TimeSpan.FromSeconds(restrictedTransport.GetProperty("nearExpirySeconds").GetInt32()));
-        }
+                required,
+                projection);
 
         private static AuthenticationPrimitiveException Stale() => new("BGW-AUTH-VERTICAL-AUTHORITY-STALE");
     }
+
+    private static bool IsSafeSignedTokenHeader(string value) =>
+        value.Length is >= 1 and <= 64 &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) || character is '!' or '#' or '$' or '%' or '&' or '\'' or '*' or '+' or '-' or '.' or '^' or '_' or '`' or '|' or '~') &&
+        !SignedTokenHeadersForbidden.Contains(value) &&
+        !value.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase) &&
+        !value.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase);
 
     private sealed record CurrentPublished(
         PublishedConnectorSnapshot Snapshot,
@@ -396,6 +504,23 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
         VerticalProfile Profile);
 
     private sealed record VerticalProfile(
+        IReadOnlyDictionary<ConnectorSigningSlotKey, SigningSlotProfile> SigningSlots,
+        string TransportProfileId,
+        long TransportRevision,
+        string ClientCertificateBinding,
+        string ClientCertificateSpkiSha256,
+        TimeSpan NearExpiryWarningWindow)
+    {
+        internal SigningSlotProfile RequiredSigningSlot(ConnectorSigningSlotKey? key)
+        {
+            if (key is null || !SigningSlots.TryGetValue(key, out SigningSlotProfile? slot))
+                throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-SLOT-DENIED");
+            return slot;
+        }
+    }
+
+    private sealed record SigningSlotProfile(
+        ConnectorSigningSlotKey SigningSlot,
         string SigningProfileId,
         long SigningRevision,
         string SigningKeyBinding,
@@ -410,9 +535,14 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
         int MinimumRsaKeySize,
         JwtCertificateHeaderMode CertificateHeaderMode,
         JwtTemporalClaimMode TemporalClaimMode,
-        string TransportProfileId,
-        long TransportRevision,
-        string ClientCertificateBinding,
-        string ClientCertificateSpkiSha256,
-        TimeSpan NearExpiryWarningWindow);
+        bool Required,
+        SigningTokenProjection Projection);
+
+    private sealed record SigningTokenProjection(SigningTokenProjectionKind Kind, string? HeaderName);
+
+    private enum SigningTokenProjectionKind
+    {
+        AuthorizationBearer,
+        SignedTokenHeader
+    }
 }

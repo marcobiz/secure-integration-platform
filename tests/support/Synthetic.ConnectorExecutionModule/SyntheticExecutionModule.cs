@@ -25,6 +25,10 @@ public sealed class SyntheticExecutionModule : IConnectorExecutionModule
         registrar.AddStrategy<SyntheticCapabilityBridgeExecutionStrategy>();
         registrar.AddStrategy<SyntheticRetainedBridgeExecutionStrategy>();
         registrar.AddStrategy<SyntheticSignedMutualTlsExecutionStrategy>();
+        registrar.AddStrategy<SyntheticDualSlotExecutionStrategy>();
+        registrar.AddStrategy<SyntheticUnknownSigningSlotExecutionStrategy>();
+        registrar.AddStrategy<SyntheticRepeatedSigningSlotExecutionStrategy>();
+        registrar.AddStrategy<SyntheticMissingRequiredSigningSlotExecutionStrategy>();
         registrar.AddStrategy<SyntheticDeniedSigningClaimExecutionStrategy>();
         registrar.AddStrategy<SyntheticRetainedSigningBridgeExecutionStrategy>();
         registrar.AddStrategy<SyntheticFireAndForgetSigningExecutionStrategy>();
@@ -189,6 +193,100 @@ public sealed class SyntheticSignedMutualTlsExecutionStrategy : IConnectorExecut
     }
 }
 
+/// <summary>
+/// Neutral external proof that requests two exact Published slots while Core owns both signing
+/// policies and their outbound projections.
+/// </summary>
+public sealed class SyntheticDualSlotExecutionStrategy : IConnectorExecutionStrategy
+{
+    /// <inheritdoc />
+    public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("synthetic-dual-slot");
+
+    /// <inheritdoc />
+    public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => SyntheticAuthenticationKinds.MutualTls;
+
+    /// <inheritdoc />
+    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(
+        AuthorizedConnectorExecution execution,
+        CancellationToken cancellationToken)
+    {
+        using Stream configuration = execution.OpenPublishedExtensionConfiguration().OpenJsonStream();
+        using JsonDocument document = await JsonDocument.ParseAsync(configuration, cancellationToken: cancellationToken).ConfigureAwait(false);
+        JsonElement root = document.RootElement;
+        string claimName = root.GetProperty("claimName").GetString()!;
+        JsonElement claimValue = root.GetProperty("claimValue").Clone();
+        string bodyValue = root.GetProperty("body").GetString()!;
+        IReadOnlyDictionary<string, JsonElement> claims = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            [claimName] = claimValue
+        };
+        _ = await execution.Capabilities.CreateSignedTokenAsync(
+            ConnectorSigningSlotKey.Parse("primary"), claims, cancellationToken).ConfigureAwait(false);
+        _ = await execution.Capabilities.CreateSignedTokenAsync(
+            ConnectorSigningSlotKey.Parse("secondary"), claims, cancellationToken).ConfigureAwait(false);
+        return await execution.Capabilities.ExecuteRestrictedTransportAsync(
+            new AuthorizedConnectorRestrictedTransportRequest(Encoding.UTF8.GetBytes(bodyValue)),
+            cancellationToken).ConfigureAwait(false);
+    }
+}
+
+/// <summary>Requests a slot absent from the exact Published operation.</summary>
+public sealed class SyntheticUnknownSigningSlotExecutionStrategy : IConnectorExecutionStrategy
+{
+    /// <inheritdoc />
+    public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("synthetic-unknown-slot");
+    /// <inheritdoc />
+    public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => SyntheticAuthenticationKinds.MutualTls;
+    /// <inheritdoc />
+    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
+    {
+        _ = await execution.Capabilities.CreateSignedTokenAsync(
+            ConnectorSigningSlotKey.Parse("unknown"),
+            new Dictionary<string, JsonElement>(StringComparer.Ordinal),
+            cancellationToken).ConfigureAwait(false);
+        throw new InvalidOperationException("Unknown signing slot unexpectedly succeeded.");
+    }
+}
+
+/// <summary>Requests the same authorized slot twice to prove one-shot consumption.</summary>
+public sealed class SyntheticRepeatedSigningSlotExecutionStrategy : IConnectorExecutionStrategy
+{
+    /// <inheritdoc />
+    public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("synthetic-repeat-slot");
+    /// <inheritdoc />
+    public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => SyntheticAuthenticationKinds.MutualTls;
+    /// <inheritdoc />
+    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
+    {
+        ConnectorSigningSlotKey primary = ConnectorSigningSlotKey.Parse("primary");
+        _ = await execution.Capabilities.CreateSignedTokenAsync(
+            primary, new Dictionary<string, JsonElement>(StringComparer.Ordinal), cancellationToken).ConfigureAwait(false);
+        _ = await execution.Capabilities.CreateSignedTokenAsync(
+            primary, new Dictionary<string, JsonElement>(StringComparer.Ordinal), cancellationToken).ConfigureAwait(false);
+        throw new InvalidOperationException("Repeated signing slot unexpectedly succeeded.");
+    }
+}
+
+/// <summary>Attempts transport without generating every Published-required slot.</summary>
+public sealed class SyntheticMissingRequiredSigningSlotExecutionStrategy : IConnectorExecutionStrategy
+{
+    /// <inheritdoc />
+    public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("synthetic-missing-slot");
+    /// <inheritdoc />
+    public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => SyntheticAuthenticationKinds.MutualTls;
+    /// <inheritdoc />
+    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
+    {
+        _ = await execution.Capabilities.CreateSignedTokenAsync(
+            ConnectorSigningSlotKey.Parse("primary"),
+            new Dictionary<string, JsonElement>(StringComparer.Ordinal),
+            cancellationToken).ConfigureAwait(false);
+        return await execution.Capabilities.ExecuteRestrictedTransportAsync(
+            new AuthorizedConnectorRestrictedTransportRequest("synthetic-body"u8.ToArray()),
+            cancellationToken).ConfigureAwait(false);
+    }
+}
+
 /// <summary>Negative strategy proving that a module cannot expand a Published claim allowlist.</summary>
 public sealed class SyntheticDeniedSigningClaimExecutionStrategy : IConnectorExecutionStrategy
 {
@@ -200,6 +298,7 @@ public sealed class SyntheticDeniedSigningClaimExecutionStrategy : IConnectorExe
     public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
     {
         _ = await execution.Capabilities.CreateSignedTokenAsync(
+            ConnectorSigningSlotKey.Parse("primary"),
             new Dictionary<string, JsonElement>(StringComparer.Ordinal)
             {
                 ["not-allowlisted"] = JsonSerializer.SerializeToElement("denied")

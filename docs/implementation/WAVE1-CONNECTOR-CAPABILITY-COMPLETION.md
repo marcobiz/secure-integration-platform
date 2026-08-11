@@ -154,3 +154,7 @@ qualification and independent review.
 The host does not claim rollback of an effect completed while a strategy was still active. Scope
 closure only prevents a tracked operation paused before effect from continuing toward that future
 effect after strategy completion begins.
+
+The later bounded per-slot evolution of this same signing and transport bridge is specified by
+ADR-0025 and `WAVE1-AUTHORIZED-SIGNING-SLOTS.md`; this historical completion report and its single
+profile checksum evidence are not rewritten.

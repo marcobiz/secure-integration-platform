@@ -39,6 +39,44 @@ public sealed record ConnectorExecutionStrategyKey
     public override string ToString() => Value;
 }
 
+/// <summary>
+/// Canonical server-owned identifier selecting one complete Published signing authority. Naming a
+/// slot does not create authority; Core exact-matches it against the current operation.
+/// </summary>
+public sealed record ConnectorSigningSlotKey
+{
+    /// <summary>Maximum canonical slot-key length.</summary>
+    public const int MaximumLength = 64;
+
+    private ConnectorSigningSlotKey(string value) => Value = value;
+
+    /// <summary>Lower-case canonical slot-key value.</summary>
+    public string Value { get; }
+
+    /// <summary>Validates an exact lower-case ASCII signing slot key.</summary>
+    public static ConnectorSigningSlotKey Parse(string value)
+    {
+        if (!ConnectorExecutionIdentifier.IsValid(value, MaximumLength))
+            throw new ArgumentException("Invalid Connector signing slot key.", nameof(value));
+        return new(value);
+    }
+
+    /// <summary>Attempts to validate an exact lower-case ASCII signing slot key.</summary>
+    public static bool TryParse(string? value, out ConnectorSigningSlotKey? key)
+    {
+        if (!ConnectorExecutionIdentifier.IsValid(value, MaximumLength))
+        {
+            key = null;
+            return false;
+        }
+        key = new(value!);
+        return true;
+    }
+
+    /// <inheritdoc />
+    public override string ToString() => Value;
+}
+
 /// <summary>Canonical deployment-owned identifier for one explicitly configured execution module.</summary>
 public sealed record ConnectorExecutionModuleId
 {
@@ -152,15 +190,17 @@ public sealed class AuthorizedConnectorExecution
         private static readonly AsyncLocal<AuthorizedConnectorCapabilityBridge?> Current = new();
         private readonly object synchronization = new();
         private readonly List<TrackedCapabilityOperation> operations = [];
+        private readonly HashSet<ConnectorSigningSlotKey> consumedSigningSlots = [];
+        private readonly Dictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> signedTokens = [];
         private CancellationToken invocationCancellation;
         private CancellationTokenSource? lifetimeCancellation;
         private int state;
         private int consumedCapabilities;
+        private int signingAttempts;
 
         private const int TypedSessionHandshakeCapability = 1;
         private const int ComposedSoapCapability = 2;
-        private const int SigningCapability = 4;
-        private const int RestrictedTransportCapability = 8;
+        private const int RestrictedTransportCapability = 4;
 
         public Task<QualifiedGatewayExecutionResult> ExecuteTypedSessionHandshakeAsync(CancellationToken cancellationToken) =>
             StartOperation(TypedSessionHandshakeCapability,
@@ -173,7 +213,15 @@ public sealed class AuthorizedConnectorExecution
         public Task<AuthorizedConnectorSignedToken> CreateSignedTokenAsync(
             IReadOnlyDictionary<string, JsonElement> claims,
             CancellationToken cancellationToken) =>
-            StartOperation(SigningCapability, async (value, handoff, token) =>
+            CreateSignedTokenAsync(ConnectorSigningSlotKeys.Legacy, claims, cancellationToken);
+
+        public Task<AuthorizedConnectorSignedToken> CreateSignedTokenAsync(
+            ConnectorSigningSlotKey signingSlot,
+            IReadOnlyDictionary<string, JsonElement> claims,
+            CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(signingSlot);
+            return StartSigningOperation(signingSlot, async (value, handoff, token) =>
             {
                 IReadOnlyDictionary<string, JsonElement> snapshot;
                 try { snapshot = BoundedJwtClaimSnapshot.Create(claims); }
@@ -181,9 +229,16 @@ public sealed class AuthorizedConnectorExecution
                 {
                     throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
                 }
-                string compactToken = await value.CreateSignedTokenAsync(handoff, snapshot, token).ConfigureAwait(false);
-                return new AuthorizedConnectorSignedToken(this, compactToken);
+                string compactToken = await value.CreateSignedTokenAsync(handoff, signingSlot, snapshot, token).ConfigureAwait(false);
+                AuthorizedConnectorSignedToken result = new(this, signingSlot, compactToken);
+                lock (synchronization)
+                {
+                    if (!signedTokens.TryAdd(signingSlot, result))
+                        throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+                }
+                return result;
             }, cancellationToken);
+        }
 
         public Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
             AuthorizedConnectorRestrictedTransportRequest request,
@@ -191,9 +246,17 @@ public sealed class AuthorizedConnectorExecution
             => StartOperation(RestrictedTransportCapability, (value, handoff, token) =>
             {
                 ArgumentNullException.ThrowIfNull(request);
-                if (!request.SignedToken.IsOwnedBy(this))
-                    throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
-                return value.ExecuteRestrictedTransportAsync(handoff, request, token);
+                IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> snapshot;
+                lock (synchronization)
+                {
+                    if (request.SignedToken is not null &&
+                        (!request.SignedToken.IsOwnedBy(this) ||
+                         !signedTokens.TryGetValue(request.SignedToken.SigningSlot, out AuthorizedConnectorSignedToken? expected) ||
+                         !ReferenceEquals(expected, request.SignedToken)))
+                        throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+                    snapshot = signedTokens.ToDictionary(value => value.Key, value => value.Value);
+                }
+                return value.ExecuteRestrictedTransportAsync(handoff, request, snapshot, token);
             }, cancellationToken);
 
         internal AuthorizedConnectorCapabilityScope EnterExecutionScope(CancellationToken actualInvocationCancellation)
@@ -226,6 +289,17 @@ public sealed class AuthorizedConnectorExecution
             return task;
         }
 
+        private Task<TResult> StartSigningOperation<TResult>(
+            ConnectorSigningSlotKey signingSlot,
+            Func<IAuthorizedConnectorCapabilityDispatcher, AuthorizedConnectorExecution, CancellationToken, Task<TResult>> invoke,
+            CancellationToken cancellationToken)
+        {
+            TrackedCapabilityOperation operation = BeginSigningOperation(signingSlot, cancellationToken);
+            Task<TResult> task = InvokeTrackedAsync(operation, invoke, cancellationToken);
+            operation.Attach(task);
+            return task;
+        }
+
         private TrackedCapabilityOperation BeginOperation(int capability, CancellationToken methodCancellation)
         {
             lock (synchronization)
@@ -235,6 +309,28 @@ public sealed class AuthorizedConnectorExecution
                     throw Failure(new GatewayException("BGW-EGRESS-AUTHENTICATION", 409));
 
                 consumedCapabilities |= capability;
+                CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
+                    invocationCancellation,
+                    lifetimeCancellation.Token,
+                    methodCancellation);
+                TrackedCapabilityOperation operation = new(linked);
+                operations.Add(operation);
+                return operation;
+            }
+        }
+
+        private TrackedCapabilityOperation BeginSigningOperation(
+            ConnectorSigningSlotKey signingSlot,
+            CancellationToken methodCancellation)
+        {
+            lock (synchronization)
+            {
+                if (state != 1 || !ReferenceEquals(Current.Value, this) || dispatcher is null ||
+                    lifetimeCancellation is null || signingAttempts >= AuthorizedSigningSlots.MaximumSlots ||
+                    !consumedSigningSlots.Add(signingSlot))
+                    throw Failure(new GatewayException("BGW-EGRESS-AUTHENTICATION", 409));
+
+                signingAttempts++;
                 CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
                     invocationCancellation,
                     lifetimeCancellation.Token,
@@ -388,6 +484,14 @@ public interface IAuthorizedConnectorCapabilityBridge
         IReadOnlyDictionary<string, JsonElement> claims,
         CancellationToken cancellationToken);
     /// <summary>
+    /// Creates at most one bounded RS256 token for one exact Published signing slot. The slot is a
+    /// selector for pre-approved authority, never a key, provider, algorithm or purpose selector.
+    /// </summary>
+    Task<AuthorizedConnectorSignedToken> CreateSignedTokenAsync(
+        ConnectorSigningSlotKey signingSlot,
+        IReadOnlyDictionary<string, JsonElement> claims,
+        CancellationToken cancellationToken);
+    /// <summary>
     /// Sends one bounded body to the exact current Published endpoint with the exact server-owned
     /// mTLS identity and the signed token produced by this same invocation.
     /// </summary>
@@ -486,6 +590,16 @@ internal static class ConnectorExecutionStrategyKeys
     }
 }
 
+internal static class ConnectorSigningSlotKeys
+{
+    internal static readonly ConnectorSigningSlotKey Legacy = ConnectorSigningSlotKey.Parse("legacy");
+}
+
+internal static class AuthorizedSigningSlots
+{
+    internal const int MaximumSlots = 4;
+}
+
 internal sealed class ConnectorExecutionStrategyRegistry
 {
     internal const int MaximumStrategies = 256;
@@ -558,12 +672,14 @@ internal interface IAuthorizedConnectorCapabilityDispatcher
 
     Task<string> CreateSignedTokenAsync(
         AuthorizedConnectorExecution execution,
+        ConnectorSigningSlotKey signingSlot,
         IReadOnlyDictionary<string, JsonElement> claims,
         CancellationToken cancellationToken);
 
     Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
         AuthorizedConnectorExecution execution,
         AuthorizedConnectorRestrictedTransportRequest request,
+        IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> signedTokens,
         CancellationToken cancellationToken);
 }
 
@@ -571,12 +687,14 @@ internal interface IAuthorizedVerticalCapabilityRuntime
 {
     Task<string> CreateSignedTokenAsync(
         AuthorizedConnectorExecution execution,
+        ConnectorSigningSlotKey signingSlot,
         IReadOnlyDictionary<string, JsonElement> claims,
         CancellationToken cancellationToken);
 
     Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
         AuthorizedConnectorExecution execution,
         AuthorizedConnectorRestrictedTransportRequest request,
+        IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> signedTokens,
         CancellationToken cancellationToken);
 }
 

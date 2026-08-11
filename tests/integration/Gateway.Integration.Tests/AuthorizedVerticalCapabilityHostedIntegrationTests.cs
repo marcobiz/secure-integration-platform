@@ -85,7 +85,7 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
         {
             publicMaterialEntered.TrySetResult();
             await releasePublicMaterial.Task.WaitAsync(cancellationToken);
-        });
+        }, blockOnPublicMaterialCall: 2);
         await using SyntheticSignedMutualTlsServer server = await SyntheticSignedMutualTlsServer.StartAsync(
             material.ServerCertificate,
             material.ClientCertificateRevision1,
@@ -107,7 +107,7 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             "1.0.0",
             environmentId,
             server.Endpoint,
-            Definition(connectorId, "1.0.0", signingSpki, clientSpki),
+            DualSlotDefinition(connectorId, "1.0.0", signingSpki, clientSpki),
             provider,
             "sign-r1",
             "mtls-r1");
@@ -117,7 +117,10 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             "2.0.0",
             environmentId,
             server.Endpoint,
-            Definition(connectorId, "2.0.0", signingSpki, clientSpki),
+            DualSlotDefinition(connectorId, "2.0.0", signingSpki, clientSpki).Replace(
+                "synthetic-secondary-issuer",
+                "synthetic-secondary-issuer-v2",
+                StringComparison.Ordinal),
             provider,
             "sign-r1",
             "mtls-r1");
@@ -139,6 +142,7 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             $"/v1/connectors/{connectorId}/operations/signed-submit:invoke",
             JsonSerializer.SerializeToUtf8Bytes(request, WebJson));
         await publicMaterialEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(1, provider.SignDigestCalls);
         Assert.Equal(0, server.Requests);
         Assert.Equal(0, fixture.Transport.GenericRequests);
 
@@ -157,6 +161,7 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
         Assert.Contains("BGW-CONNECTOR-CONFIGURATION-STALE", body, StringComparison.Ordinal);
         Assert.Equal(0, server.Requests);
         Assert.Equal(0, fixture.Transport.GenericRequests);
+        Assert.Equal(1, provider.SignDigestCalls);
     }
 
     [Fact]
@@ -179,6 +184,7 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             {
                 ["sign-r1"] = [material.RootCertificate]
             });
+        TrackingCapabilityProvider trackingProvider = new(provider);
         await using SyntheticSignedMutualTlsServer server = await SyntheticSignedMutualTlsServer.StartAsync(
             material.ServerCertificate,
             material.ClientCertificateRevision1,
@@ -188,7 +194,7 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
         await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
             "unused-transport-race-candidate",
             executionModule: Module(),
-            capabilityProvider: new(provider, material.RootCertificate));
+            capabilityProvider: new(trackingProvider, trackingProvider, trackingProvider, trackingProvider, material.RootCertificate));
         string connectorId = "synthetic-transport-race-" + Guid.NewGuid().ToString("N");
         Guid environmentId = await fixture.CreateEnvironmentAsync();
         Guid tenantId = await fixture.CreateTenantAsync("transport-race-tenant");
@@ -200,8 +206,8 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             "1.0.0",
             environmentId,
             server.Endpoint,
-            Definition(connectorId, "1.0.0", signingSpki, clientSpki),
-            provider,
+            DualSlotDefinition(connectorId, "1.0.0", signingSpki, clientSpki),
+            trackingProvider,
             "sign-r1",
             "mtls-r1");
         await fixture.PublishAsync(authorityA, expectedPublicationRevision: 0);
@@ -210,7 +216,10 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             "2.0.0",
             environmentId,
             server.Endpoint,
-            Definition(connectorId, "2.0.0", signingSpki, clientSpki),
+            DualSlotDefinition(connectorId, "2.0.0", signingSpki, clientSpki).Replace(
+                "X-Synthetic-Signature",
+                "X-Synthetic-Signature-V2",
+                StringComparison.Ordinal),
             provider,
             "sign-r1",
             "mtls-r1");
@@ -274,6 +283,7 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             {
                 ["sign-r1"] = [material.RootCertificate]
             });
+        TrackingCapabilityProvider trackingProvider = new(provider);
         await using SyntheticSignedMutualTlsServer server = await SyntheticSignedMutualTlsServer.StartAsync(
             material.ServerCertificate,
             material.ClientCertificateRevision1,
@@ -286,14 +296,14 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             runtimeConnection: runtimeConnection,
             adminConnection: adminConnection,
             executionModule: module,
-            capabilityProvider: new(provider, material.RootCertificate));
+            capabilityProvider: new(trackingProvider, trackingProvider, trackingProvider, trackingProvider, material.RootCertificate));
         Assert.Equal(requirePostgres, fixture.Store is RoutingConnectorConfigurationStore);
 
         string connectorId = "synthetic-capability-" + Guid.NewGuid().ToString("N");
         Guid environmentId = await fixture.CreateEnvironmentAsync();
         Guid tenantId = await fixture.CreateTenantAsync("capability-tenant");
         Guid applicationId = await fixture.CreateApplicationAsync("capability-application");
-        string definition = Definition(
+        string definition = DualSlotDefinition(
             connectorId,
             "1.0.0",
             SpkiSha256(material.SigningKeyRevision1),
@@ -304,7 +314,7 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             environmentId,
             server.Endpoint,
             definition,
-            provider,
+            trackingProvider,
             "sign-r1",
             "mtls-r1");
         await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
@@ -345,37 +355,103 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
         Assert.True(server.X5cChainObserved);
         Assert.True(server.PublishedClaimObserved);
         Assert.True(server.PublishedBodyObserved);
+        Assert.True(server.DualSlotTokensObserved);
+        Assert.True(server.DualSlotTokensDistinct);
+        Assert.True(server.DistinctServerOwnedIssuersObserved);
+        Assert.True(server.SameSigningIdentityObserved);
+        Assert.Equal(1, fixture.Transport.GenericRequests);
+        Assert.Equal(2, trackingProvider.SignDigestCalls);
+
+        (HttpStatusCode deniedStatus, string deniedBody, _, _) = await PublishAndInvokeNegativeAsync(
+            "2.0.0", 1, "synthetic-denied-signing-claim");
+        Assert.Equal(HttpStatusCode.Conflict, deniedStatus);
+        Assert.Contains("BGW-EGRESS-AUTHENTICATION", deniedBody, StringComparison.Ordinal);
+        Assert.Equal(2, trackingProvider.SignDigestCalls);
+
+        (HttpStatusCode unknownStatus, string unknownBody, int providerCallsBeforeUnknown, _) = await PublishAndInvokeNegativeAsync(
+            "3.0.0", 2, "synthetic-unknown-slot");
+        Assert.Equal(HttpStatusCode.Conflict, unknownStatus);
+        Assert.Contains("BGW-EGRESS-AUTHENTICATION", unknownBody, StringComparison.Ordinal);
+        Assert.Equal(providerCallsBeforeUnknown, trackingProvider.TotalCalls);
+
+        (HttpStatusCode repeatStatus, string repeatBody, _, int signingBeforeRepeat) = await PublishAndInvokeNegativeAsync(
+            "4.0.0", 3, "synthetic-repeat-slot");
+        Assert.Equal(HttpStatusCode.Conflict, repeatStatus);
+        Assert.Contains("BGW-EGRESS-AUTHENTICATION", repeatBody, StringComparison.Ordinal);
+        Assert.Equal(signingBeforeRepeat + 1, trackingProvider.SignDigestCalls);
+
+        (HttpStatusCode missingStatus, string missingBody, _, int signingBeforeMissing) = await PublishAndInvokeNegativeAsync(
+            "5.0.0", 4, "synthetic-missing-slot");
+        Assert.Equal(HttpStatusCode.Conflict, missingStatus);
+        Assert.Contains("BGW-EGRESS-AUTHENTICATION", missingBody, StringComparison.Ordinal);
+        Assert.Equal(signingBeforeMissing + 1, trackingProvider.SignDigestCalls);
+        Assert.Equal(1, server.Requests);
         Assert.Equal(1, fixture.Transport.GenericRequests);
 
-        string deniedDefinition = Definition(
+        string legacyDefinition = Definition(
             connectorId,
-            "2.0.0",
+            "6.0.0",
             SpkiSha256(material.SigningKeyRevision1),
-            SpkiSha256(material.ClientCertificateRevision1)).Replace(
-                "\"executionStrategy\":\"synthetic-signed-mtls\"",
-                "\"executionStrategy\":\"synthetic-denied-signing-claim\"",
-                StringComparison.Ordinal);
-        HostedCapabilityAuthority deniedAuthority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            SpkiSha256(material.ClientCertificateRevision1));
+        HostedCapabilityAuthority legacyAuthority = await fixture.PrepareCapabilityConnectorVersionAsync(
             connectorId,
-            "2.0.0",
+            "6.0.0",
             environmentId,
             server.Endpoint,
-            deniedDefinition,
-            provider,
+            legacyDefinition,
+            trackingProvider,
             "sign-r1",
             "mtls-r1");
-        await fixture.PublishAsync(deniedAuthority, expectedPublicationRevision: 1);
-        using HttpResponseMessage deniedResponse = await fixture.SendSignedAsync(
+        await fixture.PublishAsync(legacyAuthority, expectedPublicationRevision: 5);
+        int signingBeforeLegacy = trackingProvider.SignDigestCalls;
+        using HttpResponseMessage legacyResponse = await fixture.SendSignedAsync(
             identity,
             HttpMethod.Post,
             $"/v1/connectors/{connectorId}/operations/signed-submit:invoke",
             JsonSerializer.SerializeToUtf8Bytes(request with { CorrelationId = Guid.NewGuid() }, WebJson));
-        string deniedBody = await deniedResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        string legacyBody = await legacyResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(HttpStatusCode.Conflict, deniedResponse.StatusCode);
-        Assert.Contains("BGW-EGRESS-AUTHENTICATION", deniedBody, StringComparison.Ordinal);
-        Assert.Equal(1, server.Requests);
-        Assert.Equal(1, fixture.Transport.GenericRequests);
+        Assert.True(legacyResponse.StatusCode == HttpStatusCode.OK, legacyBody);
+        Assert.Equal(signingBeforeLegacy + 1, trackingProvider.SignDigestCalls);
+        Assert.True(server.LegacyBearerObserved);
+        Assert.Equal(2, server.Requests);
+        Assert.Equal(2, fixture.Transport.GenericRequests);
+
+        async Task<(HttpStatusCode Status, string Body, int ProviderCallsBeforeInvoke, int SigningCallsBeforeInvoke)> PublishAndInvokeNegativeAsync(
+            string version,
+            long expectedPublicationRevision,
+            string strategy)
+        {
+            string negativeDefinition = DualSlotDefinition(
+                connectorId,
+                version,
+                SpkiSha256(material.SigningKeyRevision1),
+                SpkiSha256(material.ClientCertificateRevision1)).Replace(
+                    "\"executionStrategy\":\"synthetic-dual-slot\"",
+                    $"\"executionStrategy\":\"{strategy}\"",
+                    StringComparison.Ordinal);
+            HostedCapabilityAuthority negativeAuthority = await fixture.PrepareCapabilityConnectorVersionAsync(
+                connectorId,
+                version,
+                environmentId,
+                server.Endpoint,
+                negativeDefinition,
+                trackingProvider,
+                "sign-r1",
+                "mtls-r1");
+            await fixture.PublishAsync(negativeAuthority, expectedPublicationRevision);
+            int providerCallsBeforeInvoke = trackingProvider.TotalCalls;
+            int signingCallsBeforeInvoke = trackingProvider.SignDigestCalls;
+            using HttpResponseMessage negativeResponse = await fixture.SendSignedAsync(
+                identity,
+                HttpMethod.Post,
+                $"/v1/connectors/{connectorId}/operations/signed-submit:invoke",
+                JsonSerializer.SerializeToUtf8Bytes(request with { CorrelationId = Guid.NewGuid() }, WebJson));
+            return (negativeResponse.StatusCode,
+                await negativeResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken),
+                providerCallsBeforeInvoke,
+                signingCallsBeforeInvoke);
+        }
     }
 
     private static HostedExecutionModuleConfiguration Module()
@@ -409,17 +485,50 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
           }]
         }
         """;
+
+    private static string DualSlotDefinition(string connectorId, string version, string signingSpki, string clientSpki) => $$$"""
+        {
+          "schemaVersion":"1.0","connectorId":"{{{connectorId}}}","version":"{{{version}}}","displayName":"Synthetic authorized signing slots",
+          "bindings":{"endpoints":[{"name":"service"}],"secrets":[{"name":"signing-certificate","kind":"clientCertificate"},{"name":"mtls-certificate","kind":"clientCertificate"}]},
+          "operations":[{
+            "operationId":"signed-submit","endpointBinding":"service","method":"POST","path":"/submit",
+            "request":{"contentType":"application/octet-stream","maximumBytes":4096},"response":{"maximumBytes":4096},
+            "authentication":{"kind":"mtls","certificateBinding":"mtls-certificate"},"executionStrategy":"synthetic-dual-slot",
+            "extensionConfiguration":{"claimName":"transaction-id","claimValue":"published-claim","body":"published-body"},
+            "authorizedCapabilities":{
+              "signingSlots":[
+                {
+                  "slot":"primary","required":true,
+                  "signing":{"profileId":"synthetic-primary-signing","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"synthetic-primary-issuer","audience":"synthetic-upstream","subject":"installation","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"clockSkewSeconds":5,"certificateHeader":"chain","temporalClaims":"iat-nbf-exp","minimumRsaKeySize":2048},
+                  "projection":{"kind":"authorizationBearer"}
+                },
+                {
+                  "slot":"secondary","required":true,
+                  "signing":{"profileId":"synthetic-secondary-signing","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"synthetic-secondary-issuer","audience":"synthetic-upstream","subject":"installation","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"clockSkewSeconds":5,"certificateHeader":"chain","temporalClaims":"iat-nbf-exp","minimumRsaKeySize":2048},
+                  "projection":{"kind":"signedTokenHeader","headerName":"X-Synthetic-Signature"}
+                }
+              ],
+              "restrictedTransport":{"profileId":"synthetic-transport","revision":1,"clientCertificateSpkiSha256":"{{{clientSpki}}}","nearExpirySeconds":30}
+            },
+            "timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[],"idempotent":false,"maximumRetries":0
+          }]
+        }
+        """;
 }
 
 internal sealed class BlockingPublicMaterialProvider(
     InMemoryProvider inner,
-    Func<CancellationToken, Task> beforeFirstPublicMaterial) :
+    Func<CancellationToken, Task> beforeBlockedPublicMaterial,
+    int blockOnPublicMaterialCall = 1) :
     IClientCertificateProvider,
     IKeyOperationProvider,
     ICertificateMetadataProvider,
     ICertificatePublicMaterialProvider
 {
     private int publicMaterialCalls;
+    private int signDigestCalls;
+
+    internal int SignDigestCalls => Volatile.Read(ref signDigestCalls);
 
     public Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken) =>
         inner.GetClientCertificateAsync(logicalReference, cancellationToken);
@@ -427,17 +536,70 @@ internal sealed class BlockingPublicMaterialProvider(
     public Task<ProviderCertificatePublicMetadata> GetPublicMetadataAsync(string logicalReference, CancellationToken cancellationToken) =>
         inner.GetPublicMetadataAsync(logicalReference, cancellationToken);
 
-    public Task<byte[]> SignDigestAsync(string logicalReference, string algorithm, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken) =>
-        inner.SignDigestAsync(logicalReference, algorithm, digest, cancellationToken);
+    public Task<byte[]> SignDigestAsync(string logicalReference, string algorithm, ReadOnlyMemory<byte> digest, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref signDigestCalls);
+        return inner.SignDigestAsync(logicalReference, algorithm, digest, cancellationToken);
+    }
 
     public Task<ProviderSigningKeyPublicMetadata> GetSigningKeyMetadataAsync(string logicalReference, CancellationToken cancellationToken) =>
         inner.GetSigningKeyMetadataAsync(logicalReference, cancellationToken);
 
     public async Task<ProviderCertificatePublicMaterial> GetPublicMaterialAsync(string logicalReference, CancellationToken cancellationToken)
     {
-        if (Interlocked.Increment(ref publicMaterialCalls) == 1)
-            await beforeFirstPublicMaterial(cancellationToken).ConfigureAwait(false);
+        if (Interlocked.Increment(ref publicMaterialCalls) == blockOnPublicMaterialCall)
+            await beforeBlockedPublicMaterial(cancellationToken).ConfigureAwait(false);
         return await inner.GetPublicMaterialAsync(logicalReference, cancellationToken).ConfigureAwait(false);
+    }
+}
+
+internal sealed class TrackingCapabilityProvider(InMemoryProvider inner) :
+    IClientCertificateProvider,
+    IKeyOperationProvider,
+    ICertificateMetadataProvider,
+    ICertificatePublicMaterialProvider
+{
+    private int totalCalls;
+    private int signDigestCalls;
+
+    internal int TotalCalls => Volatile.Read(ref totalCalls);
+    internal int SignDigestCalls => Volatile.Read(ref signDigestCalls);
+
+    public Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref totalCalls);
+        return inner.GetClientCertificateAsync(logicalReference, cancellationToken);
+    }
+
+    public Task<ProviderCertificatePublicMetadata> GetPublicMetadataAsync(string logicalReference, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref totalCalls);
+        return inner.GetPublicMetadataAsync(logicalReference, cancellationToken);
+    }
+
+    public Task<ProviderCertificatePublicMaterial> GetPublicMaterialAsync(string logicalReference, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref totalCalls);
+        return inner.GetPublicMaterialAsync(logicalReference, cancellationToken);
+    }
+
+    public Task<byte[]> SignDigestAsync(
+        string logicalReference,
+        string algorithm,
+        ReadOnlyMemory<byte> digest,
+        CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref totalCalls);
+        Interlocked.Increment(ref signDigestCalls);
+        return inner.SignDigestAsync(logicalReference, algorithm, digest, cancellationToken);
+    }
+
+    public Task<ProviderSigningKeyPublicMetadata> GetSigningKeyMetadataAsync(
+        string logicalReference,
+        CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref totalCalls);
+        return inner.GetSigningKeyMetadataAsync(logicalReference, cancellationToken);
     }
 }
 
@@ -452,6 +614,11 @@ internal sealed class SyntheticSignedMutualTlsServer : IAsyncDisposable
     private int x5cChainObserved;
     private int publishedClaimObserved;
     private int publishedBodyObserved;
+    private int dualSlotTokensObserved;
+    private int dualSlotTokensDistinct;
+    private int distinctServerOwnedIssuersObserved;
+    private int sameSigningIdentityObserved;
+    private int legacyBearerObserved;
 
     private SyntheticSignedMutualTlsServer(
         WebApplication application,
@@ -472,6 +639,11 @@ internal sealed class SyntheticSignedMutualTlsServer : IAsyncDisposable
     internal bool X5cChainObserved => Volatile.Read(ref x5cChainObserved) == 1;
     internal bool PublishedClaimObserved => Volatile.Read(ref publishedClaimObserved) == 1;
     internal bool PublishedBodyObserved => Volatile.Read(ref publishedBodyObserved) == 1;
+    internal bool DualSlotTokensObserved => Volatile.Read(ref dualSlotTokensObserved) == 1;
+    internal bool DualSlotTokensDistinct => Volatile.Read(ref dualSlotTokensDistinct) == 1;
+    internal bool DistinctServerOwnedIssuersObserved => Volatile.Read(ref distinctServerOwnedIssuersObserved) == 1;
+    internal bool SameSigningIdentityObserved => Volatile.Read(ref sameSigningIdentityObserved) == 1;
+    internal bool LegacyBearerObserved => Volatile.Read(ref legacyBearerObserved) == 1;
 
     internal static async Task<SyntheticSignedMutualTlsServer> StartAsync(
         X509Certificate2 serverCertificate,
@@ -500,42 +672,33 @@ internal sealed class SyntheticSignedMutualTlsServer : IAsyncDisposable
                 Convert.ToHexString(SHA256.HashData(clientCertificate.RawData)), server.expectedClientFingerprint, StringComparison.Ordinal))
                 Interlocked.Exchange(ref server.expectedClientCertificateObserved, 1);
             string authorization = context.Request.Headers.Authorization.ToString();
+            string secondaryHeader = context.Request.Headers["X-Synthetic-Signature"].ToString();
             if (authorization.StartsWith("Bearer ", StringComparison.Ordinal))
             {
-                string[] parts = authorization[7..].Split('.');
-                if (parts.Length == 3)
+                string primaryToken = authorization[7..];
+                string expectedPrimaryIssuer = string.IsNullOrEmpty(secondaryHeader)
+                    ? "synthetic-gateway"
+                    : "synthetic-primary-issuer";
+                TokenObservation? primary = ValidateSignedToken(server, primaryToken, expectedPrimaryIssuer);
+                TokenObservation? secondary = string.IsNullOrEmpty(secondaryHeader)
+                    ? null
+                    : ValidateSignedToken(server, secondaryHeader, "synthetic-secondary-issuer");
+                if (primary is not null)
                 {
-                    try
+                    Interlocked.Exchange(ref server.validSignedTokenObserved, 1);
+                    if (secondary is null)
+                        Interlocked.Exchange(ref server.legacyBearerObserved, 1);
+                    if (primary.PublishedClaim && (secondary is null || secondary.PublishedClaim))
+                        Interlocked.Exchange(ref server.publishedClaimObserved, 1);
+                    if (secondary is not null)
                     {
-                        using JsonDocument header = JsonDocument.Parse(Decode(parts[0]));
-                        using JsonDocument payload = JsonDocument.Parse(Decode(parts[1]));
-                        if (header.RootElement.TryGetProperty("x5c", out JsonElement chain) &&
-                            chain.ValueKind == JsonValueKind.Array && chain.GetArrayLength() == 2)
-                        {
-                            Interlocked.Exchange(ref server.x5cChainObserved, 1);
-                            byte[] leafDer = Convert.FromBase64String(chain[0].GetString()!);
-                            using X509Certificate2 leaf = X509CertificateLoader.LoadCertificate(leafDer);
-                            using RSA rsa = leaf.GetRSAPublicKey() ?? throw new CryptographicException();
-                            bool expectedLeaf = string.Equals(
-                                Convert.ToHexString(SHA256.HashData(leaf.RawData)),
-                                server.expectedSigningFingerprint,
-                                StringComparison.Ordinal);
-                            bool signatureValid = rsa.VerifyData(
-                                Encoding.ASCII.GetBytes(parts[0] + "." + parts[1]),
-                                Decode(parts[2]),
-                                HashAlgorithmName.SHA256,
-                                RSASignaturePadding.Pkcs1);
-                            bool fixedClaims = string.Equals(payload.RootElement.GetProperty("iss").GetString(), "synthetic-gateway", StringComparison.Ordinal) &&
-                                string.Equals(payload.RootElement.GetProperty("aud").GetString(), "synthetic-upstream", StringComparison.Ordinal);
-                            if (expectedLeaf && signatureValid && fixedClaims)
-                                Interlocked.Exchange(ref server.validSignedTokenObserved, 1);
-                        }
-                        if (payload.RootElement.TryGetProperty("transaction-id", out JsonElement claim) &&
-                            string.Equals(claim.GetString(), "published-claim", StringComparison.Ordinal))
-                            Interlocked.Exchange(ref server.publishedClaimObserved, 1);
-                    }
-                    catch (Exception exception) when (exception is JsonException or FormatException or CryptographicException or KeyNotFoundException)
-                    {
+                        Interlocked.Exchange(ref server.dualSlotTokensObserved, 1);
+                        if (!string.Equals(primary.CompactToken, secondary.CompactToken, StringComparison.Ordinal))
+                            Interlocked.Exchange(ref server.dualSlotTokensDistinct, 1);
+                        if (!string.Equals(primary.Issuer, secondary.Issuer, StringComparison.Ordinal))
+                            Interlocked.Exchange(ref server.distinctServerOwnedIssuersObserved, 1);
+                        if (string.Equals(primary.SigningFingerprint, secondary.SigningFingerprint, StringComparison.Ordinal))
+                            Interlocked.Exchange(ref server.sameSigningIdentityObserved, 1);
                     }
                 }
             }
@@ -571,12 +734,57 @@ internal sealed class SyntheticSignedMutualTlsServer : IAsyncDisposable
         return chain.Build(certificate);
     }
 
+    private static TokenObservation? ValidateSignedToken(
+        SyntheticSignedMutualTlsServer server,
+        string compactToken,
+        string expectedIssuer)
+    {
+        string[] parts = compactToken.Split('.');
+        if (parts.Length != 3) return null;
+        try
+        {
+            using JsonDocument header = JsonDocument.Parse(Decode(parts[0]));
+            using JsonDocument payload = JsonDocument.Parse(Decode(parts[1]));
+            if (!header.RootElement.TryGetProperty("x5c", out JsonElement chain) ||
+                chain.ValueKind != JsonValueKind.Array || chain.GetArrayLength() != 2)
+                return null;
+            byte[] leafDer = Convert.FromBase64String(chain[0].GetString()!);
+            using X509Certificate2 leaf = X509CertificateLoader.LoadCertificate(leafDer);
+            using RSA rsa = leaf.GetRSAPublicKey() ?? throw new CryptographicException();
+            string fingerprint = Convert.ToHexString(SHA256.HashData(leaf.RawData));
+            bool expectedLeaf = string.Equals(fingerprint, server.expectedSigningFingerprint, StringComparison.Ordinal);
+            bool signatureValid = rsa.VerifyData(
+                Encoding.ASCII.GetBytes(parts[0] + "." + parts[1]),
+                Decode(parts[2]),
+                HashAlgorithmName.SHA256,
+                RSASignaturePadding.Pkcs1);
+            string issuer = payload.RootElement.GetProperty("iss").GetString()!;
+            bool fixedClaims = string.Equals(issuer, expectedIssuer, StringComparison.Ordinal) &&
+                string.Equals(payload.RootElement.GetProperty("aud").GetString(), "synthetic-upstream", StringComparison.Ordinal);
+            if (!expectedLeaf || !signatureValid || !fixedClaims) return null;
+            Interlocked.Exchange(ref server.x5cChainObserved, 1);
+            bool publishedClaim = payload.RootElement.TryGetProperty("transaction-id", out JsonElement claim) &&
+                string.Equals(claim.GetString(), "published-claim", StringComparison.Ordinal);
+            return new(compactToken, issuer, fingerprint, publishedClaim);
+        }
+        catch (Exception exception) when (exception is JsonException or FormatException or CryptographicException or KeyNotFoundException)
+        {
+            return null;
+        }
+    }
+
     private static byte[] Decode(string value)
     {
         string padded = value.Replace('-', '+').Replace('_', '/');
         padded += new string('=', (4 - padded.Length % 4) % 4);
         return Convert.FromBase64String(padded);
     }
+
+    private sealed record TokenObservation(
+        string CompactToken,
+        string Issuer,
+        string SigningFingerprint,
+        bool PublishedClaim);
 
     public async ValueTask DisposeAsync()
     {
