@@ -24,7 +24,7 @@ Aggiornato: 2026-08-11
 | Wave 1 — Provider-neutral Connector execution seam | Ultima remediation mirata implementata; full gate/CI exact-head e targeted re-review pending | bridge no-IVT vincolato allo snapshot Published iniziale con stale A→B zero-effect; full lifecycle PostgreSQL aggiunto; negativi cross-module/ciclo descriptor-atomic; loader invariato |
 | Wave 1 — Connector capability completion | Remediation P1/P2 qualificata localmente; exact-head CI e micro-rereview pending | writer input Core-bound/callback-only, scope capability ACTIVE/CLOSING/CLOSED con cancel+drain, claim bounds pre-clone; 549 ordinary PASS, 172/172 PostgreSQL 18, M3/Admin full-stack/Core export/scans/SBOM PASS; nessuna nuova capability o connector production |
 | Wave 1 — Authorized signing slots | Freeze-exception Core/Auth implementata; product gate locale qualificato salvo full M3 demandato alla CI Linux; exact-head CI e review indipendente pending | massimo 4 slot Published, un token opaco per slot/invocation, projection server-owned, compatibilità legacy senza rewrite; targeted, PostgreSQL 18, Admin/full-stack e scans PASS |
-| Wave 1 — Authorized Published operation contract | Freeze-exception Core implementata; full gate locale, CI exact-head e review indipendente pending | preflight semantico obbligatorio prima di strategy/signing/network, path segment projection bounded Core-owned, body mode REQUIRED/NONE, legacy/checksum/storage invariati |
+| Wave 1 — Authorized Published operation contract | Remediation P1-01/P1-02 implementata; gate completo/exact-head CI e micro-rereview pending | `false/empty` è assenza Published verificata, ogni strategy external richiede authority/provider/dispatcher prima dello scope; path/body/legacy invariati |
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | Wave 1 - Generic JWT/X.509 extensions | Remediation mirata local gate PASS; CI exact-head e rereview pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 304 ordinary, 71 PostgreSQL relevant, scan/SBOM/vulnerability/Core export PASS |
 | Healthcare Wave 1 — Regional ePrescription | Foundation compilata; profili regionali non pubblicabili | capability opaca Core post-auth con stato/grant verificati indipendentemente dalle credenziali, adapter al vero store Published, schema estensioni e safe-code allowlist server-owned, isolamento cross-profile; 14 test pack + 4 architecture PASS locali; Lombardia ed Emilia-Romagna `BLOCKED_BY_SPEC` |
@@ -306,6 +306,14 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 
 ### Wave 1 — Authorized Published operation contract
 
+- remediation targeted P1-01/P1-02: il confronto di presenza è simmetrico sulla stessa exact
+  Published A; `false/empty` richiede assenza reale di `restrictedTransport`, legacy `signing` e
+  `signingSlots`. Un actual policy con aspettative vuote e ogni mismatch presenza/set sono negati
+  prima di scope, strategy, firma, DNS e rete;
+- ogni strategy external/non-Core richiede ora catalogo autoritativo, non-null exact Published
+  authority, provider exact-key e dispatcher prima dell'expectation creation/validation. Il vecchio
+  dispatch external con `GatewayOperationCatalog` non autoritativo è intenzionalmente negato come
+  breaking-security behavior; le strategy built-in Core conservano il comportamento qualificato;
 - ogni execution strategy esterna scelta da una operation Published autoritativa richiede un
   expectation provider module-owned, bounded ed exact-one. Il provider riceve solo identity/config
   aperta difensiva e restituisce aspettative generiche immutabili; assenza, duplicato, exception o

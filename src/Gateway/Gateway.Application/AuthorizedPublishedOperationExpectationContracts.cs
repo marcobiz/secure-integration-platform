@@ -210,9 +210,9 @@ public sealed class AuthorizedPublishedOperationExpectations
 
     /// <summary>Exact outbound authentication kind expected by the module.</summary>
     public GatewayAuthenticationKind AuthenticationKind { get; }
-    /// <summary>Whether the exact Published operation must contain the restricted transport profile.</summary>
+    /// <summary>Exact expected restricted-transport presence; false requires verified absence and is not an opt-out.</summary>
     public bool RestrictedTransportRequired { get; }
-    /// <summary>Exact immutable signing-slot set; an empty set means no signing policy expectation.</summary>
+    /// <summary>Exact immutable signing-slot set; empty requires verified absence of legacy signing and signing slots.</summary>
     public IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedSigningSlotExpectation> SigningSlots => signingSlots;
     /// <summary>Slots whose verified signing-certificate identities must all be equal.</summary>
     public IReadOnlySet<ConnectorSigningSlotKey> SameSigningIdentitySlots => sameSigningIdentitySlots;

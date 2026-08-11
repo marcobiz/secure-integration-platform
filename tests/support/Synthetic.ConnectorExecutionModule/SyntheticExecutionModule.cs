@@ -37,6 +37,7 @@ public sealed class SyntheticExecutionModule : IConnectorExecutionModule
         registrar.AddStrategy<SyntheticFireAndForgetSigningExecutionStrategy>();
         registrar.AddStrategy<SyntheticFireAndForgetRestrictedTransportExecutionStrategy>();
         registrar.AddStrategy<SyntheticAuthorizedPublishedOperationExecutionStrategy>();
+        registrar.AddStrategy<SyntheticExpectationProbeExecutionStrategy>();
         registrar.AddTypedSessionHandshakeRequestAdapter<SyntheticExternalTypedSessionRequestAdapter>();
         registrar.AddTypedSessionHandshakeResponseAdapter<SyntheticExternalTypedSessionResponseAdapter>();
         registrar.AddExternalSessionValidationAdapter<SyntheticExternalSessionValidationAdapter>();
@@ -56,7 +57,7 @@ public sealed class SyntheticPublishedOperationExpectationProvider : IAuthorized
         "synthetic-capability-bridge", "synthetic-retained-bridge", "synthetic-signed-mtls",
         "synthetic-dual-slot", "synthetic-unknown-slot", "synthetic-repeat-slot", "synthetic-missing-slot",
         "synthetic-denied-signing-claim", "synthetic-retained-signing", "synthetic-fire-forget-signing",
-        "synthetic-fire-forget-transport", "synthetic-authorized-operation"
+        "synthetic-fire-forget-transport", "synthetic-authorized-operation", "synthetic-expectation-probe"
     }.Select(ConnectorExecutionStrategyKey.Parse).ToFrozenSet();
 
     /// <inheritdoc />
@@ -66,12 +67,14 @@ public sealed class SyntheticPublishedOperationExpectationProvider : IAuthorized
     public AuthorizedPublishedOperationExpectations CreateExpectations(AuthorizedPublishedOperationExpectationContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
-        if (!string.Equals(context.ExecutionStrategyKey.Value, "synthetic-authorized-operation", StringComparison.Ordinal))
-            return new(context.AuthenticationKind, restrictedTransportRequired: false, []);
+        bool expectationProbe = string.Equals(
+            context.ExecutionStrategyKey.Value, "synthetic-expectation-probe", StringComparison.Ordinal);
+        if (expectationProbe) SyntheticExpectationProbe.RecordProviderInvocation();
 
         using Stream stream = context.OpenPublishedExtensionConfiguration().OpenJsonStream();
         using JsonDocument document = JsonDocument.Parse(stream, new JsonDocumentOptions { MaxDepth = 8 });
-        JsonElement profile = document.RootElement.GetProperty("policyExpectations");
+        if (!document.RootElement.TryGetProperty("policyExpectations", out JsonElement profile))
+            return new(context.AuthenticationKind, restrictedTransportRequired: false, []);
         if (!string.Equals(profile.GetProperty("algorithm").GetString(), "RS256", StringComparison.Ordinal))
             throw new InvalidOperationException("Synthetic expectation algorithm is unsupported.");
         GatewayAuthenticationKind authentication = profile.GetProperty("authenticationKind").GetString() switch
@@ -86,7 +89,9 @@ public sealed class SyntheticPublishedOperationExpectationProvider : IAuthorized
             .Select(value => ConnectorSigningSlotKey.Parse(value.GetString()!)).ToArray();
         ConnectorSigningSlotKey[] distinctFromMutualTls = profile.GetProperty("signingIdentityDistinctFromMutualTlsSlots").EnumerateArray()
             .Select(value => ConnectorSigningSlotKey.Parse(value.GetString()!)).ToArray();
-        return new(authentication, restrictedTransportRequired: true, slots, sameIdentity, distinctFromMutualTls);
+        bool restrictedTransportRequired = !profile.TryGetProperty("restrictedTransportRequired", out JsonElement required) ||
+            required.GetBoolean();
+        return new(authentication, restrictedTransportRequired, slots, sameIdentity, distinctFromMutualTls);
     }
 
     private static AuthorizedSigningSlotExpectation ParseSlot(JsonElement value)
@@ -132,6 +137,28 @@ public sealed class SyntheticPublishedOperationExpectationProvider : IAuthorized
             },
             issuer);
     }
+}
+
+/// <summary>Counts mandatory expectation-provider and strategy-scope entry for hosted security proof.</summary>
+public static class SyntheticExpectationProbe
+{
+    private static int providerInvocations;
+    private static int capabilityScopeEntries;
+
+    /// <summary>Clears isolated counters before one hosted invocation.</summary>
+    public static void Reset()
+    {
+        Interlocked.Exchange(ref providerInvocations, 0);
+        Interlocked.Exchange(ref capabilityScopeEntries, 0);
+    }
+
+    /// <summary>Number of expectation-provider invocations.</summary>
+    public static int ProviderInvocations => Volatile.Read(ref providerInvocations);
+    /// <summary>Number of strategy entries, each necessarily after host capability-scope entry.</summary>
+    public static int CapabilityScopeEntries => Volatile.Read(ref capabilityScopeEntries);
+
+    internal static void RecordProviderInvocation() => Interlocked.Increment(ref providerInvocations);
+    internal static void RecordCapabilityScopeEntry() => Interlocked.Increment(ref capabilityScopeEntries);
 }
 
 /// <summary>Qualification-only module that deliberately registers a duplicate key.</summary>
@@ -383,6 +410,25 @@ public sealed class SyntheticAuthorizedPublishedOperationExecutionStrategy : ICo
             _ => throw new InvalidOperationException("Synthetic request body mode is unsupported.")
         };
         return await execution.Capabilities.ExecuteRestrictedTransportAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+}
+
+/// <summary>Side-effect-free strategy used to prove exact presence and absence preflight semantics.</summary>
+public sealed class SyntheticExpectationProbeExecutionStrategy : IConnectorExecutionStrategy
+{
+    /// <inheritdoc />
+    public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("synthetic-expectation-probe");
+    /// <inheritdoc />
+    public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => SyntheticAuthenticationKinds.MutualTls;
+
+    /// <inheritdoc />
+    public Task<QualifiedGatewayExecutionResult> ExecuteAsync(
+        AuthorizedConnectorExecution execution,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        SyntheticExpectationProbe.RecordCapabilityScopeEntry();
+        return Task.FromResult(new QualifiedGatewayExecutionResult(200, "application/json", "{}"u8.ToArray()));
     }
 }
 

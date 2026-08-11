@@ -50,6 +50,64 @@ public sealed class RuntimeExecutionStrategyTests
     }
 
     [Fact]
+    public async Task Wave1_SEC_external_strategy_requires_authoritative_Published_provider_and_dispatcher_before_scope_entry()
+    {
+        ConnectorExecutionStrategyKey key = ConnectorExecutionStrategyKey.Parse("synthetic-authoritative-preflight");
+
+        RuntimeFixture nonAuthoritative = await RuntimeFixture.CreateAsync(GatewayAuthenticationKind.None, grant: true, key);
+        RecordingStrategy nonAuthoritativeStrategy = new(key);
+        RecordingExpectationProvider nonAuthoritativeProvider = new(new HashSet<ConnectorExecutionStrategyKey> { key });
+        RecordingExpectationDispatcher nonAuthoritativeDispatcher = new();
+        GatewayException missingAuthority = await Assert.ThrowsAsync<GatewayException>(() => nonAuthoritative.RuntimeConfigured(
+            [nonAuthoritativeStrategy], nonAuthoritative.NonAuthoritativeCatalog, [nonAuthoritativeProvider], nonAuthoritativeDispatcher).InvokeAsync(
+                nonAuthoritative.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, nonAuthoritative.Request,
+                TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-EGRESS-AUTHENTICATION", missingAuthority.Code);
+        Assert.Equal(0, nonAuthoritativeProvider.Calls);
+        Assert.Equal(0, nonAuthoritativeDispatcher.ValidationCalls);
+        Assert.Equal(0, nonAuthoritativeStrategy.Calls);
+        Assert.Equal(0, nonAuthoritative.Transport.Calls);
+
+        RuntimeFixture missingProvider = await RuntimeFixture.CreateAsync(GatewayAuthenticationKind.None, grant: true, key);
+        RecordingStrategy missingProviderStrategy = new(key);
+        RecordingExpectationDispatcher missingProviderDispatcher = new();
+        GatewayException providerFailure = await Assert.ThrowsAsync<GatewayException>(() => missingProvider.RuntimeConfigured(
+            [missingProviderStrategy], missingProvider.AuthoritativeCatalog, [], missingProviderDispatcher).InvokeAsync(
+                missingProvider.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, missingProvider.Request,
+                TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-EGRESS-AUTHENTICATION", providerFailure.Code);
+        Assert.Equal(0, missingProviderDispatcher.ValidationCalls);
+        Assert.Equal(0, missingProviderStrategy.Calls);
+        Assert.Equal(0, missingProvider.Transport.Calls);
+
+        RuntimeFixture missingDispatcher = await RuntimeFixture.CreateAsync(GatewayAuthenticationKind.None, grant: true, key);
+        RecordingStrategy missingDispatcherStrategy = new(key);
+        RecordingExpectationProvider presentProvider = new(new HashSet<ConnectorExecutionStrategyKey> { key });
+        GatewayException dispatcherFailure = await Assert.ThrowsAsync<GatewayException>(() => missingDispatcher.RuntimeConfigured(
+            [missingDispatcherStrategy], missingDispatcher.AuthoritativeCatalog, [presentProvider], null).InvokeAsync(
+                missingDispatcher.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, missingDispatcher.Request,
+                TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-EGRESS-AUTHENTICATION", dispatcherFailure.Code);
+        Assert.Equal(0, presentProvider.Calls);
+        Assert.Equal(0, missingDispatcherStrategy.Calls);
+        Assert.Equal(0, missingDispatcher.Transport.Calls);
+
+        RuntimeFixture complete = await RuntimeFixture.CreateAsync(GatewayAuthenticationKind.None, grant: true, key);
+        RecordingStrategy completeStrategy = new(key);
+        RecordingExpectationProvider completeProvider = new(new HashSet<ConnectorExecutionStrategyKey> { key });
+        RecordingExpectationDispatcher completeDispatcher = new();
+        GatewayInvokeResponse response = await complete.RuntimeConfigured(
+            [completeStrategy], complete.AuthoritativeCatalog, [completeProvider], completeDispatcher).InvokeAsync(
+                complete.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, complete.Request,
+                TestContext.Current.CancellationToken);
+        Assert.Equal("qualified", System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(response.Result.Data)));
+        Assert.Equal(1, completeProvider.Calls);
+        Assert.Equal(1, completeDispatcher.ValidationCalls);
+        Assert.Equal(1, completeStrategy.Calls);
+        Assert.Equal(0, complete.Transport.Calls);
+    }
+
+    [Fact]
     public async Task Wave1_SEC_duplicate_strategy_key_fails_during_composition()
     {
         RuntimeFixture fixture = await RuntimeFixture.CreateAsync(GatewayAuthenticationKind.SoapBasicOpaqueSession, grant: true);
@@ -292,7 +350,8 @@ public sealed class RuntimeExecutionStrategyTests
     {
         RuntimeFixture fixture = await RuntimeFixture.CreateAsync(GatewayAuthenticationKind.ApiKey, grant: true);
 
-        ProviderAccessException failure = await Assert.ThrowsAsync<ProviderAccessException>(() => fixture.Runtime([], new UnavailableSecrets()).InvokeAsync(
+        ProviderAccessException failure = await Assert.ThrowsAsync<ProviderAccessException>(() => fixture.RuntimeConfigured(
+            [], fixture.NonAuthoritativeCatalog, [], null, new UnavailableSecrets()).InvokeAsync(
             fixture.Principal, RuntimeFixture.ConnectorId, RuntimeFixture.OperationId, fixture.Request, TestContext.Current.CancellationToken));
 
         Assert.Equal("BGW-PROVIDER-UNAVAILABLE", failure.Code);
@@ -353,12 +412,20 @@ public sealed class RuntimeExecutionStrategyTests
         internal const string ConnectorId = "qualified-runtime";
         internal const string OperationId = "dispatch";
         private readonly InMemoryGatewayRegistry registry;
-        private readonly GatewayOperationCatalog catalog;
+        private readonly GatewayOperationCatalog nonAuthoritativeCatalog;
+        private readonly TestAuthorizedOperationCatalog authoritativeCatalog;
 
-        private RuntimeFixture(InMemoryGatewayRegistry registry, GatewayOperationCatalog catalog, GatewayOperationDefinition operation, GatewayClientPrincipal principal, GatewayInvokeRequest request)
+        private RuntimeFixture(
+            InMemoryGatewayRegistry registry,
+            GatewayOperationCatalog nonAuthoritativeCatalog,
+            TestAuthorizedOperationCatalog authoritativeCatalog,
+            GatewayOperationDefinition operation,
+            GatewayClientPrincipal principal,
+            GatewayInvokeRequest request)
         {
             this.registry = registry;
-            this.catalog = catalog;
+            this.nonAuthoritativeCatalog = nonAuthoritativeCatalog;
+            this.authoritativeCatalog = authoritativeCatalog;
             Operation = operation;
             Principal = principal;
             Request = request;
@@ -368,9 +435,27 @@ public sealed class RuntimeExecutionStrategyTests
         internal GatewayClientPrincipal Principal { get; }
         internal GatewayInvokeRequest Request { get; }
         internal GatewayOperationDefinition Operation { get; }
+        internal IGatewayOperationCatalog NonAuthoritativeCatalog => nonAuthoritativeCatalog;
+        internal IGatewayOperationCatalog AuthoritativeCatalog => authoritativeCatalog;
 
-        internal RestrictedEgressService Runtime(IEnumerable<IConnectorExecutionStrategy> strategies, ISecretValueProvider? secrets = null) =>
-            new(registry, catalog, secrets ?? new NeverSecrets(), new NeverCertificates(), new PublicResolver(), Transport, new FixedClock(), null, strategies);
+        internal RestrictedEgressService Runtime(IEnumerable<IConnectorExecutionStrategy> strategies, ISecretValueProvider? secrets = null)
+        {
+            IConnectorExecutionStrategy[] configured = strategies.ToArray();
+            ConnectorExecutionStrategyKey[] keys = configured.Select(value => value.Key).Distinct().ToArray();
+            IEnumerable<IAuthorizedPublishedOperationExpectationProvider> providers = keys.Length == 0
+                ? []
+                : [new RecordingExpectationProvider(keys.ToHashSet())];
+            return RuntimeConfigured(configured, authoritativeCatalog, providers, new RecordingExpectationDispatcher(), secrets);
+        }
+
+        internal RestrictedEgressService RuntimeConfigured(
+            IEnumerable<IConnectorExecutionStrategy> strategies,
+            IGatewayOperationCatalog selectedCatalog,
+            IEnumerable<IAuthorizedPublishedOperationExpectationProvider> expectationProviders,
+            IAuthorizedConnectorCapabilityDispatcher? dispatcher,
+            ISecretValueProvider? secrets = null) =>
+            new(registry, selectedCatalog, secrets ?? new NeverSecrets(), new NeverCertificates(), new PublicResolver(),
+                Transport, new FixedClock(), null, strategies, expectationProviders, dispatcher);
 
         internal static async Task<RuntimeFixture> CreateAsync(
             GatewayAuthenticationKind kind,
@@ -393,7 +478,9 @@ public sealed class RuntimeExecutionStrategyTests
             RegisteredInstallationIdentity identity = new(installationId, tenantId, applicationId, environmentId, TenantStatus.Active, ApplicationStatus.Active, InstallationStatus.Active,
                 Guid.NewGuid(), CredentialStatus.Active, [1, 2, 3], now.AddMinutes(-1), now.AddHours(1), "3.0.0", null);
             GatewayInvokeRequest request = new("1.0", new(kind == GatewayAuthenticationKind.SoapBasicOpaqueSession ? "text/xml" : "application/json", "utf8", "<request/>"), Guid.NewGuid());
-            return new(registry, new([operation]), operation, new(identity, request.CorrelationId), request);
+            GatewayOperationCatalog nonAuthoritative = new([operation]);
+            TestAuthorizedOperationCatalog authoritative = new(nonAuthoritative, operation, environmentId);
+            return new(registry, nonAuthoritative, authoritative, operation, new(identity, request.CorrelationId), request);
         }
     }
 
@@ -456,11 +543,81 @@ public sealed class RuntimeExecutionStrategyTests
     private sealed class RecordingExpectationProvider(IReadOnlySet<ConnectorExecutionStrategyKey> strategies) :
         IAuthorizedPublishedOperationExpectationProvider
     {
+        private int calls;
         public IReadOnlySet<ConnectorExecutionStrategyKey> SupportedExecutionStrategies => strategies;
+        internal int Calls => Volatile.Read(ref calls);
 
         public AuthorizedPublishedOperationExpectations CreateExpectations(
-            AuthorizedPublishedOperationExpectationContext context) =>
-            new(GatewayAuthenticationKind.None, restrictedTransportRequired: false, []);
+            AuthorizedPublishedOperationExpectationContext context)
+        {
+            Interlocked.Increment(ref calls);
+            return new(context.AuthenticationKind, restrictedTransportRequired: false, []);
+        }
+    }
+
+    private sealed class RecordingExpectationDispatcher : IAuthorizedConnectorCapabilityDispatcher
+    {
+        private int validationCalls;
+        internal int ValidationCalls => Volatile.Read(ref validationCalls);
+
+        public Task ValidatePublishedOperationExpectationsAsync(
+            AuthorizedConnectorExecution execution,
+            AuthorizedPublishedOperationExpectations expectations,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref validationCalls);
+            return Task.CompletedTask;
+        }
+
+        public Task<QualifiedGatewayExecutionResult> ExecuteTypedSessionHandshakeAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
+        public Task<QualifiedGatewayExecutionResult> ExecuteComposedSoapAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
+        public Task<string> CreateSignedTokenAsync(AuthorizedConnectorExecution execution, ConnectorSigningSlotKey signingSlot, IReadOnlyDictionary<string, JsonElement> claims, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
+        public Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(AuthorizedConnectorExecution execution, AuthorizedConnectorRestrictedTransportRequest request, IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> signedTokens, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
+    }
+
+    private sealed class TestAuthorizedOperationCatalog(
+        GatewayOperationCatalog inner,
+        GatewayOperationDefinition operation,
+        Guid environmentId) : IGatewayOperationCatalog, IAuthorizedPublishedOperationCatalog
+    {
+        private readonly AuthorizedPublishedOperation authorized = new(
+            operation,
+            new(
+                operation.ConnectorId,
+                operation.OperationId,
+                environmentId,
+                operation.Version,
+                Guid.NewGuid(),
+                1,
+                new string('A', 64),
+                Guid.NewGuid(),
+                1,
+                new string('B', 64),
+                new string('C', 64),
+                new string('D', 64),
+                operation.Authentication,
+                ConnectorExecutionStrategyKeys.Resolve(operation)),
+            AuthorizedPublishedExtensionConfiguration.Empty());
+
+        public Task<GatewayOperationDefinition> GetRequiredAsync(string connectorId, string operationId, Guid environment, CancellationToken cancellationToken) =>
+            inner.GetRequiredAsync(connectorId, operationId, environment, cancellationToken);
+
+        public void Invalidate(string connectorId) => inner.Invalidate(connectorId);
+
+        public Task<AuthorizedPublishedOperation> GetRequiredAuthorizedAsync(
+            string connectorId,
+            string operationId,
+            Guid environment,
+            PublishedConnectorAccessContext accessContext,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(authorized);
+        }
     }
 
     private sealed class IncompatibleStrategy(ConnectorExecutionStrategyKey key) : IConnectorExecutionStrategy

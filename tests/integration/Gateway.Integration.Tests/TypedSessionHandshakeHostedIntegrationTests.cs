@@ -377,6 +377,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
     internal TypedSessionHostFactory Factory { get; }
     internal SyntheticSoapServerInstance Server { get; }
     internal CountingRestrictedTransport Transport => Factory.Transport;
+    internal int HostResolutionCount => Factory.HostResolutionCount;
     internal IConnectorConfigurationStore Store { get; }
     internal SoapSessionClient Sessions { get; }
     internal Uri Endpoint { get; }
@@ -617,7 +618,8 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         string definition,
         ICertificateMetadataProvider provider,
         string signingProviderReference,
-        string clientCertificateProviderReference)
+        string clientCertificateProviderReference,
+        int expectedCertificateBindingCount = 2)
     {
         ProviderResourceCatalogRecord signing = await RegisterCertificateAsync(
             "capability-signing-" + Guid.NewGuid().ToString("N"), "Synthetic signing certificate", signingProviderReference);
@@ -640,19 +642,21 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         using JsonDocument document = JsonDocument.Parse(definition);
         ConnectorVersionResource imported = await administration.ImportAsync(document.RootElement, null, editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
         ConnectorVersionResource validated = await administration.ValidateStoredAsync(connectorId, version, imported.RowVersion, editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
+        Dictionary<string, ProviderResourceReference> certificateBindings = new(StringComparer.Ordinal)
+        {
+            ["mtls-certificate"] = new(clientCertificate.ProviderId, clientCertificate.ResourceId, clientCertificate.ResourceType, clientCertificate.Version, clientCertificate.PublicMetadataRevision)
+        };
+        if (expectedCertificateBindingCount == 2)
+            certificateBindings.Add("signing-certificate", new(signing.ProviderId, signing.ResourceId, signing.ResourceType, signing.Version, signing.PublicMetadataRevision));
         _ = await administration.PutBindingsAsync(connectorId, new(
             environmentId,
             new Dictionary<string, string> { ["service"] = endpoint.AbsoluteUri },
             new Dictionary<string, ProviderResourceReference>(),
-            CertificateResources: new Dictionary<string, ProviderResourceReference>
-            {
-                ["signing-certificate"] = new(signing.ProviderId, signing.ResourceId, signing.ResourceType, signing.Version, signing.PublicMetadataRevision),
-                ["mtls-certificate"] = new(clientCertificate.ProviderId, clientCertificate.ResourceId, clientCertificate.ResourceType, clientCertificate.Version, clientCertificate.PublicMetadataRevision)
-            },
+            CertificateResources: certificateBindings,
             ConnectorVersion: version), editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
         ConnectorApprovalRecord requested = await approvals.RequestAsync(connectorId, version, editor, Guid.NewGuid(), TestContext.Current.CancellationToken);
         ApprovalReviewResult review = await approvals.ReviewAsync(connectorId, version, approver, TestContext.Current.CancellationToken);
-        Assert.Equal(2, Assert.Single(review.Artifact.Operations).CertificateBindings.Count);
+        Assert.Equal(expectedCertificateBindingCount, Assert.Single(review.Artifact.Operations).CertificateBindings.Count);
         ConnectorApprovalRecord approved = await approvals.ApproveAsync(connectorId, version,
             new(requested.Id, review.DigestSha256, "synthetic capability approval"), approver, Guid.NewGuid(), TestContext.Current.CancellationToken);
         Assert.Equal(ConnectorApprovalStatus.Approved, approved.Status);
@@ -860,6 +864,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
     internal IReadOnlyCollection<string> Logs => logger.Messages;
     internal int AuthenticatedBoundaryRequests => certificateFilter.Requests;
     internal int AuthenticatedBusinessRequests => certificateFilter.BusinessRequests;
+    internal int HostResolutionCount => Services.GetRequiredService<LoopbackResolver>().Calls;
     internal FixedSecrets Secrets => secrets;
     internal Func<CancellationToken, Task>? BeforeHostResolution { get; set; }
     internal IGatewayClock Clock => Services.GetRequiredService<IGatewayClock>();
@@ -881,8 +886,9 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
         builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<IHostResolver>();
-            services.AddSingleton<IHostResolver>(new LoopbackResolver(cancellationToken =>
+            services.AddSingleton<LoopbackResolver>(_ => new LoopbackResolver(cancellationToken =>
                 BeforeHostResolution?.Invoke(cancellationToken) ?? Task.CompletedTask));
+            services.AddSingleton<IHostResolver>(serviceProvider => serviceProvider.GetRequiredService<LoopbackResolver>());
             services.RemoveAll<IRestrictedTransport>();
             services.AddSingleton<IRestrictedTransport>(Transport);
             services.RemoveAll<ISecretValueProvider>();
@@ -930,9 +936,13 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
 
     private sealed class LoopbackResolver(Func<CancellationToken, Task> beforeReturn) : IHostResolver
     {
+        private int calls;
+        internal int Calls => Volatile.Read(ref calls);
+
         public async Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref calls);
             await beforeReturn(cancellationToken).ConfigureAwait(false);
             return [IPAddress.Loopback];
         }

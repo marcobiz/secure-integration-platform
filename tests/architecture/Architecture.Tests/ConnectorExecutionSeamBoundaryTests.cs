@@ -284,11 +284,16 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         Assert.DoesNotContain("HttpRequestMessage", expectations, StringComparison.Ordinal);
         Assert.DoesNotContain("ValidatePublishedOperationExpectations", executionContracts[..executionContracts.IndexOf("internal interface IAuthorizedConnectorCapabilityDispatcher", StringComparison.Ordinal)], StringComparison.Ordinal);
 
+        int authoritativeGuard = dispatch.IndexOf("HasExactPublishedAuthority(published", StringComparison.Ordinal);
         int providerLookup = dispatch.IndexOf("expectationProviderRegistry.Required(strategyKey)", StringComparison.Ordinal);
         int preflight = dispatch.IndexOf("capabilityDispatcher.ValidatePublishedOperationExpectationsAsync", StringComparison.Ordinal);
+        if (preflight < 0)
+            preflight = dispatch.IndexOf("expectationDispatcher!.ValidatePublishedOperationExpectationsAsync", StringComparison.Ordinal);
         int scope = dispatch.IndexOf("execution.EnterCapabilityScope", StringComparison.Ordinal);
         int strategy = dispatch.IndexOf("registration.Strategy.ExecuteAsync", StringComparison.Ordinal);
-        Assert.True(providerLookup >= 0 && preflight > providerLookup && scope > preflight && strategy > scope);
+        Assert.True(authoritativeGuard >= 0 && providerLookup > authoritativeGuard && preflight > providerLookup && scope > preflight && strategy > scope);
+        Assert.DoesNotContain("!registration.PreservesCoreFailures && published is not null", dispatch, StringComparison.Ordinal);
+        Assert.Contains("expectationDispatcher = capabilityDispatcher ??", dispatch, StringComparison.Ordinal);
 
         Assert.Contains("public sealed class AuthorizedConnectorPathParameter", publicRequests, StringComparison.Ordinal);
         Assert.DoesNotContain("Uri", publicRequests, StringComparison.Ordinal);
@@ -300,6 +305,9 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         Assert.Contains("outbound.Content = new ByteArrayContent", runtime, StringComparison.Ordinal);
         Assert.Contains("else if (request.HasBody)", runtime, StringComparison.Ordinal);
         Assert.Contains("PublishedRestrictedTransportBodyMode.None", runtime, StringComparison.Ordinal);
+        Assert.Contains("await authority.ResolveCapabilityPresenceAsync(cancellationToken)", runtime, StringComparison.Ordinal);
+        Assert.Contains("expectations.RestrictedTransportRequired != actualPresence.RestrictedTransportPresent", runtime, StringComparison.Ordinal);
+        Assert.Contains("expectations.SigningSlots.Count != actualPresence.SigningSlots.Count", runtime, StringComparison.Ordinal);
         Assert.Contains("await authority.ResolveCurrentAsync(cancellationToken)", runtime, StringComparison.Ordinal);
         Assert.Contains("\"pathTemplate\"", schema, StringComparison.Ordinal);
         Assert.Contains("\"bodyMode\"", schema, StringComparison.Ordinal);

@@ -70,13 +70,13 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
                 throw PolicyMismatch();
 
             PublishedVerticalAuthority authority = new(store, execution);
-            if (!expectations.RestrictedTransportRequired && expectations.SigningSlots.Count == 0)
-            {
-                await authority.ValidateCurrentPublishedOperationAsync(cancellationToken).ConfigureAwait(false);
-                return;
-            }
-            if (!expectations.RestrictedTransportRequired)
+            PublishedCapabilityPresence actualPresence = await authority.ResolveCapabilityPresenceAsync(cancellationToken).ConfigureAwait(false);
+            if (expectations.RestrictedTransportRequired != actualPresence.RestrictedTransportPresent ||
+                expectations.SigningSlots.Count != actualPresence.SigningSlots.Count ||
+                expectations.SigningSlots.Keys.Any(key => !actualPresence.SigningSlots.Contains(key)))
                 throw PolicyMismatch();
+            if (!actualPresence.RestrictedTransportPresent && actualPresence.SigningSlots.Count == 0)
+                return;
 
             CurrentPublished current = await authority.ResolveCurrentAsync(cancellationToken).ConfigureAwait(false);
             VerticalProfile profile = current.Profile;
@@ -443,8 +443,36 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
 
         internal Task<CurrentPublished> ResolveCurrentAsync(CancellationToken cancellationToken) => CurrentAsync(cancellationToken);
 
-        internal async Task ValidateCurrentPublishedOperationAsync(CancellationToken cancellationToken) =>
-            _ = await CurrentOperationAsync(cancellationToken).ConfigureAwait(false);
+        internal async Task<PublishedCapabilityPresence> ResolveCapabilityPresenceAsync(CancellationToken cancellationToken)
+        {
+            CurrentOperation current = await CurrentOperationAsync(cancellationToken).ConfigureAwait(false);
+            if (!current.Operation.TryGetProperty("authorizedCapabilities", out JsonElement capabilities))
+                return new(false, new HashSet<ConnectorSigningSlotKey>());
+            if (capabilities.ValueKind != JsonValueKind.Object)
+                throw Stale();
+
+            bool restrictedTransportPresent = capabilities.TryGetProperty("restrictedTransport", out _);
+            bool legacySigningPresent = capabilities.TryGetProperty("signing", out _);
+            bool signingSlotsPresent = capabilities.TryGetProperty("signingSlots", out JsonElement signingSlots);
+            if (legacySigningPresent && signingSlotsPresent)
+                throw Stale();
+
+            HashSet<ConnectorSigningSlotKey> actualSlots = [];
+            if (legacySigningPresent)
+                actualSlots.Add(ConnectorSigningSlotKeys.Legacy);
+            if (signingSlotsPresent)
+            {
+                if (signingSlots.ValueKind != JsonValueKind.Array ||
+                    signingSlots.GetArrayLength() > AuthorizedSigningSlots.MaximumSlots)
+                    throw Stale();
+                foreach (JsonElement value in signingSlots.EnumerateArray())
+                {
+                    ConnectorSigningSlotKey key = ConnectorSigningSlotKey.Parse(value.GetProperty("slot").GetString()!);
+                    if (!actualSlots.Add(key)) throw Stale();
+                }
+            }
+            return new(restrictedTransportPresent, actualSlots);
+        }
 
         public async Task<ServerOwnedRs256PolicySnapshot> ResolveRs256Async(
             AuthenticationExecutionContext context,
@@ -793,6 +821,10 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
         PublishedConnectorSnapshot Snapshot,
         JsonElement Operation,
         Uri BaseEndpoint);
+
+    private sealed record PublishedCapabilityPresence(
+        bool RestrictedTransportPresent,
+        IReadOnlySet<ConnectorSigningSlotKey> SigningSlots);
 
     private sealed record VerticalProfile(
         IReadOnlyDictionary<ConnectorSigningSlotKey, SigningSlotProfile> SigningSlots,

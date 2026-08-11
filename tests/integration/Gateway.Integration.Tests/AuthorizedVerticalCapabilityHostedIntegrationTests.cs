@@ -17,6 +17,7 @@ using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
 using SecureIntegration.Providers.Abstractions;
 using SecureIntegration.Providers.Synthetic;
+using SecureIntegration.Synthetic.ConnectorExecutionModule;
 using Xunit;
 
 namespace SecureIntegration.Gateway.Integration.Tests;
@@ -531,6 +532,130 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
     }
 
     [Fact]
+    public async Task Wave1_SEC_false_empty_expectations_verify_exact_Published_absence_before_scope_signing_DNS_and_network()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+        InMemoryProvider provider = new(
+            new Dictionary<string, string>(),
+            certificateHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                ["mtls-r1"] = material.ClientCertificateRevision1
+            },
+            signingKeyHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                ["sign-r1"] = material.SigningKeyRevision1
+            },
+            certificateChains: new Dictionary<string, IReadOnlyList<X509Certificate2>>(StringComparer.Ordinal)
+            {
+                ["sign-r1"] = [material.RootCertificate]
+            });
+        TrackingCapabilityProvider trackingProvider = new(provider);
+        await using SyntheticSignedMutualTlsServer server = await SyntheticSignedMutualTlsServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-exact-absence-candidate",
+            executionModule: Module(),
+            capabilityProvider: new(trackingProvider, trackingProvider, trackingProvider, trackingProvider, material.RootCertificate));
+        string connectorId = "synthetic-exact-absence-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("exact-absence-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("exact-absence-application");
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "exact-absence-identity");
+        await fixture.Factory.Services.GetRequiredService<IAdminGatewayRegistry>().AddGrantAsync(new(
+            Guid.NewGuid(), identity.Identity.InstallationId, identity.Identity.TenantId, connectorId,
+            "signed-submit", true, fixture.Factory.Clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
+
+        string signingSpki = SpkiSha256(material.SigningKeyRevision1);
+        string clientSpki = SpkiSha256(material.ClientCertificateRevision1);
+        JsonObject unexpectedActualPolicy = JsonNode.Parse(DualSlotDefinition(
+            connectorId, "1.0.0", signingSpki, clientSpki))!.AsObject();
+        JsonObject unexpectedActualOperation = unexpectedActualPolicy["operations"]![0]!.AsObject();
+        unexpectedActualOperation["executionStrategy"] = "synthetic-expectation-probe";
+        unexpectedActualOperation["extensionConfiguration"]!.AsObject().Remove("policyExpectations");
+
+        List<(string Version, string Definition, int CertificateBindings, bool Pass)> cases =
+        [
+            ("1.0.0", unexpectedActualPolicy.ToJsonString(), 2, false),
+            ("2.0.0", ExpectationProbeDefinition(connectorId, "2.0.0", expectationProfile: null), 1, true),
+            ("3.0.0", ExpectationProbeDefinition(connectorId, "3.0.0", EmptySlotExpectationProfile()), 1, false),
+            ("4.0.0", ExpectationProbeDefinition(connectorId, "4.0.0", OneSlotExpectationProfile()), 1, false)
+        ];
+
+        for (int index = 0; index < cases.Count; index++)
+        {
+            (string version, string definition, int certificateBindings, bool pass) = cases[index];
+            HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+                connectorId,
+                version,
+                environmentId,
+                server.Endpoint,
+                definition,
+                trackingProvider,
+                "sign-r1",
+                "mtls-r1",
+                certificateBindings);
+            await fixture.PublishAsync(authority, index);
+            int signingBefore = trackingProvider.SignDigestCalls;
+            int dnsBefore = fixture.HostResolutionCount;
+            int networkBefore = fixture.Transport.GenericRequests;
+            int httpsBefore = server.Requests;
+            SyntheticExpectationProbe.Reset();
+
+            using HttpResponseMessage response = await fixture.SendSignedAsync(
+                identity,
+                HttpMethod.Post,
+                $"/v1/connectors/{connectorId}/operations/signed-submit:invoke",
+                JsonSerializer.SerializeToUtf8Bytes(new GatewayInvokeRequest(
+                    "1.0", new("application/octet-stream", "utf8", "caller-body"), Guid.NewGuid()), WebJson));
+            string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(1, SyntheticExpectationProbe.ProviderInvocations);
+            Assert.Equal(pass ? HttpStatusCode.OK : HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Equal(pass ? 1 : 0, SyntheticExpectationProbe.CapabilityScopeEntries);
+            if (!pass) Assert.Contains("BGW-EGRESS-AUTHENTICATION", body, StringComparison.Ordinal);
+            Assert.Equal(signingBefore, trackingProvider.SignDigestCalls);
+            Assert.Equal(dnsBefore, fixture.HostResolutionCount);
+            Assert.Equal(networkBefore, fixture.Transport.GenericRequests);
+            Assert.Equal(httpsBefore, server.Requests);
+        }
+
+        static JsonObject EmptySlotExpectationProfile() => new()
+        {
+            ["algorithm"] = "RS256",
+            ["authenticationKind"] = "mtls",
+            ["restrictedTransportRequired"] = true,
+            ["signingSlots"] = new JsonArray(),
+            ["sameSigningIdentitySlots"] = new JsonArray(),
+            ["signingIdentityDistinctFromMutualTlsSlots"] = new JsonArray()
+        };
+
+        static JsonObject OneSlotExpectationProfile()
+        {
+            JsonObject profile = EmptySlotExpectationProfile();
+            profile["signingSlots"] = new JsonArray(new JsonObject
+            {
+                ["slot"] = "primary",
+                ["required"] = true,
+                ["projection"] = new JsonObject { ["kind"] = "authorizationBearer" },
+                ["audience"] = "synthetic-upstream",
+                ["fixedSubject"] = "synthetic-fixed-subject",
+                ["allowedClaims"] = new JsonArray("transaction-id"),
+                ["tokenLifetimeSeconds"] = 60,
+                ["temporalMode"] = "iat-exp",
+                ["jtiRequired"] = true,
+                ["certificateHeader"] = "chain",
+                ["issuer"] = new JsonObject { ["kind"] = "exact", ["value"] = "synthetic-primary-issuer" }
+            });
+            return profile;
+        }
+    }
+
+    [Fact]
     public async Task Wave1_SEC_authorized_operation_missing_expectation_provider_denies_before_signing_and_network()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
@@ -1025,9 +1150,18 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             "operationId":"signed-submit","endpointBinding":"service","method":"POST","path":"/submit",
             "request":{"contentType":"application/octet-stream","maximumBytes":4096},"response":{"maximumBytes":4096},
             "authentication":{"kind":"mtls","certificateBinding":"mtls-certificate"},"executionStrategy":"synthetic-signed-mtls",
-            "extensionConfiguration":{"claimName":"transaction-id","claimValue":"published-claim","body":"published-body"},
+            "extensionConfiguration":{
+              "claimName":"transaction-id","claimValue":"published-claim","body":"published-body",
+              "policyExpectations":{
+                "algorithm":"RS256","authenticationKind":"mtls","restrictedTransportRequired":true,
+                "signingSlots":[
+                  {"slot":"legacy","required":true,"projection":{"kind":"authorizationBearer"},"audience":"synthetic-upstream","fixedSubject":"synthetic-fixed-subject","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"temporalMode":"iat-nbf-exp","jtiRequired":true,"certificateHeader":"chain","issuer":{"kind":"exact","value":"synthetic-gateway"}}
+                ],
+                "sameSigningIdentitySlots":[],"signingIdentityDistinctFromMutualTlsSlots":[]
+              }
+            },
             "authorizedCapabilities":{
-              "signing":{"profileId":"synthetic-signing","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"synthetic-gateway","audience":"synthetic-upstream","subject":"installation","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"clockSkewSeconds":5,"certificateHeader":"chain","temporalClaims":"iat-nbf-exp","minimumRsaKeySize":2048},
+              "signing":{"profileId":"synthetic-signing","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"synthetic-gateway","audience":"synthetic-upstream","subject":"fixed","fixedSubject":"synthetic-fixed-subject","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"clockSkewSeconds":5,"certificateHeader":"chain","temporalClaims":"iat-nbf-exp","minimumRsaKeySize":2048},
               "restrictedTransport":{"profileId":"synthetic-transport","revision":1,"clientCertificateSpkiSha256":"{{{clientSpki}}}","authorization":"signedTokenBearer","nearExpirySeconds":30}
             },
             "timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[],"idempotent":false,"maximumRetries":0
@@ -1043,17 +1177,27 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             "operationId":"signed-submit","endpointBinding":"service","method":"POST","path":"/submit",
             "request":{"contentType":"application/octet-stream","maximumBytes":4096},"response":{"maximumBytes":4096},
             "authentication":{"kind":"mtls","certificateBinding":"mtls-certificate"},"executionStrategy":"synthetic-dual-slot",
-            "extensionConfiguration":{"claimName":"transaction-id","claimValue":"published-claim","body":"published-body"},
+            "extensionConfiguration":{
+              "claimName":"transaction-id","claimValue":"published-claim","body":"published-body",
+              "policyExpectations":{
+                "algorithm":"RS256","authenticationKind":"mtls","restrictedTransportRequired":true,
+                "signingSlots":[
+                  {"slot":"primary","required":true,"projection":{"kind":"authorizationBearer"},"audience":"synthetic-upstream","fixedSubject":"synthetic-fixed-subject","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"temporalMode":"iat-nbf-exp","jtiRequired":true,"certificateHeader":"chain","issuer":{"kind":"exact","value":"synthetic-primary-issuer"}},
+                  {"slot":"secondary","required":true,"projection":{"kind":"signedTokenHeader","headerName":"X-Synthetic-Signature"},"audience":"synthetic-upstream","fixedSubject":"synthetic-fixed-subject","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"temporalMode":"iat-nbf-exp","jtiRequired":true,"certificateHeader":"chain","issuer":{"kind":"exact","value":"synthetic-secondary-issuer"}}
+                ],
+                "sameSigningIdentitySlots":[],"signingIdentityDistinctFromMutualTlsSlots":[]
+              }
+            },
             "authorizedCapabilities":{
               "signingSlots":[
                 {
                   "slot":"primary","required":true,
-                  "signing":{"profileId":"synthetic-primary-signing","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"synthetic-primary-issuer","audience":"synthetic-upstream","subject":"installation","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"clockSkewSeconds":5,"certificateHeader":"chain","temporalClaims":"iat-nbf-exp","minimumRsaKeySize":2048},
+                  "signing":{"profileId":"synthetic-primary-signing","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"synthetic-primary-issuer","audience":"synthetic-upstream","subject":"fixed","fixedSubject":"synthetic-fixed-subject","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"clockSkewSeconds":5,"certificateHeader":"chain","temporalClaims":"iat-nbf-exp","minimumRsaKeySize":2048},
                   "projection":{"kind":"authorizationBearer"}
                 },
                 {
                   "slot":"secondary","required":true,
-                  "signing":{"profileId":"synthetic-secondary-signing","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"synthetic-secondary-issuer","audience":"synthetic-upstream","subject":"installation","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"clockSkewSeconds":5,"certificateHeader":"chain","temporalClaims":"iat-nbf-exp","minimumRsaKeySize":2048},
+                  "signing":{"profileId":"synthetic-secondary-signing","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"synthetic-secondary-issuer","audience":"synthetic-upstream","subject":"fixed","fixedSubject":"synthetic-fixed-subject","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"clockSkewSeconds":5,"certificateHeader":"chain","temporalClaims":"iat-nbf-exp","minimumRsaKeySize":2048},
                   "projection":{"kind":"signedTokenHeader","headerName":"X-Synthetic-Signature"}
                 }
               ],
@@ -1100,6 +1244,23 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
               ],
               "restrictedTransport":{"profileId":"synthetic-transport","revision":1,"clientCertificateSpkiSha256":"{{{clientSpki}}}","nearExpirySeconds":30,"bodyMode":"{{{bodyMode}}}"}
             },
+            "timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[],"idempotent":false,"maximumRetries":0
+          }]
+        }
+        """;
+
+    private static string ExpectationProbeDefinition(
+        string connectorId,
+        string version,
+        JsonObject? expectationProfile) => $$$"""
+        {
+          "schemaVersion":"1.0","connectorId":"{{{connectorId}}}","version":"{{{version}}}","displayName":"Synthetic exact absence probe",
+          "bindings":{"endpoints":[{"name":"service"}],"secrets":[{"name":"mtls-certificate","kind":"clientCertificate"}]},
+          "operations":[{
+            "operationId":"signed-submit","endpointBinding":"service","method":"POST","path":"/unused",
+            "request":{"contentType":"application/octet-stream","maximumBytes":4096},"response":{"maximumBytes":4096},
+            "authentication":{"kind":"mtls","certificateBinding":"mtls-certificate"},"executionStrategy":"synthetic-expectation-probe",
+            "extensionConfiguration":{{{(expectationProfile is null ? "{}" : new JsonObject { ["policyExpectations"] = expectationProfile }.ToJsonString())}}},
             "timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[],"idempotent":false,"maximumRetries":0
           }]
         }

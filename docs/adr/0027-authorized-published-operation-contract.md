@@ -15,11 +15,14 @@ builder would instead broaden authority across the Core security freeze.
 
 ## Decision
 
-- Every external strategy selected from an authoritative Published operation requires one
-  startup-registered module-owned `IAuthorizedPublishedOperationExpectationProvider`. Registration
-  is bounded, exact by strategy key and duplicate-rejecting. Absence or provider failure is a
-  sanitized denial before strategy entry, signing and network. Built-in Core strategies retain their
-  existing qualified paths.
+- Every external/non-Core strategy requires an authoritative catalog, a non-null exact current
+  `AuthorizedPublishedOperation` and authority stamp, one startup-registered module-owned
+  `IAuthorizedPublishedOperationExpectationProvider`, and the internal capability dispatcher.
+  Registration is bounded, exact by strategy key and duplicate-rejecting. A non-authoritative
+  catalog, missing authority/provider/dispatcher, or provider failure is a sanitized denial before
+  expectation creation/validation, capability-scope entry, strategy, signing, DNS and network.
+  Built-in Core strategies retain their existing qualified paths and are not forced into the module
+  provider contract.
 - The provider receives only a non-constructible invocation context containing connector/version/
   operation/strategy identifiers, authentication kind and a defensive copy of open Published
   extension configuration. It receives no payload, stamp, endpoint, policy object, binding,
@@ -30,6 +33,11 @@ builder would instead broaden authority across the Core security freeze.
   lifetime; temporal mode; mandatory `jti`; x5c mode; exact issuer or fixed-prefix plus verified
   signing-certificate subject CN; equal signing identities; and signing identities distinct from
   the approved mTLS identity.
+- Restricted-transport presence and the effective signing-slot set are always compared symmetrically
+  against the same exact Published A. `RestrictedTransportRequired=false` and an empty slot set mean
+  exact verified absence of `restrictedTransport`, legacy `signing`, and `signingSlots`; they are not
+  an opt-out. Core may return without parsing the restricted profile only when both expected and
+  actual transport are absent and both expected and actual signing sets are empty.
 - Certificate relations use only Core-resolved, approved public material and compare cryptographic
   identity. Every asynchronous public-material lookup is followed by an exact-A revalidation. The
   expectation provider never sees certificate data. Preflight is an internal dispatcher/runtime
@@ -54,6 +62,10 @@ builder would instead broaden authority across the Core security freeze.
 A connector pack can state bounded semantic requirements without receiving effective policy or
 authenticated transport authority. Core denies incoherence before private-key and network effects,
 while still allowing an exact Published path segment projection and truly bodyless GET/DELETE.
+
+This clarification is intentionally breaking for external modules that previously executed from a
+non-authoritative catalog or returned empty expectations for a Published signing/transport policy.
+Those paths now fail closed; built-in Core execution compatibility is unchanged.
 
 The module and publisher remain trusted to state the intended protocol semantics; this contract
 checks coherence, not external specifications. Public certificate metadata is temporarily processed

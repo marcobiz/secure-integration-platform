@@ -11,11 +11,16 @@
 
 ## Mandatory preflight
 
-An external strategy is not entered merely because its key and authentication kind match. After
-principal, grant and immutable Published operation A resolution, Core requires exactly one
-module-owned expectation provider for that strategy. The provider is registered through the existing
-bounded module registrar and constructor-graph controls. Missing or duplicate strategy coverage,
-invalid provider metadata, provider exceptions and null/invalid expectations fail closed.
+An external/non-Core strategy is not entered merely because its key and authentication kind match.
+After principal and grant checks, Core requires an authoritative catalog, a non-null exact current
+Published operation A and authority stamp, exactly one module-owned expectation provider, and the
+internal capability dispatcher. The provider is registered through the existing bounded module
+registrar and constructor-graph controls. A non-authoritative catalog, missing authority/provider/
+dispatcher, duplicate strategy coverage, invalid provider metadata, provider exceptions and null or
+invalid expectations fail closed as sanitized `BGW-EGRESS-AUTHENTICATION` before capability-scope
+entry, strategy, signing, DNS or network. The formerly accepted non-authoritative external dispatch
+is intentionally denied. Built-in Core strategies marked by the internal Core contract keep their
+qualified legacy behavior and do not require a module provider.
 
 The provider receives a non-constructible `AuthorizedPublishedOperationExpectationContext`. Its
 public state is limited to connector/version/operation/strategy identifiers and authentication kind;
@@ -35,6 +40,13 @@ effective Published policies and exact-compares:
 - cryptographic signing-identity equality across declared slots;
 - cryptographic inequality between declared signing identities and the approved mTLS identity.
 
+Presence is part of that exact comparison. `RestrictedTransportRequired=false` means the Published A
+must not contain `restrictedTransport`; an empty expected slot set means A must contain neither
+legacy `signing` nor `signingSlots`. `false/empty` is exact verified absence, never an opt-out. Core
+returns without parsing a restricted profile only for the symmetric absent/absent and empty/empty
+case. An actual policy with empty expectations, expected transport with actual absence, or either
+direction of slot-set mismatch is denied before strategy and every privileged/network effect.
+
 Core obtains approved public certificate material only when a certificate relation requires it,
 checks DER/fingerprint/SPKI/provider metadata, extracts the subject CN internally and revalidates A
 after every await. The module receives none of that material. The preflight operation exists only on
@@ -43,6 +55,11 @@ internal dispatcher/runtime contracts; `IAuthorizedConnectorCapabilityBridge` ha
 All preflight mismatch and exception paths return sanitized `BGW-EGRESS-AUTHENTICATION` before the
 strategy, signing and network. A Published A-to-B change while public material is in flight returns
 the existing stale classification with zero signing and zero network.
+
+This is a breaking-security remediation for external modules: every external positive path must now
+provide authoritative Published authority, an exact-key provider, a dispatcher and complete coherent
+expectations for every signing/restricted-transport capability it actually uses. It adds no public
+bridge method, generic HTTP surface, policy metadata view, schema member or migration.
 
 ## Published path projection
 
@@ -108,6 +125,10 @@ module compiles only against public Core contracts and has no friend access.
 - full preflight mismatch matrix and missing-validator denial with zero signing/network:
   `Wave1_SEC_authorized_operation_policy_mismatches_deny_before_signing_and_network` and
   `Wave1_SEC_authorized_operation_missing_expectation_provider_denies_before_signing_and_network`;
+- exact absence and authoritative-preflight remediation:
+  `Wave1_SEC_false_empty_expectations_verify_exact_Published_absence_before_scope_signing_DNS_and_network`
+  and
+  `Wave1_SEC_external_strategy_requires_authoritative_Published_provider_and_dispatcher_before_scope_entry`;
 - path/template and REQUIRED/NONE mismatch denial with zero network:
   `Wave1_SEC_authorized_operation_path_and_body_mismatches_deny_before_network`;
 - deterministic exact-A races before signing and before network:
