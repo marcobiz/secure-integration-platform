@@ -16,6 +16,11 @@ public sealed class HealthcarePackBoundaryTests
         Assert.DoesNotContain("ConnectorPacks/Healthcare", coreSolution, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Healthcare.FSE2.Integration.Tests", coreSolution, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Healthcare.FSE2.Integration.Tests", File.ReadAllText(Path.Combine(Root, "BrokerGateway.slnx")), StringComparison.Ordinal);
+        string coreExportAllowlist = File.ReadAllText(Path.Combine(Root, "eng", "open-source-core.allowlist"));
+        Assert.DoesNotContain("tests/integration/\n", coreExportAllowlist.Replace("\r\n", "\n", StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.DoesNotContain("Healthcare.FSE2.Integration.Tests", coreExportAllowlist, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("tests/integration/Gateway.Integration.Tests/", coreExportAllowlist, StringComparison.Ordinal);
+        Assert.Contains("tests/integration/Broker.Integration.Tests/", coreExportAllowlist, StringComparison.Ordinal);
 
         XDocument solution = XDocument.Load(coreSolutionPath);
         Queue<string> projects = new(solution.Descendants("Project")

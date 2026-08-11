@@ -71,7 +71,8 @@ tests/architecture/Architecture.Tests/ProviderBoundaryTests.cs
 tests/architecture/Architecture.Tests/ProvisionerSecurityTests.cs
 tests/architecture/Architecture.Tests/SoapAuthBoundaryTests.cs
 tests/e2e/
-tests/integration/
+tests/integration/Broker.Integration.Tests/
+tests/integration/Gateway.Integration.Tests/
 tests/support/Synthetic.ConnectorExecutionCrossModule/
 tests/support/Synthetic.ConnectorExecutionDependencyModule/
 tests/support/Synthetic.ConnectorExecutionModule/
