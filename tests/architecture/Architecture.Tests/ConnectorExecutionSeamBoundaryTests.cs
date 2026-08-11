@@ -176,6 +176,43 @@ public sealed class ConnectorExecutionSeamBoundaryTests
     }
 
     [Fact]
+    public void Wave1_CT_typed_composed_request_has_no_new_bridge_or_arbitrary_body_binding_provider_or_transport_escape()
+    {
+        string soapRoot = Path.Combine(Root, "src", "Gateway", "Gateway.ConnectorRuntime.Auth.Soap");
+        string contracts = File.ReadAllText(Path.Combine(soapRoot, "TypedComposedSoapRequestContracts.cs"));
+        string boundary = File.ReadAllText(Path.Combine(soapRoot, "TypedComposedSoapRequestXmlBoundary.cs"));
+        string executionContracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"));
+        string loader = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "ConnectorExecutionModuleLoader.cs"));
+        string migration = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0014_typed_composed_soap_request_inputs.sql"));
+
+        Assert.Contains("public interface ITypedComposedSoapRequestAdapter", contracts, StringComparison.Ordinal);
+        Assert.Contains("void WriteRequest(XmlWriter writer, TypedComposedSoapRequestContext context)", contracts, StringComparison.Ordinal);
+        Assert.Contains("public Stream OpenBusinessPayloadStream()", contracts, StringComparison.Ordinal);
+        Assert.Contains("public AuthorizedConnectorBindingInputs ServerOwnedInputs", contracts, StringComparison.Ordinal);
+        Assert.Contains("using (serverOwnedInputs.BindToCoreWriter(writer))", boundary, StringComparison.Ordinal);
+        Assert.Contains("writer.WriteStartElement(\"op\", authority.RequestElement.LocalName", boundary, StringComparison.Ordinal);
+        Assert.Contains("TypedComposedSoapRequestAdapterRegistry", contracts, StringComparison.Ordinal);
+        Assert.Contains("RegisterAdapter(typeof(ITypedComposedSoapRequestAdapter)", loader, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExecuteTypedComposedSoap", executionContracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public byte[]", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public ReadOnlyMemory", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public Memory", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public Span", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public Uri", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpClient", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpRequestMessage", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("ISecretValueProvider", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("IConnectorConfigurationStore", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("IRestrictedTransport", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("Dictionary<string, object", contracts, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("XPath", contracts, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("typedComposedSoapRequest' -> 'serverOwnedInputs'", migration, StringComparison.Ordinal);
+        Assert.Contains("installation_connector_grant", migration, StringComparison.Ordinal);
+        Assert.Contains("TO gateway_runtime", migration, StringComparison.Ordinal);
+        Assert.Contains("FROM PUBLIC, gateway_admin, gateway_readonly", migration, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Wave1_CT_authorized_signing_slots_are_bounded_opaque_slot_bound_and_server_projected()
     {
         string executionContracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"));

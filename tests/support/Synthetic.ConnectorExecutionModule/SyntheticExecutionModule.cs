@@ -1,7 +1,9 @@
 using System.Collections.Frozen;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Xml;
+using System.Xml.Linq;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 using SecureIntegration.Providers.Abstractions;
@@ -36,6 +38,7 @@ public sealed class SyntheticExecutionModule : IConnectorExecutionModule
         registrar.AddTypedSessionHandshakeRequestAdapter<SyntheticExternalTypedSessionRequestAdapter>();
         registrar.AddTypedSessionHandshakeResponseAdapter<SyntheticExternalTypedSessionResponseAdapter>();
         registrar.AddExternalSessionValidationAdapter<SyntheticExternalSessionValidationAdapter>();
+        registrar.AddTypedComposedSoapRequestAdapter<SyntheticExternalTypedComposedSoapRequestAdapter>();
     }
 }
 
@@ -449,6 +452,29 @@ public sealed class SyntheticWrongModuleAdapterModule : IConnectorExecutionModul
         registrar.AddTypedSessionHandshakeRequestAdapter<ITypedSessionHandshakeRequestAdapter>();
 }
 
+/// <summary>Startup-negative module that duplicates the composed request adapter category.</summary>
+public sealed class SyntheticDuplicateComposedRequestAdapterModule : IConnectorExecutionModule
+{
+    /// <inheritdoc />
+    public ConnectorExecutionModuleId Id => ConnectorExecutionModuleId.Parse("synthetic-duplicate-composed-adapter");
+    /// <inheritdoc />
+    public void RegisterExecutionStrategies(IConnectorExecutionStrategyRegistrar registrar)
+    {
+        registrar.AddTypedComposedSoapRequestAdapter<SyntheticExternalTypedComposedSoapRequestAdapter>();
+        registrar.AddTypedComposedSoapRequestAdapter<SyntheticExternalTypedComposedSoapRequestAdapter>();
+    }
+}
+
+/// <summary>Startup-negative module that attempts a non-module composed adapter registration.</summary>
+public sealed class SyntheticWrongModuleComposedRequestAdapterModule : IConnectorExecutionModule
+{
+    /// <inheritdoc />
+    public ConnectorExecutionModuleId Id => ConnectorExecutionModuleId.Parse("synthetic-wrong-composed-adapter");
+    /// <inheritdoc />
+    public void RegisterExecutionStrategies(IConnectorExecutionStrategyRegistrar registrar) =>
+        registrar.AddTypedComposedSoapRequestAdapter<ITypedComposedSoapRequestAdapter>();
+}
+
 /// <summary>Startup-negative module that requests direct provider and transport authorities.</summary>
 public sealed class SyntheticForbiddenAuthorityDependencyModule : IConnectorExecutionModule
 {
@@ -683,6 +709,123 @@ internal static class SyntheticExternalTypedSessionProtocol
     internal const string Namespace = "urn:synthetic:typed-session";
     internal static readonly FrozenSet<string> RequiredInputs =
         new[] { "organization-code" }.ToFrozenSet(StringComparer.Ordinal);
+}
+
+internal static class SyntheticExternalTypedComposedSoapProtocol
+{
+    internal const string Namespace = "urn:synthetic:session";
+    internal static readonly FrozenSet<string> RequiredInputs =
+        new[] { "organization-code" }.ToFrozenSet(StringComparer.Ordinal);
+}
+
+/// <summary>External no-IVT adapter for one neutral typed composed-SOAP business request.</summary>
+public sealed class SyntheticExternalTypedComposedSoapRequestAdapter : ITypedComposedSoapRequestAdapter
+{
+    /// <inheritdoc />
+    public string AdapterId => "external-business-request";
+    /// <inheritdoc />
+    public string AdapterType => "external-compiled-business-request";
+    /// <inheritdoc />
+    public IReadOnlySet<string> RequiredServerOwnedInputs => SyntheticExternalTypedComposedSoapProtocol.RequiredInputs;
+
+    /// <inheritdoc />
+    public void WriteRequest(XmlWriter writer, TypedComposedSoapRequestContext context)
+    {
+        Stream retainedPayload = context.OpenBusinessPayloadStream();
+        SyntheticTypedComposedSoapRequestProbe.Retain(context, retainedPayload);
+        SyntheticBindingInputLifetimeProbe.Retain(context.ServerOwnedInputs);
+        using Stream first = context.OpenBusinessPayloadStream();
+        using Stream second = context.OpenBusinessPayloadStream();
+        XDocument firstDocument = ReadBusinessPayload(first);
+        XDocument secondDocument = ReadBusinessPayload(second);
+        XElement root = firstDocument.Root ?? throw new XmlException();
+        if (secondDocument.Root?.Name != root.Name) throw new XmlException();
+        XName payloadName = XName.Get("Payload", "urn:synthetic:business-input");
+        XElement payloadElement = root.Elements(payloadName).Single();
+        if (root.Elements().Any(value => value.Name != payloadName &&
+            value.Name != XName.Get("OrganizationCode", "urn:synthetic:business-input")))
+            throw new XmlException();
+        string payload = payloadElement.Value;
+        if (payload.Length > 4_096) throw new XmlException();
+        if (string.Equals(payload, "adapter-throws-canary", StringComparison.Ordinal))
+            throw new InvalidOperationException("synthetic-typed-composed-adapter-canary");
+        if (string.Equals(payload, "adapter-fake-cancellation", StringComparison.Ordinal))
+            throw new OperationCanceledException("synthetic-typed-composed-fake-cancellation", new CancellationToken(canceled: true));
+
+        writer.WriteElementString("op", "Payload", SyntheticExternalTypedComposedSoapProtocol.Namespace, payload);
+        writer.WriteStartElement("op", "OrganizationCode", SyntheticExternalTypedComposedSoapProtocol.Namespace);
+        context.ServerOwnedInputs.WriteRequiredXmlValue("organization-code");
+        writer.WriteEndElement();
+
+        static XDocument ReadBusinessPayload(Stream stream)
+        {
+            XmlReaderSettings settings = new()
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+                MaxCharactersFromEntities = 0,
+                MaxCharactersInDocument = 32_768
+            };
+            using XmlReader reader = XmlReader.Create(stream, settings);
+            XDocument document = XDocument.Load(reader, LoadOptions.None);
+            XElement root = document.Root ?? throw new XmlException();
+            if (root.Name != XName.Get("BusinessPayload", "urn:synthetic:business-input") ||
+                root.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration))
+                throw new XmlException();
+            return document;
+        }
+    }
+}
+
+/// <summary>External probes for callback lifetime and read-only repeatable business payload views.</summary>
+public static class SyntheticTypedComposedSoapRequestProbe
+{
+    private static TypedComposedSoapRequestContext? retained;
+    private static Stream? retainedPayload;
+
+    /// <summary>Clears qualification-only retained state.</summary>
+    public static void Reset()
+    {
+        Volatile.Write(ref retained, null);
+        Interlocked.Exchange(ref retainedPayload, null)?.Dispose();
+    }
+
+    /// <summary>Retains only to prove callback-scoped context denial and payload clearing.</summary>
+    public static void Retain(TypedComposedSoapRequestContext context, Stream payload)
+    {
+        Volatile.Write(ref retained, context);
+        Interlocked.Exchange(ref retainedPayload, payload)?.Dispose();
+    }
+
+    /// <summary>Returns true only when the retained stream is cleared and the context cannot reopen it.</summary>
+    public static bool RetainedPayloadViewIsClearedAndContextIsDenied()
+    {
+        TypedComposedSoapRequestContext context = Volatile.Read(ref retained)
+            ?? throw new InvalidOperationException("Synthetic typed composed request context was not retained.");
+        Stream payload = Interlocked.Exchange(ref retainedPayload, null)
+            ?? throw new InvalidOperationException("Synthetic typed composed payload stream was not retained.");
+        byte[] observed = new byte[context.BusinessPayloadLength];
+        try
+        {
+            payload.Position = 0;
+            int count = payload.ReadAtLeast(observed, observed.Length, throwOnEndOfStream: false);
+            if (count != observed.Length || observed.Any(value => value != 0)) return false;
+            try
+            {
+                using Stream _ = context.OpenBusinessPayloadStream();
+                return false;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(observed);
+            payload.Dispose();
+        }
+    }
 }
 
 /// <summary>Externally registered neutral request adapter with one server-owned input.</summary>

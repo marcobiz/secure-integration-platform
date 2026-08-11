@@ -250,6 +250,17 @@ public sealed class PostgresIsolationTests
         Assert.DoesNotContain("DROP FUNCTION", directInstallationSql, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("BYPASSRLS", directInstallationSql, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("secret_value", directInstallationSql, StringComparison.OrdinalIgnoreCase);
+        string typedComposedLocatorSql = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0014_typed_composed_soap_request_inputs.sql"));
+        Assert.Contains("typedComposedSoapRequest' -> 'serverOwnedInputs'", typedComposedLocatorSql, StringComparison.Ordinal);
+        Assert.Contains("installation_connector_grant", typedComposedLocatorSql, StringComparison.Ordinal);
+        Assert.Contains("SECURITY DEFINER", typedComposedLocatorSql, StringComparison.Ordinal);
+        Assert.Contains("OWNER TO gateway_locator_owner", typedComposedLocatorSql, StringComparison.Ordinal);
+        Assert.Contains("TO gateway_runtime", typedComposedLocatorSql, StringComparison.Ordinal);
+        Assert.Contains("FROM PUBLIC, gateway_admin, gateway_readonly", typedComposedLocatorSql, StringComparison.Ordinal);
+        Assert.DoesNotContain("GRANT SELECT", typedComposedLocatorSql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("DROP FUNCTION", typedComposedLocatorSql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("BYPASSRLS", typedComposedLocatorSql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("secret_value", typedComposedLocatorSql, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

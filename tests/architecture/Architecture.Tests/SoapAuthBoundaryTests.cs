@@ -96,6 +96,8 @@ public sealed class SoapAuthBoundaryTests
         Assert.Contains("OpaqueSessionHttpExecutionStrategy", host, StringComparison.Ordinal);
         Assert.Contains("IConnectorExecutionStrategy", operationServices, StringComparison.Ordinal);
         Assert.Contains("client.SendAuthorizedAsync", strategy, StringComparison.Ordinal);
+        Assert.Contains("requestComposer.ComposeAsync", strategy, StringComparison.Ordinal);
+        Assert.Contains("typedRequest?.Bytes ?? execution.Payload", strategy, StringComparison.Ordinal);
         Assert.DoesNotContain("transport.SendAsync", strategy, StringComparison.Ordinal);
     }
 

@@ -553,7 +553,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
                 "typed-session-" + suffix, ProviderResourceType.Secret, "Typed opaque session authority", environmentId, connectorId, sessionOperationScope ?? BusinessOperationId,
                 "synthetic://typed-session-" + suffix, ProviderResourceStatus.Active, null, 0, null, null, string.Empty, Factory.Clock.UtcNow), TestContext.Current.CancellationToken);
             ProviderResourceCatalogRecord organization = await Store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic", "Synthetic provider", "synthetic",
-                "typed-organization-" + suffix, ProviderResourceType.Secret, "Typed server-owned organization", environmentId, connectorId, "session-bootstrap",
+                "typed-organization-" + suffix, ProviderResourceType.Secret, "Typed server-owned organization", environmentId, connectorId, "*",
                 "synthetic://typed-organization-" + suffix, ProviderResourceStatus.Active, null, 0, null, null, string.Empty, Factory.Clock.UtcNow), TestContext.Current.CancellationToken);
             Assert.Equal(username.Revision, password.Revision);
             Assert.Equal(username.Revision, session.Revision);
@@ -687,6 +687,37 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         {
             Id = Guid.NewGuid(),
             Status = ProviderResourceStatus.Disabled,
+            Revision = 0,
+            ChecksumSha256 = string.Empty,
+            CreatedAt = Factory.Clock.UtcNow.AddMilliseconds(1)
+        }, TestContext.Current.CancellationToken);
+    }
+
+    internal async Task MutatePublishedBindingRevisionAsync(HostedConnectorAuthority authority, HostedIdentity identity)
+    {
+        PublishedConnectorSnapshot snapshot = await Store.GetPublishedSnapshotAsync(
+            authority.ConnectorId,
+            authority.EnvironmentId,
+            new(identity.Identity.InstallationId, identity.Identity.TenantId, identity.Identity.ApplicationId, BusinessOperationId),
+            TestContext.Current.CancellationToken)
+            ?? throw new InvalidOperationException("Published binding mutation authority was unavailable.");
+        ConnectorBindingSet binding = snapshot.Bindings;
+        _ = await Store.PutBindingsAsync(binding with
+        {
+            Id = Guid.NewGuid(),
+            Revision = 0,
+            UpdatedAt = Factory.Clock.UtcNow.AddMilliseconds(1),
+            UpdatedBy = "synthetic-binding-race"
+        }, binding.Revision, Guid.NewGuid(), TestContext.Current.CancellationToken);
+    }
+
+    internal async Task RotateOrganizationResourceAsync(HostedConnectorAuthority authority)
+    {
+        ProviderResourceCatalogRecord organization = resources[authority.ConnectorId].Organization;
+        _ = await Store.RegisterProviderResourceAsync(organization with
+        {
+            Id = Guid.NewGuid(),
+            ProviderReference = organization.ProviderReference + "-rotated",
             Revision = 0,
             ChecksumSha256 = string.Empty,
             CreatedAt = Factory.Clock.UtcNow.AddMilliseconds(1)
@@ -888,6 +919,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
                 serviceProvider.GetRequiredService<IRestrictedTransport>(),
                 serviceProvider.GetRequiredService<IGatewayClock>(),
                 serviceProvider.GetRequiredService<IPrivateDestinationAllowance>(),
+                serviceProvider.GetServices<ITypedComposedSoapRequestAdapter>(),
                 beforeComposedFinalAuthorization));
         });
     }
@@ -984,6 +1016,11 @@ internal sealed class CountingRestrictedTransport(IRestrictedTransport inner) : 
     internal int ValidationRequests => Volatile.Read(ref validationRequests);
     internal int BusinessRequests => Volatile.Read(ref businessRequests);
     internal int GenericRequests => Volatile.Read(ref genericRequests);
+    internal string? LastBusinessEnvelope { get; private set; }
+    internal string? LastBusinessContentType { get; private set; }
+    internal string? LastBusinessSoapAction { get; private set; }
+    internal string? LastBusinessAuthorizationScheme { get; private set; }
+    internal int LastBusinessSessionHeaderCount { get; private set; }
 
     public Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate,
         TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
@@ -999,7 +1036,19 @@ internal sealed class CountingRestrictedTransport(IRestrictedTransport inner) : 
         string action = request.Headers.TryGetValues("SOAPAction", out IEnumerable<string>? values) ? string.Join(',', values) : string.Empty;
         if (action.Contains("CreateSession", StringComparison.Ordinal)) Interlocked.Increment(ref acquisitionRequests);
         if (action.Contains("ValidateSession", StringComparison.Ordinal)) Interlocked.Increment(ref validationRequests);
-        if (action.Contains("BusinessOperation", StringComparison.Ordinal)) Interlocked.Increment(ref businessRequests);
+        if (action.Contains("BusinessOperation", StringComparison.Ordinal))
+        {
+            Interlocked.Increment(ref businessRequests);
+            LastBusinessEnvelope = request.Content is null
+                ? null
+                : Encoding.UTF8.GetString(request.Content.ReadAsByteArrayAsync(cancellationToken).GetAwaiter().GetResult());
+            LastBusinessContentType = request.Content?.Headers.ContentType?.ToString();
+            LastBusinessSoapAction = action;
+            LastBusinessAuthorizationScheme = request.Headers.Authorization?.Scheme;
+            LastBusinessSessionHeaderCount = request.Headers.TryGetValues("X-Session-Reference", out IEnumerable<string>? sessionValues)
+                ? sessionValues.Count()
+                : 0;
+        }
         return inner.SendSoapAsync(request, approvedAddresses, timeout, maximumResponseBytes, cancellationToken);
     }
 }

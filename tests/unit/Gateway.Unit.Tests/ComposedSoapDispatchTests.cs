@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Xml;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
 using SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
@@ -203,6 +204,40 @@ public sealed class ComposedSoapDispatchTests
     }
 
     [Fact]
+    public async Task Wave1_SEC_typed_composed_adapter_preserves_only_the_actually_cancelled_caller_token()
+    {
+        ComposedFixture fixture = new();
+        ComposedSoapResolvedExecutionContext resolved = await fixture.ResolveAsync();
+        using CancellationTokenSource callerCancellation = new();
+        CancelingTypedComposedRequestAdapter adapter = new(callerCancellation);
+        TypedComposedSoapRequestAuthority typed = new(
+            adapter,
+            new SoapElementRule("BusinessOperation", "urn:synthetic:operation"),
+            [],
+            32_768,
+            "typed-cancellation-fingerprint");
+        ComposedSoapAuthorityState state = resolved.State with { TypedRequest = typed };
+        AuthorizedConnectorBindingInputs inputs = new(new Dictionary<string, string>(StringComparer.Ordinal));
+
+        try
+        {
+            OperationCanceledException failure = Assert.ThrowsAny<OperationCanceledException>(() =>
+                TypedComposedSoapRequestXmlBoundary.Serialize(
+                    state,
+                    "<BusinessPayload/>"u8.ToArray(),
+                    inputs,
+                    callerCancellation.Token));
+
+            Assert.Equal(callerCancellation.Token, failure.CancellationToken);
+            Assert.DoesNotContain("typed-cancellation-canary", failure.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            inputs.Clear();
+        }
+    }
+
+    [Fact]
     public void Wave1_CT_composed_public_surface_has_no_authority_or_header_override()
     {
         Assert.False(typeof(ServerBoundBasicAuthentication).IsPublic);
@@ -389,6 +424,18 @@ public sealed class ComposedSoapDispatchTests
                 "basic-password-ref" => ComposedFixture.Password,
                 _ => "synthetic-session-login"
             });
+        }
+    }
+
+    private sealed class CancelingTypedComposedRequestAdapter(CancellationTokenSource callerCancellation) : ITypedComposedSoapRequestAdapter
+    {
+        public string AdapterId => "canceling-request";
+        public string AdapterType => "synthetic-canceling-request";
+
+        public void WriteRequest(XmlWriter writer, TypedComposedSoapRequestContext context)
+        {
+            callerCancellation.Cancel();
+            throw new OperationCanceledException("typed-cancellation-canary", new CancellationToken(canceled: true));
         }
     }
 

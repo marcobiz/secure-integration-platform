@@ -115,6 +115,46 @@ public sealed class ConnectorCapabilityCompletionTests
         Assert.Contains(wrongKindResult.Issues, issue => issue.Code == "BGW-CONNECTOR-SERVER-INPUT-BINDING-INVALID");
     }
 
+    [Fact]
+    public void Wave1_CT_typed_composed_SOAP_request_is_canonical_checksum_and_dependency_complete()
+    {
+        ConnectorDefinitionValidator validator = new();
+        using JsonDocument definition = JsonDocument.Parse(TypedComposedDefinition());
+
+        ValidatedConnectorDefinition validated = validator.ValidateRequired(definition.RootElement);
+        OperationBindingDependencies dependencies = ConnectorOperationBindings.Required(validated.CanonicalJson, "session-business");
+        using JsonDocument changed = JsonDocument.Parse(TypedComposedDefinition().Replace(
+            "external-business-request", "external-business-request-v2", StringComparison.Ordinal));
+        ValidatedConnectorDefinition changedValidated = validator.ValidateRequired(changed.RootElement);
+
+        Assert.Equal(["basic-password", "basic-username", "organization", "session"], dependencies.SecretBindingIds);
+        Assert.Contains("\"typedComposedSoapRequest\"", validated.CanonicalJson, StringComparison.Ordinal);
+        Assert.Contains("\"localName\":\"BusinessOperation\"", validated.CanonicalJson, StringComparison.Ordinal);
+        Assert.NotEqual(validated.ChecksumSha256, changedValidated.ChecksumSha256);
+    }
+
+    [Fact]
+    public void Wave1_SEC_typed_composed_SOAP_schema_QName_bounds_auth_and_input_kinds_fail_closed()
+    {
+        AssertTypedInvalid(value => TypedComposed(value)["requestElement"]!["localName"] = "1Invalid");
+        AssertTypedInvalid(value => TypedComposed(value)["requestElement"]!["namespaceUri"] = "relative");
+        AssertTypedInvalid(value => Operation(value)["method"] = "GET", "BGW-CONNECTOR-TYPED-COMPOSED-METHOD");
+        AssertTypedInvalid(value => Operation(value)["authentication"] = new JsonObject { ["kind"] = "none" },
+            "BGW-CONNECTOR-TYPED-COMPOSED-AUTH");
+        AssertTypedInvalid(value => value["bindings"]!["secrets"]![3]!["kind"] = "password",
+            "BGW-CONNECTOR-SERVER-INPUT-BINDING-INVALID");
+        AssertTypedInvalid(value => TypedComposed(value)["serverOwnedInputs"]!.AsArray().Add(
+            new JsonObject { ["name"] = "organization-code", ["secretBinding"] = "organization" }),
+            "BGW-CONNECTOR-SERVER-INPUT-DUPLICATE");
+        AssertTypedInvalid(value =>
+        {
+            JsonArray inputs = TypedComposed(value)["serverOwnedInputs"]!.AsArray();
+            while (inputs.Count < 17)
+                inputs.Add(new JsonObject { ["name"] = "input-" + inputs.Count, ["secretBinding"] = "organization" });
+        });
+        AssertTypedInvalid(value => Operation(value)["request"]!["maximumBytes"] = 16_777_217);
+    }
+
     private static string CapabilityDefinition() => """
         {
           "schemaVersion":"1.0","connectorId":"synthetic-capability","version":"1.0.0","displayName":"Synthetic capability",
@@ -190,4 +230,32 @@ public sealed class ConnectorCapabilityCompletionTests
           }]
         }
         """;
+
+    private static string TypedComposedDefinition() => """
+        {
+          "schemaVersion":"1.0","connectorId":"synthetic-typed-composed","version":"1.0.0","displayName":"Synthetic typed composed SOAP",
+          "bindings":{"endpoints":[{"name":"service"}],"secrets":[{"name":"basic-username","kind":"username"},{"name":"basic-password","kind":"password"},{"name":"session","kind":"opaque"},{"name":"organization","kind":"opaque"}]},
+          "operations":[{
+            "operationId":"session-business","endpointBinding":"service","method":"POST","path":"/composed",
+            "request":{"contentType":"text/xml","maximumBytes":32768},"response":{"maximumBytes":32768},
+            "authentication":{"kind":"soapBasicOpaqueSession","policyId":"typed-business-policy","sessionProfileId":"typed-session","usernameBinding":"basic-username","passwordBinding":"basic-password","secretBinding":"session","headerName":"X-Session-Reference","valueFormat":"rawOpaqueValue","soapHttp":{"version":"1.1","action":"urn:synthetic:BusinessOperation"}},
+            "typedComposedSoapRequest":{"requestAdapter":{"id":"external-business-request","type":"external-compiled-business-request"},"requestElement":{"localName":"BusinessOperation","namespaceUri":"urn:synthetic:session"},"serverOwnedInputs":[{"name":"organization-code","secretBinding":"organization"}]},
+            "timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[],"idempotent":false,"maximumRetries":0
+          }]
+        }
+        """;
+
+    private static void AssertTypedInvalid(Action<JsonObject> mutate, string? expectedIssue = null)
+    {
+        JsonObject definition = JsonNode.Parse(TypedComposedDefinition())!.AsObject();
+        mutate(definition);
+        using JsonDocument document = JsonDocument.Parse(definition.ToJsonString());
+        ConnectorValidationResult result = new ConnectorDefinitionValidator().Validate(document.RootElement);
+        Assert.False(result.Valid);
+        if (expectedIssue is not null) Assert.Contains(result.Issues, issue => issue.Code == expectedIssue);
+    }
+
+    private static JsonNode Operation(JsonObject definition) => definition["operations"]![0]!;
+
+    private static JsonNode TypedComposed(JsonObject definition) => Operation(definition)["typedComposedSoapRequest"]!;
 }
