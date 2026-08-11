@@ -48,7 +48,13 @@ public sealed class AdminSecurityTests
         Assert.Contains("BGW-CONNECTOR-SIGNING-AUTHORIZATION-DUPLICATE", catalog.Reason);
         Assert.Contains("BGW-CONNECTOR-SIGNING-HEADER-FORBIDDEN", catalog.Reason);
         Assert.Contains("BGW-CONNECTOR-SIGNING-HEADER-DUPLICATE", catalog.Reason);
-        Assert.Equal(167, catalog.Reason.Count);
+        Assert.Contains("BGW-AUTH-RESTRICTED-BODY-MODE-DENIED", catalog.Reason);
+        Assert.Contains("BGW-AUTH-RESTRICTED-PATH-DENIED", catalog.Reason);
+        Assert.Contains("BGW-CONNECTOR-PATH-TEMPLATE-CAPABILITY-REQUIRED", catalog.Reason);
+        Assert.Contains("BGW-CONNECTOR-PATH-TEMPLATE-INVALID", catalog.Reason);
+        Assert.Contains("BGW-CONNECTOR-RESTRICTED-BODY-NONE-METHOD", catalog.Reason);
+        Assert.Contains("BGW-PROVIDER-PUBLIC-MATERIAL-INVALID", catalog.Reason);
+        Assert.Equal(173, catalog.Reason.Count);
         Assert.DoesNotContain("grant.revoke", catalog.AuditAction);
         Assert.DoesNotContain("BGW-GRANT-REVOKED", catalog.Reason);
         Assert.Contains(BackendRuntimeWireCodes.Reserved, value => value == new RuntimeWireCode(RuntimeWireCodeKind.AuditAction, "grant.revoke"));
