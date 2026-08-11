@@ -1,0 +1,116 @@
+{
+  "schemaVersion": "1.0",
+  "connectorId": "sistema-ts-eprescription",
+  "version": "1.0.0",
+  "displayName": "Sistema TS SSN ePrescription - Erogatore",
+  "description": "Published connector profile for the frozen national SAC SSN dispenser contracts.",
+  "bindings": {
+    "endpoints": [
+      { "name": "sistema-ts-sac" }
+    ],
+    "secrets": [
+      { "name": "basic-username", "kind": "username" },
+      { "name": "basic-password", "kind": "password" },
+      { "name": "id-session-authority", "kind": "opaque" },
+      { "name": "sts-user-id", "kind": "opaque" },
+      { "name": "sts-identifier-type", "kind": "opaque" },
+      { "name": "sts-identifier-value", "kind": "opaque" },
+      { "name": "sts-tax-code", "kind": "opaque" },
+      { "name": "sts-region-code", "kind": "opaque" },
+      { "name": "sts-health-authority-code", "kind": "opaque" },
+      { "name": "sts-facility-code", "kind": "opaque" }
+    ]
+  },
+  "operations": [
+    {
+      "operationId": "session-create",
+      "endpointBinding": "sistema-ts-sac",
+      "method": "POST",
+      "path": "/sts",
+      "request": { "contentType": "text/xml", "maximumBytes": 32768 },
+      "response": { "maximumBytes": 32768 },
+      "authentication": { "kind": "basic", "usernameBinding": "basic-username", "passwordBinding": "basic-password" },
+      "executionStrategy": "healthcare-sistema-ts-eprescription",
+      "typedSessionHandshake": {
+        "profileId": "sistema-ts-id-session",
+        "soapVersion": "1.1",
+        "action": "http://wsdl.auth.a2f.sts.sanita.finanze.it/create",
+        "requestElement": { "localName": "CreateAuthReq", "namespaceUri": "http://authservice.xsd.wsdl.auth.a2f.sts.sanita.finanze.it" },
+        "responseElement": { "localName": "CreateAuthRes", "namespaceUri": "http://authservice.xsd.wsdl.auth.a2f.sts.sanita.finanze.it" },
+        "requestAdapter": { "id": "sistema-ts-create-session-request", "type": "compiled-sistema-ts-create-v0.1" },
+        "responseAdapter": { "id": "sistema-ts-create-session-response", "type": "compiled-sistema-ts-create-v0.1" },
+        "serverOwnedInputs": [
+          { "name": "user-id", "secretBinding": "sts-user-id" },
+          { "name": "identificativo-tipo", "secretBinding": "sts-identifier-type" },
+          { "name": "identificativo-valore", "secretBinding": "sts-identifier-value" },
+          { "name": "codice-fiscale", "secretBinding": "sts-tax-code" },
+          { "name": "codice-regione", "secretBinding": "sts-region-code" },
+          { "name": "codice-asl", "secretBinding": "sts-health-authority-code" },
+          { "name": "codice-ssa", "secretBinding": "sts-facility-code" }
+        ],
+        "sessionLifetimeSeconds": 600,
+        "externalAdmission": {
+          "validator": { "id": "sistema-ts-check-token", "type": "compiled-sistema-ts-check-token-v0.1" },
+          "serverOwnedInputs": [
+            { "name": "user-id", "secretBinding": "sts-user-id" },
+            { "name": "identificativo-tipo", "secretBinding": "sts-identifier-type" },
+            { "name": "identificativo-valore", "secretBinding": "sts-identifier-value" },
+            { "name": "codice-fiscale", "secretBinding": "sts-tax-code" }
+          ],
+          "endpointBinding": "sistema-ts-sac",
+          "path": "/sts",
+          "soapVersion": "1.1",
+          "action": "http://wsdl.auth.a2f.sts.sanita.finanze.it/checkToken",
+          "requestElement": { "localName": "CheckTokenReq", "namespaceUri": "http://authservice.xsd.wsdl.auth.a2f.sts.sanita.finanze.it" },
+          "responseElement": { "localName": "CheckTokenRes", "namespaceUri": "http://authservice.xsd.wsdl.auth.a2f.sts.sanita.finanze.it" },
+          "intentLifetimeSeconds": 120,
+          "timeoutMs": 10000,
+          "maximumRequestBytes": 32768,
+          "maximumResponseBytes": 32768
+        }
+      },
+      "extensionConfiguration": { "contractVersion": "id-session-0.1", "operation": "session-create", "profile": "ricetta-dem-erogatore" },
+      "timeoutMs": 10000,
+      "redirectPolicy": "deny",
+      "allowedClientHeaders": [],
+      "idempotent": false,
+      "maximumRetries": 0
+    },
+    {
+      "operationId": "visualizza-erogato",
+      "endpointBinding": "sistema-ts-sac",
+      "method": "POST",
+      "path": "/erogatore",
+      "request": { "contentType": "text/xml", "maximumBytes": 1048576 },
+      "response": { "maximumBytes": 1048576 },
+      "authentication": { "kind": "soapBasicOpaqueSession", "policyId": "sistema-ts-mfa", "sessionProfileId": "sistema-ts-id-session", "usernameBinding": "basic-username", "passwordBinding": "basic-password", "secretBinding": "id-session-authority", "headerName": "Authorization2F", "valueFormat": "fixedSchemeAndOpaqueValue", "fixedScheme": "Bearer", "soapHttp": { "version": "1.1", "action": "http://visualizzaerogato.wsdl.dem.sanita.finanze.it/VisualizzaErogato" } },
+      "executionStrategy": "healthcare-sistema-ts-eprescription",
+      "extensionConfiguration": { "contractVersion": "ssn-erogatore-1.5.1", "operation": "visualizza-erogato", "profile": "ricetta-dem-erogatore" },
+      "timeoutMs": 30000, "redirectPolicy": "deny", "allowedClientHeaders": [], "idempotent": false, "maximumRetries": 0
+    },
+    {
+      "operationId": "invio-erogato",
+      "endpointBinding": "sistema-ts-sac", "method": "POST", "path": "/erogatore",
+      "request": { "contentType": "text/xml", "maximumBytes": 1048576 }, "response": { "maximumBytes": 1048576 },
+      "authentication": { "kind": "soapBasicOpaqueSession", "policyId": "sistema-ts-mfa", "sessionProfileId": "sistema-ts-id-session", "usernameBinding": "basic-username", "passwordBinding": "basic-password", "secretBinding": "id-session-authority", "headerName": "Authorization2F", "valueFormat": "fixedSchemeAndOpaqueValue", "fixedScheme": "Bearer", "soapHttp": { "version": "1.1", "action": "http://invioerogato.wsdl.dem.sanita.finanze.it/InvioErogato" } },
+      "executionStrategy": "healthcare-sistema-ts-eprescription", "extensionConfiguration": { "contractVersion": "ssn-erogatore-1.5.1", "operation": "invio-erogato", "profile": "ricetta-dem-erogatore" },
+      "timeoutMs": 30000, "redirectPolicy": "deny", "allowedClientHeaders": [], "idempotent": false, "maximumRetries": 0
+    },
+    {
+      "operationId": "sospendi-erogato",
+      "endpointBinding": "sistema-ts-sac", "method": "POST", "path": "/erogatore",
+      "request": { "contentType": "text/xml", "maximumBytes": 1048576 }, "response": { "maximumBytes": 1048576 },
+      "authentication": { "kind": "soapBasicOpaqueSession", "policyId": "sistema-ts-mfa", "sessionProfileId": "sistema-ts-id-session", "usernameBinding": "basic-username", "passwordBinding": "basic-password", "secretBinding": "id-session-authority", "headerName": "Authorization2F", "valueFormat": "fixedSchemeAndOpaqueValue", "fixedScheme": "Bearer", "soapHttp": { "version": "1.1", "action": "http://visualizzaerogato.wsdl.dem.sanita.finanze.it/SospendiErogato" } },
+      "executionStrategy": "healthcare-sistema-ts-eprescription", "extensionConfiguration": { "contractVersion": "ssn-erogatore-1.5.1", "operation": "sospendi-erogato", "profile": "ricetta-dem-erogatore" },
+      "timeoutMs": 30000, "redirectPolicy": "deny", "allowedClientHeaders": [], "idempotent": false, "maximumRetries": 0
+    },
+    {
+      "operationId": "annulla-erogato",
+      "endpointBinding": "sistema-ts-sac", "method": "POST", "path": "/erogatore",
+      "request": { "contentType": "text/xml", "maximumBytes": 1048576 }, "response": { "maximumBytes": 1048576 },
+      "authentication": { "kind": "soapBasicOpaqueSession", "policyId": "sistema-ts-mfa", "sessionProfileId": "sistema-ts-id-session", "usernameBinding": "basic-username", "passwordBinding": "basic-password", "secretBinding": "id-session-authority", "headerName": "Authorization2F", "valueFormat": "fixedSchemeAndOpaqueValue", "fixedScheme": "Bearer", "soapHttp": { "version": "1.1", "action": "http://annullaerogato.wsdl.dem.sanita.finanze.it/AnnullaErogato" } },
+      "executionStrategy": "healthcare-sistema-ts-eprescription", "extensionConfiguration": { "contractVersion": "ssn-erogatore-1.5.1", "operation": "annulla-erogato", "profile": "ricetta-dem-erogatore" },
+      "timeoutMs": 30000, "redirectPolicy": "deny", "allowedClientHeaders": [], "idempotent": false, "maximumRetries": 0
+    }
+  ]
+}
