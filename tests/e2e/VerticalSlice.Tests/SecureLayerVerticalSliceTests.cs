@@ -232,9 +232,9 @@ public sealed class SecureLayerVerticalSliceTests
             NamedPipeBrokerServer broker = new(brokerOptions, new ApplicationAuthorizer(brokerOptions.Applications), new BrokerRequestDispatcher(service));
             CancellationTokenSource stopped = new();
             Task brokerTask = broker.RunAsync(stopped.Token);
-            // The ordinary path includes two in-process HTTPS handshakes and can run under
-            // heavy shared-runner load. Deadline behavior is covered independently below.
-            BrokerClient client = new(new BrokerClientOptions { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId, OperationTimeout = TimeSpan.FromSeconds(15) });
+            // The ordinary path includes two in-process HTTPS handshakes and uses the production
+            // operation deadline under shared-runner load. Deadline behavior is covered below.
+            BrokerClient client = new(new BrokerClientOptions { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId });
             BrokerClient shortClient = new(new BrokerClientOptions { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId, OperationTimeout = TimeSpan.FromMilliseconds(150) });
             harness = new VerticalSliceHarness(temporary, external, gateway, broker, stopped, brokerTask, secrets, keys, gatewayAddress, pipeName, client, shortClient, brokerClientCertificate, gatewayClientCertificate, gatewayServerCertificate, externalServerCertificate);
             harness.PlatformAudit.AddRange(audit.Events);
