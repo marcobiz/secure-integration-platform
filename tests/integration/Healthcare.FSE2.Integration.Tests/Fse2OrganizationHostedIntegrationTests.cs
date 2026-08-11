@@ -28,6 +28,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     internal const string AuthorizationIssuer = "auth:M6 Synthetic JWT Signing R1";
     internal const string IntegrityIssuer = "integrity:M6 Synthetic JWT Signing R1";
     internal const string Boundary = "broker-gateway-fse2-v1";
+    internal const int TokenLifetimeSeconds = 300;
     private static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web);
 
     [Fact]
@@ -130,6 +131,18 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Assert.Equal(0, server.Requests);
         Assert.Equal(0, fixture.GenericTransportRequests);
         Assert.Equal(1, provider.SignDigestCalls);
+    }
+
+    [Fact]
+    public void FSE2_SEC_temporal_profile_rejects_nbf_even_when_equal_to_iat()
+    {
+        using JsonDocument exact = JsonDocument.Parse(
+            $$"""{"iat":1700000000,"exp":1700000{{TokenLifetimeSeconds}},"jti":"fse2-exact-jti"}""");
+        Assert.True(SyntheticFse2OrganizationServer.TemporalPolicyIsExact(exact.RootElement));
+
+        using JsonDocument withNotBefore = JsonDocument.Parse(
+            $$"""{"iat":1700000000,"nbf":1700000000,"exp":1700000{{TokenLifetimeSeconds}},"jti":"fse2-exact-jti"}""");
+        Assert.False(SyntheticFse2OrganizationServer.TemporalPolicyIsExact(withNotBefore.RootElement));
     }
 
     private static async Task RunSuccessAsync(
@@ -365,12 +378,12 @@ public sealed class Fse2OrganizationHostedIntegrationTests
               "signingSlots":[
                 {
                   "slot":"authorization","required":true,
-                  "signing":{"profileId":"fse2-authorization","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"{{{AuthorizationIssuer}}}","audience":"{{{Audience}}}","subject":"fixed","fixedSubject":"{{{Subject}}}","allowedClaims":[],"tokenLifetimeSeconds":300,"clockSkewSeconds":30,"certificateHeader":"chain","temporalClaims":"iat-nbf-exp","minimumRsaKeySize":2048},
+                  "signing":{"profileId":"fse2-authorization","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"{{{AuthorizationIssuer}}}","audience":"{{{Audience}}}","subject":"fixed","fixedSubject":"{{{Subject}}}","allowedClaims":[],"tokenLifetimeSeconds":{{{TokenLifetimeSeconds}}},"clockSkewSeconds":30,"certificateHeader":"chain","temporalClaims":"iat-exp","minimumRsaKeySize":2048},
                   "projection":{"kind":"authorizationBearer"}
                 },
                 {
                   "slot":"integrity","required":true,
-                  "signing":{"profileId":"fse2-integrity","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"{{{IntegrityIssuer}}}","audience":"{{{Audience}}}","subject":"fixed","fixedSubject":"{{{Subject}}}","allowedClaims":["subject_role","purpose_of_use","subject_organization","subject_organization_id","locality","person_id","patient_consent","resource_hl7_type","action_id","attachment_hash","subject_application_id","subject_application_vendor","subject_application_version"],"tokenLifetimeSeconds":300,"clockSkewSeconds":30,"certificateHeader":"chain","temporalClaims":"iat-nbf-exp","minimumRsaKeySize":2048},
+                  "signing":{"profileId":"fse2-integrity","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"{{{IntegrityIssuer}}}","audience":"{{{Audience}}}","subject":"fixed","fixedSubject":"{{{Subject}}}","allowedClaims":["subject_role","purpose_of_use","subject_organization","subject_organization_id","locality","person_id","patient_consent","resource_hl7_type","action_id","attachment_hash","subject_application_id","subject_application_vendor","subject_application_version"],"tokenLifetimeSeconds":{{{TokenLifetimeSeconds}}},"clockSkewSeconds":30,"certificateHeader":"chain","temporalClaims":"iat-exp","minimumRsaKeySize":2048},
                   "projection":{"kind":"signedTokenHeader","headerName":"FSE-JWT-Signature"}
                 }
               ],
@@ -489,9 +502,15 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
             if (auth is not null && integrity is not null)
             {
                 Interlocked.Exchange(ref validRs256X5cObserved, 1);
-                if (!string.Equals(auth.CompactToken, integrity.CompactToken, StringComparison.Ordinal) &&
-                    !string.Equals(auth.Payload.GetProperty("jti").GetString(), integrity.Payload.GetProperty("jti").GetString(), StringComparison.Ordinal))
-                    Interlocked.Exchange(ref distinctTokensAndJtiObserved, 1);
+                bool exactAuthTemporal = TemporalPolicyIsExact(auth.Payload);
+                bool exactIntegrityTemporal = TemporalPolicyIsExact(integrity.Payload);
+                if (exactAuthTemporal && exactIntegrityTemporal)
+                {
+                    Interlocked.Exchange(ref temporalPolicyObserved, 1);
+                    if (!string.Equals(auth.CompactToken, integrity.CompactToken, StringComparison.Ordinal) &&
+                        !string.Equals(auth.Payload.GetProperty("jti").GetString(), integrity.Payload.GetProperty("jti").GetString(), StringComparison.Ordinal))
+                        Interlocked.Exchange(ref distinctTokensAndJtiObserved, 1);
+                }
                 if (string.Equals(auth.SigningFingerprint, integrity.SigningFingerprint, StringComparison.Ordinal))
                     Interlocked.Exchange(ref sameSigningIdentityObserved, 1);
                 if (!string.Equals(auth.Payload.GetProperty("iss").GetString(), integrity.Payload.GetProperty("iss").GetString(), StringComparison.Ordinal))
@@ -501,8 +520,6 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
                     Interlocked.Exchange(ref fixedSubjectObserved, 1);
                 if (OrganizationClaimsAreExact(integrity.Payload))
                     Interlocked.Exchange(ref organizationClaimsObserved, 1);
-                if (TemporalPolicyIsExact(auth.Payload) && TemporalPolicyIsExact(integrity.Payload))
-                    Interlocked.Exchange(ref temporalPolicyObserved, 1);
                 string digest = Convert.ToHexStringLower(SHA256.HashData(body));
                 if (string.Equals(integrity.Payload.GetProperty("attachment_hash").GetString(), digest, StringComparison.Ordinal))
                     Interlocked.Exchange(ref exactPayloadDigestObserved, 1);
@@ -557,11 +574,20 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
         string.Equals(payload.GetProperty("subject_application_vendor").GetString(), "Secure Integration", StringComparison.Ordinal) &&
         string.Equals(payload.GetProperty("subject_application_version").GetString(), "1.0.0", StringComparison.Ordinal);
 
-    private static bool TemporalPolicyIsExact(JsonElement payload)
+    internal static bool TemporalPolicyIsExact(JsonElement payload)
     {
-        long issuedAt = payload.GetProperty("iat").GetInt64();
-        return payload.GetProperty("nbf").GetInt64() == issuedAt &&
-            payload.GetProperty("exp").GetInt64() - issuedAt == 300;
+        return payload.TryGetProperty("iat", out JsonElement issuedAtElement) &&
+            issuedAtElement.ValueKind == JsonValueKind.Number &&
+            issuedAtElement.TryGetInt64(out long issuedAt) &&
+            issuedAt <= long.MaxValue - Fse2OrganizationHostedIntegrationTests.TokenLifetimeSeconds &&
+            payload.TryGetProperty("exp", out JsonElement expirationElement) &&
+            expirationElement.ValueKind == JsonValueKind.Number &&
+            expirationElement.TryGetInt64(out long expiration) &&
+            expiration == issuedAt + Fse2OrganizationHostedIntegrationTests.TokenLifetimeSeconds &&
+            payload.TryGetProperty("jti", out JsonElement tokenIdentifier) &&
+            tokenIdentifier.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(tokenIdentifier.GetString()) &&
+            !payload.TryGetProperty("nbf", out _);
     }
 
     private static byte[] Decode(string value)

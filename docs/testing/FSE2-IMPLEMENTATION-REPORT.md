@@ -4,7 +4,7 @@ Date: 2026-08-11
 
 Qualified Core/Auth/Runtime baseline: `feec547a3e0991171fca1f8b22b136d3dd4c4ee3`
 
-Branch/PR: `wave1/fse2-national` / #16
+Lineage: historical PR #16; replacement branch `wave1/fse2-national-organization`
 
 Official public freeze: guide 2.23 and OpenAPI 1.0.0 at
 `430e6b5d9dde8a35b04ae635c11303db787a977e`.
@@ -58,9 +58,10 @@ mTLS/restricted HTTPS → synthetic FSE2 server → bounded response.
 The server requires the exact trusted client certificate and checks the real request method, path
 and content type. It verifies two distinct compact tokens and `jti` values, both RS256 signatures,
 the full expected `x5c` chain, the same signing leaf, distinct `auth:`/`integrity:` issuers, fixed
-organization subject, audience, `iat+nbf+exp` lifetime, DAP/purpose/action, organization/locality/
-application and person claims, and the SHA-256 of the network-observed multipart bytes. The success
-case observes exactly one outbound request and no retry.
+organization subject, audience, `iat+exp` without `nbf`, exact Published lifetime,
+DAP/purpose/action, organization/locality/application and person claims, and the SHA-256 of the
+network-observed multipart bytes. The success case observes exactly one outbound request and no
+retry.
 
 Connector-specific negatives cover unknown and repeated slot selection, caller attempts to add a
 subject, caller metadata attempts to select endpoint/key/certificate/profile, malformed CX/XON,
@@ -70,7 +71,11 @@ denial with zero FSE2 requests and zero generic transport effects. Generic signi
 cancellation, timeout, restricted-egress and binding-substitution matrices remain regression evidence
 from the qualified Core foundation; they are not reimplemented in the vertical.
 
-## Local qualification at the implementation checkpoint
+## Historical local qualification before the temporal remediation
+
+The following results belong to predecessor candidate `45548c13df5d46cdb5f9cba1d101ee08619ef15b`.
+They remain visible as historical evidence but do not qualify the temporal-remediation exact HEAD.
+The replacement PR and final writer handoff record the newly executed exact-head gates.
 
 - FSE2 public-contract unit suite: 33/33 PASS;
 - Healthcare architecture slice: 8/8 PASS, including one `Gateway.Application` reference and no IVT;
