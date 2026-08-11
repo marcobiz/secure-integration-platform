@@ -317,8 +317,8 @@ was reused without a new subsystem.
 | Explicit REQUIRED/NONE without module method/Content-Type authority | hosted REQUIRED, NONE GET, NONE DELETE and exact wire assertions; `Wave1_SEC_authorized_operation_path_and_body_mismatches_deny_before_network` covers missing REQUIRED body and body with NONE | PASS local |
 | Exact Published A before signing and after DNS | `Wave1_SEC_Published_A_to_B_during_policy_preflight_denies_before_signing_and_network`; dynamic-template `Wave1_SEC_Published_A_to_B_after_DNS_denies_before_restricted_transport` | PASS local; zero later signing/network effect |
 | Historical static path/body request/checksum and immutable Published compatibility | fixed `D0FF…D7A` checksum regression, legacy hosted Bearer/restricted body continuation, constructor reflection inventory; no storage/locator change | PASS local; no migration or republish required |
-| Production-host PostgreSQL 18 path | `Wave1_IT_PRODUCTION_HOST_PostgreSQL18_authorized_operation_projects_Published_paths_and_body_modes` | Dedicated PostgreSQL 18 gate pending |
-| TM-087/TM-088/TM-089/TM-090 | `SEC-W1-OP-001/002/003/004` mappings in the threat model | Targeted local PASS; full local gates, exact-head CI and independent review pending |
+| Production-host PostgreSQL 18 path | `Wave1_IT_PRODUCTION_HOST_PostgreSQL18_authorized_operation_projects_Published_paths_and_body_modes` | PASS in the dedicated PostgreSQL 18.4 gate; fresh apply/no-op and 198/198 Gateway integration tests with no skip |
+| TM-087/TM-088/TM-089/TM-090 | `SEC-W1-OP-001/002/003/004` mappings in the threat model | Targeted and full local product gates PASS, including Admin/full-stack, scans and complete SBOM; final documentation-head Core export/local rerun, exact-head CI and independent review remain gates |
 
 ## Healthcare Wave 1 — Regional ePrescription foundation
 

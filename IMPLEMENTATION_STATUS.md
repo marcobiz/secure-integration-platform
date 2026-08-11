@@ -24,7 +24,7 @@ Aggiornato: 2026-08-11
 | Wave 1 — Provider-neutral Connector execution seam | Ultima remediation mirata implementata; full gate/CI exact-head e targeted re-review pending | bridge no-IVT vincolato allo snapshot Published iniziale con stale A→B zero-effect; full lifecycle PostgreSQL aggiunto; negativi cross-module/ciclo descriptor-atomic; loader invariato |
 | Wave 1 — Connector capability completion | Remediation P1/P2 qualificata localmente; exact-head CI e micro-rereview pending | writer input Core-bound/callback-only, scope capability ACTIVE/CLOSING/CLOSED con cancel+drain, claim bounds pre-clone; 549 ordinary PASS, 172/172 PostgreSQL 18, M3/Admin full-stack/Core export/scans/SBOM PASS; nessuna nuova capability o connector production |
 | Wave 1 — Authorized signing slots | Freeze-exception Core/Auth implementata; product gate locale qualificato salvo full M3 demandato alla CI Linux; exact-head CI e review indipendente pending | massimo 4 slot Published, un token opaco per slot/invocation, projection server-owned, compatibilità legacy senza rewrite; targeted, PostgreSQL 18, Admin/full-stack e scans PASS |
-| Wave 1 — Authorized Published operation contract | Remediation P1-01/P1-02 implementata; gate completo/exact-head CI e micro-rereview pending | `false/empty` è assenza Published verificata, ogni strategy external richiede authority/provider/dispatcher prima dello scope; path/body/legacy invariati |
+| Wave 1 — Authorized Published operation contract | Remediation P1-01/P1-02 e full local product gate PASS; exact-head CI e micro-rereview pending | `false/empty` è assenza Published verificata, ogni strategy external richiede authority/provider/dispatcher prima dello scope; 198/198 PostgreSQL 18, Admin/full-stack, scans e SBOM PASS; path/body/legacy invariati |
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | Wave 1 - Generic JWT/X.509 extensions | Remediation mirata local gate PASS; CI exact-head e rereview pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 304 ordinary, 71 PostgreSQL relevant, scan/SBOM/vulnerability/Core export PASS |
 | Healthcare Wave 1 — Regional ePrescription | Foundation compilata; profili regionali non pubblicabili | capability opaca Core post-auth con stato/grant verificati indipendentemente dalle credenziali, adapter al vero store Published, schema estensioni e safe-code allowlist server-owned, isolamento cross-profile; 14 test pack + 4 architecture PASS locali; Lombardia ed Emilia-Romagna `BLOCKED_BY_SPEC` |
@@ -336,9 +336,16 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 - il modulo sintetico esterno no-IVT prova due slot, stessa identità firma distinta dalla mTLS,
   issuer exact e CN-related, path statico/singolo/multiplo, canonical encoding, REQUIRED, NONE GET e
   NONE DELETE su vero HTTPS/mTLS. La stessa prova è predisposta per il gate PostgreSQL 18;
+- full local product gate PASS sul remediation commit: build Release zero warning/errori, suite
+  repository ordinaria PASS (Gateway integration 167 PASS e 31 PostgreSQL-conditional SKIP;
+  architecture 36/36), PostgreSQL 18.4 fresh apply/no-op e Gateway integration 198/198 senza skip,
+  Admin 29/29 unit, drift API/runtime, build, 37/37 browser mock, 2/2 a11y e `FULLSTACK-01` con
+  cleanup Docker 0/0/0; docs, secret scan, vulnerability inventory e SBOM completo con 165 package
+  container indicizzati PASS;
 - decisione e inventory: ADR-0027 e
-  `docs/implementation/WAVE1-AUTHORIZED-PUBLISHED-OPERATION-CONTRACT.md`. Full gate locale,
-  exact-head CI e review indipendente restano pending; merge non autorizzato.
+  `docs/implementation/WAVE1-AUTHORIZED-PUBLISHED-OPERATION-CONTRACT.md`. Core export e riesecuzione
+  locale sul commit documentale finale precedono il push; exact-head CI e review indipendente
+  restano pending; merge non autorizzato.
 
 ### Wave 1 — Authorized typed composed-SOAP request composition
 

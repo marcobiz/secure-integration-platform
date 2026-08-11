@@ -135,6 +135,9 @@ module compiles only against public Core contracts and has no friend access.
   `Wave1_SEC_Published_A_to_B_during_policy_preflight_denies_before_signing_and_network` and
   `Wave1_SEC_Published_A_to_B_after_DNS_denies_before_restricted_transport`.
 
-Final repository, PostgreSQL 18, Admin/full-stack, security scan, SBOM, Core export, exact-head CI and
-independent-review evidence is recorded only after each gate actually completes. Merge is not
-authorized by this exception.
+The remediation product commit completed the repository suites, PostgreSQL 18.4 fresh apply/no-op
+with 198/198 Gateway integration tests and no skip, Admin 29/29 unit plus 37/37 browser-mock and 2/2
+accessibility tests, `FULLSTACK-01` with zero residual Compose resources, documentation and secret
+validation, vulnerability inventory, and the complete container SBOM. Core export and the repeated
+local gate on the final documentation commit precede the normal push. Exact-head CI and independent
+micro-rereview remain separate post-push gates. Merge is not authorized by this exception.
