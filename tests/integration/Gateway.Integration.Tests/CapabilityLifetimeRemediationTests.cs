@@ -78,6 +78,62 @@ public sealed class CapabilityLifetimeRemediationTests
         }
     }
 
+    [Fact]
+    public async Task Wave1_SEC_signing_slots_are_one_shot_independent_and_attempts_are_bounded()
+    {
+        RecordingCapabilityDispatcher dualDispatcher = new();
+        SlotSequenceStrategy dual = new("synthetic-dual-once", ["primary", "secondary"]);
+        CapabilityRuntimeFixture dualFixture = await CapabilityRuntimeFixture.CreateAsync(dual.Key, dual, dualDispatcher);
+
+        _ = await dualFixture.InvokeAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["primary", "secondary"], dualDispatcher.SigningSlots);
+
+        RecordingCapabilityDispatcher repeatedDispatcher = new();
+        SlotSequenceStrategy repeated = new("synthetic-repeat-slot", ["primary", "primary"]);
+        CapabilityRuntimeFixture repeatedFixture = await CapabilityRuntimeFixture.CreateAsync(repeated.Key, repeated, repeatedDispatcher);
+        GatewayException repeatedFailure = await Assert.ThrowsAsync<GatewayException>(() =>
+            repeatedFixture.InvokeAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-EGRESS-AUTHENTICATION", repeatedFailure.Code);
+        Assert.Equal(["primary"], repeatedDispatcher.SigningSlots);
+
+        RecordingCapabilityDispatcher boundedDispatcher = new();
+        SlotSequenceStrategy bounded = new("synthetic-slot-bound", ["primary", "secondary", "tertiary", "quaternary", "fifth"]);
+        CapabilityRuntimeFixture boundedFixture = await CapabilityRuntimeFixture.CreateAsync(bounded.Key, bounded, boundedDispatcher);
+        GatewayException boundedFailure = await Assert.ThrowsAsync<GatewayException>(() =>
+            boundedFixture.InvokeAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-EGRESS-AUTHENTICATION", boundedFailure.Code);
+        Assert.Equal(["primary", "secondary", "tertiary", "quaternary"], boundedDispatcher.SigningSlots);
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_signed_token_is_denied_post_close_and_across_invocations_before_transport()
+    {
+        RecordingCapabilityDispatcher dispatcher = new();
+        RetainedSlotTokenStrategy strategy = new();
+        CapabilityRuntimeFixture fixture = await CapabilityRuntimeFixture.CreateAsync(strategy.Key, strategy, dispatcher);
+
+        _ = await fixture.InvokeAsync(TestContext.Current.CancellationToken);
+        Assert.NotNull(strategy.RetainedBridge);
+        Assert.NotNull(strategy.RetainedToken);
+        _ = await Assert.ThrowsAsync<AuthorizedConnectorCapabilityFailureException>(() => strategy.RetainedBridge.CreateSignedTokenAsync(
+            ConnectorSigningSlotKey.Parse("secondary"),
+            new Dictionary<string, JsonElement>(StringComparer.Ordinal),
+            TestContext.Current.CancellationToken));
+        _ = await Assert.ThrowsAsync<AuthorizedConnectorCapabilityFailureException>(() => strategy.RetainedBridge.ExecuteRestrictedTransportAsync(
+            new AuthorizedConnectorRestrictedTransportRequest("synthetic-body"u8.ToArray(), strategy.RetainedToken),
+            TestContext.Current.CancellationToken));
+
+        GatewayException crossInvocation = await Assert.ThrowsAsync<GatewayException>(() =>
+            fixture.InvokeAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-EGRESS-AUTHENTICATION", crossInvocation.Code);
+        Assert.Equal(1, dispatcher.SigningCalls);
+        Assert.Equal(0, dispatcher.TransportCalls);
+    }
+
     private static Dictionary<string, JsonElement> Claims(int count, Func<int, JsonElement> value) =>
         Enumerable.Range(0, count).ToDictionary(index => $"claim-{index:D2}", value, StringComparer.Ordinal);
 
@@ -125,12 +181,13 @@ public sealed class CapabilityLifetimeRemediationTests
         public Task<QualifiedGatewayExecutionResult> ExecuteComposedSoapAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
             throw new InvalidOperationException();
 
-        public Task<string> CreateSignedTokenAsync(AuthorizedConnectorExecution execution, IReadOnlyDictionary<string, JsonElement> claims, CancellationToken cancellationToken) =>
+        public Task<string> CreateSignedTokenAsync(AuthorizedConnectorExecution execution, ConnectorSigningSlotKey signingSlot, IReadOnlyDictionary<string, JsonElement> claims, CancellationToken cancellationToken) =>
             signing ? GateAsync("synthetic-token", cancellationToken) : Task.FromResult("synthetic-token");
 
         public Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
             AuthorizedConnectorExecution execution,
             AuthorizedConnectorRestrictedTransportRequest request,
+            IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> signedTokens,
             CancellationToken cancellationToken) =>
             signing ? throw new InvalidOperationException() : GateAsync(new QualifiedGatewayExecutionResult(200, "application/json", "{}"u8.ToArray()), cancellationToken);
 
@@ -155,15 +212,73 @@ public sealed class CapabilityLifetimeRemediationTests
     private sealed class RecordingCapabilityDispatcher : IAuthorizedConnectorCapabilityDispatcher
     {
         private int signingCalls;
+        private int transportCalls;
+        private readonly List<string> signingSlots = [];
         internal int SigningCalls => Volatile.Read(ref signingCalls);
+        internal int TransportCalls => Volatile.Read(ref transportCalls);
+        internal string[] SigningSlots
+        {
+            get { lock (signingSlots) return signingSlots.ToArray(); }
+        }
         public Task<QualifiedGatewayExecutionResult> ExecuteTypedSessionHandshakeAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) => throw new InvalidOperationException();
         public Task<QualifiedGatewayExecutionResult> ExecuteComposedSoapAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) => throw new InvalidOperationException();
-        public Task<string> CreateSignedTokenAsync(AuthorizedConnectorExecution execution, IReadOnlyDictionary<string, JsonElement> claims, CancellationToken cancellationToken)
+        public Task<string> CreateSignedTokenAsync(AuthorizedConnectorExecution execution, ConnectorSigningSlotKey signingSlot, IReadOnlyDictionary<string, JsonElement> claims, CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref signingCalls);
-            return Task.FromResult("synthetic-token");
+            int call = Interlocked.Increment(ref signingCalls);
+            lock (signingSlots) signingSlots.Add(signingSlot.Value);
+            return Task.FromResult($"synthetic-token-{call}");
         }
-        public Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(AuthorizedConnectorExecution execution, AuthorizedConnectorRestrictedTransportRequest request, CancellationToken cancellationToken) => throw new InvalidOperationException();
+        public Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(AuthorizedConnectorExecution execution, AuthorizedConnectorRestrictedTransportRequest request, IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> signedTokens, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref transportCalls);
+            return Task.FromResult(new QualifiedGatewayExecutionResult(200, "application/json", "{}"u8.ToArray()));
+        }
+    }
+
+    private sealed class SlotSequenceStrategy(string key, IReadOnlyList<string> slots) : IConnectorExecutionStrategy
+    {
+        public ConnectorExecutionStrategyKey Key { get; } = ConnectorExecutionStrategyKey.Parse(key);
+        public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds { get; } =
+            new[] { GatewayAuthenticationKind.None }.ToFrozenSet();
+
+        public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(
+            AuthorizedConnectorExecution execution,
+            CancellationToken cancellationToken)
+        {
+            foreach (string slot in slots)
+                _ = await execution.Capabilities.CreateSignedTokenAsync(
+                    ConnectorSigningSlotKey.Parse(slot),
+                    new Dictionary<string, JsonElement>(StringComparer.Ordinal),
+                    cancellationToken).ConfigureAwait(false);
+            return new(200, "application/json", "{}"u8.ToArray());
+        }
+    }
+
+    private sealed class RetainedSlotTokenStrategy : IConnectorExecutionStrategy
+    {
+        private int calls;
+        public ConnectorExecutionStrategyKey Key { get; } = ConnectorExecutionStrategyKey.Parse("synthetic-retained-slot-token");
+        public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds { get; } =
+            new[] { GatewayAuthenticationKind.None }.ToFrozenSet();
+        internal IAuthorizedConnectorCapabilityBridge RetainedBridge { get; private set; } = null!;
+        internal AuthorizedConnectorSignedToken RetainedToken { get; private set; } = null!;
+
+        public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(
+            AuthorizedConnectorExecution execution,
+            CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref calls) == 1)
+            {
+                RetainedBridge = execution.Capabilities;
+                RetainedToken = await execution.Capabilities.CreateSignedTokenAsync(
+                    new Dictionary<string, JsonElement>(StringComparer.Ordinal),
+                    cancellationToken).ConfigureAwait(false);
+                return new(200, "application/json", "{}"u8.ToArray());
+            }
+            return await execution.Capabilities.ExecuteRestrictedTransportAsync(
+                new AuthorizedConnectorRestrictedTransportRequest("synthetic-body"u8.ToArray(), RetainedToken),
+                cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private sealed class CapabilityRuntimeFixture(

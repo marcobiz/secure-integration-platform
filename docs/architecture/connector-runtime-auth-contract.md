@@ -227,3 +227,19 @@ Trusted dynamic subject/claim values are limited to authenticated Tenant, Applic
 and Installation identifiers already present in the server-derived execution context.
 No expression engine, reflection path, arbitrary runtime dictionary or caller subject
 override is introduced.
+
+## Wave 1 authorized signing slots note
+
+For an external execution strategy, the signing bridge now accepts one canonical
+`ConnectorSigningSlotKey` in addition to the existing bounded business claims. The key is only an
+exact selector for a complete signing authority already present in Published A; it cannot select a
+provider, certificate, algorithm, purpose, endpoint or identity. Core permits one token per slot and
+at most four slots per invocation.
+
+Each Published slot owns its required flag and either Authorization Bearer or one bounded
+signed-token HTTP field. Core retains the opaque slot-bound handles and performs every projection
+inside restricted transport; the strategy supplies neither field names nor values. Duplicate Bearer
+or case-insensitive custom fields, transport-controlled fields and missing required tokens are denied
+before network. Historical single-signing definitions derive one internal `legacy` Bearer slot without
+rewriting their canonical JSON or checksum. See ADR-0025 and
+`docs/implementation/WAVE1-AUTHORIZED-SIGNING-SLOTS.md`.

@@ -28,3 +28,4 @@ Formato: contesto, decisione, conseguenze e alternative. Tutti gli ADR elencati 
 | [0022](0022-typed-session-handshake-and-external-admission.md) | Typed session handshake and authorized external admission |
 | [0023](0023-provider-neutral-connector-execution-seam.md) | Provider-neutral Connector execution seam |
 | [0024](0024-connector-capability-completion.md) | Connector capability completion |
+| [0025](0025-authorized-signing-slots.md) | Bounded authorized signing slots |

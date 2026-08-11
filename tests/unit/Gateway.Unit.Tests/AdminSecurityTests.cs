@@ -37,9 +37,16 @@ public sealed class AdminSecurityTests
         Assert.Contains("BGW-CONNECTOR-TYPED-HANDSHAKE-AUTH", catalog.Reason);
         Assert.Contains("BGW-CONNECTOR-TYPED-HANDSHAKE-CONTENT-TYPE", catalog.Reason);
         Assert.Contains("BGW-AUTH-VERTICAL-AUTHORITY-STALE", catalog.Reason);
+        Assert.Contains("BGW-AUTH-SIGNING-SLOT-DENIED", catalog.Reason);
         Assert.Contains("BGW-CONNECTOR-SERVER-INPUT-BINDING-INVALID", catalog.Reason);
         Assert.Contains("BGW-CONNECTOR-CAPABILITY-SIGNING-BINDING-INVALID", catalog.Reason);
-        Assert.Equal(158, catalog.Reason.Count);
+        Assert.Contains("BGW-CONNECTOR-SIGNING-MODE-AMBIGUOUS", catalog.Reason);
+        Assert.Contains("BGW-CONNECTOR-SIGNING-SLOT-DUPLICATE", catalog.Reason);
+        Assert.Contains("BGW-CONNECTOR-SIGNING-PROFILE-DUPLICATE", catalog.Reason);
+        Assert.Contains("BGW-CONNECTOR-SIGNING-AUTHORIZATION-DUPLICATE", catalog.Reason);
+        Assert.Contains("BGW-CONNECTOR-SIGNING-HEADER-FORBIDDEN", catalog.Reason);
+        Assert.Contains("BGW-CONNECTOR-SIGNING-HEADER-DUPLICATE", catalog.Reason);
+        Assert.Equal(165, catalog.Reason.Count);
         Assert.DoesNotContain("grant.revoke", catalog.AuditAction);
         Assert.DoesNotContain("BGW-GRANT-REVOKED", catalog.Reason);
         Assert.Contains(BackendRuntimeWireCodes.Reserved, value => value == new RuntimeWireCode(RuntimeWireCodeKind.AuditAction, "grant.revoke"));

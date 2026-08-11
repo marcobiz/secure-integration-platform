@@ -312,7 +312,13 @@ public static class ConnectorOperationBindings
             if (handshake.TryGetProperty("externalAdmission", out admission)) AddServerOwnedInputs(admission, secrets);
         }
         if (operation.TryGetProperty("authorizedCapabilities", out JsonElement capabilities))
-            certificates.Add(capabilities.GetProperty("signing").GetProperty("keyBinding").GetString()!);
+        {
+            if (capabilities.TryGetProperty("signing", out JsonElement legacySigning))
+                certificates.Add(legacySigning.GetProperty("keyBinding").GetString()!);
+            if (capabilities.TryGetProperty("signingSlots", out JsonElement signingSlots))
+                foreach (JsonElement slot in signingSlots.EnumerateArray())
+                    certificates.Add(slot.GetProperty("signing").GetProperty("keyBinding").GetString()!);
+        }
         return new(operationId, operation.GetProperty("endpointBinding").GetString()!,
             authorityEndpoints.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
             secrets.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray(),
@@ -729,10 +735,57 @@ public sealed class ConnectorDefinitionValidator
             issues.Add(new("BGW-CONNECTOR-CAPABILITY-AUTH-INVALID", $"$.operations[{operationIndex}].authentication.kind"));
         if (!operation.TryGetProperty("executionStrategy", out _))
             issues.Add(new("BGW-CONNECTOR-CAPABILITY-STRATEGY-REQUIRED", $"$.operations[{operationIndex}].executionStrategy"));
-        JsonElement signing = capabilities.GetProperty("signing");
-        string keyBinding = signing.GetProperty("keyBinding").GetString()!;
-        if (!secrets.TryGetValue(keyBinding, out string? kind) || !string.Equals(kind, "clientCertificate", StringComparison.Ordinal))
-            issues.Add(new("BGW-CONNECTOR-CAPABILITY-SIGNING-BINDING-INVALID", $"{location}.signing.keyBinding"));
+        bool hasLegacy = capabilities.TryGetProperty("signing", out JsonElement legacySigning);
+        bool hasSlots = capabilities.TryGetProperty("signingSlots", out JsonElement signingSlots);
+        if (hasLegacy && hasSlots)
+            issues.Add(new("BGW-CONNECTOR-SIGNING-MODE-AMBIGUOUS", location));
+        if (hasLegacy)
+            ValidateSigningBinding(legacySigning, $"{location}.signing");
+        if (!hasSlots) return;
+
+        HashSet<string> keys = new(StringComparer.Ordinal);
+        HashSet<string> profileIds = new(StringComparer.Ordinal);
+        HashSet<string> projectionHeaders = new(StringComparer.OrdinalIgnoreCase);
+        bool authorizationProjection = false;
+        int slotIndex = 0;
+        foreach (JsonElement slot in signingSlots.EnumerateArray())
+        {
+            string slotLocation = $"{location}.signingSlots[{slotIndex}]";
+            string key = slot.GetProperty("slot").GetString()!;
+            if (!keys.Add(key))
+                issues.Add(new("BGW-CONNECTOR-SIGNING-SLOT-DUPLICATE", $"{slotLocation}.slot"));
+            JsonElement signing = slot.GetProperty("signing");
+            if (!profileIds.Add(signing.GetProperty("profileId").GetString()!))
+                issues.Add(new("BGW-CONNECTOR-SIGNING-PROFILE-DUPLICATE", $"{slotLocation}.signing.profileId"));
+            ValidateSigningBinding(signing, $"{slotLocation}.signing");
+
+            JsonElement projection = slot.GetProperty("projection");
+            string projectionKind = projection.GetProperty("kind").GetString()!;
+            if (string.Equals(projectionKind, "authorizationBearer", StringComparison.Ordinal))
+            {
+                if (authorizationProjection)
+                    issues.Add(new("BGW-CONNECTOR-SIGNING-AUTHORIZATION-DUPLICATE", $"{slotLocation}.projection"));
+                authorizationProjection = true;
+            }
+            else if (string.Equals(projectionKind, "signedTokenHeader", StringComparison.Ordinal))
+            {
+                string header = projection.GetProperty("headerName").GetString()!;
+                if (!IsHttpToken(header) || AuthenticationPlacementHeadersForbidden.Contains(header) ||
+                    header.StartsWith("Proxy-", StringComparison.OrdinalIgnoreCase) ||
+                    header.StartsWith("X-Forwarded-", StringComparison.OrdinalIgnoreCase))
+                    issues.Add(new("BGW-CONNECTOR-SIGNING-HEADER-FORBIDDEN", $"{slotLocation}.projection.headerName"));
+                if (!projectionHeaders.Add(header))
+                    issues.Add(new("BGW-CONNECTOR-SIGNING-HEADER-DUPLICATE", $"{slotLocation}.projection.headerName"));
+            }
+            slotIndex++;
+        }
+
+        void ValidateSigningBinding(JsonElement signing, string signingLocation)
+        {
+            string keyBinding = signing.GetProperty("keyBinding").GetString()!;
+            if (!secrets.TryGetValue(keyBinding, out string? kind) || !string.Equals(kind, "clientCertificate", StringComparison.Ordinal))
+                issues.Add(new("BGW-CONNECTOR-CAPABILITY-SIGNING-BINDING-INVALID", $"{signingLocation}.keyBinding"));
+        }
     }
 
     private static Dictionary<string, string> UniqueBindings(JsonElement values, List<ConnectorValidationIssue> issues, string category, bool includeKind = false)

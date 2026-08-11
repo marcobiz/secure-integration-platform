@@ -22,6 +22,7 @@ Aggiornato: 2026-08-11
 | Wave 1 — Typed SOAP session handshake + authorized external admission | Shared-lifecycle wiring remediation qualificata localmente; CI exact-head e targeted re-review pending | PR #23 commit `f08eb9762fcc21dc7d6d7ba236cf6a80840dfac9`: `OpaqueSessionLeaseProvider` è l'alias del lifecycle singleton posseduto da `SoapSessionClient`; vero host `Program`/HTTP/BGW1/Published/`ComposedSoapExecutionStrategy` riusa la sessione promossa senza reacquire; 120 unit session/composed, 38 integration mirati, 509 ordinary e 10×133 PostgreSQL integration PASS |
 | Wave 1 — Provider-neutral Connector execution seam | Ultima remediation mirata implementata; full gate/CI exact-head e targeted re-review pending | bridge no-IVT vincolato allo snapshot Published iniziale con stale A→B zero-effect; full lifecycle PostgreSQL aggiunto; negativi cross-module/ciclo descriptor-atomic; loader invariato |
 | Wave 1 — Connector capability completion | Remediation P1/P2 qualificata localmente; exact-head CI e micro-rereview pending | writer input Core-bound/callback-only, scope capability ACTIVE/CLOSING/CLOSED con cancel+drain, claim bounds pre-clone; 549 ordinary PASS, 172/172 PostgreSQL 18, M3/Admin full-stack/Core export/scans/SBOM PASS; nessuna nuova capability o connector production |
+| Wave 1 — Authorized signing slots | Freeze-exception Core/Auth implementata; product gate locale qualificato salvo full M3 demandato alla CI Linux; exact-head CI e review indipendente pending | massimo 4 slot Published, un token opaco per slot/invocation, projection server-owned, compatibilità legacy senza rewrite; targeted, PostgreSQL 18, Admin/full-stack e scans PASS |
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | Wave 1 - Generic JWT/X.509 extensions | Remediation mirata local gate PASS; CI exact-head e rereview pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 304 ordinary, 71 PostgreSQL relevant, scan/SBOM/vulnerability/Core export PASS |
 | Healthcare Wave 1 — Regional ePrescription | Foundation compilata; profili regionali non pubblicabili | capability opaca Core post-auth con stato/grant verificati indipendentemente dalle credenziali, adapter al vero store Published, schema estensioni e safe-code allowlist server-owned, isolamento cross-profile; 14 test pack + 4 architecture PASS locali; Lombardia ed Emilia-Romagna `BLOCKED_BY_SPEC` |
@@ -268,6 +269,38 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
   capability, signing oracle, arbitrary authenticated HTTP o public certificate view è stato aggiunto;
 - decisione e inventory: ADR-0024 e
   `docs/implementation/WAVE1-CONNECTOR-CAPABILITY-COMPLETION.md`.
+
+### Wave 1 — Authorized signing slots
+
+- una operation Published nuova può dichiarare da uno a quattro slot di firma canonici; ogni slot
+  riusa il profilo RS256/X.509 qualificato, dichiara completezza obbligatoria/opzionale e una sola
+  projection server-owned Authorization Bearer oppure signed-token header bounded;
+- il bridge esterno aggiunge soltanto il selector tipizzato `ConnectorSigningSlotKey`; ogni slot è
+  consumabile una volta per invocation e il set tentativi è limitato a quattro. Unknown/repeat sono
+  negati prima dell'effetto private-key e non esiste fallback a un altro profilo;
+- token e compact JWT restano opachi: il handle è host-constructible, bridge/slot/A-bound e Core
+  conserva internamente la mappa slot-token per applicare le projection esatte. Header duplicati,
+  Authorization multipla, header hop-by-hop/proxy/forwarding/tracing/content e slot richiesti mancanti
+  falliscono closed prima della rete;
+- definizioni storiche `signing` + `signedTokenBearer` restano leggibili con checksum invariato e
+  derivano uno slot interno `legacy`; legacy e `signingSlots` espliciti insieme sono invalidi;
+- migration additiva `0013_authorized_signing_slots.sql` ammette nel locator least-privilege solo i
+  binding firma dichiarati dagli slot dell'esatta operation Published, conservando principal, grant,
+  revision/checksum, catalog-current, RLS e privilegi runtime;
+- il modulo sintetico esterno senza friend access richiede `primary` e `secondary`; il vero server
+  HTTPS/mTLS valida due JWT distinti con issuer server-owned diversi, stessa identità/x5c approvata,
+  Bearer e custom header. Negativi coprono unknown, repeat, incomplete, cross-invocation, post-close e
+  race deterministici A→B sul secondo slot e dopo DNS;
+- il percorso canonical hosted è PASS anche su PostgreSQL 18 con editor, approvatore distinto,
+  publication, BGW1 e grant reali. Il gate locale registra build Release zero-warning, 560 ordinary
+  PASS più 30 skip PostgreSQL condizionali, 34 architecture, 93 signing, 28 Vitest, 2 a11y, 37 browser
+  mock e `FULLSTACK-01`; docs, scans, vulnerability, SBOM e cleanup PASS;
+- le regressioni M3 split-network/firewall/operator e TLS hardening sono PASS. Il driver M3 completo
+  locale è rimasto non attestato perché Windows ha richiesto interattivamente il trust della CA
+  sintetica; prompt terminato, CA assente e Compose ripulito. Full M3 Linux, Core export e Gitleaks
+  sul final HEAD, CI exact-head e review indipendente restano pending; merge non autorizzato;
+- decisione e inventory: ADR-0025 e
+  `docs/implementation/WAVE1-AUTHORIZED-SIGNING-SLOTS.md`.
 
 ### M6 — Certificate, Signing and outbound mTLS primitives
 

@@ -2,6 +2,7 @@ using System.Collections.Frozen;
 using System.Net;
 using System.Reflection;
 using System.Security.Cryptography.X509Certificates;
+using System.Text.Json;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 using SecureIntegration.Gateway.Domain;
@@ -68,11 +69,20 @@ public sealed class RuntimeExecutionStrategyTests
         Assert.DoesNotContain(typeof(AuthorizedConnectorExecution).GetMethods(BindingFlags.Public | BindingFlags.Static), method => method.Name.Contains("Create", StringComparison.Ordinal));
         Assert.Equal(typeof(IAuthorizedConnectorCapabilityBridge), typeof(AuthorizedConnectorExecution).GetProperty(nameof(AuthorizedConnectorExecution.Capabilities))!.PropertyType);
         Assert.Equal(
-            [nameof(IAuthorizedConnectorCapabilityBridge.CreateSignedTokenAsync), nameof(IAuthorizedConnectorCapabilityBridge.ExecuteComposedSoapAsync),
+            [nameof(IAuthorizedConnectorCapabilityBridge.CreateSignedTokenAsync), nameof(IAuthorizedConnectorCapabilityBridge.CreateSignedTokenAsync),
+                nameof(IAuthorizedConnectorCapabilityBridge.ExecuteComposedSoapAsync),
                 nameof(IAuthorizedConnectorCapabilityBridge.ExecuteRestrictedTransportAsync), nameof(IAuthorizedConnectorCapabilityBridge.ExecuteTypedSessionHandshakeAsync)],
             typeof(IAuthorizedConnectorCapabilityBridge).GetMethods().Select(method => method.Name).Order(StringComparer.Ordinal).ToArray());
-        Assert.Equal(typeof(Task<AuthorizedConnectorSignedToken>), typeof(IAuthorizedConnectorCapabilityBridge).GetMethod(nameof(IAuthorizedConnectorCapabilityBridge.CreateSignedTokenAsync))!.ReturnType);
+        MethodInfo slotSigning = Assert.Single(typeof(IAuthorizedConnectorCapabilityBridge).GetMethods(), method =>
+            method.Name == nameof(IAuthorizedConnectorCapabilityBridge.CreateSignedTokenAsync) &&
+            method.GetParameters().Length == 3);
+        Assert.Equal([typeof(ConnectorSigningSlotKey), typeof(IReadOnlyDictionary<string, JsonElement>), typeof(CancellationToken)],
+            slotSigning.GetParameters().Select(value => value.ParameterType));
+        Assert.Equal(typeof(Task<AuthorizedConnectorSignedToken>), slotSigning.ReturnType);
         Assert.Equal(typeof(Task<QualifiedGatewayExecutionResult>), typeof(IAuthorizedConnectorCapabilityBridge).GetMethod(nameof(IAuthorizedConnectorCapabilityBridge.ExecuteRestrictedTransportAsync))!.ReturnType);
+        Assert.Empty(typeof(ConnectorSigningSlotKey).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+        Assert.Equal([nameof(ConnectorSigningSlotKey.Value)],
+            typeof(ConnectorSigningSlotKey).GetProperties(BindingFlags.Public | BindingFlags.Instance).Select(value => value.Name));
         Assert.Empty(typeof(AuthorizedConnectorSignedToken).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
         Assert.Empty(typeof(AuthorizedConnectorSignedToken).GetProperties(BindingFlags.Public | BindingFlags.Instance));
         Assert.Empty(typeof(AuthorizedPublishedExtensionConfiguration).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
@@ -81,9 +91,13 @@ public sealed class RuntimeExecutionStrategyTests
         Assert.Equal([nameof(AuthorizedPublishedExtensionConfiguration.OpenJsonStream), nameof(AuthorizedPublishedExtensionConfiguration.ToString)],
             typeof(AuthorizedPublishedExtensionConfiguration).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
                 .Where(value => !value.IsSpecialName).Select(value => value.Name).Order(StringComparer.Ordinal));
-        ConstructorInfo transportRequest = Assert.Single(typeof(AuthorizedConnectorRestrictedTransportRequest).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
-        Assert.Equal([typeof(ReadOnlyMemory<byte>), typeof(AuthorizedConnectorSignedToken)],
-            transportRequest.GetParameters().Select(value => value.ParameterType));
+        ConstructorInfo[] transportRequests = typeof(AuthorizedConnectorRestrictedTransportRequest)
+            .GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+        Assert.Equal(2, transportRequests.Length);
+        Assert.Contains(transportRequests, constructor => constructor.GetParameters().Select(value => value.ParameterType)
+            .SequenceEqual([typeof(ReadOnlyMemory<byte>)]));
+        Assert.Contains(transportRequests, constructor => constructor.GetParameters().Select(value => value.ParameterType)
+            .SequenceEqual([typeof(ReadOnlyMemory<byte>), typeof(AuthorizedConnectorSignedToken)]));
         Assert.Equal([nameof(AuthorizedConnectorRestrictedTransportRequest.BodyLength)],
             typeof(AuthorizedConnectorRestrictedTransportRequest).GetProperties(BindingFlags.Public | BindingFlags.Instance).Select(value => value.Name));
         Assert.Empty(typeof(AuthorizedConnectorBindingInputs).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
@@ -117,6 +131,24 @@ public sealed class RuntimeExecutionStrategyTests
         ConnectorExecutionStrategyKey key = ConnectorExecutionStrategyKey.Parse("synthetic-execution.v1");
         Assert.Equal("synthetic-execution.v1", key.Value);
         Assert.Equal(key, ConnectorExecutionStrategyKey.Parse(key.ToString()));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("UpperCase")]
+    [InlineData("-leading")]
+    [InlineData("trailing-")]
+    [InlineData("contains space")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public void Wave1_UT_signing_slot_key_is_bounded_exact_lower_case_and_canonical(string invalid)
+    {
+        Assert.False(ConnectorSigningSlotKey.TryParse(invalid, out ConnectorSigningSlotKey? parsed));
+        Assert.Null(parsed);
+        Assert.Throws<ArgumentException>(() => ConnectorSigningSlotKey.Parse(invalid));
+
+        ConnectorSigningSlotKey key = ConnectorSigningSlotKey.Parse("secondary-signing.v1");
+        Assert.Equal("secondary-signing.v1", key.Value);
+        Assert.Equal(key, ConnectorSigningSlotKey.Parse(key.ToString()));
     }
 
     [Fact]

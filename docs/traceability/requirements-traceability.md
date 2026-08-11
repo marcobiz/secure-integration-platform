@@ -282,6 +282,27 @@ was reused without a new subsystem.
 | No provider/store/transport DI, IVT, vertical logic or hypothetical capability | module constructor negative matrix; `Wave1_CT_external_execution_module_uses_only_public_provider_neutral_contracts_without_friend_access`; `Wave1_CT_capability_completion_has_no_token_provider_store_or_authenticated_HTTP_escape`; Core export | PASS local including 416-file Core export |
 | TM-075/TM-076/TM-077/TM-078 | `SEC-W1-CAP-001/002/003/004` mappings in the threat model | Targeted and full local remediation gates PASS; exact-head CI and independent micro-rereview pending |
 
+## Wave 1 bounded authorized signing slots
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| Canonical immutable slot key and maximum four slots | `Wave1_UT_signing_slot_key_is_bounded_exact_lower_case_and_canonical`; `Wave1_CT_authorized_signing_slots_are_bounded_checksum_bound_and_dependency_complete`; schema `maxItems: 4` | PASS local |
+| Slot/policy/projection checksum and four-eyes authority | checksum-change assertion for secondary issuer; canonical hosted editor/distinct-approver publication; operation dependency extraction for every slot binding | PASS local including PostgreSQL 18 |
+| One fresh opaque token per authorized slot and no global one-token limit | `Wave1_SEC_signing_slots_are_one_shot_independent_and_attempts_are_bounded`; external `SyntheticDualSlotExecutionStrategy`; network-observed compact-token inequality | PASS local |
+| Same slot second use and more than four attempts denied before dispatcher/private-key effect | repeated-slot unit dispatcher count remains one; hosted repeated-slot private-key count increases by exactly one; fifth slot stops at four dispatcher calls | PASS local |
+| Unknown slot denied with no fallback/provider/network | hosted `synthetic-unknown-slot` continuation compares total provider calls before/after invocation and keeps HTTPS/transport counts unchanged | PASS local and PostgreSQL 18 |
+| Distinct server-owned issuer policies with no external privileged-claim override | dual Published profiles have different issuers; external strategy supplies only the existing business claim; HTTPS server observes exact distinct `iss` values | PASS local and PostgreSQL 18 |
+| Same approved signing identity, valid signatures and Core-owned x5c | both slots reference the same approved binding/SPKI; server verifies both RS256 signatures and identical leaf fingerprint/x5c identity | PASS local and PostgreSQL 18 |
+| Bearer plus bounded signed-token header projection is server-owned | server observes primary Bearer and secondary `X-Synthetic-Signature`; strategy passes no header name/value; public API and architecture inventory exclude header bags | PASS local and PostgreSQL 18 |
+| Authorization uniqueness, header collision and dangerous header denial | `Wave1_SEC_authorized_signing_slot_schema_and_projection_matrix_fails_closed` covers duplicate Bearer, case-insensitive duplicate custom header and forbidden `Host`; runtime defense repeats the denylist | PASS local |
+| Required-slot completeness before network | hosted `synthetic-missing-slot` signs only primary, then receives 409 with no extra HTTPS or restricted-transport effect | PASS local and PostgreSQL 18 |
+| Slot/token identity, cross-invocation and post-close denial | internal key-to-handle map and `token.SigningSlot != key` invariant; `Wave1_SEC_signed_token_is_denied_post_close_and_across_invocations_before_transport` | PASS local |
+| Exact Published A and deterministic final freshness | second-slot `Wave1_SEC_Published_A_to_B_during_signing_public_material_returns_no_token_and_performs_no_transport`; dual-token post-DNS `Wave1_SEC_Published_A_to_B_after_DNS_denies_before_restricted_transport` | PASS local; zero later private-key/network effect |
+| Legacy single profile loads without rewrite or checksum change | fixed historical checksum assertion `D0FF…D7A`; reserved internal `legacy` slot; canonical hosted legacy Bearer continuation after explicit-slot revisions | PASS local and PostgreSQL 18 |
+| Least-privilege PostgreSQL locator includes exact slot bindings | additive migration `0013_authorized_signing_slots.sql`; canonical PostgreSQL 18 hosted dual-slot proof | PASS local on PostgreSQL 18 |
+| No token/provider/certificate/generic HTTP or connector-specific Core surface | reflection/API inventory; `Wave1_CT_authorized_signing_slots_are_bounded_opaque_slot_bound_and_server_projected`; no-vertical source guard | PASS local |
+| TM-079/TM-080/TM-081/TM-082 | `SEC-W1-SLOT-001/002/003/004` mappings in the threat model | Targeted, ordinary, PostgreSQL 18, Admin/full-stack, scans and deterministic M3 split regressions PASS; full M3 Linux, final-HEAD Core export/Gitleaks, CI exact-head and independent review pending |
+
 ## Healthcare Wave 1 — Regional ePrescription foundation
 
 | Requirement | Automated evidence | Status |

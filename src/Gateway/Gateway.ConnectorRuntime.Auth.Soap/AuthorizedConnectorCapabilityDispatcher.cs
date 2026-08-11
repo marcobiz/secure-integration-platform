@@ -55,22 +55,26 @@ internal sealed class AuthorizedConnectorCapabilityDispatcher(
 
     public Task<string> CreateSignedTokenAsync(
         AuthorizedConnectorExecution execution,
+        ConnectorSigningSlotKey signingSlot,
         IReadOnlyDictionary<string, JsonElement> claims,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(execution);
+        ArgumentNullException.ThrowIfNull(signingSlot);
         ArgumentNullException.ThrowIfNull(claims);
-        return verticalCapabilities.CreateSignedTokenAsync(execution, claims, cancellationToken);
+        return verticalCapabilities.CreateSignedTokenAsync(execution, signingSlot, claims, cancellationToken);
     }
 
     public Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
         AuthorizedConnectorExecution execution,
         AuthorizedConnectorRestrictedTransportRequest request,
+        IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> signedTokens,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(execution);
         ArgumentNullException.ThrowIfNull(request);
-        return verticalCapabilities.ExecuteRestrictedTransportAsync(execution, request, cancellationToken);
+        ArgumentNullException.ThrowIfNull(signedTokens);
+        return verticalCapabilities.ExecuteRestrictedTransportAsync(execution, request, signedTokens, cancellationToken);
     }
 
     private static JsonSerializerOptions CreateResultJson()
