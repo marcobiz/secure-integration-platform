@@ -107,11 +107,11 @@
       "oneOf": [
         {
           "required": ["path"],
-          "not": { "required": ["pathTemplate"] }
+          "properties": { "path": true }
         },
         {
           "required": ["pathTemplate"],
-          "not": { "required": ["path"] }
+          "properties": { "pathTemplate": true }
         }
       ]
     },
