@@ -77,6 +77,12 @@ The following results belong to predecessor candidate `45548c13df5d46cdb5f9cba1d
 They remain visible as historical evidence but do not qualify the temporal-remediation exact HEAD.
 The replacement PR and final writer handoff record the newly executed exact-head gates.
 
+Two historical harness invocation failures remain recorded and are not PASS evidence: a bare
+`npm run test:e2e` was started without the required Gateway full-stack service and failed with
+`ECONNREFUSED ::1:8443`; an initial PostgreSQL gate command selected the machine-wide .NET 8 SDK
+instead of repository-pinned SDK 10.0.302 and stopped before any product test ran. The later
+canonical full-stack and pinned-SDK executions do not erase or reclassify those failures.
+
 - FSE2 public-contract unit suite: 33/33 PASS;
 - Healthcare architecture slice: 8/8 PASS, including one `Gateway.Application` reference and no IVT;
 - hosted FSE2 in-memory success/negatives and A→B race: 2/2 PASS;
