@@ -36,6 +36,7 @@ Questa directory è la fonte di verità architetturale del prodotto. Le decision
 24. [Architettura implementata M2](architecture/m2-gateway-architecture.md)
 25. [Piano M2](implementation/M2-IMPLEMENTATION-PLAN.md), [runbook M2](operations/M2-GATEWAY-RUNBOOK.md), [report M2](testing/M2-IMPLEMENTATION-REPORT.md) e [Gate Review M2](reviews/M2-GATE-REVIEW.md)
 26. [Wave 1 typed composed SOAP authenticated dispatch](implementation/WAVE1-TYPED-COMPOSED-SOAP-DISPATCH.md)
+27. [Wave 1 authorized typed composed-SOAP request composition](implementation/WAVE1-AUTHORIZED-TYPED-COMPOSED-SOAP-REQUEST.md)
 
 ## Deliverable coperti
 

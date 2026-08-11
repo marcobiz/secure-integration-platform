@@ -321,6 +321,21 @@ OAuth/SOAP regional integration, callback/session correlation, actual operation/
 accreditation and live conformance remain blocked until current official specifications are
 available. Generic M6 auth tests are regression evidence only, not regional support evidence.
 
+## Wave 1 authorized typed composed-SOAP request composition
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| Exact schema, adapter/QName/mapping bounds and canonical/four-eyes coverage | `Wave1_CT_typed_composed_SOAP_request_is_canonical_checksum_and_dependency_complete`; `Wave1_SEC_typed_composed_SOAP_schema_QName_bounds_auth_and_input_kinds_fail_closed`; distinct editor/approver hosted publication and non-empty resource stamp assertions | PASS targeted local |
+| No new bridge method and one bounded module-owned adapter category | `Wave1_CT_typed_composed_request_has_no_new_bridge_or_arbitrary_body_binding_provider_or_transport_escape`; `Wave1_CT_external_module_registers_existing_session_adapters_and_one_bounded_composed_request_category`; duplicate/wrong-module startup matrix | PASS targeted local |
+| Real BGW1, grant, exact Published operation, business payload plus server-owned input and one HTTPS request | `Wave1_IT_PRODUCTION_HOST_external_no_IVT_module_uses_authorized_handshake_admission_and_composed_SOAP_on_one_session_lifecycle` asserts exact envelope/QName/order/escaping, SOAP version, Content-Type, SOAPAction, Basic, opaque session and request count | PASS targeted local |
+| Caller final envelope/arbitrary body and server-owned field spoof cannot bypass the adapter | hosted caller-envelope denial, malformed/oversized payload cases and exact server-owned organization assertion; zero business transport and redacted canaries | PASS targeted local |
+| No binding plaintext or retained/alternate-writer escape | public API inventory; `Wave1_SEC_external_no_IVT_binding_input_cannot_redirect_Core_writer_and_retained_view_is_denied`; retained already-open payload stream observes cleared bytes and retained context rejects reopen | PASS targeted local |
+| Adapter/input exact match, exception and cancellation fail closed | `Wave1_SEC_typed_composed_request_adapter_and_inputs_match_exact_Published_operation_before_provider_or_transport`; config duplicate mapping; unknown adapter; `Wave1_SEC_typed_composed_adapter_exception_and_fake_cancellation_are_sanitized_with_zero_transport`; actual-token cancellation unit | PASS targeted local |
+| Immutable exact bytes and complete Published A freshness before network | `Wave1_SEC_external_bridge_typed_composed_SOAP_bound_to_A_denies_mutated_B_after_composition_before_dispatch` covers adapter, mapping, QName, binding, resource, action, endpoint and strategy; all keep business network at zero and never adopt B | PASS targeted local |
+| Historical composed-SOAP uses the original caller envelope without rewrite/republish | `Wave1_E2E_PostgreSQL18_legacy_composed_profile_preserves_original_caller_envelope_without_republish_when_configured`; architecture assertion `typedRequest?.Bytes ?? execution.Payload`; existing composed regression suites | PASS targeted local; dedicated PostgreSQL execution pending |
+| PostgreSQL 18 locator, fresh/second apply and least privilege | additive migration `0014_typed_composed_soap_request_inputs.sql`; static owner/revoke/grant/no-enumeration assertions; canonical full external no-IVT hosted E2E | Dedicated PostgreSQL gate pending |
+| TM-083/TM-084/TM-085/TM-086 | `SEC-W1-COMPOSE-001/002/003/004` mappings in the threat model | Targeted local PASS; full gates and independent review pending |
+
 ## Security threats
 
 La fotografia conclusiva M0/M1, inclusi gli elementi non automatizzati, è in `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md`.

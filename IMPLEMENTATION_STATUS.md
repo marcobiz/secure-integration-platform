@@ -6,6 +6,7 @@ Aggiornato: 2026-08-11
 
 | Ambito richiesto | Stato | Evidenza principale |
 |---|---|---|
+| Wave 1 — Authorized typed composed-SOAP request composition | Freeze-exception Core implementata; full gate, CI exact-head e review indipendente pending | adapter request exact Published, payload business read-only, input server-owned write-only, envelope/auth/session/transport Core-owned, legacy unchanged; targeted unit/hosted/architecture PASS |
 | M0 — fondamenta repository | Implementato; baseline congelata | commit `7f68442`, tag `baseline-m0-m1-vslice-2026-08-03` |
 | M1 — Local Broker minimo | Implementato; **gate live tecnico PASS** | run `m0-m1-20260803-232955`; AC-002/004 PASS-LIVE sul commit testato |
 | Primo vertical slice E2E | Completato come harness ripetibile | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` |
@@ -301,6 +302,35 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
   sul final HEAD, CI exact-head e review indipendente restano pending; merge non autorizzato;
 - decisione e inventory: ADR-0025 e
   `docs/implementation/WAVE1-AUTHORIZED-SIGNING-SLOTS.md`.
+
+### Wave 1 — Authorized typed composed-SOAP request composition
+
+- `IAuthorizedConnectorCapabilityBridge` non cambia: `ExecuteComposedSoapAsync` compone internamente
+  solo quando l'esatta operation Published dichiara `typedComposedSoapRequest`; in assenza del blocco
+  usa ancora il payload caller originale senza rewrite o republish;
+- la sola nuova categoria `ITypedComposedSoapRequestAdapter` è registrata tramite il registrar
+  startup bounded esistente, con ownership del modulo, grafo costruttori e duplicate/cap fail-closed;
+- ID/type adapter, QName e mapping name→binding `opaque` sono canonical/checksum/four-eyes owned.
+  Core copia il business payload in stream read-only ripetibili callback-scoped e mantiene gli input
+  dietro `WriteRequiredXmlValue(name)`, legato per reference al proprio writer;
+- Core possiede writer hardened, Envelope/Body/QName, body bound, exact-byte snapshot, Basic, sessione
+  opaca, Content-Type/SOAPAction, DNS e one-shot restricted transport. Nessun body/header/provider/
+  store/transport selector, plaintext getter o nuovo bridge method è stato aggiunto;
+- retained context/stream, alternate writer, caller final envelope, spoof server-owned, malformed e
+  oversized payload, adapter exception/fake cancellation, duplicate/wrong-module e input mismatch
+  sono negati con zero business transport e diagnostica redatta; cancellation reale conserva il
+  token effettivo;
+- ogni provider await rivalida A e il controllo finale copre adapter, mapping, binding/resource,
+  endpoint, Basic, sessione, action, policy e strategy. Race deterministici dopo composizione su
+  adapter/mapping/QName/binding/resource/action/endpoint/strategy non adottano B e producono zero rete;
+- migration additiva `0014_typed_composed_soap_request_inputs.sql` estende soltanto il locator
+  operation-scoped all'esatto nuovo path e conserva owner, `SECURITY DEFINER`, `search_path`, grant,
+  RLS e non-enumerabilità; `0012` e `0013` restano immutate;
+- evidenza mirata corrente: 31/31 unit composed/configuration, 41/41 hosted execution seam ordinari e
+  15/15 architecture PASS. PostgreSQL 18 senza skip, full repository, Admin/full-stack, Core export,
+  scans/SBOM, exact-head CI e review indipendente sono ancora gate da registrare sul final candidate;
+- decisione e inventory: ADR-0026 e
+  `docs/implementation/WAVE1-AUTHORIZED-TYPED-COMPOSED-SOAP-REQUEST.md`.
 
 ### M6 — Certificate, Signing and outbound mTLS primitives
 
