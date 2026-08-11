@@ -24,7 +24,7 @@ public sealed class SistemaTsExecutionModule : IConnectorExecutionModule
 public sealed class SistemaTsExecutionStrategy : IConnectorExecutionStrategy
 {
     private static readonly IReadOnlySet<GatewayAuthenticationKind> AuthenticationKinds =
-        new[] { GatewayAuthenticationKind.Basic, GatewayAuthenticationKind.SoapBasicOpaqueSession }
+        new[] { GatewayAuthenticationKind.Basic }
             .ToFrozenSet();
 
     /// <summary>Exact Published strategy selector.</summary>
@@ -46,19 +46,8 @@ public sealed class SistemaTsExecutionStrategy : IConnectorExecutionStrategy
             return await execution.Capabilities.ExecuteTypedSessionHandshakeAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        RequireAuthentication(execution, GatewayAuthenticationKind.SoapBasicOpaqueSession);
-        if (!execution.RequestContentType.StartsWith("text/xml", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Sistema TS requires the frozen SOAP 1.1 media type.");
-        SistemaTsBusinessOperation operation = SistemaTsOperationCatalog.Required(published.OperationId);
-        using Stream request = execution.OpenPayloadStream();
-        byte[] requestBytes = await SistemaTsBoundedContent.ReadAsync(request, execution.PayloadLength, cancellationToken).ConfigureAwait(false);
-        SistemaTsBusinessXml.ValidateRequest(operation, requestBytes);
-
-        QualifiedGatewayExecutionResult result = await execution.Capabilities
-            .ExecuteComposedSoapAsync(cancellationToken)
-            .ConfigureAwait(false);
-        SistemaTsBusinessXml.ValidateResponse(operation, result.Body);
-        return result;
+        throw new InvalidOperationException(
+            "Sistema TS business dispatch is unavailable until the qualified typed composed-body capability is present.");
     }
 
     private static void RequireAuthentication(AuthorizedConnectorExecution execution, GatewayAuthenticationKind expected)

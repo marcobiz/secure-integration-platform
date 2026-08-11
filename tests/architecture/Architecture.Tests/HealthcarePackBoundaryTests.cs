@@ -102,11 +102,46 @@ public sealed class HealthcarePackBoundaryTests
 
         string source = string.Join('\n', Directory.EnumerateFiles(packRoot, "*.cs", SearchOption.AllDirectories)
             .Select(File.ReadAllText));
-        foreach (string forbidden in new[] { "IServiceProvider", "IConnectorConfigurationStore", "ISecretProvider", "HttpClient", "HttpRequestMessage", "InternalsVisibleTo", "Gateway.Api", "GetSecret" })
+        foreach (string forbidden in new[] { "IServiceProvider", "IConnectorConfigurationStore", "ISecretProvider", "HttpClient", "HttpRequestMessage", "RestrictedTransport", "InternalsVisibleTo", "Gateway.Api", "GetSecret" })
             Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal);
 
         string apiProject = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "Gateway.Api.csproj"));
         Assert.DoesNotContain("Healthcare.SistemaTs", apiProject, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void HC_W1_SISTEMATS_ARCH_unsafe_raw_business_dispatch_is_absent_and_profile_is_fail_closed()
+    {
+        string packRoot = Path.Combine(Root, "src", "ConnectorPacks", "Healthcare", "Healthcare.SistemaTs");
+        string source = string.Join('\n', Directory.EnumerateFiles(packRoot, "*.cs", SearchOption.AllDirectories)
+            .Select(File.ReadAllText));
+        Assert.DoesNotContain("ExecuteComposedSoapAsync", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("OpenPayloadStream", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ssn-erogatore-1.5.1", source, StringComparison.Ordinal);
+
+        string definitionPath = Path.Combine(Root, "docs", "connectors", "healthcare",
+            "sistema-ts-eprescription", "sistema-ts.connector.json");
+        using System.Text.Json.JsonDocument definition = System.Text.Json.JsonDocument.Parse(File.ReadAllText(definitionPath));
+        string[] operations = definition.RootElement.GetProperty("operations").EnumerateArray()
+            .Select(operation => operation.GetProperty("operationId").GetString()!).ToArray();
+        Assert.Equal(["session-create"], operations);
+        Assert.DoesNotContain("authorization2F", File.ReadAllText(definitionPath), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void HC_W1_SISTEMATS_ARCH_canonical_PostgreSQL_job_requires_vertical_test_execution()
+    {
+        string workflow = File.ReadAllText(Path.Combine(Root, ".github", "workflows", "ci.yml"));
+        const string project =
+            "tests/integration/Healthcare.SistemaTs.Integration.Tests/Healthcare.SistemaTs.Integration.Tests.csproj";
+        const string test =
+            "HC_W1_SISTEMATS_IT_PostgreSQL18_four_eyes_Published_admission_and_checkToken_execute_when_required";
+
+        Assert.Contains($"dotnet restore {project} --locked-mode", workflow, StringComparison.Ordinal);
+        Assert.Contains($"dotnet build {project} -c Release --no-restore", workflow, StringComparison.Ordinal);
+        Assert.Contains($"dotnet test {project}", workflow, StringComparison.Ordinal);
+        Assert.Contains("REQUIRE_SISTEMA_TS_POSTGRES_GATE: '1'", workflow, StringComparison.Ordinal);
+        Assert.Contains(test, workflow, StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()

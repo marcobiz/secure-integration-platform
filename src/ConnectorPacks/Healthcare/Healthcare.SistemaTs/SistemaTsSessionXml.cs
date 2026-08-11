@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Xml;
 
 namespace SecureIntegration.ConnectorPacks.Healthcare.SistemaTs;
@@ -121,10 +120,14 @@ internal static class SistemaTsSessionXml
 
     private static DateTimeOffset ParseDate(string value)
     {
-        if (!DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture,
-                DateTimeStyles.AllowWhiteSpaces | DateTimeStyles.AssumeUniversal, out DateTimeOffset parsed))
+        try
+        {
+            return XmlConvert.ToDateTimeOffset(value).ToUniversalTime();
+        }
+        catch (FormatException)
+        {
             throw Malformed();
-        return parsed.ToUniversalTime();
+        }
     }
 
     private static void MoveToContent(XmlReader reader)

@@ -1,7 +1,8 @@
 # Healthcare connector characterization
 
 This directory contains public-safe characterization, official-source freezes, synthetic test guidance,
-the Wave 1 Regional ePrescription foundation and the implementation-ready national Sistema TS connector.
+the Wave 1 Regional ePrescription foundation and the connector-local Sistema TS contract
+implementation. Sistema TS business dispatch remains blocked by the Core composed-body gap.
 
 ## Package contents
 
@@ -22,4 +23,11 @@ the Wave 1 Regional ePrescription foundation and the implementation-ready nation
   - [Umbria mTLS + dual JWT](umbria-mtls-jwt/spec.md)
 - Synthetic vectors: `tests/characterization/healthcare`
 
-`KNOWN` is a historical characterization label, not current official or live-verified evidence. The Sistema TS Wave 1 source questions are resolved from current public material. Qualified baseline `b1810ed` supplies module-owned adapter registration and exact callback-only server-owned inputs in addition to admission, shared lifecycle, composed SOAP and the provider-neutral execution seam. The Sistema TS implementation consumes those capabilities without a Core or host dependency. Other production profiles remain `NEEDS_PUBLIC_SOURCE` and NO-GO until their own unresolved questions are closed.
+`KNOWN` is a historical characterization label, not current official or live-verified evidence. The
+Sistema TS Wave 1 source questions are resolved from current public material. Qualified baseline
+`b1810ed` supplies module-owned adapter registration and exact callback-only server-owned inputs for
+create/checkToken, plus admission and the shared lifecycle. The current composed SOAP primitive does
+not safely combine caller business data with Core-resolved server-owned fields, so business
+publication and execution fail closed and require a new Core typed composed-body capability. The
+vertical does not duplicate provider, secret, transport or session authority. Other production
+profiles remain `NEEDS_PUBLIC_SOURCE` and NO-GO until their own unresolved questions are closed.

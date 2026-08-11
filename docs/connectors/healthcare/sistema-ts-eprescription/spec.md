@@ -1,6 +1,6 @@
 # SistemaTSEPrescriptionConnector - Wave 1 specification freeze
 
-Status: **IMPLEMENTATION_READY - INDEPENDENT REVIEW PENDING**
+Status: **CONNECTOR-LOCAL VALIDATION READY - BUSINESS DISPATCH BLOCKED BY CORE**
 
 Freeze date: 2026-08-08
 Implementation-resumption audit: 2026-08-11
@@ -12,20 +12,24 @@ Target pack: `ConnectorPacks.Healthcare`
 
 Current official WSDL/XSD and MFA material are available and have been frozen in the
 [official source registry](official-source-registry.md). The 2026-08-09 currency recheck
-accepted that freeze without replacement. The generic opaque-session HTTP projection now
-supports the fixed server-owned `Authorization2F: Bearer` placement, so the earlier header
-placement gap is closed.
+accepted that freeze without replacement. The generic opaque-session HTTP projection supports
+fixed server-owned `Authorization2F: Bearer` placement, but the composed SOAP capability still
+dispatches the original authorized caller body. It cannot safely compose that body from
+caller-owned business data plus Core-resolved server-owned identity fields.
 
 Baseline `b1810ed` includes the separately qualified capability completion from PR #26: an explicit
 module may register the three existing typed adapter contracts and each adapter receives an exact,
 Published-mapped server-owned input set that can write only through the Core-owned XML writer.
-The former frozen-surface hard stop is therefore closed without a new Core primitive.
+That capability qualifies create/checkToken only; it does not close business-body composition.
 
-`Healthcare.SistemaTs` now registers the exact `healthcare-sistema-ts-eprescription` strategy,
-official `CreateAuthReq`/`CreateAuthRes` and `CheckTokenReq`/`CheckTokenRes` semantics and the four
-frozen SSN dispenser operations. Core continues to own Basic resolution, opaque session custody,
-external-admission intent, atomic promotion, freshness, restricted transport and composed SOAP.
-Healthcare has no provider/store/service-locator access and Gateway.Api has no Healthcare reference.
+`Healthcare.SistemaTs` registers the exact `healthcare-sistema-ts-eprescription` strategy and
+official `CreateAuthReq`/`CreateAuthRes` and `CheckTokenReq`/`CheckTokenRes` semantics. Only
+`session-create` is Published. The four business contracts have exact connector-local XML
+validators/serializers and synthetic wire fixtures, but their publication and execution are
+disabled until Core provides typed composed-body authority. Core continues to own Basic resolution,
+opaque session custody, external-admission intent, atomic promotion, freshness and restricted
+transport. Healthcare has no provider/store/service-locator access and Gateway.Api has no
+Healthcare reference.
 
 ## Confirmed national business scope
 
@@ -35,11 +39,11 @@ operations and not an implementation claim.
 
 | Business capability | Official operation | Status for this wave |
 |---|---|---|
-| Retrieve and exclusively take in charge an SSN prescription | `visualizzaErogato` | Implemented as `visualizza-erogato` |
-| Release a prior take-in-charge when the official operation mode permits it | `visualizzaErogato` with the documented operation mode | Implemented through the same frozen typed contract |
-| Dispense and close, including documented modes | `invioErogato` | Implemented as `invio-erogato` |
-| Suspend or revoke suspension | `sospendiErogato` | Implemented as `sospendi-erogato` |
-| Correct or cancel a prior dispensation | `annullaErogato` | Implemented as `annulla-erogato` |
+| Retrieve and exclusively take in charge an SSN prescription | `visualizzaErogato` | Exact XML/wire fixture; `BLOCKED_BY_CORE` for product dispatch |
+| Release a prior take-in-charge when the official operation mode permits it | `visualizzaErogato` with the documented operation mode | Exact frozen contract; `BLOCKED_BY_CORE` for product dispatch |
+| Dispense and close, including documented modes | `invioErogato` | Exact XML/wire fixture; `BLOCKED_BY_CORE` for product dispatch |
+| Suspend or revoke suspension | `sospendiErogato` | Exact XML/wire fixture; `BLOCKED_BY_CORE` for product dispatch |
+| Correct or cancel a prior dispensation | `annullaErogato` | Exact XML/wire fixture; `BLOCKED_BY_CORE` for product dispatch |
 
 Deferred/unconfirmed as public connector operations in this wave:
 
@@ -77,12 +81,19 @@ constraint; it is not implemented or generalized here.
 
 - SOAP actions, namespaces, request/response roots and environments remain server-owned.
 - The official WSDL/XSD are not copied into Git and no XML is invented.
-- Future generated or hand-controlled typed serializers must pin the frozen artifact
-  digest and reject arbitrary XML, caller XPath, raw headers and dynamic namespaces.
+- Connector-local serializers and validators encode every frozen request/response sequence,
+  cardinality, simple/complex distinction and relevant lexical/value facet. They reject arbitrary
+  nesting, caller XPath, raw headers, dynamic namespaces and children inside simple values.
 - The official `sospendiErogato` SOAP action is retained exactly as published, including
   its namespace difference from the WSDL target namespace.
 - Endpoint addresses found in the kit remain server-side environment bindings and are
   intentionally absent from this public specification.
+
+These serializers are not wired to product transport. The safe future boundary must accept typed
+caller business data and resolve server-owned bindings inside Core before serializing the final
+authenticated body. Caller-supplied `pinCode` or server identity, plaintext binding extraction,
+direct provider access, injected transport/`HttpClient`, raw authenticated header/body escape,
+Gateway.Api-to-Healthcare dependency and IVT remain forbidden.
 
 ## Basic, ID-session and MFA
 
@@ -137,12 +148,28 @@ custody may be reused only after the frozen-surface blocker is qualified.
 ## Synthetic server and security tests
 
 `tools/healthcare/SyntheticSistemaTsServer` is a real loopback HTTPS/SOAP authority tied to the
-frozen contract. The canonical hosted tests cross BGW1 authentication, grant, four-eyes Published
-configuration, server-owned inputs, create, authenticated completion, checkToken, shared-session
-reuse and `visualizzaErogato`. Wire counters prove create/checkToken/business `1/1/1`, generic
-fallback `0` and retry `0`. PostgreSQL 18 runs the same path through the real routing store.
+frozen contract. Direct fixture tests cover all four business operations and assert exact SOAPAction,
+SOAP 1.1, content type, Basic, `Authorization2F`, nested XML, namespaces, values and independent
+operation counters. Seven meaningful network-boundary negatives are executed for every operation.
+
+The hosted product test crosses BGW1 authentication, grant, four-eyes Published `session-create`,
+server-owned create/checkToken inputs, authenticated completion and shared-session promotion, then
+proves all four business operation IDs fail without business or generic transport. PostgreSQL 18
+runs this admission-only path through the real routing store; CI requires execution and turns
+missing database configuration into failure. It is not a full business E2E.
+
 Generic lifecycle/race/cancellation tests remain prerequisite regression evidence and are mapped
 explicitly rather than relabelled as official conformance.
+
+`SERVER_OWNED_BUSINESS_FIELDS = BLOCKED_BY_CORE`.
+
+`BUSINESS_SOAP = BLOCKED_BY_CORE`.
+
+`POSTGRESQL_FULL_BUSINESS_E2E = BLOCKED_BY_CORE`.
+
+`CORE_COMPOSITION_BLOCKER = STILL_OPEN`.
+
+`NEW_CORE_PRIMITIVE_REQUIRED = YES`.
 
 ## Provisioning and accreditation blockers
 

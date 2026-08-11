@@ -304,23 +304,26 @@ available. Generic M6 auth tests are regression evidence only, not regional supp
 | Requirement | Evidence | Status |
 |---|---|---|
 | Official-current registry | `docs/connectors/healthcare/sistema-ts-eprescription/official-source-registry.md` | PASS documentation freeze |
-| National SAC business contracts | Frozen XSD-sequence catalog plus `sistema-ts.connector.json`; hosted exact-wire `visualizzaErogato` | PASS implementation; live conformance pending |
+| National SAC business XML contracts | Exact connector-local request/response descriptors and serializers; all four direct synthetic HTTPS wire cases; real XSD-derived nested/simple/facet negatives | PASS connector-local validation; product dispatch `BLOCKED_BY_CORE` |
 | SAC/SAR server-owned routing | `docs/connectors/healthcare/sistema-ts-eprescription/spec.md` | DOCUMENTED, no regional adapter |
 | Basic and opaque ID-session | `HC_W1_SISTEMATS_CT_module_and_adapter_metadata_are_exact_and_constructor_closed`; hosted exact-wire create/completion/checkToken lifecycle | PASS |
 | HTTP `Authorization2F` placement | Generic fixed-scheme projection integrated in Foundation | PASS generic prerequisite |
-| SOAP/session one-shot composition | Baseline `3f8667b` typed handshake, external admission, shared lifecycle and composed SOAP | PASS generic prerequisite |
-| Vertical adapter registration | `HC_W1_SISTEMATS_CT_module_registers_exact_strategy_and_adapters_without_host_access`; hosted explicit module load | PASS, no IVT/host dependency |
+| SOAP/session one-shot composition | Existing typed handshake, external admission and shared lifecycle; business IDs absent from Published sample and explicitly denied by the module | PASS for admission/fail-closed; typed business-body composition `BLOCKED_BY_CORE` |
+| Vertical adapter registration | `HC_W1_SISTEMATS_CT_module_and_adapter_metadata_are_exact_and_constructor_closed`; hosted explicit module load | PASS, no IVT/host dependency |
 | Server-owned STS create/checkToken inputs | exact 7/4 Published mappings; generic exact-set missing/unexpected Core regressions plus connector hosted caller-spoof test | PASS |
-| Nested response/checkToken semantics | exact data-type structures, duplicate/DTD negatives, remote expiry and rejection tests | PASS |
+| Nested business XML and checkToken semantics | exact QName/order/cardinality/simple-complex/facet tests; nested unexpected and child-in-simple negatives; `XmlConvert` xs:dateTime parsing and non-XSD lexical negatives | PASS |
 | Shared admission/session lifecycle | connector hosted E2E plus existing cross-context replay, expiry, generation, rotate/disable suites | PASS deterministic |
-| Business Basic + Authorization2F + SOAPAction | connector HTTPS server exact assertions and `1/1/1`, generic `0`, retry `0` counters | PASS deterministic |
+| All-operation synthetic wire boundary | direct HTTPS server exact SOAPAction/version/content type/Basic/Authorization2F/XML/value assertions, per-operation counters and seven negatives per operation | PASS fixture evidence; not product dispatch evidence |
+| Unsafe business dispatch disabled | one-operation Published sample; `HC_W1_SISTEMATS_ARCH_unsafe_raw_business_dispatch_is_absent_and_profile_is_fail_closed`; hosted four-ID denial with zero transport | PASS |
 | Published A and A-to-B stale | existing exact-authority execution/capability race suites, consumed without vertical authority | PASS regression |
-| PostgreSQL hosted canonical path | `HC_W1_SISTEMATS_IT_PostgreSQL18_four_eyes_Published_hosted_full_lifecycle` | PASS local PostgreSQL 18 |
+| PostgreSQL hosted canonical admission path | canonical CI restores/builds/tests `Healthcare.SistemaTs.Integration.Tests`; `REQUIRE_SISTEMA_TS_POSTGRES_GATE=1` executes `HC_W1_SISTEMATS_IT_PostgreSQL18_four_eyes_Published_admission_and_checkToken_execute_when_required` and forbids skip | PASS CI definition; full business E2E `BLOCKED_BY_CORE` |
+| Server-owned business fields and authenticated business SOAP | Requires a Core typed composed-body capability joining caller-owned data to Core-resolved bindings | `BLOCKED_BY_CORE`; `NEW_CORE_PRIMITIVE_REQUIRED=YES` |
 | Accreditation and live conformance | Gate review | BLOCKED_BY_ACCREDITATION |
 
-The Wave 1 product result is implementation-ready for independent connector review. Existing
+The Wave 1 connector-local XML and synthetic fixture result is ready for independent review. The
+product result is deliberately fail-closed until the Core composition primitive exists. Existing
 generic suites remain prerequisite regression evidence; only the named Sistema TS tests count as
-connector wire evidence, and none is claimed as live conformance.
+connector evidence, and none is claimed as product business E2E or live conformance.
 
 ## Security threats
 
