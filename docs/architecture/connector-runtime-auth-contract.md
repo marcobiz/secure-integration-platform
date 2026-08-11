@@ -241,5 +241,4 @@ signed-token HTTP field. Core retains the opaque slot-bound handles and performs
 inside restricted transport; the strategy supplies neither field names nor values. Duplicate Bearer
 or case-insensitive custom fields, transport-controlled fields and missing required tokens are denied
 before network. Historical single-signing definitions derive one internal `legacy` Bearer slot without
-rewriting their canonical JSON or checksum. See ADR-0025 and
-`docs/implementation/WAVE1-AUTHORIZED-SIGNING-SLOTS.md`.
+rewriting their canonical JSON or checksum. ADR-0025 records the durable decision.
