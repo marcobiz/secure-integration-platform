@@ -109,6 +109,8 @@ jobs:
           cache-dependency-path: '**/packages.lock.json'
       - name: Restore Gateway integration tests
         run: dotnet restore tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj --locked-mode
+      - name: Restore Sistema TS integration tests
+        run: dotnet restore tests/integration/Healthcare.SistemaTs.Integration.Tests/Healthcare.SistemaTs.Integration.Tests.csproj --locked-mode
       - name: Restore and build migration runner
         run: |
           dotnet restore src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj --locked-mode
@@ -155,8 +157,17 @@ jobs:
           docker exec "$POSTGRES_SERVICE_ID" psql -v ON_ERROR_STOP=1 -U postgres -d broker_gateway_test -c "CREATE ROLE ci_gateway_admin LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION; GRANT gateway_admin TO ci_gateway_admin;"
       - name: Build Gateway integration tests
         run: dotnet build tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj -c Release --no-restore
+      - name: Build Sistema TS integration tests
+        run: dotnet build tests/integration/Healthcare.SistemaTs.Integration.Tests/Healthcare.SistemaTs.Integration.Tests.csproj -c Release --no-restore
       - name: Run PostgreSQL and API integration tests
         run: dotnet test tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj -c Release --no-build --no-restore
+      - name: Run mandatory Sistema TS PostgreSQL admission integration test
+        env:
+          REQUIRE_SISTEMA_TS_POSTGRES_GATE: '1'
+        run: >-
+          dotnet test tests/integration/Healthcare.SistemaTs.Integration.Tests/Healthcare.SistemaTs.Integration.Tests.csproj
+          -c Release --no-build --no-restore
+          --filter FullyQualifiedName=SecureIntegration.ConnectorPacks.Healthcare.SistemaTs.Integration.Tests.SistemaTsHostedIntegrationTests.HC_W1_SISTEMATS_IT_PostgreSQL18_four_eyes_Published_admission_and_checkToken_execute_when_required
       - name: Clean PostgreSQL test schema
         if: always()
         shell: bash

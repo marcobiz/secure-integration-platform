@@ -291,7 +291,7 @@ public sealed class TypedSessionHandshakePostgresRaceIntegrationTests
     }
 }
 
-internal sealed record HostedConnectorAuthority(
+public sealed record HostedConnectorAuthority(
     string ConnectorId,
     string Version,
     Guid EnvironmentId,
@@ -310,7 +310,7 @@ internal sealed record HostedCapabilityAuthority(
     ProviderResourceCatalogRecord SigningCertificate,
     ProviderResourceCatalogRecord ClientCertificate);
 
-internal sealed record HostedExecutionModuleConfiguration(
+public sealed record HostedExecutionModuleConfiguration(
     string ModuleId,
     string AssemblyPath,
     string AssemblyFullName,
@@ -327,9 +327,9 @@ internal sealed record HostedCapabilityProvider(
         : this(provider, provider, provider, provider, rootCertificate) { }
 }
 
-internal sealed record HostedHandshakeResult(string Kind, string? IntentReference, string? SessionReference)
+public sealed record HostedHandshakeResult(string Kind, string? IntentReference, string? SessionReference)
 {
-    internal static HostedHandshakeResult Parse(string json)
+    public static HostedHandshakeResult Parse(string json)
     {
         using JsonDocument document = JsonDocument.Parse(json);
         JsonElement root = document.RootElement;
@@ -344,21 +344,23 @@ internal sealed record HostedHandshakeResult(string Kind, string? IntentReferenc
     }
 }
 
-internal sealed class HostedIdentity(X509Certificate2 certificate, RegisteredInstallationIdentity identity) : IDisposable
+public sealed class HostedIdentity(X509Certificate2 certificate, RegisteredInstallationIdentity identity) : IDisposable
 {
     internal X509Certificate2 Certificate { get; } = certificate;
     internal RegisteredInstallationIdentity Identity { get; } = identity;
     public void Dispose() => Certificate.Dispose();
 }
 
-internal sealed class HostedTypedSessionFixture : IAsyncDisposable
+public sealed class HostedTypedSessionFixture : IAsyncDisposable
 {
     private const string SyntheticHost = "typed-session.synthetic.test";
-    internal const string SyntheticUsername = "synthetic-user";
-    internal const string SyntheticPassword = "synthetic-password";
+    public const string SyntheticUsername = "synthetic-user";
+    public const string SyntheticPassword = "synthetic-password";
     internal const string SyntheticOrganizationCode = "core-owned<&organization";
     internal const string BusinessOperationId = "session-business";
     private readonly HostedServerCertificates certificates;
+    private readonly IAsyncDisposable serverLifetime;
+    private readonly SyntheticSoapServerInstance? syntheticServer;
     private readonly HttpClient api;
     private readonly List<HostedIdentity> identities = [];
     private readonly Dictionary<string, (ProviderResourceCatalogRecord Username, ProviderResourceCatalogRecord Password, ProviderResourceCatalogRecord Session, ProviderResourceCatalogRecord Organization)> resources = new(StringComparer.Ordinal);
@@ -366,7 +368,8 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
     private HostedTypedSessionFixture(HostedServerCertificates certificates, SyntheticSoapServerInstance server, TypedSessionHostFactory factory)
     {
         this.certificates = certificates;
-        Server = server;
+        serverLifetime = server;
+        syntheticServer = server;
         Factory = factory;
         api = factory.CreateClient();
         Store = factory.Services.GetRequiredService<IConnectorConfigurationStore>();
@@ -374,12 +377,28 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         Endpoint = new Uri($"https://{SyntheticHost}:{server.Endpoint.Port}/", UriKind.Absolute);
     }
 
+    private HostedTypedSessionFixture(HostedServerCertificates certificates, IAsyncDisposable server, Uri serverEndpoint,
+        string host, TypedSessionHostFactory factory)
+    {
+        this.certificates = certificates;
+        serverLifetime = server;
+        Factory = factory;
+        api = factory.CreateClient();
+        Store = factory.Services.GetRequiredService<IConnectorConfigurationStore>();
+        Sessions = factory.Services.GetRequiredService<SoapSessionClient>();
+        Endpoint = new Uri($"https://{host}:{serverEndpoint.Port}/", UriKind.Absolute);
+    }
+
     internal TypedSessionHostFactory Factory { get; }
-    internal SyntheticSoapServerInstance Server { get; }
+    internal SyntheticSoapServerInstance Server => syntheticServer ?? throw new InvalidOperationException("The generic synthetic SOAP authority is not active.");
     internal CountingRestrictedTransport Transport => Factory.Transport;
     internal IConnectorConfigurationStore Store { get; }
     internal SoapSessionClient Sessions { get; }
     internal Uri Endpoint { get; }
+    public bool UsesPostgres => Store is RoutingConnectorConfigurationStore;
+    public int GenericTransportRequests => Transport.GenericRequests;
+    public int TotalSoapTransportRequests => Transport.TotalSoapRequests;
+    public IReadOnlyCollection<string> HostedLogs => Factory.Logs;
 
     internal static async Task<HostedTypedSessionFixture> CreateAsync(
         string candidate,
@@ -407,6 +426,39 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
                 TypedSessionHostFactory factory = new(certificates.Root, certificates.Server, SyntheticHost, beforePromotion, runtimeConnection, adminConnection,
                     executionModule, beforeHandshakeFinalAuthorization, beforeComposedFinalAuthorization, capabilityProvider);
                 return new(certificates, server, factory);
+            }
+            catch
+            {
+                await server.DisposeAsync();
+                throw;
+            }
+        }
+        catch
+        {
+            certificates.Dispose();
+            throw;
+        }
+    }
+
+    public static async Task<HostedTypedSessionFixture> CreateExternalAsync(
+        string host,
+        Func<X509Certificate2, CancellationToken, Task<(IAsyncDisposable Server, Uri Endpoint)>> startServer,
+        string? runtimeConnection,
+        string? adminConnection,
+        HostedExecutionModuleConfiguration executionModule)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(host);
+        ArgumentNullException.ThrowIfNull(startServer);
+        HostedServerCertificates certificates = HostedServerCertificates.Create(host);
+        try
+        {
+            (IAsyncDisposable server, Uri endpoint) = await startServer(certificates.Server,
+                TestContext.Current.CancellationToken);
+            try
+            {
+                TypedSessionHostFactory factory = new(certificates.Root, certificates.Server, host, null, runtimeConnection,
+                    adminConnection, executionModule, null, null, null);
+                return new(certificates, server, endpoint, host, factory);
             }
             catch
             {
@@ -457,7 +509,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         }
         """;
 
-    internal async Task<Guid> CreateEnvironmentAsync()
+    public async Task<Guid> CreateEnvironmentAsync()
     {
         Guid id = Guid.NewGuid();
         await Factory.Services.GetRequiredService<IAdminGatewayRegistry>().AddEnvironmentAsync(
@@ -465,7 +517,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         return id;
     }
 
-    internal async Task<Guid> CreateTenantAsync(string marker)
+    public async Task<Guid> CreateTenantAsync(string marker)
     {
         Guid id = Guid.NewGuid();
         await Factory.Services.GetRequiredService<IAdminGatewayRegistry>().AddTenantAsync(
@@ -473,7 +525,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         return id;
     }
 
-    internal async Task<Guid> CreateApplicationAsync(string marker)
+    public async Task<Guid> CreateApplicationAsync(string marker)
     {
         Guid id = Guid.NewGuid();
         await Factory.Services.GetRequiredService<IAdminGatewayRegistry>().AddApplicationAsync(
@@ -481,7 +533,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         return id;
     }
 
-    internal async Task<HostedIdentity> EnrollIdentityAsync(Guid tenantId, Guid applicationId, Guid environmentId, string marker)
+    public async Task<HostedIdentity> EnrollIdentityAsync(Guid tenantId, Guid applicationId, Guid environmentId, string marker)
     {
         IAdminGatewayRegistry adminRegistry = Factory.Services.GetRequiredService<IAdminGatewayRegistry>();
         Guid installationId = Guid.NewGuid();
@@ -531,6 +583,14 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
             await registry.AddGrantAsync(new(Guid.NewGuid(), identity.Identity.InstallationId, identity.Identity.TenantId, connectorId,
                 BusinessOperationId, true, Factory.Clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
         }
+    }
+
+    public async Task GrantOperationsAsync(string connectorId, HostedIdentity identity, params string[] operationIds)
+    {
+        IAdminGatewayRegistry registry = Factory.Services.GetRequiredService<IAdminGatewayRegistry>();
+        foreach (string operationId in operationIds)
+            await registry.AddGrantAsync(new(Guid.NewGuid(), identity.Identity.InstallationId, identity.Identity.TenantId,
+                connectorId, operationId, true, Factory.Clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
     }
 
     internal async Task<HostedConnectorAuthority> PrepareConnectorVersionAsync(
@@ -599,12 +659,76 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         return new(connectorId, version, environmentId, validated, approver, connectorResources.Username, connectorResources.Password, connectorResources.Session);
     }
 
-    internal async Task PublishAsync(HostedConnectorAuthority authority, long expectedPublicationRevision)
+    public async Task PublishAsync(HostedConnectorAuthority authority, long expectedPublicationRevision)
     {
         ConnectorVersionResource published = await Factory.Services.GetRequiredService<ConnectorAdministrationService>().PublishAsync(
             authority.ConnectorId, authority.Version, authority.Validated.RowVersion, expectedPublicationRevision,
             authority.Approver.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
         Assert.Equal(ConnectorVersionState.Published, published.State);
+    }
+
+    public async Task<HostedConnectorAuthority> PrepareExternalConnectorVersionAsync(
+        string connectorId,
+        string version,
+        Guid environmentId,
+        string definition,
+        string endpointBinding,
+        IReadOnlyDictionary<string, string> bindingValues,
+        string usernameBinding,
+        string passwordBinding,
+        string sessionBinding)
+    {
+        Dictionary<string, (ProviderResourceCatalogRecord Resource, string ProviderReference)> registered = new(StringComparer.Ordinal);
+        foreach ((string binding, string value) in bindingValues)
+        {
+            string providerReference = "synthetic://external-" + binding + "-" + Guid.NewGuid().ToString("N");
+            Factory.Secrets.Set(providerReference, value);
+            ProviderResourceType type = ProviderResourceType.Secret;
+            ProviderResourceCatalogRecord resource = await Store.RegisterProviderResourceAsync(new(
+                Guid.NewGuid(), "synthetic-external", "Synthetic external provider", "synthetic",
+                "external-" + binding + "-" + Guid.NewGuid().ToString("N"), type, "Synthetic external binding",
+                environmentId, connectorId, "*", providerReference, ProviderResourceStatus.Active, null, 0, null, null,
+                string.Empty, Factory.Clock.UtcNow), TestContext.Current.CancellationToken);
+            registered.Add(binding, (resource, providerReference));
+        }
+
+        ConnectorAdministrationService administration = Factory.Services.GetRequiredService<ConnectorAdministrationService>();
+        IAdminSecurityStore security = Factory.Services.GetRequiredService<IAdminSecurityStore>();
+        ConnectorApprovalService approvals = Factory.Services.GetRequiredService<ConnectorApprovalService>();
+        string actorSuffix = Guid.NewGuid().ToString("N");
+        AdminPrincipalRecord editorPrincipal = await security.EnsurePrincipalAsync(
+            new("https://external-hosted.invalid", "editor-" + actorSuffix, "Editor", null), TestContext.Current.CancellationToken);
+        AdminPrincipalRecord approverPrincipal = await security.EnsurePrincipalAsync(
+            new("https://external-hosted.invalid", "approver-" + actorSuffix, "Approver", null), TestContext.Current.CancellationToken);
+        _ = await security.AssignRoleAsync(editorPrincipal.Id, AdminRole.ConnectorEditor, null, editorPrincipal.Id,
+            Guid.NewGuid(), Factory.Clock.UtcNow, TestContext.Current.CancellationToken);
+        _ = await security.AssignRoleAsync(approverPrincipal.Id, AdminRole.ConnectorApprover, null, approverPrincipal.Id,
+            Guid.NewGuid(), Factory.Clock.UtcNow, TestContext.Current.CancellationToken);
+        AdminAccessContext editor = new(editorPrincipal, await security.GetAssignmentsAsync(editorPrincipal.Id, TestContext.Current.CancellationToken));
+        AdminAccessContext approver = new(approverPrincipal, await security.GetAssignmentsAsync(approverPrincipal.Id, TestContext.Current.CancellationToken));
+
+        using JsonDocument document = JsonDocument.Parse(definition);
+        ConnectorVersionResource imported = await administration.ImportAsync(document.RootElement, null, editor.ActorId,
+            Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionResource validated = await administration.ValidateStoredAsync(connectorId, version, imported.RowVersion,
+            editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
+        Dictionary<string, ProviderResourceReference> bindings = registered.ToDictionary(value => value.Key,
+            value => new ProviderResourceReference(value.Value.Resource.ProviderId, value.Value.Resource.ResourceId,
+                value.Value.Resource.ResourceType), StringComparer.Ordinal);
+        _ = await administration.PutBindingsAsync(connectorId, new(environmentId,
+            new Dictionary<string, string> { [endpointBinding] = Endpoint.AbsoluteUri }, bindings, null, null, version),
+            editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorApprovalRecord requested = await approvals.RequestAsync(connectorId, version, editor, Guid.NewGuid(),
+            TestContext.Current.CancellationToken);
+        ApprovalReviewResult review = await approvals.ReviewAsync(connectorId, version, approver, TestContext.Current.CancellationToken);
+        ConnectorApprovalRecord approved = await approvals.ApproveAsync(connectorId, version,
+            new(requested.Id, review.DigestSha256, "Synthetic external hosted approval"), approver, Guid.NewGuid(),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(ConnectorApprovalStatus.Approved, approved.Status);
+        Assert.NotEqual(editor.Principal.Id, approved.ApprovedBy);
+        return new(connectorId, version, environmentId, validated, approver,
+            registered[usernameBinding].Resource, registered[passwordBinding].Resource,
+            registered[sessionBinding].Resource);
     }
 
     internal async Task<HostedCapabilityAuthority> PrepareCapabilityConnectorVersionAsync(
@@ -693,7 +817,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         }, TestContext.Current.CancellationToken);
     }
 
-    internal async Task<HttpResponseMessage> SendSignedAsync(
+    public async Task<HttpResponseMessage> SendSignedAsync(
         HostedIdentity identity,
         HttpMethod method,
         string target,
@@ -720,7 +844,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         return JsonSerializer.SerializeToUtf8Bytes(new GatewayInvokeRequest("1.0", new("text/xml", "utf8", envelope), Guid.NewGuid()));
     }
 
-    internal long CaptureCurrentSessionGeneration()
+    public long CaptureCurrentSessionGeneration()
     {
         FieldInfo cacheField = typeof(SoapSessionClient).GetField("cache", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("SOAP cache field unavailable to the test evidence harness.");
@@ -774,7 +898,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
     {
         api.Dispose();
         await Factory.DisposeAsync();
-        await Server.DisposeAsync();
+        await serverLifetime.DisposeAsync();
         foreach (HostedIdentity identity in identities) identity.Dispose();
         certificates.Dispose();
     }
@@ -911,13 +1035,16 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
     internal sealed class FixedSecrets : ISecretValueProvider
     {
         private int totalRequests;
+        private readonly Dictionary<string, string> configured = new(StringComparer.Ordinal);
         internal int TotalRequests => Volatile.Read(ref totalRequests);
         internal Func<CancellationToken, Task>? BeforeOrganizationReturn { get; set; }
+        internal void Set(string logicalReference, string value) => configured.Add(logicalReference, value);
 
         public async Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref totalRequests);
+            if (configured.TryGetValue(logicalReference, out string? configuredValue)) return configuredValue;
             if (logicalReference.Contains("user", StringComparison.OrdinalIgnoreCase))
                 return HostedTypedSessionFixture.SyntheticUsername;
             if (logicalReference.Contains("password", StringComparison.OrdinalIgnoreCase))

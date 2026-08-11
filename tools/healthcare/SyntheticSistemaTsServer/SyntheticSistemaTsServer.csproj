@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>SecureIntegration.Healthcare.SyntheticSistemaTsServer</AssemblyName>
+    <RootNamespace>SecureIntegration.Healthcare.SyntheticSistemaTsServer</RootNamespace>
+  </PropertyGroup>
+</Project>

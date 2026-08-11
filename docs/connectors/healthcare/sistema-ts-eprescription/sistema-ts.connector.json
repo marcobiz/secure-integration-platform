@@ -1,0 +1,79 @@
+{
+  "schemaVersion": "1.0",
+  "connectorId": "sistema-ts-eprescription",
+  "version": "1.0.0",
+  "displayName": "Sistema TS SSN ePrescription - Erogatore",
+  "description": "Admission-only SAC profile; business dispatch remains blocked pending typed composed-body authority.",
+  "bindings": {
+    "endpoints": [
+      { "name": "sistema-ts-sac" }
+    ],
+    "secrets": [
+      { "name": "basic-username", "kind": "username" },
+      { "name": "basic-password", "kind": "password" },
+      { "name": "sts-user-id", "kind": "opaque" },
+      { "name": "sts-identifier-type", "kind": "opaque" },
+      { "name": "sts-identifier-value", "kind": "opaque" },
+      { "name": "sts-tax-code", "kind": "opaque" },
+      { "name": "sts-region-code", "kind": "opaque" },
+      { "name": "sts-health-authority-code", "kind": "opaque" },
+      { "name": "sts-facility-code", "kind": "opaque" }
+    ]
+  },
+  "operations": [
+    {
+      "operationId": "session-create",
+      "endpointBinding": "sistema-ts-sac",
+      "method": "POST",
+      "path": "/sts",
+      "request": { "contentType": "text/xml", "maximumBytes": 32768 },
+      "response": { "maximumBytes": 32768 },
+      "authentication": { "kind": "basic", "usernameBinding": "basic-username", "passwordBinding": "basic-password" },
+      "executionStrategy": "healthcare-sistema-ts-eprescription",
+      "typedSessionHandshake": {
+        "profileId": "sistema-ts-id-session",
+        "soapVersion": "1.1",
+        "action": "http://wsdl.auth.a2f.sts.sanita.finanze.it/create",
+        "requestElement": { "localName": "CreateAuthReq", "namespaceUri": "http://authservice.xsd.wsdl.auth.a2f.sts.sanita.finanze.it" },
+        "responseElement": { "localName": "CreateAuthRes", "namespaceUri": "http://authservice.xsd.wsdl.auth.a2f.sts.sanita.finanze.it" },
+        "requestAdapter": { "id": "sistema-ts-create-session-request", "type": "compiled-sistema-ts-create-v0.1" },
+        "responseAdapter": { "id": "sistema-ts-create-session-response", "type": "compiled-sistema-ts-create-v0.1" },
+        "serverOwnedInputs": [
+          { "name": "user-id", "secretBinding": "sts-user-id" },
+          { "name": "identificativo-tipo", "secretBinding": "sts-identifier-type" },
+          { "name": "identificativo-valore", "secretBinding": "sts-identifier-value" },
+          { "name": "codice-fiscale", "secretBinding": "sts-tax-code" },
+          { "name": "codice-regione", "secretBinding": "sts-region-code" },
+          { "name": "codice-asl", "secretBinding": "sts-health-authority-code" },
+          { "name": "codice-ssa", "secretBinding": "sts-facility-code" }
+        ],
+        "sessionLifetimeSeconds": 600,
+        "externalAdmission": {
+          "validator": { "id": "sistema-ts-check-token", "type": "compiled-sistema-ts-check-token-v0.1" },
+          "serverOwnedInputs": [
+            { "name": "user-id", "secretBinding": "sts-user-id" },
+            { "name": "identificativo-tipo", "secretBinding": "sts-identifier-type" },
+            { "name": "identificativo-valore", "secretBinding": "sts-identifier-value" },
+            { "name": "codice-fiscale", "secretBinding": "sts-tax-code" }
+          ],
+          "endpointBinding": "sistema-ts-sac",
+          "path": "/sts",
+          "soapVersion": "1.1",
+          "action": "http://wsdl.auth.a2f.sts.sanita.finanze.it/checkToken",
+          "requestElement": { "localName": "CheckTokenReq", "namespaceUri": "http://authservice.xsd.wsdl.auth.a2f.sts.sanita.finanze.it" },
+          "responseElement": { "localName": "CheckTokenRes", "namespaceUri": "http://authservice.xsd.wsdl.auth.a2f.sts.sanita.finanze.it" },
+          "intentLifetimeSeconds": 120,
+          "timeoutMs": 10000,
+          "maximumRequestBytes": 32768,
+          "maximumResponseBytes": 32768
+        }
+      },
+      "extensionConfiguration": { "contractVersion": "id-session-0.1", "operation": "session-create", "profile": "ricetta-dem-erogatore" },
+      "timeoutMs": 10000,
+      "redirectPolicy": "deny",
+      "allowedClientHeaders": [],
+      "idempotent": false,
+      "maximumRetries": 0
+    }
+  ]
+}

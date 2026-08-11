@@ -9,6 +9,16 @@ public sealed class HealthcarePackBoundaryTests
     private static readonly string Root = FindRepositoryRoot();
 
     [Fact]
+    public void HC_W1_ARCH_Core_export_allowlist_does_not_capture_vertical_integration_tests()
+    {
+        string allowlist = File.ReadAllText(Path.Combine(Root, "eng", "open-source-core.allowlist"));
+
+        Assert.DoesNotContain("tests/integration/", allowlist.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries));
+        Assert.Contains("tests/integration/Broker.Integration.Tests/", allowlist, StringComparison.Ordinal);
+        Assert.Contains("tests/integration/Gateway.Integration.Tests/", allowlist, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void HC_W1_ARCH_Core_does_not_reference_Healthcare_pack()
     {
         string coreSolutionPath = Path.Combine(Root, "BrokerGateway.Core.slnx");
@@ -79,6 +89,59 @@ public sealed class HealthcarePackBoundaryTests
         string coreAuthorization = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "AuthorizedGatewayInvocation.cs"));
         Assert.Contains("IGatewayInvocationAuthorizer", coreAuthorization, StringComparison.Ordinal);
         Assert.Contains("AuthorizedGatewayInvocation", coreAuthorization, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HC_W1_SISTEMATS_ARCH_connector_depends_only_on_qualified_public_capabilities_and_has_no_host_escape()
+    {
+        string packRoot = Path.Combine(Root, "src", "ConnectorPacks", "Healthcare", "Healthcare.SistemaTs");
+        XDocument project = XDocument.Load(Path.Combine(packRoot, "Healthcare.SistemaTs.csproj"));
+        string[] references = project.Descendants("ProjectReference")
+            .Select(element => Path.GetFileName((string?)element.Attribute("Include") ?? string.Empty)).Order().ToArray();
+        Assert.Equal(["Gateway.Application.csproj", "Gateway.ConnectorRuntime.Auth.Soap.csproj"], references);
+
+        string source = string.Join('\n', Directory.EnumerateFiles(packRoot, "*.cs", SearchOption.AllDirectories)
+            .Select(File.ReadAllText));
+        foreach (string forbidden in new[] { "IServiceProvider", "IConnectorConfigurationStore", "ISecretProvider", "HttpClient", "HttpRequestMessage", "RestrictedTransport", "InternalsVisibleTo", "Gateway.Api", "GetSecret" })
+            Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal);
+
+        string apiProject = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "Gateway.Api.csproj"));
+        Assert.DoesNotContain("Healthcare.SistemaTs", apiProject, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void HC_W1_SISTEMATS_ARCH_unsafe_raw_business_dispatch_is_absent_and_profile_is_fail_closed()
+    {
+        string packRoot = Path.Combine(Root, "src", "ConnectorPacks", "Healthcare", "Healthcare.SistemaTs");
+        string source = string.Join('\n', Directory.EnumerateFiles(packRoot, "*.cs", SearchOption.AllDirectories)
+            .Select(File.ReadAllText));
+        Assert.DoesNotContain("ExecuteComposedSoapAsync", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("OpenPayloadStream", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ssn-erogatore-1.5.1", source, StringComparison.Ordinal);
+
+        string definitionPath = Path.Combine(Root, "docs", "connectors", "healthcare",
+            "sistema-ts-eprescription", "sistema-ts.connector.json");
+        using System.Text.Json.JsonDocument definition = System.Text.Json.JsonDocument.Parse(File.ReadAllText(definitionPath));
+        string[] operations = definition.RootElement.GetProperty("operations").EnumerateArray()
+            .Select(operation => operation.GetProperty("operationId").GetString()!).ToArray();
+        Assert.Equal(["session-create"], operations);
+        Assert.DoesNotContain("authorization2F", File.ReadAllText(definitionPath), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void HC_W1_SISTEMATS_ARCH_canonical_PostgreSQL_job_requires_vertical_test_execution()
+    {
+        string workflow = File.ReadAllText(Path.Combine(Root, ".github", "workflows", "ci.yml"));
+        const string project =
+            "tests/integration/Healthcare.SistemaTs.Integration.Tests/Healthcare.SistemaTs.Integration.Tests.csproj";
+        const string test =
+            "HC_W1_SISTEMATS_IT_PostgreSQL18_four_eyes_Published_admission_and_checkToken_execute_when_required";
+
+        Assert.Contains($"dotnet restore {project} --locked-mode", workflow, StringComparison.Ordinal);
+        Assert.Contains($"dotnet build {project} -c Release --no-restore", workflow, StringComparison.Ordinal);
+        Assert.Contains($"dotnet test {project}", workflow, StringComparison.Ordinal);
+        Assert.Contains("REQUIRE_SISTEMA_TS_POSTGRES_GATE: '1'", workflow, StringComparison.Ordinal);
+        Assert.Contains(test, workflow, StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()

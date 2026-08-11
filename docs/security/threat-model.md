@@ -115,6 +115,7 @@
 | TM-080 | T/I/E | Un modulo sceglie header/value, duplica Authorization o un custom header, usa hop-by-hop/proxy/forwarding/tracing/content headers, omette un token richiesto o induce last-wins. | Projection e required flag sono Published/checksum/four-eyes owned. I soli tipi sono Bearer e signed-token header; il valore è esclusivamente il token opaco dello stesso slot. Schema, semantic validator e runtime defense negano header pericolosi, duplicate case-insensitive e più di un Bearer. Core applica la propria mappa slot-token e verifica tutti gli slot required prima di mTLS/DNS/network. | Il destinatario riceve necessariamente i token approvati; una configurazione di header semanticamente errata richiede nuova review. |
 | TM-081 | S/T/E/R | Un token viene sostituito tra slot, riusato in un'altra invocation/versione, trattenuto dopo close o proiettato sotto Published B dopo una race. | Handle non costruibile e senza getter, legato per reference a bridge e slot; Core conserva la mappa exact slot→handle e il transport interno ricontrolla slot identity. Scope ACTIVE/CLOSING/CLOSED rende post-close e cross-invocation inutilizzabili; transport one-shot. Ogni policy/transport reread confronta solo A e i race deterministici sul secondo slot e dopo DNS negano B prima del successivo private-key/network effect. | Una firma o dispatch già completati mentre A è legittimamente attiva non sono revocabili; memoria e reflection full-trust restano nella TCB. |
 | TM-082 | T/R/E | L'estensione riscrive snapshot storici/checksum, richiede mass republish, mescola legacy e slot espliciti o rende la collezione runtime-growing. | JSON storico resta immutato e deriva un solo slot interno `legacy` required/Bearer; checksum storico fissato da regression test. Lo schema `oneOf` nega legacy+slots, richiede 1..4 slot espliciti e nessun runtime registration/growth. Ogni nuovo slot/policy/projection è nel canonical checksum, approval artifact e Published revision; la migration additiva conserva i predicati locator least-privilege. | Il legacy mantiene il limite storico di un token e non ottiene automaticamente nuovi slot; l'adozione esplicita richiede nuova revisione approvata. |
+| TM-083 | S/T/I/E | Il connector Sistema TS accetta identità STS, endpoint, adapter, sessione, `Authorization2F`, SOAPAction o operation/profile dal caller; interpreta XML ambiguo; oppure promuove un ID-session senza checkToken nel contesto autenticato. | Modulo allowlisted e Published four-eyes fissano strategy, adapter ID/type, 7/4 binding input, endpoint, Basic e session profile per create/checkToken. Gli input scrivono soltanto tramite writer Core e vengono azzerati. Parser verticali business impongono ricorsivamente QName, sequenza/cardinalità, tipo simple/complex e facet congelati; DTD, duplicati, figli in valori semplici e nodi inattesi falliscono. Create positivo produce sempre handoff, il candidato UUID passa per checkToken con expiry remota e solo il lifecycle Core esegue la promozione. Le quattro operazioni business non sono Published e il modulo le nega prima del transport finché Core non può comporre un body tipizzato con binding server-owned. | Il business SOAP e i campi business server-owned restano `BLOCKED_BY_CORE`; non esiste ancora E2E business PostgreSQL. Gateway/provider/modulo allowlisted restano nella TCB. La prova sintetica diretta qualifica il fixture di protocollo, non un dispatch prodotto né accreditamento/live conformance. |
 
 ## Analisi degli scenari obbligatori
 
@@ -224,6 +225,17 @@ interno slot→handle, sui negativi post-close/cross-invocation e sui race deter
 slot e post-DNS. `SEC-W1-SLOT-004` mappa `TM-082` sul checksum storico fisso, sulla derivazione
 `legacy`, sul mixed-mode denial, sul bound massimo quattro, sulla distinct approval e sulla migration
 `0013_authorized_signing_slots.sql` esercitata dal hosted E2E PostgreSQL 18.
+
+`SEC-HC-STS-001` mappa `TM-083` sui test `SistemaTsPublicContractTests`, sul boundary test no-IVT/no
+provider/store/host escape/raw-business-dispatch e sui test hosted/direct-wire Sistema TS. I test
+connector-specifici coprono create/checkToken esatti, parsing `xs:dateTime`, binding mancanti,
+candidato invalido, reject/expiry, DTD/duplicati, XML business ricorsivo e violazioni XSD reali,
+caller endpoint/header/action/identity spoof, redaction, generazione condivisa, fail-closed dei quattro
+operation ID e contatori wire separati per tutte le operazioni. Il test PostgreSQL è admission-only
+e la CI ne rende obbligatoria l'esecuzione; nessun full business E2E viene dichiarato.
+I race A-to-B, replay cross-Tenant/Application/Installation, rotate/disable, provider exception e
+cancellation/timeout restano mappati alle suite Core nominate `SEC-W1-HS-*`, `SEC-W1-EXEC-*` e
+`SEC-W1-CAP-*`, perché il connector consuma quelle authority senza duplicarle.
 
 ## Criteri di revisione
 
