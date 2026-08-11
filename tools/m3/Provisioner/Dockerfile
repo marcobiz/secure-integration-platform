@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0.302-alpine3.24@sha256:979da27fc87dc255f4675b7642556cdcba9307459f8891f85f3cc26edcd7e766 AS build
 WORKDIR /src
 COPY ["global.json", "Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props", "NuGet.config", "./"]
 COPY ["src/Gateway/Gateway.Domain/Gateway.Domain.csproj", "src/Gateway/Gateway.Domain/"]
@@ -23,7 +23,7 @@ COPY docs/connectors/connector-definition.schema.json docs/connectors/connector-
 COPY docs/connectors/examples/sample-secure-service.connector.json docs/connectors/examples/sample-secure-service.connector.json
 COPY tools/m3/Provisioner/ tools/m3/Provisioner/
 RUN dotnet publish tools/m3/Provisioner/Provisioner.csproj -c Release --no-restore -o /app /p:UseAppHost=false
-FROM mcr.microsoft.com/dotnet/runtime:10.0-alpine
+FROM mcr.microsoft.com/dotnet/runtime:10.0.11-alpine3.24@sha256:216f4e2027da6ae806e0bc4b448669ac0faa00125908e308f31dd70598e58136
 RUN addgroup -S m3fixture && adduser -S -G m3fixture -u 1657 m3fixture
 WORKDIR /app
 COPY --from=build /app .
