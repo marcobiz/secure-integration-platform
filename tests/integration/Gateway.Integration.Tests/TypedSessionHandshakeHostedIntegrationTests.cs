@@ -301,7 +301,7 @@ internal sealed record HostedConnectorAuthority(
     ProviderResourceCatalogRecord Password,
     ProviderResourceCatalogRecord Session);
 
-internal sealed record HostedCapabilityAuthority(
+public sealed record HostedCapabilityAuthority(
     string ConnectorId,
     string Version,
     Guid EnvironmentId,
@@ -310,20 +310,25 @@ internal sealed record HostedCapabilityAuthority(
     ProviderResourceCatalogRecord SigningCertificate,
     ProviderResourceCatalogRecord ClientCertificate);
 
-internal sealed record HostedExecutionModuleConfiguration(
+public sealed record HostedExecutionModuleConfiguration(
     string ModuleId,
     string AssemblyPath,
     string AssemblyFullName,
     string ModuleType);
 
-internal sealed record HostedCapabilityProvider(
+public static class HostedPostgresTestSupport
+{
+    public static Task ApplyMigrationAsync() => PostgresIsolationTests.ApplyMigrationAsync();
+}
+
+public sealed record HostedCapabilityProvider(
     IClientCertificateProvider ClientCertificates,
     IKeyOperationProvider KeyOperations,
     ICertificateMetadataProvider CertificateMetadata,
     ICertificatePublicMaterialProvider CertificatePublicMaterial,
     X509Certificate2 RootCertificate)
 {
-    internal HostedCapabilityProvider(InMemoryProvider provider, X509Certificate2 rootCertificate)
+    public HostedCapabilityProvider(InMemoryProvider provider, X509Certificate2 rootCertificate)
         : this(provider, provider, provider, provider, rootCertificate) { }
 }
 
@@ -344,14 +349,14 @@ internal sealed record HostedHandshakeResult(string Kind, string? IntentReferenc
     }
 }
 
-internal sealed class HostedIdentity(X509Certificate2 certificate, RegisteredInstallationIdentity identity) : IDisposable
+public sealed class HostedIdentity(X509Certificate2 certificate, RegisteredInstallationIdentity identity) : IDisposable
 {
-    internal X509Certificate2 Certificate { get; } = certificate;
-    internal RegisteredInstallationIdentity Identity { get; } = identity;
+    public X509Certificate2 Certificate { get; } = certificate;
+    public RegisteredInstallationIdentity Identity { get; } = identity;
     public void Dispose() => Certificate.Dispose();
 }
 
-internal sealed class HostedTypedSessionFixture : IAsyncDisposable
+public sealed class HostedTypedSessionFixture : IAsyncDisposable
 {
     private const string SyntheticHost = "typed-session.synthetic.test";
     internal const string SyntheticUsername = "synthetic-user";
@@ -380,8 +385,10 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
     internal IConnectorConfigurationStore Store { get; }
     internal SoapSessionClient Sessions { get; }
     internal Uri Endpoint { get; }
+    public bool UsesPostgreSql => Store is RoutingConnectorConfigurationStore;
+    public int GenericTransportRequests => Transport.GenericRequests;
 
-    internal static async Task<HostedTypedSessionFixture> CreateAsync(
+    public static async Task<HostedTypedSessionFixture> CreateAsync(
         string candidate,
         Func<CancellationToken, Task>? beforePromotion = null,
         string? runtimeConnection = null,
@@ -457,7 +464,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         }
         """;
 
-    internal async Task<Guid> CreateEnvironmentAsync()
+    public async Task<Guid> CreateEnvironmentAsync()
     {
         Guid id = Guid.NewGuid();
         await Factory.Services.GetRequiredService<IAdminGatewayRegistry>().AddEnvironmentAsync(
@@ -465,7 +472,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         return id;
     }
 
-    internal async Task<Guid> CreateTenantAsync(string marker)
+    public async Task<Guid> CreateTenantAsync(string marker)
     {
         Guid id = Guid.NewGuid();
         await Factory.Services.GetRequiredService<IAdminGatewayRegistry>().AddTenantAsync(
@@ -473,7 +480,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         return id;
     }
 
-    internal async Task<Guid> CreateApplicationAsync(string marker)
+    public async Task<Guid> CreateApplicationAsync(string marker)
     {
         Guid id = Guid.NewGuid();
         await Factory.Services.GetRequiredService<IAdminGatewayRegistry>().AddApplicationAsync(
@@ -481,7 +488,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         return id;
     }
 
-    internal async Task<HostedIdentity> EnrollIdentityAsync(Guid tenantId, Guid applicationId, Guid environmentId, string marker)
+    public async Task<HostedIdentity> EnrollIdentityAsync(Guid tenantId, Guid applicationId, Guid environmentId, string marker)
     {
         IAdminGatewayRegistry adminRegistry = Factory.Services.GetRequiredService<IAdminGatewayRegistry>();
         Guid installationId = Guid.NewGuid();
@@ -607,7 +614,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         Assert.Equal(ConnectorVersionState.Published, published.State);
     }
 
-    internal async Task<HostedCapabilityAuthority> PrepareCapabilityConnectorVersionAsync(
+    public async Task<HostedCapabilityAuthority> PrepareCapabilityConnectorVersionAsync(
         string connectorId,
         string version,
         Guid environmentId,
@@ -615,7 +622,8 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         string definition,
         ICertificateMetadataProvider provider,
         string signingProviderReference,
-        string clientCertificateProviderReference)
+        string clientCertificateProviderReference,
+        string operationId = "signed-submit")
     {
         ProviderResourceCatalogRecord signing = await RegisterCertificateAsync(
             "capability-signing-" + Guid.NewGuid().ToString("N"), "Synthetic signing certificate", signingProviderReference);
@@ -667,13 +675,13 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
                 metadata.NotBefore, metadata.NotAfter, metadata.KeyAlgorithm, metadata.PublicKeySize, metadata.Version);
             return await Store.RegisterProviderResourceAsync(new(
                 Guid.NewGuid(), "synthetic-capability", "Synthetic capability provider", "synthetic", resourceId,
-                ProviderResourceType.ClientCertificate, displayName, environmentId, connectorId, "signed-submit",
+                ProviderResourceType.ClientCertificate, displayName, environmentId, connectorId, operationId,
                 providerReference, ProviderResourceStatus.Active, metadata.Version, 0, 1, publicMetadata,
                 string.Empty, Factory.Clock.UtcNow), TestContext.Current.CancellationToken);
         }
     }
 
-    internal async Task PublishAsync(HostedCapabilityAuthority authority, long expectedPublicationRevision)
+    public async Task PublishAsync(HostedCapabilityAuthority authority, long expectedPublicationRevision)
     {
         ConnectorVersionResource published = await Factory.Services.GetRequiredService<ConnectorAdministrationService>().PublishAsync(
             authority.ConnectorId, authority.Version, authority.Validated.RowVersion, expectedPublicationRevision,
@@ -693,7 +701,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
         }, TestContext.Current.CancellationToken);
     }
 
-    internal async Task<HttpResponseMessage> SendSignedAsync(
+    public async Task<HttpResponseMessage> SendSignedAsync(
         HostedIdentity identity,
         HttpMethod method,
         string target,
@@ -713,6 +721,11 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
             foreach ((string name, string value) in additionalHeaders) request.Headers.TryAddWithoutValidation(name, value);
         return await api.SendAsync(request, TestContext.Current.CancellationToken);
     }
+
+    public Task AddOperationGrantAsync(HostedIdentity identity, string connectorId, string operationId) =>
+        Factory.Services.GetRequiredService<IAdminGatewayRegistry>().AddGrantAsync(new(
+            Guid.NewGuid(), identity.Identity.InstallationId, identity.Identity.TenantId, connectorId,
+            operationId, true, Factory.Clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
 
     internal static byte[] BusinessInvocationBody()
     {

@@ -117,6 +117,16 @@ public sealed class Fse2ClinicalClaims
         string? resourceHl7Type = null) =>
         new(Fse2IheFormatter.FormatPersonCx(taxIdentifier, assigningAuthorityOid), patientConsent,
             resourceHl7Type is null ? null : Fse2Validation.ValidateResourceHl7Type(resourceHl7Type));
+
+    public static Fse2ClinicalClaims CreateCanonicalPerson(
+        string canonicalPersonCx,
+        bool patientConsent,
+        string? resourceHl7Type = null)
+    {
+        Fse2IheFormatter.ValidateCx(canonicalPersonCx, organization: false);
+        return new(canonicalPersonCx, patientConsent,
+            resourceHl7Type is null ? null : Fse2Validation.ValidateResourceHl7Type(resourceHl7Type));
+    }
 }
 
 /// <summary>
@@ -155,7 +165,32 @@ public sealed class Fse2Request
     public string? ResourceIdentifier { get; }
     public Fse2ClinicalClaims? ClinicalClaims { get; }
 
-    internal Fse2RequestSnapshot CaptureSnapshot() => new(this, document.ToArray(), requestBody.ToArray());
+    /// <summary>
+    /// Creates the connector-specific BGW1 payload. It contains business input only and exposes no
+    /// endpoint, actor, issuer, audience, signing slot, certificate or provider selector.
+    /// </summary>
+    public byte[] SerializeAuthorizedPayload()
+    {
+        using MemoryStream output = new();
+        using (Utf8JsonWriter writer = new(output))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("personId", ClinicalClaims?.PersonId);
+            writer.WriteBoolean("patientConsent", ClinicalClaims?.PatientConsent ?? false);
+            if (ClinicalClaims?.ResourceHl7Type is not null)
+                writer.WriteString("resourceHl7Type", ClinicalClaims.ResourceHl7Type);
+            if (document.Length > 0)
+                writer.WriteBase64String("documentBase64", document);
+            if (requestBody.Length > 0)
+                writer.WriteBase64String("requestBodyBase64", requestBody);
+            if (DocumentContentType is not null)
+                writer.WriteString("documentContentType", DocumentContentType);
+            if (ResourceIdentifier is not null)
+                writer.WriteString("resourceIdentifier", ResourceIdentifier);
+            writer.WriteEndObject();
+        }
+        return output.ToArray();
+    }
 
     public static Fse2Request ValidateCda(ReadOnlyMemory<byte> document, ReadOnlyMemory<byte> requestBody, Fse2ClinicalClaims claims) =>
         DocumentRequest(Fse2Operation.ValidateCda, document, requestBody, "application/pdf", null, claims);
@@ -209,13 +244,6 @@ public sealed class Fse2Request
     }
 }
 
-/// <summary>One private invocation-entry copy consumed for validation, hashing and transport.</summary>
-internal sealed record Fse2RequestSnapshot(Fse2Request Source, byte[] DocumentBytes, byte[] RequestBodyBytes)
-{
-    internal ReadOnlyMemory<byte> Document => DocumentBytes;
-    internal ReadOnlyMemory<byte> RequestBody => RequestBodyBytes;
-}
-
 /// <summary>Technical-only normalized response.</summary>
 public sealed record Fse2Response(
     int StatusCode,
@@ -232,12 +260,9 @@ public sealed record Fse2WorkflowAuthorityScope(
     Guid ApplicationId,
     Guid InstallationId,
     Guid EnvironmentId,
-    Guid ConnectorVersionId,
     string ConnectorVersion,
     string ConnectorId,
-    string ProfileAuthorityId,
-    long PublishedRevision,
-    string PublishedChecksumSha256);
+    string ProfileChecksumSha256);
 
 /// <summary>Technical-only persisted reconciliation record. It contains no patient or document data.</summary>
 public sealed record Fse2WorkflowRecord(

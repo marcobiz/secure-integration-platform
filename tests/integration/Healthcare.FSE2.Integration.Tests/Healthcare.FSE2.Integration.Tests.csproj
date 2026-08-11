@@ -3,14 +3,18 @@
     <TargetFramework>net10.0</TargetFramework>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <AssemblyName>Healthcare.FSE2.Tests</AssemblyName>
-    <RootNamespace>SecureIntegration.ConnectorPacks.Healthcare.FSE2.Tests</RootNamespace>
+    <AssemblyName>Healthcare.FSE2.Integration.Tests</AssemblyName>
+    <RootNamespace>SecureIntegration.ConnectorPacks.Healthcare.FSE2.Integration.Tests</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Gateway.Integration.Tests\Gateway.Integration.Tests.csproj" />
     <ProjectReference Include="..\..\..\src\ConnectorPacks\Healthcare\Healthcare.FSE2\Healthcare.FSE2.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />
     <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 </Project>

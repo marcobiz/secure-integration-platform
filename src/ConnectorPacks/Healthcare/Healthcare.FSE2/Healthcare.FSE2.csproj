@@ -6,11 +6,6 @@
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\..\Authentication\CertificateSigning\Authentication.CertificateSigning.csproj" />
     <ProjectReference Include="..\..\..\Gateway\Gateway.Application\Gateway.Application.csproj" />
-    <ProjectReference Include="..\..\..\Providers\Abstractions\Providers.Abstractions.csproj" />
-  </ItemGroup>
-  <ItemGroup>
-    <InternalsVisibleTo Include="Healthcare.FSE2.Tests" />
   </ItemGroup>
 </Project>

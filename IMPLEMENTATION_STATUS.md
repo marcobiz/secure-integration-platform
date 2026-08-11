@@ -26,7 +26,7 @@ Aggiornato: 2026-08-11
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | Wave 1 - Generic JWT/X.509 extensions | Remediation mirata local gate PASS; CI exact-head e rereview pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 304 ordinary, 71 PostgreSQL relevant, scan/SBOM/vulnerability/Core export PASS |
 | Healthcare Wave 1 — Regional ePrescription | Foundation compilata; profili regionali non pubblicabili | capability opaca Core post-auth con stato/grant verificati indipendentemente dalle credenziali, adapter al vero store Published, schema estensioni e safe-code allowlist server-owned, isolamento cross-profile; 14 test pack + 4 architecture PASS locali; Lombardia ed Emilia-Romagna `BLOCKED_BY_SPEC` |
-| Healthcare Wave 1 — FSE2 National Connector | **ORGANIZATION_PROFILE: REMEDIATED, targeted re-review pending; HUMAN_ACTOR_PROFILE: DEFERRED** | La remediation della review su `702642f` usa il reale Published/four-eyes store, binding catalogo/revisioni reali, authority endpoint ufficiali exact, lease composito con revalidation finale, workflow full-authority senza dati clinici, snapshot payload privato, catalogo frozen e parser CN/OID semantici. Nessun input business è promosso a `sub`; nessuna primitive Core è cambiata. L'accreditamento ufficiale resta separato e non eseguito; vedere `docs/testing/FSE2-IMPLEMENTATION-REPORT.md`. |
+| Healthcare Wave 1 — FSE2 National Connector | **ORGANIZATION_PROFILE: READY_FOR_INDEPENDENT_REVIEW; HUMAN_ACTOR_PROFILE: DEFERRED** | Modulo esterno `healthcare-fse2`, strategia mTLS minima e solo contratti pubblici `Gateway.Application`; profilo esatto da `AuthorizedPublishedExtensionConfiguration`; slot `authorization`/`integrity`, token opachi e projection Core Bearer + `FSE-JWT-Signature`; subject Organization CX, digest sui byte finali, mTLS/restricted transport e race A→B zero-network. Hosted reale PASS in-memory e PostgreSQL 18; nessuna nuova primitive Core. L'accreditamento ufficiale resta separato; vedere `docs/testing/FSE2-IMPLEMENTATION-REPORT.md`. |
 | M3B e milestone/connector production successivi | Non iniziati | nessun cloud reale, connector sanitario production o adapter commerciale |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
@@ -302,6 +302,30 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
   sul final HEAD, CI exact-head e review indipendente restano pending; merge non autorizzato;
 - decisione e inventory: ADR-0025 e
   `docs/implementation/WAVE1-AUTHORIZED-SIGNING-SLOTS.md`.
+
+### Healthcare Wave 1 — FSE2 Organization profile
+
+- il pack è un modulo esterno `healthcare-fse2` con strategia
+  `healthcare-fse2-organization`; dichiara soltanto `mtls` e dipende dal solo
+  progetto `Gateway.Application`, senza IVT, store/provider, primitive firma/certificato,
+  transport diretto o oggetti invocation interni;
+- parser, Organization subject P.IVA+authority→CX, CX/XON, matrice undici operazioni,
+  DAP/purpose/action, claim composition, body multipart esatto e fault mapping restano nel
+  vertical. Human Actor è `DEFERRED`;
+- il profilo è la copia immutabile `AuthorizedPublishedExtensionConfiguration` di Published A.
+  Il vertical richiede una volta `authorization` e una volta `integrity`, ma non vede i JWT:
+  Core possiede issuer/audience/fixed subject/temporali/jti/RS256/SPKI/x5c, applica Bearer e
+  `FSE-JWT-Signature`, poi esegue mTLS/restricted transport con freshness finale;
+- il digest lowercase SHA-256 è calcolato sul body finale già composto e gli stessi byte copiati
+  entrano nel transport. Il server HTTPS ricalcola il digest sui byte di rete e verifica due token
+  e jti distinti, issuer distinti, stessa identità/x5c, subject e claim Organization, certificato
+  client esatto, metodo/path/content type e un solo outbound;
+- il percorso canonical hosted con import/validate, editor, approvatore distinto, publication,
+  BGW1 e grant è PASS sia in-memory sia su PostgreSQL 18. La race del vero connector pubblica B
+  durante il secondo slot e ottiene stale con FSE2 network 0 e generic transport 0;
+- targeted checkpoint: 33 unit FSE2, 8 Healthcare architecture, 2 hosted in-memory/race e 1 hosted
+  PostgreSQL 18 PASS. Gate completi, CI exact-head e review indipendente sono registrati nel handoff;
+- report: `docs/testing/FSE2-IMPLEMENTATION-REPORT.md`.
 
 ### M6 — Certificate, Signing and outbound mTLS primitives
 

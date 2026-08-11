@@ -14,6 +14,8 @@ public sealed class HealthcarePackBoundaryTests
         string coreSolutionPath = Path.Combine(Root, "BrokerGateway.Core.slnx");
         string coreSolution = File.ReadAllText(coreSolutionPath);
         Assert.DoesNotContain("ConnectorPacks/Healthcare", coreSolution, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Healthcare.FSE2.Integration.Tests", coreSolution, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Healthcare.FSE2.Integration.Tests", File.ReadAllText(Path.Combine(Root, "BrokerGateway.slnx")), StringComparison.Ordinal);
 
         XDocument solution = XDocument.Load(coreSolutionPath);
         Queue<string> projects = new(solution.Descendants("Project")
@@ -100,19 +102,43 @@ public sealed class HealthcarePackBoundaryTests
     }
 
     [Fact]
-    public void HC_W1_ARCH_FSE2_pack_depends_only_on_public_provider_neutral_edges()
+    public void HC_W1_ARCH_FSE2_pack_depends_only_on_the_public_Application_capability_contract()
     {
         string projectPath = Path.Combine(Root, "src", "ConnectorPacks", "Healthcare", "Healthcare.FSE2", "Healthcare.FSE2.csproj");
         XDocument project = XDocument.Load(projectPath);
         string[] references = project.Descendants("ProjectReference").Select(element => (string?)element.Attribute("Include") ?? string.Empty).ToArray();
 
-        Assert.Equal(3, references.Length);
-        Assert.Contains(references, reference => reference.EndsWith("Authentication.CertificateSigning.csproj", StringComparison.Ordinal));
-        Assert.Contains(references, reference => reference.EndsWith("Gateway.Application.csproj", StringComparison.Ordinal));
-        Assert.Contains(references, reference => reference.EndsWith("Providers.Abstractions.csproj", StringComparison.Ordinal));
+        Assert.Single(references);
+        Assert.EndsWith("Gateway.Application.csproj", references[0], StringComparison.Ordinal);
         Assert.DoesNotContain(references, reference => reference.Contains("Infrastructure", StringComparison.OrdinalIgnoreCase) ||
             reference.Contains("Gateway.Api", StringComparison.OrdinalIgnoreCase) || reference.Contains("Broker", StringComparison.OrdinalIgnoreCase) ||
+            reference.Contains("Authentication.CertificateSigning", StringComparison.OrdinalIgnoreCase) ||
+            reference.Contains("Providers.Abstractions", StringComparison.OrdinalIgnoreCase) ||
             reference.Contains("Azure", StringComparison.OrdinalIgnoreCase) || reference.Contains("AWS", StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(project.Descendants("InternalsVisibleTo"));
+    }
+
+    [Fact]
+    public void HC_W1_ARCH_FSE2_pack_has_no_direct_store_provider_transport_or_Gateway_internal_bypass()
+    {
+        string packRoot = Path.Combine(Root, "src", "ConnectorPacks", "Healthcare", "Healthcare.FSE2");
+        string source = string.Join(Environment.NewLine, Directory.GetFiles(packRoot, "*.cs").Select(File.ReadAllText));
+        string[] forbidden =
+        [
+            "IConnectorConfigurationStore", "IAdminSecurityStore", "ConnectorDefinitionValidator",
+            "IKeyOperationProvider", "ICertificatePublicMaterialProvider", "IClientCertificateProvider",
+            "IRestrictedTransport", "PurposeBoundMutualTlsSender", "Rs256JwtSigner", "new HttpClient",
+            "HttpRequestMessage", "AuthorizedGatewayInvocation", "GetSecretAsync", "InternalsVisibleTo"
+        ];
+        foreach (string identifier in forbidden)
+            Assert.DoesNotContain(identifier, source, StringComparison.Ordinal);
+
+        string strategy = File.ReadAllText(Path.Combine(packRoot, "Fse2Connector.cs"));
+        Assert.Contains("OpenPublishedExtensionConfiguration", strategy, StringComparison.Ordinal);
+        Assert.Contains("CreateSignedTokenAsync", strategy, StringComparison.Ordinal);
+        Assert.Contains("ExecuteRestrictedTransportAsync", strategy, StringComparison.Ordinal);
+        Assert.Contains("new AuthorizedConnectorRestrictedTransportRequest(exactOutboundBody)", strategy, StringComparison.Ordinal);
+        Assert.DoesNotContain("Headers", strategy, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -122,17 +148,17 @@ public sealed class HealthcarePackBoundaryTests
         string contracts = File.ReadAllText(Path.Combine(packRoot, "Fse2Contracts.cs"));
         string requestBlock = contracts[(contracts.IndexOf("public sealed class Fse2Request", StringComparison.Ordinal))..];
         requestBlock = requestBlock[..requestBlock.IndexOf("public sealed record Fse2Response", StringComparison.Ordinal)];
-        string[] forbiddenRequestAuthority = ["public string Subject", "public string Role", "public Uri Endpoint", "UseSubjectAsAuthor", "SigningKey", "X5c", "Audience", "Issuer"];
+        string[] forbiddenRequestAuthority =
+        [
+            "public string Subject", "public string Role", "public Uri Endpoint", "public bool UseSubjectAsAuthor",
+            "public string SigningKey", "public string X5c", "public string Audience", "public string Issuer"
+        ];
         foreach (string forbidden in forbiddenRequestAuthority)
             Assert.DoesNotContain(forbidden, requestBlock, StringComparison.OrdinalIgnoreCase);
 
         string connector = File.ReadAllText(Path.Combine(packRoot, "Fse2Connector.cs"));
-        string finalAuthority = File.ReadAllText(Path.Combine(packRoot, "Fse2DispatchAuthority.cs"));
-        Assert.DoesNotContain("Headers.Authorization =", connector, StringComparison.Ordinal);
-        Assert.Contains("Authorization", finalAuthority, StringComparison.Ordinal);
-        Assert.Contains("FSE-JWT-Signature", finalAuthority, StringComparison.Ordinal);
-        Assert.Contains("resolver.RevalidateAsync", finalAuthority, StringComparison.Ordinal);
-        Assert.DoesNotContain("GetSecretAsync", string.Join(Environment.NewLine, Directory.GetFiles(packRoot, "*.cs").Select(File.ReadAllText)), StringComparison.Ordinal);
+        Assert.DoesNotContain("Headers.Authorization", connector, StringComparison.Ordinal);
+        Assert.DoesNotContain("FSE-JWT-Signature", connector, StringComparison.Ordinal);
         Assert.DoesNotContain("use_subject_as_author", connector, StringComparison.Ordinal);
         Assert.DoesNotContain("new HttpClient", connector, StringComparison.Ordinal);
     }

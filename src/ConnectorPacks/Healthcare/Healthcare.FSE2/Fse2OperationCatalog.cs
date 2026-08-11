@@ -70,6 +70,10 @@ public static class Fse2OperationCatalog
             ? descriptor
             : throw new Fse2ConnectorException(Fse2ErrorCategory.PolicyDenied, "FSE2_OPERATION_NOT_AVAILABLE");
 
+    public static Fse2OperationDescriptor Get(string operationId) =>
+        Descriptors.Values.SingleOrDefault(value => string.Equals(value.OperationId, operationId, StringComparison.Ordinal))
+        ?? throw new Fse2ConnectorException(Fse2ErrorCategory.PolicyDenied, "FSE2_OPERATION_NOT_AVAILABLE");
+
     public static Fse2OperationAvailability GetAvailability(string operationId)
     {
         Fse2OperationDescriptor? descriptor = Descriptors.Values.SingleOrDefault(value => string.Equals(value.OperationId, operationId, StringComparison.Ordinal));

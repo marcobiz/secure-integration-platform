@@ -516,7 +516,7 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
         """;
 }
 
-internal sealed class BlockingPublicMaterialProvider(
+public sealed class BlockingPublicMaterialProvider(
     InMemoryProvider inner,
     Func<CancellationToken, Task> beforeBlockedPublicMaterial,
     int blockOnPublicMaterialCall = 1) :
@@ -528,7 +528,7 @@ internal sealed class BlockingPublicMaterialProvider(
     private int publicMaterialCalls;
     private int signDigestCalls;
 
-    internal int SignDigestCalls => Volatile.Read(ref signDigestCalls);
+    public int SignDigestCalls => Volatile.Read(ref signDigestCalls);
 
     public Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken) =>
         inner.GetClientCertificateAsync(logicalReference, cancellationToken);
@@ -553,7 +553,7 @@ internal sealed class BlockingPublicMaterialProvider(
     }
 }
 
-internal sealed class TrackingCapabilityProvider(InMemoryProvider inner) :
+public sealed class TrackingCapabilityProvider(InMemoryProvider inner) :
     IClientCertificateProvider,
     IKeyOperationProvider,
     ICertificateMetadataProvider,
@@ -562,8 +562,8 @@ internal sealed class TrackingCapabilityProvider(InMemoryProvider inner) :
     private int totalCalls;
     private int signDigestCalls;
 
-    internal int TotalCalls => Volatile.Read(ref totalCalls);
-    internal int SignDigestCalls => Volatile.Read(ref signDigestCalls);
+    public int TotalCalls => Volatile.Read(ref totalCalls);
+    public int SignDigestCalls => Volatile.Read(ref signDigestCalls);
 
     public Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken)
     {
@@ -603,7 +603,7 @@ internal sealed class TrackingCapabilityProvider(InMemoryProvider inner) :
     }
 }
 
-internal sealed class SyntheticSignedMutualTlsServer : IAsyncDisposable
+public sealed class SyntheticSignedMutualTlsServer : IAsyncDisposable
 {
     private readonly WebApplication application;
     private readonly string expectedClientFingerprint;
@@ -716,7 +716,7 @@ internal sealed class SyntheticSignedMutualTlsServer : IAsyncDisposable
         return server;
     }
 
-    internal static bool ValidateClientCertificate(
+    public static bool ValidateClientCertificate(
         X509Certificate2 certificate,
         X509Certificate2 expectedCertificate,
         X509Certificate2 trustedRootCertificate)

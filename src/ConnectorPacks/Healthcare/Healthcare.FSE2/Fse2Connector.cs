@@ -1,238 +1,329 @@
-using System.Net.Http.Headers;
+using System.Collections.Concurrent;
+using System.Collections.Frozen;
+using System.Net;
+using System.Text;
 using System.Text.Json;
-using SecureIntegration.Authentication.CertificateSigning;
 using SecureIntegration.Gateway.Application;
 
 namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2;
 
-/// <summary>FSE2 orchestration over one Published, composite, final-revalidated organization authority.</summary>
-public sealed class Fse2NationalConnector
+/// <summary>External Healthcare module for the frozen FSE2 Organization profile.</summary>
+public sealed class Fse2OrganizationExecutionModule : IConnectorExecutionModule
 {
-    private readonly IGatewayInvocationAuthorizer authorizer;
-    private readonly PublishedConnectorFse2ProfileResolver profiles;
-    private readonly Fse2DispatchAuthorityRegistry dispatches;
-    private readonly Rs256JwtSigner jwtSigner;
-    private readonly PurposeBoundMutualTlsSender mutualTls;
-    private readonly IFse2WorkflowCorrelationStore workflowStore;
-    private readonly IFse2DispatchTestHook hook;
+    public ConnectorExecutionModuleId Id => ConnectorExecutionModuleId.Parse("healthcare-fse2");
 
-    public Fse2NationalConnector(IGatewayInvocationAuthorizer authorizer, PublishedConnectorFse2ProfileResolver profiles,
-        Fse2DispatchAuthorityRegistry dispatches, Rs256JwtSigner jwtSigner, PurposeBoundMutualTlsSender mutualTls,
-        IFse2WorkflowCorrelationStore workflowStore)
-        : this(authorizer, profiles, dispatches, jwtSigner, mutualTls, workflowStore, NoOpFse2DispatchTestHook.Instance)
+    public void RegisterExecutionStrategies(IConnectorExecutionStrategyRegistrar registrar)
     {
+        ArgumentNullException.ThrowIfNull(registrar);
+        registrar.AddSingleton<IFse2WorkflowCorrelationStore, InMemoryFse2WorkflowCorrelationStore>();
+        registrar.AddStrategy<Fse2OrganizationExecutionStrategy>();
     }
+}
 
-    internal Fse2NationalConnector(IGatewayInvocationAuthorizer authorizer, PublishedConnectorFse2ProfileResolver profiles,
-        Fse2DispatchAuthorityRegistry dispatches, Rs256JwtSigner jwtSigner, PurposeBoundMutualTlsSender mutualTls,
-        IFse2WorkflowCorrelationStore workflowStore, IFse2DispatchTestHook hook)
+/// <summary>
+/// Connector-local FSE2 composition. Core has already authenticated, granted and resolved Published
+/// A; the strategy receives no store, provider, endpoint, certificate, key, token or HttpClient.
+/// </summary>
+public sealed class Fse2OrganizationExecutionStrategy(
+    IFse2WorkflowCorrelationStore workflowStore) : IConnectorExecutionStrategy
+{
+    private static readonly ConnectorExecutionStrategyKey StrategyKey =
+        ConnectorExecutionStrategyKey.Parse("healthcare-fse2-organization");
+    private static readonly IReadOnlySet<GatewayAuthenticationKind> AuthenticationKinds =
+        new HashSet<GatewayAuthenticationKind> { GatewayAuthenticationKind.MutualTls }.ToFrozenSet();
+    private static readonly IReadOnlyDictionary<string, JsonElement> EmptyClaims =
+        new Dictionary<string, JsonElement>(StringComparer.Ordinal).ToFrozenDictionary(StringComparer.Ordinal);
+    private static readonly JsonSerializerOptions ResponseJson = new(JsonSerializerDefaults.Web);
+
+    public ConnectorExecutionStrategyKey Key => StrategyKey;
+    public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => AuthenticationKinds;
+
+    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(
+        AuthorizedConnectorExecution execution,
+        CancellationToken cancellationToken)
     {
-        this.authorizer = authorizer; this.profiles = profiles; this.dispatches = dispatches; this.jwtSigner = jwtSigner;
-        this.mutualTls = mutualTls; this.workflowStore = workflowStore; this.hook = hook;
-    }
+        ArgumentNullException.ThrowIfNull(execution);
+        if (execution.ExecutionStrategyKey != StrategyKey || execution.AuthenticationKind != GatewayAuthenticationKind.MutualTls)
+            throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_EXECUTION_AUTHORITY_DENIED");
 
-    public async Task<Fse2Response> InvokeAsync(GatewayClientPrincipal principal, string connectorId,
-        Fse2Request request, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(principal);
-        ArgumentException.ThrowIfNullOrWhiteSpace(connectorId);
-        ArgumentNullException.ThrowIfNull(request);
-        Fse2RequestSnapshot payload = request.CaptureSnapshot();
-        Fse2OperationDescriptor operation = Fse2OperationCatalog.Get(request.Operation);
+        Fse2PublishedOrganizationProfile profile =
+            Fse2PublishedOrganizationProfile.Parse(execution.OpenPublishedExtensionConfiguration());
+        if (!string.Equals(profile.Operation.OperationId, execution.OperationId, StringComparison.Ordinal) ||
+            !string.Equals(profile.RequestContentType, execution.RequestContentType, StringComparison.Ordinal))
+            throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_PUBLISHED_OPERATION_MISMATCH");
 
-        AuthorizedGatewayInvocation authorized;
-        try { authorized = await authorizer.AuthorizeAsync(principal, connectorId, operation.OperationId, cancellationToken).ConfigureAwait(false); }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception) { throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_OPERATION_GRANT_DENIED"); }
-        if (!ReferenceEquals(authorized.Principal, principal) || !string.Equals(authorized.ConnectorId, connectorId, StringComparison.Ordinal) ||
-            !string.Equals(authorized.OperationId, operation.OperationId, StringComparison.Ordinal))
-            throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_OPERATION_GRANT_DENIED");
+        Fse2InboundPayload inbound;
+        using (Stream payload = execution.OpenPayloadStream())
+            inbound = Fse2InboundPayload.Parse(payload, execution.PayloadLength);
+        ValidateRequest(profile, inbound);
 
-        Fse2PublishedProfileLookup lookup = new(principal.TenantId, principal.ApplicationId, principal.InstallationId,
-            principal.Identity.EnvironmentId, connectorId, request.Operation);
-        AuthorizedFse2Dispatch authority;
-        try { authority = await profiles.ResolveAsync(lookup, cancellationToken).ConfigureAwait(false); }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Fse2ConnectorException) { throw; }
-        catch (Exception) { throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_PROFILE_NOT_PUBLISHED"); }
-        Fse2PublishedOrganizationProfile profile = authority.Profile;
-        ValidateRequest(profile, operation, payload);
-        Fse2WorkflowExecutionContext security = await ResolveSecurityContextAsync(profile, operation, payload, cancellationToken).ConfigureAwait(false);
-        Uri endpoint = Fse2OperationCatalog.BuildEndpoint(profile.BaseEndpoint, request.Operation, request.ResourceIdentifier);
-        Fse2DispatchLease lease = dispatches.Begin(authority, endpoint, hook);
-        HttpRequestMessage? outbound = null;
-        try
+        Fse2WorkflowExecutionContext security = await ResolveSecurityContextAsync(
+            execution, profile, inbound, cancellationToken).ConfigureAwait(false);
+        byte[] exactOutboundBody = Fse2ExactBodyComposer.Compose(profile, inbound);
+        IReadOnlyDictionary<string, JsonElement> integrityClaims = BuildIntegrityClaims(
+            profile, inbound, security, exactOutboundBody);
+
+        _ = await execution.Capabilities.CreateSignedTokenAsync(
+            profile.AuthorizationSigningSlot,
+            EmptyClaims,
+            cancellationToken).ConfigureAwait(false);
+        _ = await execution.Capabilities.CreateSignedTokenAsync(
+            profile.IntegritySigningSlot,
+            integrityClaims,
+            cancellationToken).ConfigureAwait(false);
+
+        QualifiedGatewayExecutionResult upstream = await execution.Capabilities.ExecuteRestrictedTransportAsync(
+            new AuthorizedConnectorRestrictedTransportRequest(exactOutboundBody),
+            cancellationToken).ConfigureAwait(false);
+        Fse2Response normalized = Fse2ResponseMapper.Map(upstream, execution.CorrelationId, profile.Operation);
+        if (profile.Operation.Operation is not (Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace) &&
+            (normalized.WorkflowInstanceId is not null || normalized.TraceId is not null))
         {
-            AuthenticationExecutionContext authenticationContext = Context(profile, operation, endpoint, profile.AuthenticationJwtProfileId, lease.Id);
-            AuthenticationExecutionContext signatureContext = Context(profile, operation, endpoint, profile.SignatureJwtProfileId, lease.Id);
-            AuthenticationExecutionContext mutualTlsContext = Context(profile, operation, endpoint, profile.MutualTlsProfileId, lease.Id);
-            string authenticationJwt;
-            string signatureJwt;
-            try
-            {
-                authenticationJwt = await jwtSigner.SignJwtAsync(authenticationContext, profile.AuthenticationJwtProfileId, [], cancellationToken).ConfigureAwait(false);
-                signatureJwt = await jwtSigner.SignJwtAsync(signatureContext, profile.SignatureJwtProfileId,
-                    BuildSignatureClaims(profile, operation, payload, security), cancellationToken).ConfigureAwait(false);
-                await hook.AfterBothJwtPreparedAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-            catch (AuthenticationPrimitiveException exception) { throw MapAuthenticationFailure(exception); }
-            catch (Fse2ConnectorException) { throw; }
-            catch (Exception) { throw AuthenticationFailure("FSE2_JWT_COMPOSITION_FAILED"); }
-
-            outbound = BuildRequest(endpoint, operation, payload);
-            dispatches.Prepare(outbound, lease, authenticationJwt, signatureJwt);
-            MutualTlsAuthenticatedResponse authenticatedResponse;
-            try { authenticatedResponse = await mutualTls.SendAsync(mutualTlsContext, profile.MutualTlsProfileId, outbound, cancellationToken).ConfigureAwait(false); }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-            catch (AuthenticationPrimitiveException exception) { throw MapAuthenticationFailure(exception); }
-            catch (GatewayException) { throw Denied(Fse2ErrorCategory.UpstreamRejected, "FSE2_UPSTREAM_REJECTED", operation.RetryClass == Fse2RetryClass.SafeRetry); }
-            catch (Fse2ConnectorException) { throw; }
-            catch (Exception) { throw Denied(Fse2ErrorCategory.TemporarilyUnavailable, "FSE2_TRANSPORT_FAILED", operation.RetryClass == Fse2RetryClass.SafeRetry); }
-
-            Fse2Response response = Fse2ResponseMapper.Map(authenticatedResponse.Response, principal.CorrelationId, operation);
-            if (request.Operation is not (Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace) &&
-                (response.WorkflowInstanceId is not null || response.TraceId is not null))
-                await RecordWorkflowAsync(principal.CorrelationId, profile, request.Operation, response, security, cancellationToken).ConfigureAwait(false);
-            return response;
+            await workflowStore.RecordAsync(execution.CorrelationId, new(
+                WorkflowScope(execution, profile),
+                profile.Operation.Operation,
+                security.OperationReference,
+                security.Action,
+                security.PurposeOfUse,
+                normalized.WorkflowInstanceId,
+                normalized.TraceId), cancellationToken).ConfigureAwait(false);
         }
-        finally
-        {
-            dispatches.Complete(lease, outbound);
-            outbound?.Dispose();
-        }
+
+        return new(upstream.StatusCode, "application/json", JsonSerializer.SerializeToUtf8Bytes(normalized, ResponseJson));
     }
 
-    private static void ValidateRequest(Fse2PublishedOrganizationProfile profile, Fse2OperationDescriptor operation, Fse2RequestSnapshot payload)
+    private async Task<Fse2WorkflowExecutionContext> ResolveSecurityContextAsync(
+        AuthorizedConnectorExecution execution,
+        Fse2PublishedOrganizationProfile profile,
+        Fse2InboundPayload inbound,
+        CancellationToken cancellationToken)
     {
-        Fse2Request request = payload.Source;
-        if (payload.Document.Length > profile.MaximumDocumentBytes || payload.RequestBody.Length > 1024 * 1024)
-            throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_PAYLOAD_TOO_LARGE");
-        if (operation.HasDocument != !payload.Document.IsEmpty || operation.HasJsonBody != !payload.RequestBody.IsEmpty ||
-            operation.RequiresResourceIdentifier != (request.ResourceIdentifier is not null))
-            throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_REQUEST_SHAPE_DENIED");
-        if (operation.HasJsonBody) Fse2Validation.ValidateJsonObject(payload.RequestBody);
-        if (operation.HasDocument && request.DocumentContentType is not ("application/pdf" or "application/json"))
-            throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_DOCUMENT_CONTENT_TYPE_DENIED");
-        if (request.Operation != Fse2Operation.ValidateFhir && request.DocumentContentType == "application/json")
-            throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_DOCUMENT_CONTENT_TYPE_DENIED");
-        if (request.ClinicalClaims is null) throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_CLINICAL_CONTEXT_REQUIRED");
-    }
-
-    private async Task<Fse2WorkflowExecutionContext> ResolveSecurityContextAsync(Fse2PublishedOrganizationProfile profile,
-        Fse2OperationDescriptor operation, Fse2RequestSnapshot payload, CancellationToken cancellationToken)
-    {
-        Fse2ClinicalClaims claims = payload.Source.ClinicalClaims!;
+        Fse2OperationDescriptor operation = profile.Operation;
         if (operation.Action is Fse2Action action && operation.PurposeOfUse is Fse2PurposeOfUse purpose)
         {
-            if (payload.Source.Operation != Fse2Operation.Delete && claims.ResourceHl7Type is null)
+            if (operation.Operation != Fse2Operation.Delete && inbound.ClinicalClaims.ResourceHl7Type is null)
                 throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_RESOURCE_HL7_TYPE_REQUIRED");
             Fse2OperationCatalog.ValidateOrganizationCombination(profile.SubjectRole, operation.OperationId, purpose, action);
-            return new(action, purpose, claims, operation.OperationId);
+            return new(action, purpose, inbound.ClinicalClaims, operation.OperationId);
         }
 
         try
         {
-            Fse2WorkflowAuthorityScope scope = WorkflowScope(profile);
-            Fse2WorkflowRecord stored = await workflowStore.ResolveAsync(scope, payload.Source.Operation,
-                payload.Source.ResourceIdentifier!, cancellationToken).ConfigureAwait(false)
-                ?? throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_WORKFLOW_CONTEXT_NOT_FOUND");
-            if (stored.Authority != scope || !Fse2Validation.IsSafeIdentifier(stored.OriginatingOperationId))
-                throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_WORKFLOW_CONTEXT_DENIED");
+            Fse2WorkflowAuthorityScope scope = WorkflowScope(execution, profile);
+            Fse2WorkflowRecord stored = await workflowStore.ResolveAsync(
+                scope,
+                operation.Operation,
+                profile.ResourceIdentifier!,
+                cancellationToken).ConfigureAwait(false);
             Fse2OperationDescriptor origin = Fse2OperationCatalog.Get(stored.OriginatingOperation);
-            if (!string.Equals(origin.OperationId, stored.OriginatingOperationId, StringComparison.Ordinal))
+            if (stored.Authority != scope ||
+                !string.Equals(origin.OperationId, stored.OriginatingOperationId, StringComparison.Ordinal))
                 throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_WORKFLOW_CONTEXT_DENIED");
-            Fse2OperationCatalog.ValidateOrganizationCombination(profile.SubjectRole, stored.OriginatingOperationId,
-                stored.PurposeOfUse, stored.Action);
-            return new(stored.Action, stored.PurposeOfUse, claims, stored.OriginatingOperationId);
+            Fse2OperationCatalog.ValidateOrganizationCombination(
+                profile.SubjectRole,
+                stored.OriginatingOperationId,
+                stored.PurposeOfUse,
+                stored.Action);
+            return new(stored.Action, stored.PurposeOfUse, inbound.ClinicalClaims, stored.OriginatingOperationId);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Fse2ConnectorException) { throw; }
         catch (Exception) { throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_WORKFLOW_CONTEXT_NOT_FOUND"); }
     }
 
-    private static List<JwtBoundClaim> BuildSignatureClaims(Fse2PublishedOrganizationProfile profile,
-        Fse2OperationDescriptor operation, Fse2RequestSnapshot payload, Fse2WorkflowExecutionContext security)
+    private static void ValidateRequest(Fse2PublishedOrganizationProfile profile, Fse2InboundPayload inbound)
     {
-        List<JwtBoundClaim> claims =
-        [
-            Claim("subject_role", profile.SubjectRole), Claim("purpose_of_use", Fse2OperationCatalog.ClaimValue(security.PurposeOfUse)),
-            Claim("subject_organization", profile.OrganizationDescription), Claim("subject_organization_id", profile.OrganizationDomainId),
-            Claim("locality", profile.Locality), Claim("person_id", security.ClinicalClaims.PersonId),
-            new("patient_consent", JsonSerializer.SerializeToElement(security.ClinicalClaims.PatientConsent)),
-            Claim("action_id", Fse2OperationCatalog.ClaimValue(security.Action)), Claim("subject_application_id", profile.ApplicationId),
-            Claim("subject_application_vendor", profile.ApplicationVendor), Claim("subject_application_version", profile.ApplicationVersion)
-        ];
-        if (security.ClinicalClaims.ResourceHl7Type is not null) claims.Add(Claim("resource_hl7_type", security.ClinicalClaims.ResourceHl7Type));
-        if (operation.RequiresAttachmentHash) claims.Add(Claim("attachment_hash", Fse2Validation.ComputeAttachmentHash(payload.Document)));
-        return claims;
+        Fse2OperationDescriptor operation = profile.Operation;
+        if (inbound.Document.Length > profile.MaximumDocumentBytes ||
+            operation.HasDocument != !inbound.Document.IsEmpty ||
+            operation.HasJsonBody != !inbound.RequestBody.IsEmpty ||
+            operation.RequiresResourceIdentifier != (inbound.ResourceIdentifier is not null) ||
+            !string.Equals(profile.ResourceIdentifier, inbound.ResourceIdentifier, StringComparison.Ordinal))
+            throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_REQUEST_SHAPE_DENIED");
+        if (operation.HasJsonBody) Fse2Validation.ValidateJsonObject(inbound.RequestBody);
+        if (operation.HasDocument && inbound.DocumentContentType is not ("application/pdf" or "application/json"))
+            throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_DOCUMENT_CONTENT_TYPE_DENIED");
+        if (operation.Operation != Fse2Operation.ValidateFhir && inbound.DocumentContentType == "application/json")
+            throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_DOCUMENT_CONTENT_TYPE_DENIED");
     }
 
-    private static JwtBoundClaim Claim(string name, string value) => new(name, JsonSerializer.SerializeToElement(value));
-
-    private static HttpRequestMessage BuildRequest(Uri endpoint, Fse2OperationDescriptor operation, Fse2RequestSnapshot payload)
+    private static FrozenDictionary<string, JsonElement> BuildIntegrityClaims(
+        Fse2PublishedOrganizationProfile profile,
+        Fse2InboundPayload inbound,
+        Fse2WorkflowExecutionContext security,
+        ReadOnlyMemory<byte> exactOutboundBody)
     {
-        HttpRequestMessage outbound = new(operation.Method, endpoint);
-        outbound.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        if (operation.HasDocument)
+        Dictionary<string, JsonElement> claims = new(StringComparer.Ordinal)
         {
-            MultipartFormDataContent multipart = new();
-            ByteArrayContent body = new(payload.RequestBody.ToArray());
-            body.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-            multipart.Add(body, "requestBody");
-            ByteArrayContent file = new(payload.Document.ToArray());
-            file.Headers.ContentType = new MediaTypeHeaderValue(payload.Source.DocumentContentType!);
-            multipart.Add(file, "file", payload.Source.DocumentContentType == "application/json" ? "bundle.json" : "document.pdf");
-            outbound.Content = multipart;
-        }
-        else if (operation.HasJsonBody)
-        {
-            outbound.Content = new ByteArrayContent(payload.RequestBody.ToArray());
-            outbound.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-        }
-        return outbound;
+            ["subject_role"] = JsonSerializer.SerializeToElement(profile.SubjectRole),
+            ["purpose_of_use"] = JsonSerializer.SerializeToElement(Fse2OperationCatalog.ClaimValue(security.PurposeOfUse)),
+            ["subject_organization"] = JsonSerializer.SerializeToElement(profile.OrganizationDescription),
+            ["subject_organization_id"] = JsonSerializer.SerializeToElement(profile.OrganizationDomainId),
+            ["locality"] = JsonSerializer.SerializeToElement(profile.Locality),
+            ["person_id"] = JsonSerializer.SerializeToElement(security.ClinicalClaims.PersonId),
+            ["patient_consent"] = JsonSerializer.SerializeToElement(security.ClinicalClaims.PatientConsent),
+            ["action_id"] = JsonSerializer.SerializeToElement(Fse2OperationCatalog.ClaimValue(security.Action)),
+            ["subject_application_id"] = JsonSerializer.SerializeToElement(profile.ApplicationId),
+            ["subject_application_vendor"] = JsonSerializer.SerializeToElement(profile.ApplicationVendor),
+            ["subject_application_version"] = JsonSerializer.SerializeToElement(profile.ApplicationVersion)
+        };
+        if (security.ClinicalClaims.ResourceHl7Type is not null)
+            claims["resource_hl7_type"] = JsonSerializer.SerializeToElement(security.ClinicalClaims.ResourceHl7Type);
+        if (profile.Operation.RequiresAttachmentHash)
+            claims["attachment_hash"] = JsonSerializer.SerializeToElement(Fse2Validation.ComputeAttachmentHash(exactOutboundBody));
+        return claims.ToFrozenDictionary(StringComparer.Ordinal);
     }
 
-    private static AuthenticationExecutionContext Context(Fse2PublishedOrganizationProfile profile,
-        Fse2OperationDescriptor operation, Uri endpoint, string profileId, Guid dispatchId) =>
-        new(profile.Authority.TenantId, profile.Authority.InstallationId, profile.Authority.ApplicationId,
-            profile.Authority.EnvironmentId, profile.ConnectorVersionId, profile.Authority.ConnectorId,
-            operation.OperationId, profileId, endpoint, dispatchId);
+    private static Fse2WorkflowAuthorityScope WorkflowScope(
+        AuthorizedConnectorExecution execution,
+        Fse2PublishedOrganizationProfile profile) => new(
+            execution.TenantId,
+            execution.ApplicationId,
+            execution.InstallationId,
+            execution.EnvironmentId,
+            execution.ConnectorVersion,
+            execution.ConnectorId,
+            profile.ProfileChecksumSha256);
 
-    private async Task RecordWorkflowAsync(Guid correlationId, Fse2PublishedOrganizationProfile profile,
-        Fse2Operation operation, Fse2Response response, Fse2WorkflowExecutionContext security, CancellationToken cancellationToken)
+    private static Fse2ConnectorException Denied(Fse2ErrorCategory category, string code) => new(category, code);
+
+    private sealed record Fse2WorkflowExecutionContext(
+        Fse2Action Action,
+        Fse2PurposeOfUse PurposeOfUse,
+        Fse2ClinicalClaims ClinicalClaims,
+        string OperationReference);
+}
+
+/// <summary>Bounded, process-local technical correlation store owned by the FSE2 module.</summary>
+public sealed class InMemoryFse2WorkflowCorrelationStore : IFse2WorkflowCorrelationStore
+{
+    private const int MaximumRecords = 10_000;
+    private readonly ConcurrentDictionary<(Fse2WorkflowAuthorityScope Authority, string Identifier), Fse2WorkflowRecord> records = new();
+
+    public Task RecordAsync(Guid correlationId, Fse2WorkflowRecord record, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(record);
+        if (correlationId == Guid.Empty || records.Count >= MaximumRecords ||
+            record.WorkflowInstanceId is null && record.TraceId is null)
+            throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_WORKFLOW_RECORD_FAILED");
+        Add(record.WorkflowInstanceId);
+        Add(record.TraceId);
+        return Task.CompletedTask;
+
+        void Add(string? identifier)
+        {
+            if (identifier is null) return;
+            if (!records.TryAdd((record.Authority, identifier), record))
+                throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_WORKFLOW_RECORD_FAILED");
+        }
+    }
+
+    public Task<Fse2WorkflowRecord> ResolveAsync(
+        Fse2WorkflowAuthorityScope authority,
+        Fse2Operation statusOperation,
+        string resourceIdentifier,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (statusOperation is not (Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace) ||
+            !records.TryGetValue((authority, resourceIdentifier), out Fse2WorkflowRecord? record) ||
+            statusOperation == Fse2Operation.GetStatusByWorkflow && !string.Equals(record.WorkflowInstanceId, resourceIdentifier, StringComparison.Ordinal) ||
+            statusOperation == Fse2Operation.GetStatusByTrace && !string.Equals(record.TraceId, resourceIdentifier, StringComparison.Ordinal))
+            throw new Fse2ConnectorException(Fse2ErrorCategory.PolicyDenied, "FSE2_WORKFLOW_CONTEXT_NOT_FOUND");
+        return Task.FromResult(record);
+    }
+}
+
+internal sealed record Fse2InboundPayload(
+    ReadOnlyMemory<byte> Document,
+    ReadOnlyMemory<byte> RequestBody,
+    string? DocumentContentType,
+    string? ResourceIdentifier,
+    Fse2ClinicalClaims ClinicalClaims)
+{
+    private static readonly HashSet<string> AllowedProperties = new(StringComparer.Ordinal)
+    {
+        "personId", "patientConsent", "resourceHl7Type", "documentBase64", "requestBodyBase64",
+        "documentContentType", "resourceIdentifier"
+    };
+
+    internal static Fse2InboundPayload Parse(Stream stream, int payloadLength)
+    {
+        if (payloadLength is < 2 or > 16 * 1024 * 1024)
+            throw new Fse2ConnectorException(Fse2ErrorCategory.InputDenied, "FSE2_REQUEST_PAYLOAD_INVALID");
         try
         {
-            await workflowStore.RecordAsync(correlationId, new(WorkflowScope(profile), operation, security.OperationReference,
-                security.Action, security.PurposeOfUse, response.WorkflowInstanceId, response.TraceId), cancellationToken).ConfigureAwait(false);
+            using JsonDocument document = JsonDocument.Parse(stream, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+                MaxDepth = 4
+            });
+            JsonElement root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) throw new JsonException();
+            HashSet<string> observed = new(StringComparer.Ordinal);
+            foreach (JsonProperty property in root.EnumerateObject())
+                if (!AllowedProperties.Contains(property.Name) || !observed.Add(property.Name)) throw new JsonException();
+            if (!observed.Contains("personId") || !observed.Contains("patientConsent")) throw new JsonException();
+
+            string personId = String(root, "personId", 512)!;
+            bool consent = root.GetProperty("patientConsent").GetBoolean();
+            string? resourceType = String(root, "resourceHl7Type", 256);
+            Fse2ClinicalClaims clinical = Fse2ClinicalClaims.CreateCanonicalPerson(personId, consent, resourceType);
+            byte[] documentBytes = Decode(root, "documentBase64");
+            byte[] requestBytes = Decode(root, "requestBodyBase64");
+            return new(documentBytes, requestBytes, String(root, "documentContentType", 128),
+                String(root, "resourceIdentifier", 512), clinical);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception) { throw Denied(Fse2ErrorCategory.ResponseInvalid, "FSE2_WORKFLOW_RECORD_FAILED"); }
+        catch (Fse2ConnectorException) { throw; }
+        catch (Exception exception) when (exception is ArgumentException or FormatException or InvalidOperationException or JsonException or KeyNotFoundException or OverflowException)
+        {
+            throw new Fse2ConnectorException(Fse2ErrorCategory.InputDenied, "FSE2_REQUEST_PAYLOAD_INVALID");
+        }
     }
 
-    private static Fse2WorkflowAuthorityScope WorkflowScope(Fse2PublishedOrganizationProfile profile) => new(
-        profile.Authority.TenantId, profile.Authority.ApplicationId, profile.Authority.InstallationId,
-        profile.Authority.EnvironmentId, profile.ConnectorVersionId, profile.ConnectorVersion,
-        profile.Authority.ConnectorId, profile.ProfileAuthorityId, profile.Revision, profile.ChecksumSha256);
-
-    private static Fse2ConnectorException MapAuthenticationFailure(AuthenticationPrimitiveException failure)
+    private static string? String(JsonElement root, string name, int maximumLength)
     {
-        Fse2ErrorCategory category = failure.Code.Contains("DESTINATION", StringComparison.Ordinal) || failure.Code.Contains("REQUEST-BOUNDARY", StringComparison.Ordinal)
-            ? Fse2ErrorCategory.DestinationDenied : Fse2ErrorCategory.AuthenticationDenied;
-        return new(category, Fse2Validation.IsSafeCode(failure.Code) ? failure.Code : "FSE2_AUTHENTICATION_DENIED", failure.Retryable);
+        if (!root.TryGetProperty(name, out JsonElement property) || property.ValueKind == JsonValueKind.Null) return null;
+        if (property.ValueKind != JsonValueKind.String) throw new JsonException();
+        string value = property.GetString()!;
+        if (string.IsNullOrWhiteSpace(value) || value.Length > maximumLength || value != value.Trim() || value.Any(char.IsControl))
+            throw new JsonException();
+        return value;
     }
 
-    private static Fse2ConnectorException AuthenticationFailure(string safeCode) => new(Fse2ErrorCategory.AuthenticationDenied, safeCode);
-    private static Fse2ConnectorException Denied(Fse2ErrorCategory category, string code, bool retryable = false) => new(category, code, retryable);
-    private sealed record Fse2WorkflowExecutionContext(Fse2Action Action, Fse2PurposeOfUse PurposeOfUse,
-        Fse2ClinicalClaims ClinicalClaims, string OperationReference);
+    private static byte[] Decode(JsonElement root, string name)
+    {
+        string? encoded = String(root, name, 21 * 1024 * 1024);
+        return encoded is null ? [] : Convert.FromBase64String(encoded);
+    }
+}
+
+internal static class Fse2ExactBodyComposer
+{
+    internal static byte[] Compose(Fse2PublishedOrganizationProfile profile, Fse2InboundPayload inbound)
+    {
+        if (!profile.Operation.HasDocument)
+            return inbound.RequestBody.IsEmpty ? "{}"u8.ToArray() : inbound.RequestBody.ToArray();
+
+        using MemoryStream output = new();
+        string boundary = profile.MultipartBoundary!;
+        WriteAscii(output, $"--{boundary}\r\nContent-Disposition: form-data; name=\"requestBody\"\r\nContent-Type: application/json\r\n\r\n");
+        output.Write(inbound.RequestBody.Span);
+        WriteAscii(output, $"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{(inbound.DocumentContentType == "application/json" ? "bundle.json" : "document.pdf")}\"\r\nContent-Type: {inbound.DocumentContentType}\r\n\r\n");
+        output.Write(inbound.Document.Span);
+        WriteAscii(output, $"\r\n--{boundary}--\r\n");
+        return output.ToArray();
+    }
+
+    private static void WriteAscii(Stream stream, string value) => stream.Write(Encoding.ASCII.GetBytes(value));
 }
 
 /// <summary>RFC7807 and success response mapper retaining technical allowlisted metadata only.</summary>
 public static class Fse2ResponseMapper
 {
-    public static Fse2Response Map(MutualTlsTransportResponse response, Guid correlationId, Fse2OperationDescriptor operation)
+    public static Fse2Response Map(QualifiedGatewayExecutionResult response, Guid correlationId, Fse2OperationDescriptor operation)
     {
         ArgumentNullException.ThrowIfNull(response);
         if (!operation.SuccessStatusCodes.Contains(response.StatusCode)) throw MapProblem(response, operation.RetryClass);
@@ -241,14 +332,14 @@ public static class Fse2ResponseMapper
             using JsonDocument document = JsonDocument.Parse(response.Body, new JsonDocumentOptions { MaxDepth = 16 });
             JsonElement root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object) throw new JsonException();
-            return new(response.StatusCode, correlationId, Safe(root, "workflowInstanceId", 512, workflow: true), Safe(root, "traceID", 128),
-                Safe(root, "spanID", 128), Safe(root, "warning", 96), operation.RetryClass);
+            return new(response.StatusCode, correlationId, Safe(root, "workflowInstanceId", 512, workflow: true),
+                Safe(root, "traceID", 128), Safe(root, "spanID", 128), Safe(root, "warning", 96), operation.RetryClass);
         }
         catch (Fse2ConnectorException) { throw; }
         catch (Exception) { throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID"); }
     }
 
-    public static Fse2ConnectorException MapProblem(MutualTlsTransportResponse response, Fse2RetryClass retryClass)
+    public static Fse2ConnectorException MapProblem(QualifiedGatewayExecutionResult response, Fse2RetryClass retryClass)
     {
         string safeCode = "FSE2_UPSTREAM_REJECTED";
         if (response.ContentType.StartsWith("application/problem+json", StringComparison.OrdinalIgnoreCase))
@@ -260,14 +351,17 @@ public static class Fse2ResponseMapper
                 string? candidate = SafeProblemValue(root, "type") ?? SafeProblemValue(root, "code");
                 if (candidate is not null)
                 {
-                    int slash = candidate.LastIndexOf('/'); candidate = slash >= 0 ? candidate[(slash + 1)..] : candidate;
+                    int slash = candidate.LastIndexOf('/');
+                    candidate = slash >= 0 ? candidate[(slash + 1)..] : candidate;
                     if (Fse2Validation.IsSafeCode(candidate)) safeCode = candidate;
                 }
             }
             catch (Exception) { safeCode = "FSE2_UPSTREAM_REJECTED"; }
         }
         bool retryable = retryClass == Fse2RetryClass.SafeRetry && response.StatusCode is 429 or 502 or 503 or 504;
-        Fse2ErrorCategory category = response.StatusCode is 429 or >= 500 ? Fse2ErrorCategory.TemporarilyUnavailable : Fse2ErrorCategory.UpstreamRejected;
+        Fse2ErrorCategory category = response.StatusCode is 429 or >= 500
+            ? Fse2ErrorCategory.TemporarilyUnavailable
+            : Fse2ErrorCategory.UpstreamRejected;
         return new(category, safeCode, retryable);
     }
 
@@ -283,12 +377,15 @@ public static class Fse2ResponseMapper
     private static string? Safe(JsonElement root, string name, int maximumLength, bool workflow = false)
     {
         if (!root.TryGetProperty(name, out JsonElement value) || value.ValueKind == JsonValueKind.Null) return null;
-        if (value.ValueKind != JsonValueKind.String) throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
+        if (value.ValueKind != JsonValueKind.String)
+            throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
         string text = value.GetString()!;
-        if (string.IsNullOrWhiteSpace(text) || text.Length > maximumLength || text.Any(char.IsControl)) throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
+        if (string.IsNullOrWhiteSpace(text) || text.Length > maximumLength || text.Any(char.IsControl))
+            throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
         if (!workflow && name != "warning" && !text.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.'))
             throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
-        if (name == "warning" && !Fse2Validation.IsSafeCode(text)) throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
+        if (name == "warning" && !Fse2Validation.IsSafeCode(text))
+            throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
         return text;
     }
 }

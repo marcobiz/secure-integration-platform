@@ -1,10 +1,8 @@
-# FSE2 National Connector organization profile — implementation report
+# FSE2 National Connector Organization profile — implementation report
 
-Date: 2026-08-09
+Date: 2026-08-11
 
-Starting HEAD: `298e76163143f339d14b88308c3b4ca609036b2f`
-
-Independent-review remediation baseline: `702642f8254f34a8e34879ba052689eb7c67e077`
+Qualified Core/Auth/Runtime baseline: `feec547a3e0991171fca1f8b22b136d3dd4c4ee3`
 
 Branch/PR: `wave1/fse2-national` / #16
 
@@ -13,91 +11,99 @@ Official public freeze: guide 2.23 and OpenAPI 1.0.0 at
 
 ## Implemented result
 
-The independent gate decision `RESUME_FSE2_WITH_EXISTING_CORE` is implemented only for the
-server-owned organization profile. The profile's approved P.IVA is canonicalized into CX,
-bound to the exact Published authority and checksum, and signed as fixed `sub`. Changing
-the organization identity requires a different checksum/revision.
+The Organization profile now runs as the external module `healthcare-fse2` and strategy
+`healthcare-fse2-organization`. Its only declared outbound authentication kind is `mtls`.
+The pack consumes the public `AuthorizedConnectorExecution` surface and has one project dependency:
+`Gateway.Application`. It has no `InternalsVisibleTo`, store, provider, signing primitive,
+certificate primitive, restricted-transport implementation, Gateway internal invocation object,
+service locator or HTTP client.
 
-The targeted remediation replaces caller-constructible profile attestation with
-`PublishedConnectorFse2ProfileResolver`: the production path reads the real Connector store with
-the authenticated access context, validates the exact Published version/operation/canonical
-checksum and active binding/resource stamps, and requires a current exact-checksum/exact-binding-
-digest four-eyes record with distinct requester/approver principals. The resolved profile and
-dispatch authority have no public construction path.
+The FSE2-specific profile is parsed and validated inside `Healthcare.FSE2` from the immutable
+`AuthorizedPublishedExtensionConfiguration` copied from initially authorized Published A. The
+profile supplies organization/locality/application values, the exact frozen operation semantics,
+request media type and the two vertical slot names. It does not reread a generic store and is not a
+second authority model. The profile's approved P.IVA plus assigning authority produce canonical CX;
+the two server-owned signing policies use that value as fixed `sub`. `person_id` remains a separate
+validated business CX. DAP, purpose and action are derived from the frozen operation matrix and
+`use_subject_as_author` is absent. Human Actor remains deferred.
 
-The pack implements the frozen eleven-operation inventory, while rejecting both official
-test-only operations in Production and leaving direct FHIR create/replace plus inbound
-callback surfaces unavailable. DAP/purpose/action combinations are explicit and fail
-closed. `person_id` remains clinical/business identity; `use_subject_as_author` is omitted.
+The strategy requests exactly one fresh opaque token from `authorization` and one from `integrity`.
+Core owns RS256, issuer, audience, fixed subject, temporal values, `jti`, signing binding, SPKI,
+`x5c` and both projections. The vertical never reads either compact JWT and never creates an
+Authorization or `FSE-JWT-Signature` header. Core projects the first as Bearer and the second as the
+FSE header, then performs the existing Published-A freshness, restricted-egress and server-owned
+mTLS flow.
 
-Two fresh RS256 JWTs are composed per call with leaf `x5c`, issuer prefix plus the exactly-one
-OID `2.5.4.3` CN parsed from Subject DER, fixed audience and `iat+exp` without `nbf`. A distinct
-purpose-bound client certificate is used for mTLS. Signing and mTLS bindings carry their actual
-Published logical ID, protected provider reference, catalog and binding revisions/checksums,
-fingerprint, SPKI and version. Both JWTs, both resources, organization subject and endpoint are
-held by one `Fse2DispatchLease`; after mTLS material/DNS resolution the final transport re-reads
-the complete authority, then projects the JWT headers synchronously and sends.
+FSE2 claim composition remains connector-local. The integrity token receives only allowlisted
+business/derived scalar claims. For document operations, the connector composes one immutable,
+deterministic multipart body and computes lowercase SHA-256 over those exact final outbound bytes;
+the same copied byte array is handed to restricted transport without later serialization. The
+frozen eleven-operation inventory is unchanged: nine Production-available operations, two official
+test-only operations, and no speculative FHIR create/replace, callback or consumer surface.
 
-The document hash is lowercase SHA-256 over the same private invocation-entry byte snapshot sent
-on wire. Workflow/trace persistence uses a full tenant/application/installation/environment/
-ConnectorVersion/profile revision+checksum key and technical identifiers only; patient claims and
-document bodies are not persisted. Only the two status operations are safe-retry. Responses and
-RFC7807 errors retain bounded allowlisted technical fields and stable codes only.
+Responses are reduced to bounded technical identifiers and safe warnings. The module-owned workflow
+store keeps technical workflow/trace correlations scoped by authenticated identities, Connector
+version and exact FSE profile checksum; it never stores patient or document data. This correlation
+store is process-local and is not represented as durable PostgreSQL workflow persistence.
 
-## Synthetic evidence
+## Production-path evidence
 
-The test server uses per-run CA, HTTPS server, signing and mTLS certificates. It requires
-the expected client certificate and cryptographically verifies both JWT signatures,
-standard-Base64 leaf x5c, issuer, organization subject, audience, temporal profile,
-role/purpose/action, CX/XON and exact uploaded-file hash. CI performs no official FSE call.
+`Fse2OrganizationHostedIntegrationTests` crosses the real hosted path:
 
-`CONNECTOR_SECURITY_PATH` evidence crosses the production Published resolver, connector, generic
-signing/mTLS and final restricted transport. It covers wrong grant, invalidated four-eyes approval,
-business person/organization separation, stable signing and mTLS substitutions, purpose cross-use,
-attacker endpoint, Production use of a test-only operation, four deterministic final races
-(signing, mTLS, organization profile and endpoint), workflow cross-context reuse and payload
-mutation during signing. Pre-dispatch denials assert network zero and pre-signing denials also
-assert provider zero. `SERVER_VALIDATION_TEST` cases for malformed/missing JWT headers are kept
-separate and are not counted as connector-authority evidence.
+PostgreSQL 18 or in-memory Published store → Connector import/validation → editor → distinct
+approver → publication → hosted Gateway → BGW1 request authentication → grant → dynamically loaded
+FSE2 module/strategy → exact Published extension → both authorized signing slots → server-owned
+mTLS/restricted HTTPS → synthetic FSE2 server → bounded response.
 
-Unit evidence additionally covers truly frozen catalog collections, canonical ASN.1 OID arc rules,
-and DER X.500 CN absence/duplicates/multi-valued RDN/empty/malformed/SAN-only behavior.
+The server requires the exact trusted client certificate and checks the real request method, path
+and content type. It verifies two distinct compact tokens and `jti` values, both RS256 signatures,
+the full expected `x5c` chain, the same signing leaf, distinct `auth:`/`integrity:` issuers, fixed
+organization subject, audience, `iat+nbf+exp` lifetime, DAP/purpose/action, organization/locality/
+application and person claims, and the SHA-256 of the network-observed multipart bytes. The success
+case observes exactly one outbound request and no retry.
+
+Connector-specific negatives cover unknown and repeated slot selection, caller attempts to add a
+subject, caller metadata attempts to select endpoint/key/certificate/profile, malformed CX/XON,
+role/operation/environment profile substitution and exact-byte mutation detection. The deterministic
+connector race blocks the second-slot signing flow, publishes B, resumes and receives Core stale
+denial with zero FSE2 requests and zero generic transport effects. Generic signing-slot, provider,
+cancellation, timeout, restricted-egress and binding-substitution matrices remain regression evidence
+from the qualified Core foundation; they are not reimplemented in the vertical.
+
+## Local qualification at the implementation checkpoint
+
+- FSE2 public-contract unit suite: 33/33 PASS;
+- Healthcare architecture slice: 8/8 PASS, including one `Gateway.Application` reference and no IVT;
+- hosted FSE2 in-memory success/negatives and A→B race: 2/2 PASS;
+- hosted FSE2 PostgreSQL 18 canonical test: 1/1 PASS on an ephemeral `postgres:18` container;
+- migration `0001` through `0013`, including authorized signing slots: PASS; container removed;
+- pack and hosted integration build: zero warnings/errors.
+
+- full `BrokerGateway.slnx` Release build and ordinary test gate: 599 PASS, 31 explicit
+  environment-gated skips and zero failures, with zero build warnings/errors;
+- authorized signing-slot focused regression: 8/8 PASS; complete certificate-signing suite:
+  93/93 PASS; hosted capability/execution regression: 5/5 PASS with its PostgreSQL-only case
+  explicitly skipped in the ordinary run;
+- Admin Web lint, generated OpenAPI diff, 28/28 Vitest, production build and npm high-severity
+  audit: PASS; `FULLSTACK-01` 1/1 PASS with production images, redaction and Docker cleanup;
+- documentation validation, conservative secret scan, NuGet vulnerability scan and
+  `git diff --check`: PASS;
+- full SPDX generation, including the indexed Gateway container, validation and SBOM-mode
+  regression: PASS;
+- verified Core export: PASS for 418 allowlisted files, including its clean restore, Release build,
+  Core tests, Admin build and frontend-license scan; an independent inventory check found no
+  Healthcare or ConnectorPacks path;
+- deterministic M3 split-network, split-firewall and operator-handoff regressions: PASS.
+
+Exact-head Gitleaks and canonical GitHub CI remain pending until the final commit is pushed. This
+report does not claim an official FSE endpoint call or accreditation.
 
 ## Readiness boundary
 
-- `ORGANIZATION_PROFILE = READY_FOR_TARGETED_REREVIEW`, subject to exact-head CI and that review;
-- `HUMAN_ACTOR_PROFILE = DEFERRED_PENDING_TRUSTED_ACTOR_SOURCE`;
+- `ORGANIZATION_PROFILE = READY_FOR_INDEPENDENT_REVIEW`, subject to final exact-head gates;
+- `HUMAN_ACTOR_PROFILE = DEFERRED`;
+- `NEW_CORE_PRIMITIVE_REQUIRED = NO`;
 - `ACCREDITED_PRODUCTION_READY = false`.
 
-Official provisioning, production certificate custody, approved deployment lifetime/skew,
-official conformance/accreditation, operational monitoring and live evidence remain
-required before any production-readiness claim.
-
-## Local qualification candidate
-
-The local product candidate completed:
-
-- full Release restore/build: PASS, 38 projects, zero warnings/errors;
-- FSE2 pack remediation candidate: 50/50 PASS, including real Published resolver, HTTPS/mTLS,
-  production-path negatives, final TCS races, workflow authority, immutable payload/catalog,
-  exact CN, semantic OID and separately labelled server validation;
-- ordinary .NET solution: 446 PASS, 11 PostgreSQL-conditional SKIP, zero failures;
-- architecture: 26/26 PASS, including seven Healthcare boundary tests;
-- certificate-signing/X.509 regression: 91/91 PASS;
-- documentation validation and conservative secret scan: PASS;
-- Gitleaks 8.30.0 on the complete FSE2 commit range: PASS;
-- transitive NuGet vulnerability audit: no vulnerable packages reported;
-- Windows SBOM generation/validation with explicit `-SkipContainer` and the SBOM
-  fail-closed mode regression: PASS;
-- open-source Core export: PASS, 371 files, Healthcare excluded, internal secret scan,
-  Release build/test and Admin frontend 28/28 PASS.
-
-Docker Desktop was unavailable locally. Therefore the PostgreSQL 18 conditional tests and
-container SBOM were not executed locally; the ordinary suite reported the 11 skips, and the
-first full SBOM attempt failed visibly at Docker daemon connection before the explicit
-Windows-mode rerun passed. No database, migration, Admin Web or container surface changed
-in this PR. The exact-head CI PostgreSQL/Gitleaks/SBOM results remain mandatory and are
-recorded after push; this report does not convert the local skips into PASS.
-
-Exact-head CI, final SHA, PR check state and clean-worktree result are recorded in the
-final PR handoff after push, so this committed report does not contain a self-referential SHA.
+Official provisioning, production certificate custody, approved policy values, conformance,
+accreditation, monitoring and live evidence remain required before production readiness.
