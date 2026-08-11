@@ -81,6 +81,24 @@ public sealed class HealthcarePackBoundaryTests
         Assert.Contains("AuthorizedGatewayInvocation", coreAuthorization, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void HC_W1_SISTEMATS_ARCH_connector_depends_only_on_qualified_public_capabilities_and_has_no_host_escape()
+    {
+        string packRoot = Path.Combine(Root, "src", "ConnectorPacks", "Healthcare", "Healthcare.SistemaTs");
+        XDocument project = XDocument.Load(Path.Combine(packRoot, "Healthcare.SistemaTs.csproj"));
+        string[] references = project.Descendants("ProjectReference")
+            .Select(element => Path.GetFileName((string?)element.Attribute("Include") ?? string.Empty)).Order().ToArray();
+        Assert.Equal(["Gateway.Application.csproj", "Gateway.ConnectorRuntime.Auth.Soap.csproj"], references);
+
+        string source = string.Join('\n', Directory.EnumerateFiles(packRoot, "*.cs", SearchOption.AllDirectories)
+            .Select(File.ReadAllText));
+        foreach (string forbidden in new[] { "IServiceProvider", "IConnectorConfigurationStore", "ISecretProvider", "HttpClient", "HttpRequestMessage", "InternalsVisibleTo", "Gateway.Api", "GetSecret" })
+            Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal);
+
+        string apiProject = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "Gateway.Api.csproj"));
+        Assert.DoesNotContain("Healthcare.SistemaTs", apiProject, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? current = new(AppContext.BaseDirectory);

@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/ConnectorPacks/Healthcare/Healthcare.SistemaTs/Healthcare.SistemaTs.csproj" />
     <Project Path="src/ConnectorPacks/Healthcare/Healthcare.RegionalEPrescription/Healthcare.RegionalEPrescription.csproj" />
     <Project Path="src/Authentication/CertificateSigning/Authentication.CertificateSigning.csproj" />
     <Project Path="src/Providers/Abstractions/Providers.Abstractions.csproj" />
@@ -23,6 +24,8 @@
     <Project Path="samples/DirectGatewayClient/DirectGatewayClient.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/unit/Healthcare.SistemaTs.Tests/Healthcare.SistemaTs.Tests.csproj" />
+    <Project Path="tests/integration/Healthcare.SistemaTs.Integration.Tests/Healthcare.SistemaTs.Integration.Tests.csproj" />
     <Project Path="tests/support/Synthetic.ConnectorExecutionCrossModule/Synthetic.ConnectorExecutionCrossModule.csproj" />
     <Project Path="tests/support/Synthetic.ConnectorExecutionDependencyModule/Synthetic.ConnectorExecutionDependencyModule.csproj" />
     <Project Path="tests/support/Synthetic.ConnectorExecutionModule/Synthetic.ConnectorExecutionModule.csproj" />
@@ -36,6 +39,7 @@
     <Project Path="tests/integration/Gateway.Integration.Tests/Gateway.Integration.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <Project Path="tools/healthcare/SyntheticSistemaTsServer/SyntheticSistemaTsServer.csproj" />
     <Project Path="tools/m6/SyntheticOAuthServer/SyntheticOAuthServer.csproj" />
     <Project Path="tools/connector-cli/Connector.Cli.csproj" />
     <Project Path="tools/live-matrix/probe/LiveMatrix.Probe.csproj" />

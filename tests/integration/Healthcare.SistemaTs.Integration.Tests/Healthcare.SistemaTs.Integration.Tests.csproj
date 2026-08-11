@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <AssemblyName>Healthcare.SistemaTs.Integration.Tests</AssemblyName>
+    <RootNamespace>SecureIntegration.ConnectorPacks.Healthcare.SistemaTs.Integration.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Gateway.Integration.Tests\Gateway.Integration.Tests.csproj" />
+    <ProjectReference Include="..\..\..\src\ConnectorPacks\Healthcare\Healthcare.SistemaTs\Healthcare.SistemaTs.csproj" />
+    <ProjectReference Include="..\..\..\tools\healthcare\SyntheticSistemaTsServer\SyntheticSistemaTsServer.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\..\docs\connectors\healthcare\sistema-ts-eprescription\sistema-ts.connector.json" Link="Samples\sistema-ts.connector.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -1220,3 +1220,8 @@ public sealed class PostgresIsolationTests
 
     private sealed class InjectedFailureException(string boundary) : Exception(boundary);
 }
+
+public static class HostedPostgresSupport
+{
+    public static Task ApplyMigrationsAsync() => PostgresIsolationTests.ApplyMigrationAsync();
+}
