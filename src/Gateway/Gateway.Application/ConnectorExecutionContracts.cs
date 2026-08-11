@@ -533,6 +533,9 @@ public interface IConnectorExecutionStrategyRegistrar
     void AddExternalSessionValidationAdapter<TAdapter>() where TAdapter : class;
     /// <summary>Registers one module-owned composed-SOAP business request adapter.</summary>
     void AddTypedComposedSoapRequestAdapter<TAdapter>() where TAdapter : class;
+    /// <summary>Registers one module-owned bounded Published-operation expectation provider.</summary>
+    void AddAuthorizedPublishedOperationExpectationProvider<TProvider>()
+        where TProvider : class, IAuthorizedPublishedOperationExpectationProvider;
 }
 
 /// <summary>Explicit startup-only module that registers known execution strategies and their own services.</summary>
@@ -658,12 +661,55 @@ internal sealed record ConnectorExecutionStrategyRegistration(
     IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds,
     bool PreservesCoreFailures);
 
+internal sealed class AuthorizedPublishedOperationExpectationProviderRegistry
+{
+    private const int MaximumProviders = 64;
+    private readonly FrozenDictionary<ConnectorExecutionStrategyKey, IAuthorizedPublishedOperationExpectationProvider> providers;
+
+    internal AuthorizedPublishedOperationExpectationProviderRegistry(
+        IEnumerable<IAuthorizedPublishedOperationExpectationProvider>? values)
+    {
+        Dictionary<ConnectorExecutionStrategyKey, IAuthorizedPublishedOperationExpectationProvider> registered = [];
+        int providerCount = 0;
+        foreach (IAuthorizedPublishedOperationExpectationProvider provider in values ?? [])
+        {
+            if (provider is null || ++providerCount > MaximumProviders)
+                throw new InvalidOperationException("Published operation expectation provider registry is invalid or full.");
+            IReadOnlySet<ConnectorExecutionStrategyKey> advertised = provider.SupportedExecutionStrategies ??
+                throw new InvalidOperationException("Published operation expectation provider strategy set is missing.");
+            int strategyCount = 0;
+            HashSet<ConnectorExecutionStrategyKey> snapshot = [];
+            foreach (ConnectorExecutionStrategyKey key in advertised)
+            {
+                if (key is null || ++strategyCount > ConnectorExecutionStrategyRegistry.MaximumStrategies || !snapshot.Add(key))
+                    throw new InvalidOperationException("Published operation expectation provider strategy set is invalid.");
+            }
+            if (snapshot.Count == 0)
+                throw new InvalidOperationException("Published operation expectation provider strategy set is empty.");
+            foreach (ConnectorExecutionStrategyKey key in snapshot)
+                if (!registered.TryAdd(key, provider))
+                    throw new InvalidOperationException("Duplicate Published operation expectation provider strategy key.");
+        }
+        providers = registered.ToFrozenDictionary();
+    }
+
+    internal IAuthorizedPublishedOperationExpectationProvider Required(ConnectorExecutionStrategyKey key) =>
+        providers.TryGetValue(key, out IAuthorizedPublishedOperationExpectationProvider? provider)
+            ? provider
+            : throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+}
+
 /// <summary>Implemented only by built-in Core strategies through existing friend boundaries.</summary>
 internal interface ICoreConnectorExecutionStrategy;
 
 /// <summary>Internal composition contract implemented by the existing qualified capability pack.</summary>
 internal interface IAuthorizedConnectorCapabilityDispatcher
 {
+    Task ValidatePublishedOperationExpectationsAsync(
+        AuthorizedConnectorExecution execution,
+        AuthorizedPublishedOperationExpectations expectations,
+        CancellationToken cancellationToken);
+
     Task<QualifiedGatewayExecutionResult> ExecuteTypedSessionHandshakeAsync(
         AuthorizedConnectorExecution execution,
         CancellationToken cancellationToken);
@@ -687,6 +733,11 @@ internal interface IAuthorizedConnectorCapabilityDispatcher
 
 internal interface IAuthorizedVerticalCapabilityRuntime
 {
+    Task ValidatePublishedOperationExpectationsAsync(
+        AuthorizedConnectorExecution execution,
+        AuthorizedPublishedOperationExpectations expectations,
+        CancellationToken cancellationToken);
+
     Task<string> CreateSignedTokenAsync(
         AuthorizedConnectorExecution execution,
         ConnectorSigningSlotKey signingSlot,

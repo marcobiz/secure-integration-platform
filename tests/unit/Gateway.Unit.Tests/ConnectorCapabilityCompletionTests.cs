@@ -72,6 +72,50 @@ public sealed class ConnectorCapabilityCompletionTests
         AssertInvalid(value => SigningSlots(value)[0]!["signing"]!["algorithm"] = "RS512");
     }
 
+    [Fact]
+    public void Wave1_CT_Published_path_template_and_NONE_body_mode_are_checksum_bound_and_method_bounded()
+    {
+        JsonObject templated = SigningSlotsNode();
+        JsonObject operation = Operation(templated).AsObject();
+        operation.Remove("path");
+        operation["pathTemplate"] = "/v1/{tenant}/documents/{document}";
+        operation["method"] = "GET";
+        operation["authorizedCapabilities"]!["restrictedTransport"]!["bodyMode"] = "none";
+        using JsonDocument templatedDocument = JsonDocument.Parse(templated.ToJsonString());
+        ValidatedConnectorDefinition validated = new ConnectorDefinitionValidator().ValidateRequired(templatedDocument.RootElement);
+
+        Assert.Contains("\"pathTemplate\"", validated.CanonicalJson, StringComparison.Ordinal);
+        Assert.Contains("\"bodyMode\":\"none\"", validated.CanonicalJson, StringComparison.Ordinal);
+
+        JsonObject postNone = SigningSlotsNode();
+        postNone["operations"]![0]!["authorizedCapabilities"]!["restrictedTransport"]!["bodyMode"] = "none";
+        using JsonDocument postNoneDocument = JsonDocument.Parse(postNone.ToJsonString());
+        ConnectorValidationResult postNoneResult = new ConnectorDefinitionValidator().Validate(postNoneDocument.RootElement);
+        Assert.Contains(postNoneResult.Issues, issue => issue.Code == "BGW-CONNECTOR-RESTRICTED-BODY-NONE-METHOD");
+    }
+
+    [Fact]
+    public void Wave1_SEC_Published_path_template_schema_and_semantics_fail_closed()
+    {
+        AssertInvalid(value =>
+        {
+            JsonObject operation = Operation(value).AsObject();
+            operation["pathTemplate"] = "/v1/{tenant}";
+        });
+        AssertInvalid(value =>
+        {
+            JsonObject operation = Operation(value).AsObject();
+            operation.Remove("path");
+            operation["pathTemplate"] = "/v1/prefix-{tenant}";
+        }, "BGW-CONNECTOR-PATH-TEMPLATE-INVALID");
+        AssertInvalid(value =>
+        {
+            JsonObject operation = Operation(value).AsObject();
+            operation.Remove("path");
+            operation["pathTemplate"] = "/v1/{tenant}/{tenant}";
+        }, "BGW-CONNECTOR-PATH-TEMPLATE-INVALID");
+    }
+
     [Theory]
     [InlineData("\"executionStrategy\":\"synthetic-signed-mtls\",", "")]
     [InlineData("\"kind\":\"mtls\",\"certificateBinding\":\"mtls-certificate\"", "\"kind\":\"none\"")]

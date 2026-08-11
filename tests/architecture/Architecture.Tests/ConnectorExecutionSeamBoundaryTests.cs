@@ -255,6 +255,57 @@ public sealed class ConnectorExecutionSeamBoundaryTests
     }
 
     [Fact]
+    public void Wave1_CT_authorized_Published_operation_preflight_path_and_body_authority_remain_Core_owned()
+    {
+        string expectations = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Application", "AuthorizedPublishedOperationExpectationContracts.cs"));
+        string executionContracts = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"));
+        string publicRequests = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Application", "AuthorizedVerticalCapabilityContracts.cs"));
+        string pathProjection = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Application", "PublishedPathTemplate.cs"));
+        string dispatch = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Application", "OperationServices.cs"));
+        string runtime = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Api", "AuthorizedVerticalCapabilityRuntime.cs"));
+        string schema = File.ReadAllText(Path.Combine(
+            Root, "docs", "connectors", "connector-definition.schema.json"));
+
+        Assert.Contains("public interface IAuthorizedPublishedOperationExpectationProvider", expectations, StringComparison.Ordinal);
+        Assert.Contains("internal AuthorizedPublishedOperationExpectationContext(", expectations, StringComparison.Ordinal);
+        Assert.Contains("public AuthorizedPublishedExtensionConfiguration OpenPublishedExtensionConfiguration()", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("public AuthorizedPublishedOperationExpectationContext(", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("IAuthorizedConnectorCapabilityBridge", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("IConnectorConfigurationStore", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("IKeyOperationProvider", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("ICertificatePublicMaterialProvider", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpClient", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpRequestMessage", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("ValidatePublishedOperationExpectations", executionContracts[..executionContracts.IndexOf("internal interface IAuthorizedConnectorCapabilityDispatcher", StringComparison.Ordinal)], StringComparison.Ordinal);
+
+        int providerLookup = dispatch.IndexOf("expectationProviderRegistry.Required(strategyKey)", StringComparison.Ordinal);
+        int preflight = dispatch.IndexOf("capabilityDispatcher.ValidatePublishedOperationExpectationsAsync", StringComparison.Ordinal);
+        int scope = dispatch.IndexOf("execution.EnterCapabilityScope", StringComparison.Ordinal);
+        int strategy = dispatch.IndexOf("registration.Strategy.ExecuteAsync", StringComparison.Ordinal);
+        Assert.True(providerLookup >= 0 && preflight > providerLookup && scope > preflight && strategy > scope);
+
+        Assert.Contains("public sealed class AuthorizedConnectorPathParameter", publicRequests, StringComparison.Ordinal);
+        Assert.DoesNotContain("Uri", publicRequests, StringComparison.Ordinal);
+        Assert.Contains("internal static class PublishedPathTemplate", pathProjection, StringComparison.Ordinal);
+        Assert.Contains("Uri.EscapeDataString(value)", pathProjection, StringComparison.Ordinal);
+        Assert.Contains("projected.Port != baseEndpoint.Port", pathProjection, StringComparison.Ordinal);
+        Assert.Contains("string.IsNullOrEmpty(projected.Query)", pathProjection, StringComparison.Ordinal);
+        Assert.Contains("string.IsNullOrEmpty(projected.Fragment)", pathProjection, StringComparison.Ordinal);
+        Assert.Contains("outbound.Content = new ByteArrayContent", runtime, StringComparison.Ordinal);
+        Assert.Contains("else if (request.HasBody)", runtime, StringComparison.Ordinal);
+        Assert.Contains("PublishedRestrictedTransportBodyMode.None", runtime, StringComparison.Ordinal);
+        Assert.Contains("await authority.ResolveCurrentAsync(cancellationToken)", runtime, StringComparison.Ordinal);
+        Assert.Contains("\"pathTemplate\"", schema, StringComparison.Ordinal);
+        Assert.Contains("\"bodyMode\"", schema, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Wave1_CT_generic_seam_and_Core_solution_have_no_vertical_dependency_or_logic()
     {
         string[] files =
@@ -265,6 +316,8 @@ public sealed class ConnectorExecutionSeamBoundaryTests
             Path.Combine(Root, "src", "Gateway", "Gateway.Api", "GatewayHostOptions.cs"),
             Path.Combine(Root, "src", "Gateway", "Gateway.Api", "AuthorizedVerticalCapabilityRuntime.cs"),
             Path.Combine(Root, "src", "Gateway", "Gateway.Application", "AuthorizedVerticalCapabilityContracts.cs"),
+            Path.Combine(Root, "src", "Gateway", "Gateway.Application", "AuthorizedPublishedOperationExpectationContracts.cs"),
+            Path.Combine(Root, "src", "Gateway", "Gateway.Application", "PublishedPathTemplate.cs"),
             Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorConfiguration.cs"),
             Path.Combine(Root, "tests", "support", "Synthetic.ConnectorExecutionModule", "SyntheticExecutionModule.cs")
         ];

@@ -80,14 +80,42 @@ public sealed class AuthorizedConnectorSignedToken
 public sealed class AuthorizedConnectorRestrictedTransportRequest
 {
     private const int MaximumBodyBytes = 16 * 1024 * 1024;
-    private readonly byte[] body;
+    private readonly byte[]? body;
+    private readonly AuthorizedConnectorPathParameter[] pathParameters;
+
+    /// <summary>
+    /// Creates a bodyless request without dynamic path parameters. Core accepts it only when the
+    /// exact Published transport body mode is NONE.
+    /// </summary>
+    public AuthorizedConnectorRestrictedTransportRequest()
+        : this(null, null, [], true)
+    {
+    }
+
+    /// <summary>
+    /// Creates a bodyless request with a bounded immutable collection of opaque Published path
+    /// segment values. No URI, query, method or header authority is accepted.
+    /// </summary>
+    public AuthorizedConnectorRestrictedTransportRequest(
+        IReadOnlyCollection<AuthorizedConnectorPathParameter> pathParameters)
+        : this(null, null, pathParameters, true)
+    {
+    }
 
     /// <summary>
     /// Creates a body whose signed-token projections are supplied only by the current capability
     /// bridge from tokens generated for the exact Published signing slots.
     /// </summary>
     public AuthorizedConnectorRestrictedTransportRequest(ReadOnlyMemory<byte> body)
-        : this(body, null, true)
+        : this(body, null, [], true)
+    {
+    }
+
+    /// <summary>Creates a required body plus bounded opaque values for an exact Published path template.</summary>
+    public AuthorizedConnectorRestrictedTransportRequest(
+        ReadOnlyMemory<byte> body,
+        IReadOnlyCollection<AuthorizedConnectorPathParameter> pathParameters)
+        : this(body, null, pathParameters, true)
     {
     }
 
@@ -98,27 +126,79 @@ public sealed class AuthorizedConnectorRestrictedTransportRequest
     public AuthorizedConnectorRestrictedTransportRequest(
         ReadOnlyMemory<byte> body,
         AuthorizedConnectorSignedToken signedToken)
-        : this(body, signedToken ?? throw new ArgumentNullException(nameof(signedToken)), true)
+        : this(body, signedToken ?? throw new ArgumentNullException(nameof(signedToken)), [], true)
+    {
+    }
+
+    /// <summary>
+    /// Creates a required body, historical same-invocation token proof and bounded opaque values for
+    /// an exact Published path template.
+    /// </summary>
+    public AuthorizedConnectorRestrictedTransportRequest(
+        ReadOnlyMemory<byte> body,
+        AuthorizedConnectorSignedToken signedToken,
+        IReadOnlyCollection<AuthorizedConnectorPathParameter> pathParameters)
+        : this(body, signedToken ?? throw new ArgumentNullException(nameof(signedToken)), pathParameters, true)
     {
     }
 
     private AuthorizedConnectorRestrictedTransportRequest(
-        ReadOnlyMemory<byte> body,
+        ReadOnlyMemory<byte>? body,
         AuthorizedConnectorSignedToken? signedToken,
+        IReadOnlyCollection<AuthorizedConnectorPathParameter> pathParameters,
         bool _)
     {
-        if (body.Length is < 1 or > MaximumBodyBytes)
+        ArgumentNullException.ThrowIfNull(pathParameters);
+        if (body is { Length: < 1 or > MaximumBodyBytes })
             throw new ArgumentOutOfRangeException(nameof(body));
-        this.body = body.ToArray();
+        this.body = body?.ToArray();
+        List<AuthorizedConnectorPathParameter> parameters = [];
+        HashSet<string> names = new(StringComparer.Ordinal);
+        int count = 0;
+        foreach (AuthorizedConnectorPathParameter parameter in pathParameters)
+        {
+            if (parameter is null || ++count > PublishedPathTemplate.MaximumPlaceholders || !names.Add(parameter.Name))
+                throw new ArgumentException("Published path parameters are invalid, duplicated or excessive.", nameof(pathParameters));
+            parameters.Add(parameter.Copy());
+        }
+        this.pathParameters = parameters.ToArray();
         SignedToken = signedToken;
     }
 
     /// <summary>Copied protocol-body length.</summary>
-    public int BodyLength => body.Length;
+    public int BodyLength => body?.Length ?? 0;
+    /// <summary>Number of copied opaque path-segment values.</summary>
+    public int PathParameterCount => pathParameters.Length;
 
-    internal ReadOnlyMemory<byte> Body => body;
+    internal bool HasBody => body is not null;
+    internal ReadOnlyMemory<byte> Body => body ?? ReadOnlyMemory<byte>.Empty;
+    internal IReadOnlyList<AuthorizedConnectorPathParameter> PathParameters => pathParameters;
     internal AuthorizedConnectorSignedToken? SignedToken { get; }
 
     /// <inheritdoc />
-    public override string ToString() => $"AuthorizedConnectorRestrictedTransportRequest(BodyLength={BodyLength}, Redacted=True)";
+    public override string ToString() => $"AuthorizedConnectorRestrictedTransportRequest(BodyLength={BodyLength}, PathParameterCount={PathParameterCount}, Redacted=True)";
+}
+
+/// <summary>
+/// One immutable opaque value for a whole-segment placeholder declared by the exact Published path
+/// template. It carries no URI, scheme, host, port, query, fragment, method or header authority.
+/// </summary>
+public sealed class AuthorizedConnectorPathParameter
+{
+    /// <summary>Creates one canonical-name opaque path-segment value.</summary>
+    public AuthorizedConnectorPathParameter(string name, string value)
+    {
+        Name = PublishedPathTemplate.ValidateParameterName(name, nameof(name));
+        Value = PublishedPathTemplate.ValidateParameterValue(value, nameof(value));
+    }
+
+    /// <summary>Exact canonical Published placeholder name.</summary>
+    public string Name { get; }
+    /// <summary>Opaque segment value; Core validates and encodes it exactly once.</summary>
+    public string Value { get; }
+
+    internal AuthorizedConnectorPathParameter Copy() => new(Name, Value);
+
+    /// <inheritdoc />
+    public override string ToString() => $"AuthorizedConnectorPathParameter(Name={Name}, Redacted=True)";
 }

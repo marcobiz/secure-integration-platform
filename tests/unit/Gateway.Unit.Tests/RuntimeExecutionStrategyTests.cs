@@ -60,6 +60,24 @@ public sealed class RuntimeExecutionStrategyTests
     }
 
     [Fact]
+    public void Wave1_SEC_expectation_provider_registry_is_exact_one_bounded_and_snapshotted()
+    {
+        ConnectorExecutionStrategyKey key = ConnectorExecutionStrategyKey.Parse("synthetic-expectation");
+        HashSet<ConnectorExecutionStrategyKey> advertised = [key];
+        RecordingExpectationProvider first = new(advertised);
+        AuthorizedPublishedOperationExpectationProviderRegistry registry = new([first]);
+
+        advertised.Clear();
+
+        Assert.Same(first, registry.Required(key));
+        Assert.Throws<InvalidOperationException>(() => new AuthorizedPublishedOperationExpectationProviderRegistry(
+            [new RecordingExpectationProvider(new HashSet<ConnectorExecutionStrategyKey> { key }),
+                new RecordingExpectationProvider(new HashSet<ConnectorExecutionStrategyKey> { key })]));
+        Assert.Throws<InvalidOperationException>(() => new AuthorizedPublishedOperationExpectationProviderRegistry(
+            [new RecordingExpectationProvider(new HashSet<ConnectorExecutionStrategyKey>())]));
+    }
+
+    [Fact]
     public void Wave1_CT_qualified_execution_handoff_is_non_forgeable_and_hides_payload_and_operation_authority()
     {
         Assert.Empty(typeof(AuthorizedConnectorExecution).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
@@ -93,13 +111,55 @@ public sealed class RuntimeExecutionStrategyTests
                 .Where(value => !value.IsSpecialName).Select(value => value.Name).Order(StringComparer.Ordinal));
         ConstructorInfo[] transportRequests = typeof(AuthorizedConnectorRestrictedTransportRequest)
             .GetConstructors(BindingFlags.Public | BindingFlags.Instance);
-        Assert.Equal(2, transportRequests.Length);
+        Assert.Equal(6, transportRequests.Length);
+        Assert.Contains(transportRequests, constructor => constructor.GetParameters().Length == 0);
+        Assert.Contains(transportRequests, constructor => constructor.GetParameters().Select(value => value.ParameterType)
+            .SequenceEqual([typeof(IReadOnlyCollection<AuthorizedConnectorPathParameter>)]));
         Assert.Contains(transportRequests, constructor => constructor.GetParameters().Select(value => value.ParameterType)
             .SequenceEqual([typeof(ReadOnlyMemory<byte>)]));
         Assert.Contains(transportRequests, constructor => constructor.GetParameters().Select(value => value.ParameterType)
+            .SequenceEqual([typeof(ReadOnlyMemory<byte>), typeof(IReadOnlyCollection<AuthorizedConnectorPathParameter>)]));
+        Assert.Contains(transportRequests, constructor => constructor.GetParameters().Select(value => value.ParameterType)
             .SequenceEqual([typeof(ReadOnlyMemory<byte>), typeof(AuthorizedConnectorSignedToken)]));
-        Assert.Equal([nameof(AuthorizedConnectorRestrictedTransportRequest.BodyLength)],
+        Assert.Contains(transportRequests, constructor => constructor.GetParameters().Select(value => value.ParameterType)
+            .SequenceEqual([typeof(ReadOnlyMemory<byte>), typeof(AuthorizedConnectorSignedToken), typeof(IReadOnlyCollection<AuthorizedConnectorPathParameter>)]));
+        Assert.Equal([nameof(AuthorizedConnectorRestrictedTransportRequest.BodyLength), nameof(AuthorizedConnectorRestrictedTransportRequest.PathParameterCount)],
             typeof(AuthorizedConnectorRestrictedTransportRequest).GetProperties(BindingFlags.Public | BindingFlags.Instance).Select(value => value.Name));
+        Assert.Equal([nameof(AuthorizedConnectorPathParameter.Name), nameof(AuthorizedConnectorPathParameter.Value)],
+            typeof(AuthorizedConnectorPathParameter).GetProperties(BindingFlags.Public | BindingFlags.Instance).Select(value => value.Name));
+        Assert.Empty(typeof(AuthorizedPublishedOperationExpectationContext).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+        Assert.Equal(
+            [nameof(AuthorizedPublishedOperationExpectationContext.AuthenticationKind),
+                nameof(AuthorizedPublishedOperationExpectationContext.ConnectorId),
+                nameof(AuthorizedPublishedOperationExpectationContext.ConnectorVersion),
+                nameof(AuthorizedPublishedOperationExpectationContext.ExecutionStrategyKey),
+                nameof(AuthorizedPublishedOperationExpectationContext.OperationId)],
+            typeof(AuthorizedPublishedOperationExpectationContext).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Select(value => value.Name).Order(StringComparer.Ordinal));
+        MethodInfo expectationFactory = typeof(IAuthorizedPublishedOperationExpectationProvider)
+            .GetMethod(nameof(IAuthorizedPublishedOperationExpectationProvider.CreateExpectations))!;
+        Assert.Equal([typeof(AuthorizedPublishedOperationExpectationContext)],
+            expectationFactory.GetParameters().Select(value => value.ParameterType));
+        Assert.Equal(typeof(AuthorizedPublishedOperationExpectations), expectationFactory.ReturnType);
+        Type[] expectationSurface =
+        [
+            typeof(AuthorizedPublishedOperationExpectationContext),
+            typeof(AuthorizedPublishedOperationExpectations),
+            typeof(AuthorizedSigningSlotExpectation),
+            typeof(AuthorizedSigningIssuerExpectation),
+            typeof(AuthorizedSigningTokenProjectionExpectation)
+        ];
+        Assert.DoesNotContain(expectationSurface.SelectMany(type => type.GetProperties(BindingFlags.Public | BindingFlags.Instance)), property =>
+            property.PropertyType == typeof(Uri) || property.PropertyType == typeof(JsonElement) ||
+            typeof(IAuthorizedConnectorCapabilityBridge).IsAssignableFrom(property.PropertyType) ||
+            property.PropertyType.Namespace?.StartsWith("SecureIntegration.Providers", StringComparison.Ordinal) == true ||
+            property.Name.Contains("Secret", StringComparison.OrdinalIgnoreCase) ||
+            property.Name.Contains("CertificateMaterial", StringComparison.OrdinalIgnoreCase) ||
+            property.Name.Contains("Store", StringComparison.OrdinalIgnoreCase) ||
+            property.Name.Contains("Provider", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(typeof(AuthorizedConnectorExecution).Assembly.GetExportedTypes()
+            .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static)),
+            method => method.Name.Contains("ValidatePublishedOperationExpectations", StringComparison.Ordinal));
         Assert.Empty(typeof(AuthorizedConnectorBindingInputs).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
         Assert.Equal([nameof(AuthorizedConnectorBindingInputs.Count)],
             typeof(AuthorizedConnectorBindingInputs).GetProperties(BindingFlags.Public | BindingFlags.Instance).Select(value => value.Name));
@@ -391,6 +451,16 @@ public sealed class RuntimeExecutionStrategyTests
             callerCancellation.Cancel();
             throw new OperationCanceledException(cancellationToken);
         }
+    }
+
+    private sealed class RecordingExpectationProvider(IReadOnlySet<ConnectorExecutionStrategyKey> strategies) :
+        IAuthorizedPublishedOperationExpectationProvider
+    {
+        public IReadOnlySet<ConnectorExecutionStrategyKey> SupportedExecutionStrategies => strategies;
+
+        public AuthorizedPublishedOperationExpectations CreateExpectations(
+            AuthorizedPublishedOperationExpectationContext context) =>
+            new(GatewayAuthenticationKind.None, restrictedTransportRequired: false, []);
     }
 
     private sealed class IncompatibleStrategy(ConnectorExecutionStrategyKey key) : IConnectorExecutionStrategy

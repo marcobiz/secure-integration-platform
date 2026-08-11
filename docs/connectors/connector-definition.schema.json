@@ -63,7 +63,7 @@
     "operation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["operationId", "endpointBinding", "method", "path", "request", "response", "authentication", "timeoutMs", "redirectPolicy", "allowedClientHeaders"],
+      "required": ["operationId", "endpointBinding", "method", "request", "response", "authentication", "timeoutMs", "redirectPolicy", "allowedClientHeaders"],
       "properties": {
         "operationId": { "$ref": "#/$defs/identifier" },
         "endpointBinding": { "$ref": "#/$defs/identifier" },
@@ -73,6 +73,12 @@
           "pattern": "^/",
           "maxLength": 1024,
           "not": { "pattern": "(^|/)\\.\\.(/|$)|[?#]" }
+        },
+        "pathTemplate": {
+          "type": "string",
+          "pattern": "^/(?!/)",
+          "maxLength": 1024,
+          "not": { "pattern": "[?#%\\\\\\u0000-\\u001F\\u007F-\\u009F]" }
         },
         "request": { "$ref": "#/$defs/messagePolicy" },
         "response": { "$ref": "#/$defs/responsePolicy" },
@@ -97,7 +103,17 @@
         },
         "idempotent": { "type": "boolean", "default": false },
         "maximumRetries": { "type": "integer", "minimum": 0, "maximum": 2, "default": 0 }
-      }
+      },
+      "oneOf": [
+        {
+          "required": ["path"],
+          "not": { "required": ["pathTemplate"] }
+        },
+        {
+          "required": ["pathTemplate"],
+          "not": { "required": ["path"] }
+        }
+      ]
     },
     "messagePolicy": {
       "type": "object",
@@ -436,7 +452,8 @@
         "revision": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
         "clientCertificateSpkiSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
         "authorization": { "const": "signedTokenBearer" },
-        "nearExpirySeconds": { "type": "integer", "minimum": 0, "maximum": 300 }
+        "nearExpirySeconds": { "type": "integer", "minimum": 0, "maximum": 300 },
+        "bodyMode": { "enum": ["required", "none"] }
       }
     },
     "invocationRestrictedTransport": {
@@ -447,7 +464,8 @@
         "profileId": { "$ref": "#/$defs/identifier" },
         "revision": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
         "clientCertificateSpkiSha256": { "type": "string", "pattern": "^[A-F0-9]{64}$" },
-        "nearExpirySeconds": { "type": "integer", "minimum": 0, "maximum": 300 }
+        "nearExpirySeconds": { "type": "integer", "minimum": 0, "maximum": 300 },
+        "bodyMode": { "enum": ["required", "none"] }
       }
     },
     "compiledAdapter": {

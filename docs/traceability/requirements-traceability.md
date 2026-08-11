@@ -303,6 +303,22 @@ was reused without a new subsystem.
 | No token/provider/certificate/generic HTTP or connector-specific Core surface | reflection/API inventory; `Wave1_CT_authorized_signing_slots_are_bounded_opaque_slot_bound_and_server_projected`; no-vertical source guard | PASS local |
 | TM-079/TM-080/TM-081/TM-082 | `SEC-W1-SLOT-001/002/003/004` mappings in the threat model | Targeted, ordinary, PostgreSQL 18, Admin/full-stack, scans and deterministic M3 split regressions PASS; full M3 Linux, final-HEAD Core export/Gitleaks, CI exact-head and independent review pending |
 
+## Wave 1 authorized Published operation contract
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| Mandatory exact-one module expectation provider before external strategy | `Wave1_SEC_authorized_operation_missing_expectation_provider_denies_before_signing_and_network`; bounded/duplicate registry behavior; production-host selection after principal/grant/Published | PASS targeted local; zero signing/network |
+| Safe non-constructible context and no public bridge/store/provider/policy/certificate surface | expectation-context and bridge reflection inventory in `Wave1_CT_qualified_execution_handoff_is_non_forgeable_and_hides_payload_and_operation_authority`; external synthetic module no-IVT build | PASS targeted local |
+| Exact two-slot semantic coherence before signing | `Wave1_SEC_authorized_operation_policy_mismatches_deny_before_signing_and_network` covers missing/extra/required/projection/algorithm/subject/audience/issuer/CN/lifetime/temporal/nbf/jti/x5c/claims/identity/authentication | PASS targeted local; every case signing/network count zero |
+| Same approved signing identity, distinct mTLS identity and server-owned issuer semantics | `Wave1_IT_PRODUCTION_HOST_in_memory_authorized_operation_projects_Published_paths_and_body_modes` verifies both signatures, exact issuer plus CN-derived issuer, shared signing fingerprint, mTLS client identity and restricted HTTPS | PASS local |
+| Static and bounded dynamic Published path projection | `Wave1_CT_Published_path_projection_is_exact_single_encoded_and_origin_preserving`; hosted static/single/multiple wire paths; `Wave1_SEC_authorized_operation_path_and_body_mismatches_deny_before_network` | PASS local |
+| Path injection, traversal, delimiter, percent/double-encoding and template-shape denial | `AuthorizedPublishedOperationContractTests` value/template theories plus exact missing/extra/duplicate set tests and hosted template-not-Published/unknown denial | PASS targeted local |
+| Explicit REQUIRED/NONE without module method/Content-Type authority | hosted REQUIRED, NONE GET, NONE DELETE and exact wire assertions; `Wave1_SEC_authorized_operation_path_and_body_mismatches_deny_before_network` covers missing REQUIRED body and body with NONE | PASS local |
+| Exact Published A before signing and after DNS | `Wave1_SEC_Published_A_to_B_during_policy_preflight_denies_before_signing_and_network`; dynamic-template `Wave1_SEC_Published_A_to_B_after_DNS_denies_before_restricted_transport` | PASS local; zero later signing/network effect |
+| Historical static path/body request/checksum and immutable Published compatibility | fixed `D0FF…D7A` checksum regression, legacy hosted Bearer/restricted body continuation, constructor reflection inventory; no storage/locator change | PASS local; no migration or republish required |
+| Production-host PostgreSQL 18 path | `Wave1_IT_PRODUCTION_HOST_PostgreSQL18_authorized_operation_projects_Published_paths_and_body_modes` | Dedicated PostgreSQL 18 gate pending |
+| TM-087/TM-088/TM-089/TM-090 | `SEC-W1-OP-001/002/003/004` mappings in the threat model | Targeted local PASS; full local gates, exact-head CI and independent review pending |
+
 ## Healthcare Wave 1 — Regional ePrescription foundation
 
 | Requirement | Automated evidence | Status |

@@ -20,6 +20,7 @@ public sealed class SyntheticExecutionModule : IConnectorExecutionModule
     public void RegisterExecutionStrategies(IConnectorExecutionStrategyRegistrar registrar)
     {
         registrar.AddSingleton<SyntheticExecutionResultWriter>();
+        registrar.AddAuthorizedPublishedOperationExpectationProvider<SyntheticPublishedOperationExpectationProvider>();
         registrar.AddStrategy<SyntheticEchoExecutionStrategy>();
         registrar.AddStrategy<SyntheticThrowingExecutionStrategy>();
         registrar.AddStrategy<SyntheticFakeCancellationExecutionStrategy>();
@@ -35,10 +36,101 @@ public sealed class SyntheticExecutionModule : IConnectorExecutionModule
         registrar.AddStrategy<SyntheticRetainedSigningBridgeExecutionStrategy>();
         registrar.AddStrategy<SyntheticFireAndForgetSigningExecutionStrategy>();
         registrar.AddStrategy<SyntheticFireAndForgetRestrictedTransportExecutionStrategy>();
+        registrar.AddStrategy<SyntheticAuthorizedPublishedOperationExecutionStrategy>();
         registrar.AddTypedSessionHandshakeRequestAdapter<SyntheticExternalTypedSessionRequestAdapter>();
         registrar.AddTypedSessionHandshakeResponseAdapter<SyntheticExternalTypedSessionResponseAdapter>();
         registrar.AddExternalSessionValidationAdapter<SyntheticExternalSessionValidationAdapter>();
         registrar.AddTypedComposedSoapRequestAdapter<SyntheticExternalTypedComposedSoapRequestAdapter>();
+    }
+}
+
+/// <summary>
+/// Neutral module-owned expectation source. Only the dedicated authorized-operation strategy has a
+/// semantic profile; the other qualification strategies still receive a mandatory exact-A check.
+/// </summary>
+public sealed class SyntheticPublishedOperationExpectationProvider : IAuthorizedPublishedOperationExpectationProvider
+{
+    private static readonly IReadOnlySet<ConnectorExecutionStrategyKey> Strategies = new[]
+    {
+        "synthetic-echo", "synthetic-throw", "synthetic-fake-cancel", "synthetic-forged-error",
+        "synthetic-capability-bridge", "synthetic-retained-bridge", "synthetic-signed-mtls",
+        "synthetic-dual-slot", "synthetic-unknown-slot", "synthetic-repeat-slot", "synthetic-missing-slot",
+        "synthetic-denied-signing-claim", "synthetic-retained-signing", "synthetic-fire-forget-signing",
+        "synthetic-fire-forget-transport", "synthetic-authorized-operation"
+    }.Select(ConnectorExecutionStrategyKey.Parse).ToFrozenSet();
+
+    /// <inheritdoc />
+    public IReadOnlySet<ConnectorExecutionStrategyKey> SupportedExecutionStrategies => Strategies;
+
+    /// <inheritdoc />
+    public AuthorizedPublishedOperationExpectations CreateExpectations(AuthorizedPublishedOperationExpectationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (!string.Equals(context.ExecutionStrategyKey.Value, "synthetic-authorized-operation", StringComparison.Ordinal))
+            return new(context.AuthenticationKind, restrictedTransportRequired: false, []);
+
+        using Stream stream = context.OpenPublishedExtensionConfiguration().OpenJsonStream();
+        using JsonDocument document = JsonDocument.Parse(stream, new JsonDocumentOptions { MaxDepth = 8 });
+        JsonElement profile = document.RootElement.GetProperty("policyExpectations");
+        if (!string.Equals(profile.GetProperty("algorithm").GetString(), "RS256", StringComparison.Ordinal))
+            throw new InvalidOperationException("Synthetic expectation algorithm is unsupported.");
+        GatewayAuthenticationKind authentication = profile.GetProperty("authenticationKind").GetString() switch
+        {
+            "mtls" => GatewayAuthenticationKind.MutualTls,
+            "none" => GatewayAuthenticationKind.None,
+            _ => throw new InvalidOperationException("Synthetic expectation authentication kind is unsupported.")
+        };
+        AuthorizedSigningSlotExpectation[] slots = profile.GetProperty("signingSlots").EnumerateArray()
+            .Select(ParseSlot).ToArray();
+        ConnectorSigningSlotKey[] sameIdentity = profile.GetProperty("sameSigningIdentitySlots").EnumerateArray()
+            .Select(value => ConnectorSigningSlotKey.Parse(value.GetString()!)).ToArray();
+        ConnectorSigningSlotKey[] distinctFromMutualTls = profile.GetProperty("signingIdentityDistinctFromMutualTlsSlots").EnumerateArray()
+            .Select(value => ConnectorSigningSlotKey.Parse(value.GetString()!)).ToArray();
+        return new(authentication, restrictedTransportRequired: true, slots, sameIdentity, distinctFromMutualTls);
+    }
+
+    private static AuthorizedSigningSlotExpectation ParseSlot(JsonElement value)
+    {
+        JsonElement projectionValue = value.GetProperty("projection");
+        AuthorizedSigningTokenProjectionExpectation projection = projectionValue.GetProperty("kind").GetString() switch
+        {
+            "authorizationBearer" => AuthorizedSigningTokenProjectionExpectation.AuthorizationBearer(),
+            "signedTokenHeader" => AuthorizedSigningTokenProjectionExpectation.SignedTokenHeader(
+                projectionValue.GetProperty("headerName").GetString()!),
+            _ => throw new InvalidOperationException("Synthetic expectation projection is unsupported.")
+        };
+        JsonElement issuerValue = value.GetProperty("issuer");
+        AuthorizedSigningIssuerExpectation issuer = issuerValue.GetProperty("kind").GetString() switch
+        {
+            "exact" => AuthorizedSigningIssuerExpectation.Exact(issuerValue.GetProperty("value").GetString()!),
+            "prefixAndCertificateSubjectCn" => AuthorizedSigningIssuerExpectation.FixedPrefixAndCertificateSubjectCommonName(
+                issuerValue.GetProperty("value").GetString()!),
+            _ => throw new InvalidOperationException("Synthetic expectation issuer relation is unsupported.")
+        };
+        return new(
+            ConnectorSigningSlotKey.Parse(value.GetProperty("slot").GetString()!),
+            value.GetProperty("required").GetBoolean(),
+            AuthorizedSigningAlgorithm.Rs256,
+            projection,
+            value.GetProperty("audience").GetString()!,
+            value.GetProperty("fixedSubject").GetString()!,
+            value.GetProperty("allowedClaims").EnumerateArray().Select(claim => claim.GetString()!).ToArray(),
+            value.GetProperty("tokenLifetimeSeconds").GetInt32(),
+            value.GetProperty("temporalMode").GetString() switch
+            {
+                "iat-exp" => AuthorizedSigningTemporalMode.IssuedAtExpiration,
+                "iat-nbf-exp" => AuthorizedSigningTemporalMode.IssuedAtNotBeforeExpiration,
+                _ => throw new InvalidOperationException("Synthetic expectation temporal mode is unsupported.")
+            },
+            value.GetProperty("jtiRequired").GetBoolean(),
+            value.GetProperty("certificateHeader").GetString() switch
+            {
+                "none" => AuthorizedSigningCertificateHeaderMode.None,
+                "leaf" => AuthorizedSigningCertificateHeaderMode.Leaf,
+                "chain" => AuthorizedSigningCertificateHeaderMode.Chain,
+                _ => throw new InvalidOperationException("Synthetic expectation certificate header is unsupported.")
+            },
+            issuer);
     }
 }
 
@@ -54,6 +146,19 @@ public sealed class SyntheticDuplicateExecutionModule : IConnectorExecutionModul
         registrar.AddSingleton<SyntheticExecutionResultWriter>();
         registrar.AddStrategy<SyntheticEchoExecutionStrategy>();
         registrar.AddStrategy<DuplicateSyntheticEchoExecutionStrategy>();
+    }
+}
+
+/// <summary>Qualification-only module that deliberately omits its mandatory expectation provider.</summary>
+public sealed class SyntheticMissingExpectationProviderModule : IConnectorExecutionModule
+{
+    /// <inheritdoc />
+    public ConnectorExecutionModuleId Id => ConnectorExecutionModuleId.Parse("synthetic-missing-expectation");
+
+    /// <inheritdoc />
+    public void RegisterExecutionStrategies(IConnectorExecutionStrategyRegistrar registrar)
+    {
+        registrar.AddStrategy<SyntheticAuthorizedPublishedOperationExecutionStrategy>();
     }
 }
 
@@ -230,6 +335,54 @@ public sealed class SyntheticDualSlotExecutionStrategy : IConnectorExecutionStra
         return await execution.Capabilities.ExecuteRestrictedTransportAsync(
             new AuthorizedConnectorRestrictedTransportRequest(Encoding.UTF8.GetBytes(bodyValue)),
             cancellationToken).ConfigureAwait(false);
+    }
+}
+
+/// <summary>
+/// Neutral positive strategy for mandatory policy preflight, bounded Published path projection and
+/// explicit REQUIRED/NONE body modes. It receives no policy metadata, URI, method or header surface.
+/// </summary>
+public sealed class SyntheticAuthorizedPublishedOperationExecutionStrategy : IConnectorExecutionStrategy
+{
+    /// <inheritdoc />
+    public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("synthetic-authorized-operation");
+
+    /// <inheritdoc />
+    public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => SyntheticAuthenticationKinds.MutualTls;
+
+    /// <inheritdoc />
+    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(
+        AuthorizedConnectorExecution execution,
+        CancellationToken cancellationToken)
+    {
+        using Stream configuration = execution.OpenPublishedExtensionConfiguration().OpenJsonStream();
+        using JsonDocument document = await JsonDocument.ParseAsync(configuration, cancellationToken: cancellationToken).ConfigureAwait(false);
+        JsonElement requestProfile = document.RootElement.GetProperty("requestProjection");
+        string claimName = requestProfile.GetProperty("claimName").GetString()!;
+        JsonElement claimValue = requestProfile.GetProperty("claimValue").Clone();
+        IReadOnlyDictionary<string, JsonElement> claims = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            [claimName] = claimValue
+        };
+        _ = await execution.Capabilities.CreateSignedTokenAsync(
+            ConnectorSigningSlotKey.Parse("primary"), claims, cancellationToken).ConfigureAwait(false);
+        _ = await execution.Capabilities.CreateSignedTokenAsync(
+            ConnectorSigningSlotKey.Parse("secondary"), claims, cancellationToken).ConfigureAwait(false);
+
+        AuthorizedConnectorPathParameter[] pathParameters = requestProfile.GetProperty("pathParameters")
+            .EnumerateArray()
+            .Select(value => new AuthorizedConnectorPathParameter(
+                value.GetProperty("name").GetString()!,
+                value.GetProperty("value").GetString()!))
+            .ToArray();
+        AuthorizedConnectorRestrictedTransportRequest request = requestProfile.GetProperty("bodyMode").GetString() switch
+        {
+            "required" => new AuthorizedConnectorRestrictedTransportRequest(
+                Encoding.UTF8.GetBytes(requestProfile.GetProperty("body").GetString()!), pathParameters),
+            "none" => new AuthorizedConnectorRestrictedTransportRequest(pathParameters),
+            _ => throw new InvalidOperationException("Synthetic request body mode is unsupported.")
+        };
+        return await execution.Capabilities.ExecuteRestrictedTransportAsync(request, cancellationToken).ConfigureAwait(false);
     }
 }
 

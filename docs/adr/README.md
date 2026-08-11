@@ -30,3 +30,4 @@ Formato: contesto, decisione, conseguenze e alternative. Tutti gli ADR elencati 
 | [0024](0024-connector-capability-completion.md) | Connector capability completion |
 | [0025](0025-authorized-signing-slots.md) | Bounded authorized signing slots |
 | [0026](0026-authorized-typed-composed-soap-request-composition.md) | Authorized typed composed-SOAP request composition |
+| [0027](0027-authorized-published-operation-contract.md) | Authorized Published operation contract |

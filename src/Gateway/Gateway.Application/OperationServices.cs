@@ -87,6 +87,7 @@ public sealed class RestrictedEgressService
     private readonly IGatewayOperationCatalog catalog;
     private readonly IGatewayClock clock;
     private readonly ConnectorExecutionStrategyRegistry executionStrategyRegistry;
+    private readonly AuthorizedPublishedOperationExpectationProviderRegistry expectationProviderRegistry;
     private readonly IAuthorizedConnectorCapabilityDispatcher? capabilityDispatcher;
 
     /// <summary>Creates the provider-neutral egress service with optional startup-fixed strategies.</summary>
@@ -101,7 +102,7 @@ public sealed class RestrictedEgressService
         IPrivateDestinationAllowance? privateDestinationAllowance = null,
         IEnumerable<IConnectorExecutionStrategy>? executionStrategies = null)
         : this(registry, catalog, secrets, certificates, resolver, transport, clock, privateDestinationAllowance,
-            executionStrategies, capabilityDispatcher: null)
+            executionStrategies, expectationProviders: null, capabilityDispatcher: null)
     {
     }
 
@@ -115,6 +116,7 @@ public sealed class RestrictedEgressService
         IGatewayClock clock,
         IPrivateDestinationAllowance? privateDestinationAllowance,
         IEnumerable<IConnectorExecutionStrategy>? executionStrategies,
+        IEnumerable<IAuthorizedPublishedOperationExpectationProvider>? expectationProviders,
         IAuthorizedConnectorCapabilityDispatcher? capabilityDispatcher)
     {
         this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
@@ -123,6 +125,7 @@ public sealed class RestrictedEgressService
         executionStrategyRegistry = new(PrependDefault(
             new DefaultHttpExecutionStrategy(secrets, certificates, resolver, transport, privateDestinationAllowance),
             executionStrategies));
+        expectationProviderRegistry = new(expectationProviders);
         this.capabilityDispatcher = capabilityDispatcher;
     }
 
@@ -170,6 +173,29 @@ public sealed class RestrictedEgressService
             capabilityDispatcher,
             published?.Authority,
             published?.ExtensionConfiguration);
+        if (!registration.PreservesCoreFailures && published is not null)
+        {
+            IAuthorizedPublishedOperationExpectationProvider provider = expectationProviderRegistry.Required(strategyKey);
+            AuthorizedPublishedOperationExpectations expectations;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                expectations = provider.CreateExpectations(new AuthorizedPublishedOperationExpectationContext(execution)) ??
+                    throw new InvalidOperationException("Published operation expectation provider returned no expectations.");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+            catch (Exception)
+            {
+                throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+            }
+            if (capabilityDispatcher is null)
+                throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+            await capabilityDispatcher.ValidatePublishedOperationExpectationsAsync(
+                execution, expectations, cancellationToken).ConfigureAwait(false);
+        }
         QualifiedGatewayExecutionResult result;
         try
         {

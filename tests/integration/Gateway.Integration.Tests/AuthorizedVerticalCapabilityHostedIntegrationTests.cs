@@ -3,11 +3,13 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.DependencyInjection;
 using SecureIntegration.Gateway.Application;
@@ -39,6 +41,37 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
         await using AdminApiSecurityTests.PostgresRuntimeRoleLease runtimeRole =
             await AdminApiSecurityTests.PostgresRuntimeRoleLease.CreateAsync(adminConnection, migrationConnection, TestContext.Current.CancellationToken);
         await RunAsync(runtimeRole.ConnectionString, adminConnection, requirePostgres: true);
+    }
+
+    [Fact]
+    public Task Wave1_IT_PRODUCTION_HOST_in_memory_authorized_operation_projects_Published_paths_and_body_modes() =>
+        RunAuthorizedOperationAsync(runtimeConnection: null, adminConnection: null, requirePostgres: false);
+
+    [Fact]
+    public async Task Wave1_IT_PRODUCTION_HOST_PostgreSQL18_authorized_operation_projects_Published_paths_and_body_modes()
+    {
+        bool gateRequired = string.Equals(
+            Environment.GetEnvironmentVariable("GATEWAY_REQUIRE_AUTHORIZED_OPERATION_POSTGRES_GATE"),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+        string? adminConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(adminConnection))
+        {
+            Assert.False(gateRequired, "The required authorized-operation PostgreSQL gate did not provide the admin connection.");
+            Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        }
+
+        string? migrationConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
+        if (string.IsNullOrWhiteSpace(migrationConnection))
+        {
+            Assert.False(gateRequired, "The required authorized-operation PostgreSQL gate did not provide the migration connection.");
+            Assert.Skip("PostgreSQL migration connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        }
+
+        await PostgresIsolationTests.ApplyMigrationAsync();
+        await using AdminApiSecurityTests.PostgresRuntimeRoleLease runtimeRole =
+            await AdminApiSecurityTests.PostgresRuntimeRoleLease.CreateAsync(adminConnection, migrationConnection, TestContext.Current.CancellationToken);
+        await RunAuthorizedOperationAsync(runtimeRole.ConnectionString, adminConnection, requirePostgres: true);
     }
 
     [Fact]
@@ -165,6 +198,95 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
     }
 
     [Fact]
+    public async Task Wave1_SEC_Published_A_to_B_during_policy_preflight_denies_before_signing_and_network()
+    {
+        TaskCompletionSource publicMaterialEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource releasePublicMaterial = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+        InMemoryProvider inner = new(
+            new Dictionary<string, string>(),
+            certificateHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                ["mtls-r1"] = material.ClientCertificateRevision1
+            },
+            signingKeyHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                ["sign-r1"] = material.SigningKeyRevision1
+            },
+            certificateChains: new Dictionary<string, IReadOnlyList<X509Certificate2>>(StringComparer.Ordinal)
+            {
+                ["sign-r1"] = [material.RootCertificate]
+            });
+        BlockingPublicMaterialProvider provider = new(inner, async cancellationToken =>
+        {
+            publicMaterialEntered.TrySetResult();
+            await releasePublicMaterial.Task.WaitAsync(cancellationToken);
+        });
+        await using SyntheticSignedMutualTlsServer server = await SyntheticSignedMutualTlsServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-preflight-race-candidate",
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
+        string connectorId = "synthetic-preflight-race-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("preflight-race-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("preflight-race-application");
+        string signingSpki = SpkiSha256(material.SigningKeyRevision1);
+        string clientSpki = SpkiSha256(material.ClientCertificateRevision1);
+        string subjectCn = material.SigningKeyRevision1.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
+        string definitionA = AuthorizedOperationDefinition(
+            connectorId, "1.0.0", signingSpki, clientSpki, subjectCn, "POST",
+            "\"pathTemplate\":\"/bounded/{tenant}\"", "required",
+            "[{\"name\":\"tenant\",\"value\":\"north\"}]");
+        HostedCapabilityAuthority authorityA = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId, "1.0.0", environmentId, server.Endpoint, definitionA, provider, "sign-r1", "mtls-r1");
+        await fixture.PublishAsync(authorityA, 0);
+        string definitionB = AuthorizedOperationDefinition(
+            connectorId, "2.0.0", signingSpki, clientSpki, subjectCn, "POST",
+            "\"pathTemplate\":\"/bounded/{region}\"", "required",
+            "[{\"name\":\"region\",\"value\":\"south\"}]");
+        HostedCapabilityAuthority authorityB = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId, "2.0.0", environmentId, server.Endpoint, definitionB, provider, "sign-r1", "mtls-r1");
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "preflight-race-identity");
+        await fixture.Factory.Services.GetRequiredService<IAdminGatewayRegistry>().AddGrantAsync(new(
+            Guid.NewGuid(), identity.Identity.InstallationId, identity.Identity.TenantId, connectorId,
+            "signed-submit", true, fixture.Factory.Clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
+        Task<HttpResponseMessage> pending = fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/signed-submit:invoke",
+            JsonSerializer.SerializeToUtf8Bytes(new GatewayInvokeRequest(
+                "1.0", new("application/octet-stream", "utf8", "caller-body"), Guid.NewGuid()), WebJson));
+        await publicMaterialEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(0, provider.SignDigestCalls);
+        Assert.Equal(0, server.Requests);
+        Assert.Equal(0, fixture.Transport.GenericRequests);
+
+        try
+        {
+            await fixture.PublishAsync(authorityB, 1);
+        }
+        finally
+        {
+            releasePublicMaterial.TrySetResult();
+        }
+
+        using HttpResponseMessage response = await pending;
+        string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Contains("BGW-CONNECTOR-CONFIGURATION-STALE", responseBody, StringComparison.Ordinal);
+        Assert.Equal(0, provider.SignDigestCalls);
+        Assert.Equal(0, server.Requests);
+        Assert.Equal(0, fixture.Transport.GenericRequests);
+    }
+
+    [Fact]
     public async Task Wave1_SEC_Published_A_to_B_after_DNS_denies_before_restricted_transport()
     {
         TaskCompletionSource dnsEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -201,12 +323,16 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
         Guid applicationId = await fixture.CreateApplicationAsync("transport-race-application");
         string signingSpki = SpkiSha256(material.SigningKeyRevision1);
         string clientSpki = SpkiSha256(material.ClientCertificateRevision1);
+        string signingSubjectCn = material.SigningKeyRevision1.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
         HostedCapabilityAuthority authorityA = await fixture.PrepareCapabilityConnectorVersionAsync(
             connectorId,
             "1.0.0",
             environmentId,
             server.Endpoint,
-            DualSlotDefinition(connectorId, "1.0.0", signingSpki, clientSpki),
+            AuthorizedOperationDefinition(
+                connectorId, "1.0.0", signingSpki, clientSpki, signingSubjectCn, "POST",
+                "\"pathTemplate\":\"/bounded/{tenant}\"", "required",
+                "[{\"name\":\"tenant\",\"value\":\"north\"}]"),
             trackingProvider,
             "sign-r1",
             "mtls-r1");
@@ -216,10 +342,10 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
             "2.0.0",
             environmentId,
             server.Endpoint,
-            DualSlotDefinition(connectorId, "2.0.0", signingSpki, clientSpki).Replace(
-                "X-Synthetic-Signature",
-                "X-Synthetic-Signature-V2",
-                StringComparison.Ordinal),
+            AuthorizedOperationDefinition(
+                connectorId, "2.0.0", signingSpki, clientSpki, signingSubjectCn, "POST",
+                "\"pathTemplate\":\"/bounded/{region}\"", "required",
+                "[{\"name\":\"region\",\"value\":\"south\"}]"),
             provider,
             "sign-r1",
             "mtls-r1");
@@ -264,6 +390,299 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
         Assert.Contains("BGW-CONNECTOR-CONFIGURATION-STALE", body, StringComparison.Ordinal);
         Assert.Equal(0, server.Requests);
         Assert.Equal(0, fixture.Transport.GenericRequests);
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_authorized_operation_policy_mismatches_deny_before_signing_and_network()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+        InMemoryProvider provider = new(
+            new Dictionary<string, string>(),
+            certificateHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                ["mtls-r1"] = material.ClientCertificateRevision1
+            },
+            signingKeyHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                ["sign-r1"] = material.SigningKeyRevision1
+            },
+            certificateChains: new Dictionary<string, IReadOnlyList<X509Certificate2>>(StringComparer.Ordinal)
+            {
+                ["sign-r1"] = [material.RootCertificate]
+            });
+        TrackingCapabilityProvider trackingProvider = new(provider);
+        await using SyntheticSignedMutualTlsServer server = await SyntheticSignedMutualTlsServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-policy-negative-candidate",
+            executionModule: Module(),
+            capabilityProvider: new(trackingProvider, trackingProvider, trackingProvider, trackingProvider, material.RootCertificate));
+        string connectorId = "synthetic-policy-negative-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("policy-negative-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("policy-negative-application");
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "policy-negative-identity");
+        await fixture.Factory.Services.GetRequiredService<IAdminGatewayRegistry>().AddGrantAsync(new(
+            Guid.NewGuid(), identity.Identity.InstallationId, identity.Identity.TenantId, connectorId,
+            "signed-submit", true, fixture.Factory.Clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
+        string signingSpki = SpkiSha256(material.SigningKeyRevision1);
+        string clientSpki = SpkiSha256(material.ClientCertificateRevision1);
+        string signingSubjectCn = material.SigningKeyRevision1.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
+        List<(string Name, Action<JsonObject> Mutate)> cases =
+        [
+            ("slot-missing", root => ActualSlots(root).RemoveAt(1)),
+            ("slot-extra", root =>
+            {
+                JsonObject tertiary = ActualSlots(root)[1]!.DeepClone().AsObject();
+                tertiary["slot"] = "tertiary";
+                tertiary["signing"]!["profileId"] = "synthetic-tertiary-signing";
+                tertiary["projection"]!["headerName"] = "X-Synthetic-Tertiary";
+                ActualSlots(root).Add(tertiary);
+            }),
+            ("wrong-projection", root =>
+            {
+                JsonNode first = ActualSlots(root)[0]!["projection"]!.DeepClone();
+                ActualSlots(root)[0]!["projection"] = ActualSlots(root)[1]!["projection"]!.DeepClone();
+                ActualSlots(root)[1]!["projection"] = first;
+            }),
+            ("wrong-required", root => ActualSlots(root)[1]!["required"] = false),
+            ("wrong-algorithm", root => Policy(root)["algorithm"] = "RS512"),
+            ("wrong-fixed-subject", root => ActualSigning(root, 0)["fixedSubject"] = "wrong-fixed-subject"),
+            ("wrong-audience", root => ActualSigning(root, 0)["audience"] = "wrong-audience"),
+            ("wrong-issuer", root => ActualSigning(root, 0)["issuer"] = "wrong-primary-issuer"),
+            ("wrong-issuer-cn-relation", root => ActualSigning(root, 1)["issuer"] = "synthetic-cn-wrong"),
+            ("wrong-lifetime", root => ActualSigning(root, 0)["tokenLifetimeSeconds"] = 61),
+            ("wrong-temporal-expectation", root => ExpectedSlot(root, 0)["temporalMode"] = "iat-nbf-exp"),
+            ("nbf-enabled-against-iat-exp", root => ActualSigning(root, 0)["temporalClaims"] = "iat-nbf-exp"),
+            ("jti-not-required", root => ExpectedSlot(root, 0)["jtiRequired"] = false),
+            ("x5c-absent", root => ActualSigning(root, 0)["certificateHeader"] = "none"),
+            ("wrong-allowed-claims", root => ActualSigning(root, 0)["allowedClaims"]!.AsArray().Add("other-claim")),
+            ("signing-identities-different", root =>
+            {
+                ActualSigning(root, 1)["keyBinding"] = "mtls-certificate";
+                ActualSigning(root, 1)["publicKeySpkiSha256"] = clientSpki;
+                Policy(root)["signingIdentityDistinctFromMutualTlsSlots"] = new JsonArray("primary");
+            }),
+            ("signing-identity-equals-mtls", root =>
+            {
+                Operation(root)["authorizedCapabilities"]!["restrictedTransport"]!["clientCertificateSpkiSha256"] = signingSpki;
+            }),
+            ("wrong-authentication-kind", root => Policy(root)["authenticationKind"] = "none")
+        ];
+
+        for (int index = 0; index < cases.Count; index++)
+        {
+            string version = $"{index + 1}.0.0";
+            JsonObject definition = JsonNode.Parse(AuthorizedOperationDefinition(
+                connectorId,
+                version,
+                signingSpki,
+                clientSpki,
+                signingSubjectCn,
+                "POST",
+                "\"path\":\"/bounded/static\"",
+                "required",
+                "[]"))!.AsObject();
+            cases[index].Mutate(definition);
+            HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+                connectorId,
+                version,
+                environmentId,
+                server.Endpoint,
+                definition.ToJsonString(),
+                trackingProvider,
+                "sign-r1",
+                string.Equals(cases[index].Name, "signing-identity-equals-mtls", StringComparison.Ordinal)
+                    ? "sign-r1"
+                    : "mtls-r1");
+            await fixture.PublishAsync(authority, index);
+            int signingBefore = trackingProvider.SignDigestCalls;
+            int networkBefore = server.Requests;
+            int transportBefore = fixture.Transport.GenericRequests;
+            GatewayInvokeRequest request = new(
+                "1.0",
+                new("application/octet-stream", "utf8", "caller-controlled-body"),
+                Guid.NewGuid());
+            using HttpResponseMessage response = await fixture.SendSignedAsync(
+                identity,
+                HttpMethod.Post,
+                $"/v1/connectors/{connectorId}/operations/signed-submit:invoke",
+                JsonSerializer.SerializeToUtf8Bytes(request, WebJson));
+            string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+            Assert.True(response.StatusCode == HttpStatusCode.Conflict,
+                $"{cases[index].Name}: {response.StatusCode}: {responseBody}");
+            Assert.Contains("BGW-EGRESS-AUTHENTICATION", responseBody, StringComparison.Ordinal);
+            Assert.Equal(signingBefore, trackingProvider.SignDigestCalls);
+            Assert.Equal(networkBefore, server.Requests);
+            Assert.Equal(transportBefore, fixture.Transport.GenericRequests);
+        }
+
+        static JsonObject Operation(JsonObject root) => root["operations"]![0]!.AsObject();
+        static JsonObject Policy(JsonObject root) => Operation(root)["extensionConfiguration"]!["policyExpectations"]!.AsObject();
+        static JsonArray ActualSlots(JsonObject root) => Operation(root)["authorizedCapabilities"]!["signingSlots"]!.AsArray();
+        static JsonObject ActualSigning(JsonObject root, int index) => ActualSlots(root)[index]!["signing"]!.AsObject();
+        static JsonObject ExpectedSlot(JsonObject root, int index) => Policy(root)["signingSlots"]![index]!.AsObject();
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_authorized_operation_missing_expectation_provider_denies_before_signing_and_network()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+        InMemoryProvider provider = new(
+            new Dictionary<string, string>(),
+            certificateHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                ["mtls-r1"] = material.ClientCertificateRevision1
+            },
+            signingKeyHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                ["sign-r1"] = material.SigningKeyRevision1
+            },
+            certificateChains: new Dictionary<string, IReadOnlyList<X509Certificate2>>(StringComparer.Ordinal)
+            {
+                ["sign-r1"] = [material.RootCertificate]
+            });
+        TrackingCapabilityProvider trackingProvider = new(provider);
+        await using SyntheticSignedMutualTlsServer server = await SyntheticSignedMutualTlsServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-missing-expectation-candidate",
+            executionModule: MissingExpectationModule(),
+            capabilityProvider: new(trackingProvider, trackingProvider, trackingProvider, trackingProvider, material.RootCertificate));
+        string connectorId = "synthetic-missing-expectation-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("missing-expectation-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("missing-expectation-application");
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId,
+            "1.0.0",
+            environmentId,
+            server.Endpoint,
+            AuthorizedOperationDefinition(
+                connectorId,
+                "1.0.0",
+                SpkiSha256(material.SigningKeyRevision1),
+                SpkiSha256(material.ClientCertificateRevision1),
+                material.SigningKeyRevision1.GetNameInfo(X509NameType.SimpleName, forIssuer: false),
+                "POST",
+                "\"path\":\"/bounded/static\"",
+                "required",
+                "[]"),
+            trackingProvider,
+            "sign-r1",
+            "mtls-r1");
+        await fixture.PublishAsync(authority, 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "missing-expectation-identity");
+        await fixture.Factory.Services.GetRequiredService<IAdminGatewayRegistry>().AddGrantAsync(new(
+            Guid.NewGuid(), identity.Identity.InstallationId, identity.Identity.TenantId, connectorId,
+            "signed-submit", true, fixture.Factory.Clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
+        int signingBefore = trackingProvider.SignDigestCalls;
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/signed-submit:invoke",
+            JsonSerializer.SerializeToUtf8Bytes(new GatewayInvokeRequest(
+                "1.0", new("application/octet-stream", "utf8", "caller-body"), Guid.NewGuid()), WebJson));
+        string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("BGW-EGRESS-AUTHENTICATION", responseBody, StringComparison.Ordinal);
+        Assert.Equal(signingBefore, trackingProvider.SignDigestCalls);
+        Assert.Equal(0, server.Requests);
+        Assert.Equal(0, fixture.Transport.GenericRequests);
+    }
+
+    [Fact]
+    public async Task Wave1_SEC_authorized_operation_path_and_body_mismatches_deny_before_network()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+        InMemoryProvider provider = new(
+            new Dictionary<string, string>(),
+            certificateHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                ["mtls-r1"] = material.ClientCertificateRevision1
+            },
+            signingKeyHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                ["sign-r1"] = material.SigningKeyRevision1
+            },
+            certificateChains: new Dictionary<string, IReadOnlyList<X509Certificate2>>(StringComparer.Ordinal)
+            {
+                ["sign-r1"] = [material.RootCertificate]
+            });
+        TrackingCapabilityProvider trackingProvider = new(provider);
+        await using SyntheticSignedMutualTlsServer server = await SyntheticSignedMutualTlsServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-shape-negative-candidate",
+            executionModule: Module(),
+            capabilityProvider: new(trackingProvider, trackingProvider, trackingProvider, trackingProvider, material.RootCertificate));
+        string connectorId = "synthetic-shape-negative-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("shape-negative-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("shape-negative-application");
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "shape-negative-identity");
+        await fixture.Factory.Services.GetRequiredService<IAdminGatewayRegistry>().AddGrantAsync(new(
+            Guid.NewGuid(), identity.Identity.InstallationId, identity.Identity.TenantId, connectorId,
+            "signed-submit", true, fixture.Factory.Clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
+        string signingSpki = SpkiSha256(material.SigningKeyRevision1);
+        string clientSpki = SpkiSha256(material.ClientCertificateRevision1);
+        string subjectCn = material.SigningKeyRevision1.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
+        List<(string Name, string Method, string PathMember, string PublishedBodyMode, string RequestBodyMode, string Parameters)> cases =
+        [
+            ("missing-path-value", "POST", "\"pathTemplate\":\"/bounded/{tenant}\"", "required", "required", "[]"),
+            ("unknown-extra-path-value", "POST", "\"pathTemplate\":\"/bounded/{tenant}\"", "required", "required", "[{\"name\":\"tenant\",\"value\":\"north\"},{\"name\":\"unknown\",\"value\":\"extra\"}]"),
+            ("template-not-Published", "POST", "\"path\":\"/bounded/static\"", "required", "required", "[{\"name\":\"tenant\",\"value\":\"north\"}]"),
+            ("REQUIRED-without-body", "POST", "\"path\":\"/bounded/static\"", "required", "none", "[]"),
+            ("body-with-NONE", "GET", "\"path\":\"/bounded/static\"", "none", "required", "[]")
+        ];
+
+        for (int index = 0; index < cases.Count; index++)
+        {
+            (string name, string method, string pathMember, string publishedBodyMode, string requestBodyMode, string parameters) = cases[index];
+            string version = $"{index + 1}.0.0";
+            JsonObject definition = JsonNode.Parse(AuthorizedOperationDefinition(
+                connectorId, version, signingSpki, clientSpki, subjectCn, method, pathMember,
+                publishedBodyMode, parameters))!.AsObject();
+            definition["operations"]![0]!["extensionConfiguration"]!["requestProjection"]!["bodyMode"] = requestBodyMode;
+            HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+                connectorId, version, environmentId, server.Endpoint, definition.ToJsonString(), trackingProvider,
+                "sign-r1", "mtls-r1");
+            await fixture.PublishAsync(authority, index);
+            int signingBefore = trackingProvider.SignDigestCalls;
+            int networkBefore = server.Requests;
+            int transportBefore = fixture.Transport.GenericRequests;
+            using HttpResponseMessage response = await fixture.SendSignedAsync(
+                identity,
+                HttpMethod.Post,
+                $"/v1/connectors/{connectorId}/operations/signed-submit:invoke",
+                JsonSerializer.SerializeToUtf8Bytes(new GatewayInvokeRequest(
+                    "1.0", new("application/octet-stream", "utf8", "caller-body"), Guid.NewGuid()), WebJson));
+            string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+            Assert.True(response.StatusCode == HttpStatusCode.Conflict,
+                $"{name}: {response.StatusCode}: {responseBody}");
+            Assert.Contains("BGW-EGRESS-AUTHENTICATION", responseBody, StringComparison.Ordinal);
+            Assert.Equal(signingBefore + 2, trackingProvider.SignDigestCalls);
+            Assert.Equal(networkBefore, server.Requests);
+            Assert.Equal(transportBefore, fixture.Transport.GenericRequests);
+        }
     }
 
     private static async Task RunAsync(string? runtimeConnection, string? adminConnection, bool requirePostgres)
@@ -454,12 +873,142 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
         }
     }
 
+    private static async Task RunAuthorizedOperationAsync(string? runtimeConnection, string? adminConnection, bool requirePostgres)
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+        InMemoryProvider provider = new(
+            new Dictionary<string, string>(),
+            certificateHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                ["mtls-r1"] = material.ClientCertificateRevision1
+            },
+            signingKeyHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                ["sign-r1"] = material.SigningKeyRevision1
+            },
+            certificateChains: new Dictionary<string, IReadOnlyList<X509Certificate2>>(StringComparer.Ordinal)
+            {
+                ["sign-r1"] = [material.RootCertificate]
+            });
+        TrackingCapabilityProvider trackingProvider = new(provider);
+        await using SyntheticSignedMutualTlsServer server = await SyntheticSignedMutualTlsServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-authorized-operation-candidate",
+            runtimeConnection: runtimeConnection,
+            adminConnection: adminConnection,
+            executionModule: Module(),
+            capabilityProvider: new(trackingProvider, trackingProvider, trackingProvider, trackingProvider, material.RootCertificate));
+        Assert.Equal(requirePostgres, fixture.Store is RoutingConnectorConfigurationStore);
+
+        string connectorId = "synthetic-authorized-operation-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("authorized-operation-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("authorized-operation-application");
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "authorized-operation-identity");
+        await fixture.Factory.Services.GetRequiredService<IAdminGatewayRegistry>().AddGrantAsync(new(
+            Guid.NewGuid(), identity.Identity.InstallationId, identity.Identity.TenantId, connectorId,
+            "signed-submit", true, fixture.Factory.Clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
+        string signingSpki = SpkiSha256(material.SigningKeyRevision1);
+        string clientSpki = SpkiSha256(material.ClientCertificateRevision1);
+        string signingSubjectCn = material.SigningKeyRevision1.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
+
+        await PublishInvokeAndAssertAsync(
+            "1.0.0", 0, "POST", "\"path\":\"/bounded/static\"", "required", "[]",
+            "/bounded/static", "published-body", "application/octet-stream");
+        await PublishInvokeAndAssertAsync(
+            "2.0.0", 1, "POST", "\"pathTemplate\":\"/bounded/{tenant}\"", "required",
+            "[{\"name\":\"tenant\",\"value\":\"north west\"}]",
+            "/bounded/north%20west", "published-body", "application/octet-stream");
+        await PublishInvokeAndAssertAsync(
+            "3.0.0", 2, "GET", "\"pathTemplate\":\"/bounded/{tenant}/documents/{document}\"", "none",
+            "[{\"name\":\"tenant\",\"value\":\"acme\"},{\"name\":\"document\",\"value\":\"caffè+2026\"}]",
+            "/bounded/acme/documents/caff%C3%A8%2B2026", string.Empty, null);
+        await PublishInvokeAndAssertAsync(
+            "4.0.0", 3, "DELETE", "\"pathTemplate\":\"/bounded/{tenant}\"", "none",
+            "[{\"name\":\"tenant\",\"value\":\"south\"}]",
+            "/bounded/south", string.Empty, null);
+
+        Assert.Equal(4, server.Requests);
+        Assert.Equal(8, trackingProvider.SignDigestCalls);
+        Assert.True(server.ExpectedClientCertificateObserved);
+        Assert.True(server.ValidSignedTokenObserved);
+        Assert.True(server.DualSlotTokensObserved);
+        Assert.True(server.SameSigningIdentityObserved);
+
+        async Task PublishInvokeAndAssertAsync(
+            string version,
+            long expectedPublicationRevision,
+            string method,
+            string pathMember,
+            string bodyMode,
+            string pathParameters,
+            string expectedRawTarget,
+            string expectedBody,
+            string? expectedContentType)
+        {
+            string definition = AuthorizedOperationDefinition(
+                connectorId,
+                version,
+                signingSpki,
+                clientSpki,
+                signingSubjectCn,
+                method,
+                pathMember,
+                bodyMode,
+                pathParameters);
+            HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+                connectorId,
+                version,
+                environmentId,
+                server.Endpoint,
+                definition,
+                trackingProvider,
+                "sign-r1",
+                "mtls-r1");
+            await fixture.PublishAsync(authority, expectedPublicationRevision);
+            GatewayInvokeRequest request = new(
+                "1.0",
+                new("application/octet-stream", "utf8", "caller-controlled-body"),
+                Guid.NewGuid());
+            using HttpResponseMessage response = await fixture.SendSignedAsync(
+                identity,
+                HttpMethod.Post,
+                $"/v1/connectors/{connectorId}/operations/signed-submit:invoke",
+                JsonSerializer.SerializeToUtf8Bytes(request, WebJson));
+            string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+            Assert.True(response.StatusCode == HttpStatusCode.OK, responseBody);
+            Assert.Equal(method, server.LastMethod);
+            Assert.Equal(expectedRawTarget, server.LastRawTarget);
+            Assert.Equal(expectedBody, server.LastBody);
+            Assert.Equal(expectedContentType, server.LastContentType);
+        }
+    }
+
     private static HostedExecutionModuleConfiguration Module()
     {
         string path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "SecureIntegration.Synthetic.ConnectorExecutionModule.dll"));
         string fullName = System.Reflection.AssemblyName.GetAssemblyName(path).FullName
             ?? throw new InvalidOperationException("Synthetic execution module identity is unavailable.");
         return new("synthetic-execution", path, fullName, "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticExecutionModule");
+    }
+
+    private static HostedExecutionModuleConfiguration MissingExpectationModule()
+    {
+        string path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "SecureIntegration.Synthetic.ConnectorExecutionModule.dll"));
+        string fullName = System.Reflection.AssemblyName.GetAssemblyName(path).FullName
+            ?? throw new InvalidOperationException("Synthetic execution module identity is unavailable.");
+        return new(
+            "synthetic-missing-expectation",
+            path,
+            fullName,
+            "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticMissingExpectationProviderModule");
     }
 
     private static string SpkiSha256(X509Certificate2 certificate)
@@ -509,6 +1058,47 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
                 }
               ],
               "restrictedTransport":{"profileId":"synthetic-transport","revision":1,"clientCertificateSpkiSha256":"{{{clientSpki}}}","nearExpirySeconds":30}
+            },
+            "timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[],"idempotent":false,"maximumRetries":0
+          }]
+        }
+        """;
+
+    private static string AuthorizedOperationDefinition(
+        string connectorId,
+        string version,
+        string signingSpki,
+        string clientSpki,
+        string signingSubjectCn,
+        string method,
+        string pathMember,
+        string bodyMode,
+        string pathParameters) => $$$"""
+        {
+          "schemaVersion":"1.0","connectorId":"{{{connectorId}}}","version":"{{{version}}}","displayName":"Synthetic authorized operation",
+          "bindings":{"endpoints":[{"name":"service"}],"secrets":[{"name":"signing-certificate","kind":"clientCertificate"},{"name":"mtls-certificate","kind":"clientCertificate"}]},
+          "operations":[{
+            "operationId":"signed-submit","endpointBinding":"service","method":"{{{method}}}",{{{pathMember}}},
+            "request":{"contentType":"application/octet-stream","maximumBytes":4096},"response":{"maximumBytes":4096},
+            "authentication":{"kind":"mtls","certificateBinding":"mtls-certificate"},"executionStrategy":"synthetic-authorized-operation",
+            "extensionConfiguration":{
+              "policyExpectations":{
+                "algorithm":"RS256","authenticationKind":"mtls",
+                "signingSlots":[
+                  {"slot":"primary","required":true,"projection":{"kind":"authorizationBearer"},"audience":"synthetic-upstream","fixedSubject":"synthetic-fixed-subject","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"temporalMode":"iat-exp","jtiRequired":true,"certificateHeader":"chain","issuer":{"kind":"exact","value":"synthetic-primary-issuer"}},
+                  {"slot":"secondary","required":true,"projection":{"kind":"signedTokenHeader","headerName":"X-Synthetic-Signature"},"audience":"synthetic-upstream","fixedSubject":"synthetic-fixed-subject","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"temporalMode":"iat-exp","jtiRequired":true,"certificateHeader":"chain","issuer":{"kind":"prefixAndCertificateSubjectCn","value":"synthetic-cn-"}}
+                ],
+                "sameSigningIdentitySlots":["primary","secondary"],
+                "signingIdentityDistinctFromMutualTlsSlots":["primary","secondary"]
+              },
+              "requestProjection":{"claimName":"transaction-id","claimValue":"published-claim","bodyMode":"{{{bodyMode}}}","body":"published-body","pathParameters":{{{pathParameters}}}}
+            },
+            "authorizedCapabilities":{
+              "signingSlots":[
+                {"slot":"primary","required":true,"signing":{"profileId":"synthetic-primary-signing","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"synthetic-primary-issuer","audience":"synthetic-upstream","subject":"fixed","fixedSubject":"synthetic-fixed-subject","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"clockSkewSeconds":5,"certificateHeader":"chain","temporalClaims":"iat-exp","minimumRsaKeySize":2048},"projection":{"kind":"authorizationBearer"}},
+                {"slot":"secondary","required":true,"signing":{"profileId":"synthetic-secondary-signing","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"synthetic-cn-{{{signingSubjectCn}}}","audience":"synthetic-upstream","subject":"fixed","fixedSubject":"synthetic-fixed-subject","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"clockSkewSeconds":5,"certificateHeader":"chain","temporalClaims":"iat-exp","minimumRsaKeySize":2048},"projection":{"kind":"signedTokenHeader","headerName":"X-Synthetic-Signature"}}
+              ],
+              "restrictedTransport":{"profileId":"synthetic-transport","revision":1,"clientCertificateSpkiSha256":"{{{clientSpki}}}","nearExpirySeconds":30,"bodyMode":"{{{bodyMode}}}"}
             },
             "timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[],"idempotent":false,"maximumRetries":0
           }]
@@ -608,6 +1198,7 @@ internal sealed class SyntheticSignedMutualTlsServer : IAsyncDisposable
     private readonly WebApplication application;
     private readonly string expectedClientFingerprint;
     private readonly string expectedSigningFingerprint;
+    private readonly string expectedDerivedIssuer;
     private int requests;
     private int expectedClientCertificateObserved;
     private int validSignedTokenObserved;
@@ -619,17 +1210,23 @@ internal sealed class SyntheticSignedMutualTlsServer : IAsyncDisposable
     private int distinctServerOwnedIssuersObserved;
     private int sameSigningIdentityObserved;
     private int legacyBearerObserved;
+    private string? lastMethod;
+    private string? lastRawTarget;
+    private string? lastBody;
+    private string? lastContentType;
 
     private SyntheticSignedMutualTlsServer(
         WebApplication application,
         Uri endpoint,
         string expectedClientFingerprint,
-        string expectedSigningFingerprint)
+        string expectedSigningFingerprint,
+        string expectedDerivedIssuer)
     {
         this.application = application;
         Endpoint = endpoint;
         this.expectedClientFingerprint = expectedClientFingerprint;
         this.expectedSigningFingerprint = expectedSigningFingerprint;
+        this.expectedDerivedIssuer = expectedDerivedIssuer;
     }
 
     internal Uri Endpoint { get; }
@@ -644,6 +1241,10 @@ internal sealed class SyntheticSignedMutualTlsServer : IAsyncDisposable
     internal bool DistinctServerOwnedIssuersObserved => Volatile.Read(ref distinctServerOwnedIssuersObserved) == 1;
     internal bool SameSigningIdentityObserved => Volatile.Read(ref sameSigningIdentityObserved) == 1;
     internal bool LegacyBearerObserved => Volatile.Read(ref legacyBearerObserved) == 1;
+    internal string? LastMethod => Volatile.Read(ref lastMethod);
+    internal string? LastRawTarget => Volatile.Read(ref lastRawTarget);
+    internal string? LastBody => Volatile.Read(ref lastBody);
+    internal string? LastContentType => Volatile.Read(ref lastContentType);
 
     internal static async Task<SyntheticSignedMutualTlsServer> StartAsync(
         X509Certificate2 serverCertificate,
@@ -709,10 +1310,45 @@ internal sealed class SyntheticSignedMutualTlsServer : IAsyncDisposable
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsync("{\"accepted\":true}", context.RequestAborted);
         });
+        app.MapMethods("/bounded/{**remainder}", ["GET", "DELETE", "POST"], async context =>
+        {
+            Interlocked.Increment(ref server!.requests);
+            Volatile.Write(ref server.lastMethod, context.Request.Method);
+            Volatile.Write(ref server.lastRawTarget,
+                context.Features.Get<IHttpRequestFeature>()?.RawTarget ?? context.Request.Path.Value);
+            Volatile.Write(ref server.lastContentType, context.Request.ContentType);
+            X509Certificate2? clientCertificate = await context.Connection.GetClientCertificateAsync(context.RequestAborted);
+            if (clientCertificate is not null && string.Equals(
+                Convert.ToHexString(SHA256.HashData(clientCertificate.RawData)), server.expectedClientFingerprint, StringComparison.Ordinal))
+                Interlocked.Exchange(ref server.expectedClientCertificateObserved, 1);
+            string authorization = context.Request.Headers.Authorization.ToString();
+            string secondaryHeader = context.Request.Headers["X-Synthetic-Signature"].ToString();
+            if (authorization.StartsWith("Bearer ", StringComparison.Ordinal) && !string.IsNullOrEmpty(secondaryHeader))
+            {
+                TokenObservation? primary = ValidateSignedToken(server, authorization[7..], "synthetic-primary-issuer");
+                TokenObservation? secondary = ValidateSignedToken(server, secondaryHeader, server.expectedDerivedIssuer);
+                if (primary is not null && secondary is not null)
+                {
+                    Interlocked.Exchange(ref server.validSignedTokenObserved, 1);
+                    Interlocked.Exchange(ref server.dualSlotTokensObserved, 1);
+                    if (string.Equals(primary.SigningFingerprint, secondary.SigningFingerprint, StringComparison.Ordinal))
+                        Interlocked.Exchange(ref server.sameSigningIdentityObserved, 1);
+                }
+            }
+            using StreamReader reader = new(context.Request.Body, Encoding.UTF8);
+            Volatile.Write(ref server.lastBody, await reader.ReadToEndAsync(context.RequestAborted));
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync("{\"accepted\":true}", context.RequestAborted);
+        });
         await app.StartAsync(cancellationToken);
         string address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
         Uri listening = new(address, UriKind.Absolute);
-        server = new(app, new Uri($"https://localhost:{listening.Port}/", UriKind.Absolute), expectedFingerprint, expectedSigner);
+        server = new(
+            app,
+            new Uri($"https://localhost:{listening.Port}/", UriKind.Absolute),
+            expectedFingerprint,
+            expectedSigner,
+            "synthetic-cn-" + expectedSigningCertificate.GetNameInfo(X509NameType.SimpleName, forIssuer: false));
         return server;
     }
 

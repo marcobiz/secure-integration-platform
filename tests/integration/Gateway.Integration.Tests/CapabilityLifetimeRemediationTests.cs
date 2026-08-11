@@ -176,6 +176,9 @@ public sealed class CapabilityLifetimeRemediationTests
         internal int PrivilegedEffects => Volatile.Read(ref privilegedEffects);
         internal bool LifetimeCancellationObserved => Volatile.Read(ref lifetimeCancellationObserved) == 1;
 
+        public Task ValidatePublishedOperationExpectationsAsync(AuthorizedConnectorExecution execution, AuthorizedPublishedOperationExpectations expectations, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
         public Task<QualifiedGatewayExecutionResult> ExecuteTypedSessionHandshakeAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
             throw new InvalidOperationException();
         public Task<QualifiedGatewayExecutionResult> ExecuteComposedSoapAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
@@ -220,6 +223,7 @@ public sealed class CapabilityLifetimeRemediationTests
         {
             get { lock (signingSlots) return signingSlots.ToArray(); }
         }
+        public Task ValidatePublishedOperationExpectationsAsync(AuthorizedConnectorExecution execution, AuthorizedPublishedOperationExpectations expectations, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<QualifiedGatewayExecutionResult> ExecuteTypedSessionHandshakeAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) => throw new InvalidOperationException();
         public Task<QualifiedGatewayExecutionResult> ExecuteComposedSoapAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) => throw new InvalidOperationException();
         public Task<string> CreateSignedTokenAsync(AuthorizedConnectorExecution execution, ConnectorSigningSlotKey signingSlot, IReadOnlyDictionary<string, JsonElement> claims, CancellationToken cancellationToken)
@@ -322,7 +326,7 @@ public sealed class CapabilityLifetimeRemediationTests
             GatewayClientPrincipal principal = new(identity, request.CorrelationId);
             NeverTransport transport = new();
             RestrictedEgressService runtime = new(registry, catalog, new NeverSecrets(), new NeverCertificates(), new PublicResolver(),
-                transport, clock, null, [strategy], dispatcher);
+                transport, clock, null, [strategy], null, dispatcher);
             return new(runtime, principal, request, registry, transport);
         }
     }

@@ -211,6 +211,7 @@ builder.Services.AddSingleton<RestrictedEgressService>(services => new Restricte
     services.GetRequiredService<IGatewayClock>(),
     services.GetService<IPrivateDestinationAllowance>(),
     services.GetServices<IConnectorExecutionStrategy>(),
+    services.GetServices<IAuthorizedPublishedOperationExpectationProvider>(),
     services.GetRequiredService<AuthorizedConnectorCapabilityDispatcher>()));
 builder.Services.AddSingleton<AdminAccessService>();
 builder.Services.AddSingleton<ConnectorApprovalService>();
