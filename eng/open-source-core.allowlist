@@ -50,6 +50,7 @@ eng/test.ps1
 eng/test-m3-operator-handoff.ps1
 eng/test-m3-split-firewall.ps1
 eng/test-m3-split-network.ps1
+eng/validate-container-base-images.ps1
 eng/validate-docs.ps1
 eng/validate-tls-hardening.ps1
 eng/Export-OpenSourceCore.ps1

@@ -21,13 +21,33 @@ $approvedDigests = @{
     'runtime:10.0.11-alpine3.24' = '216f4e2027da6ae806e0bc4b448669ac0faa00125908e308f31dd70598e58136'
 }
 
-$expectedReferencesByPath = @{
+$repositoryExpectedReferencesByPath = @{
     'src/Gateway/Gateway.Api/Dockerfile' = @($sdkNonAlpine, $aspnetNonAlpine)
     'src/Gateway/Gateway.Migrations/Dockerfile' = @($sdkNonAlpine, $runtimeNonAlpine)
     'packs/deployment/azure/Dockerfile' = @($sdkNonAlpine, $aspnetNonAlpine)
     'tools/m3/VendorMock/Dockerfile' = @($sdkAlpine, $aspnetAlpine)
     'tools/m3/SyntheticVault/Dockerfile' = @($sdkAlpine, $aspnetAlpine)
     'tools/m3/Provisioner/Dockerfile' = @($sdkAlpine, $runtimeAlpine)
+}
+
+$coreExportManifestPath = Join-Path $root 'OPEN_SOURCE_EXPORT_MANIFEST.json'
+$isCoreExport = Test-Path -LiteralPath $coreExportManifestPath -PathType Leaf
+if ($isCoreExport) {
+    $expectedReferencesByPath = @{}
+    foreach ($path in @($repositoryExpectedReferencesByPath.Keys)) {
+        if ($path -ne 'packs/deployment/azure/Dockerfile') {
+            $expectedReferencesByPath[$path] = $repositoryExpectedReferencesByPath[$path]
+        }
+    }
+    $validationProfile = 'core-export'
+    $expectedDockerfileCount = 5
+    $expectedDotNetFromCount = 10
+}
+else {
+    $expectedReferencesByPath = $repositoryExpectedReferencesByPath
+    $validationProfile = 'repository'
+    $expectedDockerfileCount = 6
+    $expectedDotNetFromCount = 12
 }
 
 function New-ValidationFinding {
@@ -113,9 +133,18 @@ function Invoke-RepositoryValidation {
         return @(New-ValidationFinding -Code 'GLOBAL_JSON_SDK_VERSION_MISSING' -Path 'global.json' -Line 0)
     }
 
-    $trackedCandidates = @(& git -C $root ls-files -- '*Dockerfile*')
-    if ($LASTEXITCODE -ne 0) {
-        return @(New-ValidationFinding -Code 'GIT_TRACKED_FILE_ENUMERATION_FAILED' -Path 'repository' -Line 0)
+    if ($isCoreExport) {
+        $exportManifest = Get-Content -LiteralPath $coreExportManifestPath -Raw | ConvertFrom-Json
+        if ([int]$exportManifest.schemaVersion -ne 1) {
+            return @(New-ValidationFinding -Code 'CORE_EXPORT_MANIFEST_VERSION_INVALID' -Path 'OPEN_SOURCE_EXPORT_MANIFEST.json' -Line 0)
+        }
+        $trackedCandidates = @($exportManifest.files | ForEach-Object { [string]$_.path } | Where-Object { $_ -like '*Dockerfile*' })
+    }
+    else {
+        $trackedCandidates = @(& git -C $root ls-files -- '*Dockerfile*')
+        if ($LASTEXITCODE -ne 0) {
+            return @(New-ValidationFinding -Code 'GIT_TRACKED_FILE_ENUMERATION_FAILED' -Path 'repository' -Line 0)
+        }
     }
 
     $trackedDockerfiles = @($trackedCandidates | Where-Object {
@@ -176,7 +205,7 @@ function Invoke-RepositoryValidation {
         }
     }
 
-    if ($dotNetFromCount -ne 12) {
+    if ($dotNetFromCount -ne $expectedDotNetFromCount) {
         $findings += New-ValidationFinding -Code 'DOTNET_FROM_COUNT_INVALID' -Path 'repository' -Line $dotNetFromCount
     }
 
@@ -232,7 +261,7 @@ try {
         exit 1
     }
 
-    Write-Output 'CONTAINER_BASE_IMAGE_VALIDATION_PASS:dockerfiles=6:dotnet_from=12'
+    Write-Output ('CONTAINER_BASE_IMAGE_VALIDATION_PASS:profile={0}:dockerfiles={1}:dotnet_from={2}' -f $validationProfile, $expectedDockerfileCount, $expectedDotNetFromCount)
 
     if ($SelfTest) {
         Test-NegativeControl `
