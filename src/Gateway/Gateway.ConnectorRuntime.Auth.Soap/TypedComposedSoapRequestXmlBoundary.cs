@@ -28,12 +28,13 @@ internal static class TypedComposedSoapRequestXmlBoundary
                 using (XmlWriter writer = XmlWriter.Create(output, Settings()))
                 {
                     writer.WriteStartElement("core", "AdapterPayload", InternalNamespace);
+                    CoreOwnedAdapterXmlWriter adapterWriter = new(writer);
                     context = new(state, businessPayload, serverOwnedInputs);
                     try
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        using (serverOwnedInputs.BindToCoreWriter(writer))
-                            authority.Adapter.WriteRequest(writer, context);
+                        using (serverOwnedInputs.BindToCoreWriter(adapterWriter))
+                            authority.Adapter.WriteRequest(adapterWriter, context);
                         cancellationToken.ThrowIfCancellationRequested();
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -54,6 +55,7 @@ internal static class TypedComposedSoapRequestXmlBoundary
                     }
                     finally
                     {
+                        adapterWriter.CompleteCallback();
                         context.Clear();
                     }
                     writer.WriteEndElement();

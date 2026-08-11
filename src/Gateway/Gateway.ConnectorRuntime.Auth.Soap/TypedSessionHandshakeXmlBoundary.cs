@@ -88,17 +88,19 @@ internal static class TypedSessionHandshakeXmlBoundary
             using (XmlWriter writer = XmlWriter.Create(fragment, Settings()))
             {
                 writer.WriteStartElement("core", "AdapterPayload", "urn:secure-integration:typed-session-handshake:internal");
+                CoreOwnedAdapterXmlWriter adapterWriter = new(writer);
                 try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    using (serverOwnedInputs.BindToCoreWriter(writer))
-                        adapter.WriteValidationRequest(writer, new(state, candidate, provenance, serverOwnedInputs));
+                    using (serverOwnedInputs.BindToCoreWriter(adapterWriter))
+                        adapter.WriteValidationRequest(adapterWriter, new(state, candidate, provenance, serverOwnedInputs));
                     cancellationToken.ThrowIfCancellationRequested();
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
                 catch (OperationCanceledException) { throw TypedSessionHandshakeFailures.ValidationFailed(); }
                 catch (SoapAuthException exception) when (string.Equals(exception.Code, "SOAP-REQUEST-TOO-LARGE", StringComparison.Ordinal)) { throw; }
                 catch (Exception) { throw TypedSessionHandshakeFailures.ValidationFailed(); }
+                finally { adapterWriter.CompleteCallback(); }
                 writer.WriteEndElement();
             }
 
@@ -182,17 +184,19 @@ internal static class TypedSessionHandshakeXmlBoundary
             using (XmlWriter writer = XmlWriter.Create(fragment, Settings()))
             {
                 writer.WriteStartElement("core", "AdapterPayload", "urn:secure-integration:typed-session-handshake:internal");
+                CoreOwnedAdapterXmlWriter adapterWriter = new(writer);
                 try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    using (serverOwnedInputs.BindToCoreWriter(writer))
-                        state.RequestAdapter.WriteRequest(writer, new(state, serverOwnedInputs));
+                    using (serverOwnedInputs.BindToCoreWriter(adapterWriter))
+                        state.RequestAdapter.WriteRequest(adapterWriter, new(state, serverOwnedInputs));
                     cancellationToken.ThrowIfCancellationRequested();
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
                 catch (OperationCanceledException) { throw TypedSessionHandshakeFailures.AdapterRejected(); }
                 catch (SoapAuthException exception) when (string.Equals(exception.Code, "SOAP-REQUEST-TOO-LARGE", StringComparison.Ordinal)) { throw; }
                 catch (Exception) { throw TypedSessionHandshakeFailures.AdapterRejected(); }
+                finally { adapterWriter.CompleteCallback(); }
                 writer.WriteEndElement();
             }
             if (fragment.Length > state.Operation.MaximumRequestBytes) throw new SoapAuthException("SOAP-REQUEST-TOO-LARGE");

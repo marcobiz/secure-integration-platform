@@ -15,7 +15,7 @@ public sealed class AuthorizedConnectorBindingInputs
 
     private readonly Dictionary<string, char[]> values;
     private readonly object synchronization = new();
-    private XmlWriter? boundWriter;
+    private CoreOwnedAdapterXmlWriter? boundWriter;
     private int state;
 
     internal AuthorizedConnectorBindingInputs(IReadOnlyDictionary<string, string> resolved)
@@ -54,7 +54,8 @@ public sealed class AuthorizedConnectorBindingInputs
     }
 
     /// <summary>
-    /// Writes the required value into the current Core-owned XML element or attribute. No string,
+    /// Writes the required value only as text of the current Core-owned XML element. Attribute
+    /// emission is denied so stateful XML APIs cannot retain or reveal the value. No string,
     /// provider reference or mutable backing buffer is returned to the adapter.
     /// </summary>
     public void WriteRequiredXmlValue(string name)
@@ -63,18 +64,20 @@ public sealed class AuthorizedConnectorBindingInputs
         {
             if (state != 1 || boundWriter is null || !values.TryGetValue(name, out char[]? value))
                 throw TypedSessionHandshakeFailures.BindingInputRejected();
-            boundWriter.WriteChars(value, 0, value.Length);
+            boundWriter.WriteAuthorizedElementValue(value);
         }
     }
 
     internal IDisposable BindToCoreWriter(XmlWriter writer)
     {
         ArgumentNullException.ThrowIfNull(writer);
+        if (writer is not CoreOwnedAdapterXmlWriter coreWriter)
+            throw TypedSessionHandshakeFailures.BindingInputRejected();
         lock (synchronization)
         {
             if (state != 0 || boundWriter is not null)
                 throw TypedSessionHandshakeFailures.BindingInputRejected();
-            boundWriter = writer;
+            boundWriter = coreWriter;
             state = 1;
             return new BindingScope(this);
         }
