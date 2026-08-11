@@ -106,12 +106,27 @@ canonical full-stack and pinned-SDK executions do not erase or reclassify those 
   Healthcare or ConnectorPacks path;
 - deterministic M3 split-network, split-firewall and operator-handoff regressions: PASS.
 
-Exact-head Gitleaks and canonical GitHub CI remain pending until the final commit is pushed. This
-report does not claim an official FSE endpoint call or accreditation.
+## Canonical PostgreSQL CI qualification
+
+The connector/CI candidate exact head `c450d7133436a6f7a3a83dcb5c35f594dcadf7b6` qualified on
+2026-08-11 without rerun. General run
+[`31495813159`](https://github.com/marcobiz/secure-integration-platform/actions/runs/31495813159)
+passed 6/6 and M5/Admin run
+[`31495813186`](https://github.com/marcobiz/secure-integration-platform/actions/runs/31495813186)
+passed 15/15. In General job
+[`gateway-postgresql-18` (`93793113966`)](https://github.com/marcobiz/secure-integration-platform/actions/runs/31495813159/job/93793113966),
+the log identifies that exact SHA, restores the FSE2 integration project in locked mode, builds it
+in Release, and runs the exact PostgreSQL FSE2 FQN with `REQUIRE_FSE2_POSTGRES_GATE=1` before the
+always-run cleanup. The explicit result is `Healthcare.FSE2.Integration.Tests.dll`: Failed 0,
+Passed 1, Skipped 0, Total 1.
+
+The historical harness invocation failures above remain failures and are not evidence for this
+qualification. This report does not claim an official FSE endpoint call or accreditation.
 
 ## Readiness boundary
 
-- `ORGANIZATION_PROFILE = READY_FOR_INDEPENDENT_REVIEW`, subject to final exact-head gates;
+- `ORGANIZATION_PROFILE = READY_FOR_INDEPENDENT_REVIEW`, after final documentation-only exact-head
+  CI confirmation;
 - `HUMAN_ACTOR_PROFILE = DEFERRED`;
 - `NEW_CORE_PRIMITIVE_REQUIRED = NO`;
 - `ACCREDITED_PRODUCTION_READY = false`.
