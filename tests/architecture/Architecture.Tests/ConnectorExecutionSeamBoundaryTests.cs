@@ -181,6 +181,8 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         string soapRoot = Path.Combine(Root, "src", "Gateway", "Gateway.ConnectorRuntime.Auth.Soap");
         string contracts = File.ReadAllText(Path.Combine(soapRoot, "TypedComposedSoapRequestContracts.cs"));
         string boundary = File.ReadAllText(Path.Combine(soapRoot, "TypedComposedSoapRequestXmlBoundary.cs"));
+        string bindingInputs = File.ReadAllText(Path.Combine(soapRoot, "AuthorizedConnectorBindingInputs.cs"));
+        string adapterWriter = File.ReadAllText(Path.Combine(soapRoot, "CoreOwnedAdapterXmlWriter.cs"));
         string executionContracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"));
         string loader = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "ConnectorExecutionModuleLoader.cs"));
         string migration = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0014_typed_composed_soap_request_inputs.sql"));
@@ -189,7 +191,12 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         Assert.Contains("void WriteRequest(XmlWriter writer, TypedComposedSoapRequestContext context)", contracts, StringComparison.Ordinal);
         Assert.Contains("public Stream OpenBusinessPayloadStream()", contracts, StringComparison.Ordinal);
         Assert.Contains("public AuthorizedConnectorBindingInputs ServerOwnedInputs", contracts, StringComparison.Ordinal);
-        Assert.Contains("using (serverOwnedInputs.BindToCoreWriter(writer))", boundary, StringComparison.Ordinal);
+        Assert.Contains("using (serverOwnedInputs.BindToCoreWriter(adapterWriter))", boundary, StringComparison.Ordinal);
+        Assert.Contains("private CoreOwnedAdapterXmlWriter? boundWriter", bindingInputs, StringComparison.Ordinal);
+        Assert.Contains("boundWriter.WriteAuthorizedElementValue(value)", bindingInputs, StringComparison.Ordinal);
+        Assert.DoesNotContain("boundWriter.WriteChars", bindingInputs, StringComparison.Ordinal);
+        Assert.Contains("attributeOpen || inner.WriteState is not (WriteState.Element or WriteState.Content)", adapterWriter, StringComparison.Ordinal);
+        Assert.Contains("lock (synchronization)", adapterWriter, StringComparison.Ordinal);
         Assert.Contains("writer.WriteStartElement(\"op\", authority.RequestElement.LocalName", boundary, StringComparison.Ordinal);
         Assert.Contains("TypedComposedSoapRequestAdapterRegistry", contracts, StringComparison.Ordinal);
         Assert.Contains("RegisterAdapter(typeof(ITypedComposedSoapRequestAdapter)", loader, StringComparison.Ordinal);

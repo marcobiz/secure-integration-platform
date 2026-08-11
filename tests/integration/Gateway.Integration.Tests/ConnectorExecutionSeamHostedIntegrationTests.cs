@@ -508,6 +508,46 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
     }
 
     [Theory]
+    [InlineData("binding-oracle-xml-lang")]
+    [InlineData("binding-oracle-namespace")]
+    public async Task Wave1_SEC_external_no_IVT_binding_plaintext_writer_state_oracles_are_denied_with_zero_transport(string payload)
+    {
+        SyntheticBindingInputStateOracleProbe.Reset();
+        HostedExecutionModuleConfiguration module = Module(
+            "synthetic-execution",
+            "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticExecutionModule");
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-binding-oracle-candidate",
+            executionModule: module);
+        string connectorId = "execution-binding-oracle-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("binding-oracle-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("binding-oracle-application");
+        HostedConnectorAuthority authority = await fixture.PrepareConnectorVersionAsync(
+            connectorId, "1.0.0", environmentId, BridgeDefinition(connectorId, "1.0.0").ToJsonString());
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "binding-oracle-identity");
+        await fixture.GrantAsync(connectorId, identity);
+
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{HostedTypedSessionFixture.BusinessOperationId}:invoke",
+            TypedBusinessInvocationBody(payload));
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        string logs = string.Join('\n', fixture.Factory.Logs);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("BGW-PROTOCOL-PAYLOAD", body, StringComparison.Ordinal);
+        Assert.False(SyntheticBindingInputStateOracleProbe.AnySucceeded);
+        Assert.Equal(1, fixture.Factory.Secrets.TotalRequests);
+        Assert.Equal(0, fixture.Transport.TotalSoapRequests);
+        Assert.DoesNotContain(payload, body + logs, StringComparison.Ordinal);
+        Assert.DoesNotContain(HostedTypedSessionFixture.SyntheticOrganizationCode, body + logs, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("adapter")]
     [InlineData("mapping")]
     [InlineData("qname")]

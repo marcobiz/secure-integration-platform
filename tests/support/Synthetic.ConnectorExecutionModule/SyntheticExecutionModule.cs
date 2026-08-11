@@ -751,6 +751,24 @@ public sealed class SyntheticExternalTypedComposedSoapRequestAdapter : ITypedCom
             throw new InvalidOperationException("synthetic-typed-composed-adapter-canary");
         if (string.Equals(payload, "adapter-fake-cancellation", StringComparison.Ordinal))
             throw new OperationCanceledException("synthetic-typed-composed-fake-cancellation", new CancellationToken(canceled: true));
+        if (string.Equals(payload, "binding-oracle-xml-lang", StringComparison.Ordinal))
+        {
+            writer.WriteStartAttribute("xml", "lang", "http://www.w3.org/XML/1998/namespace");
+            context.ServerOwnedInputs.WriteRequiredXmlValue("organization-code");
+            writer.WriteEndAttribute();
+            SyntheticBindingInputStateOracleProbe.RecordXmlLang(
+                string.Equals(writer.XmlLang, "core-owned<&organization", StringComparison.Ordinal));
+            throw new InvalidOperationException("synthetic-binding-oracle-must-not-complete");
+        }
+        if (string.Equals(payload, "binding-oracle-namespace", StringComparison.Ordinal))
+        {
+            writer.WriteStartAttribute("xmlns", "probe", "http://www.w3.org/2000/xmlns/");
+            context.ServerOwnedInputs.WriteRequiredXmlValue("organization-code");
+            writer.WriteEndAttribute();
+            SyntheticBindingInputStateOracleProbe.RecordNamespace(
+                string.Equals(writer.LookupPrefix("core-owned<&organization"), "probe", StringComparison.Ordinal));
+            throw new InvalidOperationException("synthetic-binding-oracle-must-not-complete");
+        }
 
         writer.WriteElementString("op", "Payload", SyntheticExternalTypedComposedSoapProtocol.Namespace, payload);
         writer.WriteStartElement("op", "OrganizationCode", SyntheticExternalTypedComposedSoapProtocol.Namespace);
@@ -775,6 +793,29 @@ public sealed class SyntheticExternalTypedComposedSoapRequestAdapter : ITypedCom
             return document;
         }
     }
+}
+
+/// <summary>External no-IVT probe for XML writer state that must never observe binding plaintext.</summary>
+public static class SyntheticBindingInputStateOracleProbe
+{
+    private static int xmlLangSucceeded;
+    private static int namespaceSucceeded;
+
+    /// <summary>Clears qualification-only boolean observations without retaining any value.</summary>
+    public static void Reset()
+    {
+        Volatile.Write(ref xmlLangSucceeded, 0);
+        Volatile.Write(ref namespaceSucceeded, 0);
+    }
+
+    /// <summary>Records only whether the reserved XML attribute exposed the known synthetic value.</summary>
+    public static void RecordXmlLang(bool succeeded) => Volatile.Write(ref xmlLangSucceeded, succeeded ? 1 : 0);
+
+    /// <summary>Records only whether namespace lookup confirmed the known synthetic value.</summary>
+    public static void RecordNamespace(bool succeeded) => Volatile.Write(ref namespaceSucceeded, succeeded ? 1 : 0);
+
+    /// <summary>Whether any adapter-visible writer-state oracle succeeded.</summary>
+    public static bool AnySucceeded => Volatile.Read(ref xmlLangSucceeded) != 0 || Volatile.Read(ref namespaceSucceeded) != 0;
 }
 
 /// <summary>External probes for callback lifetime and read-only repeatable business payload views.</summary>
