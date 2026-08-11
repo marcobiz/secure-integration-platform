@@ -11,6 +11,7 @@ public sealed class ComposedSoapExecutionStrategy : IConnectorExecutionStrategy,
     private static readonly FrozenSet<GatewayAuthenticationKind> AuthenticationKinds =
         new[] { GatewayAuthenticationKind.SoapBasicOpaqueSession }.ToFrozenSet();
     private readonly PublishedComposedSoapAuthorityResolver authority;
+    private readonly TypedComposedSoapRequestComposer requestComposer;
     private readonly ComposedSoapAuthenticatedClient client;
 
     /// <summary>Creates the production strategy over the real Published store and restricted SOAP transport.</summary>
@@ -21,8 +22,10 @@ public sealed class ComposedSoapExecutionStrategy : IConnectorExecutionStrategy,
         IHostResolver resolver,
         IRestrictedTransport transport,
         IGatewayClock clock,
-        IPrivateDestinationAllowance? privateDestinationAllowance = null)
-        : this(store, secrets, sessions, resolver, transport, clock, privateDestinationAllowance, null)
+        IPrivateDestinationAllowance? privateDestinationAllowance = null,
+        IEnumerable<ITypedComposedSoapRequestAdapter>? requestAdapters = null)
+        : this(store, secrets, sessions, resolver, transport, clock, privateDestinationAllowance,
+            new TypedComposedSoapRequestAdapterRegistry(requestAdapters ?? []), null)
     {
     }
 
@@ -35,9 +38,41 @@ public sealed class ComposedSoapExecutionStrategy : IConnectorExecutionStrategy,
         IGatewayClock clock,
         IPrivateDestinationAllowance? privateDestinationAllowance,
         Func<CancellationToken, Task>? beforeFinalAuthorization)
+        : this(store, secrets, sessions, resolver, transport, clock, privateDestinationAllowance,
+            new TypedComposedSoapRequestAdapterRegistry([]), beforeFinalAuthorization)
     {
-        authority = new(store ?? throw new ArgumentNullException(nameof(store)), clock ?? throw new ArgumentNullException(nameof(clock)));
-        client = new(secrets ?? throw new ArgumentNullException(nameof(secrets)), sessions ?? throw new ArgumentNullException(nameof(sessions)),
+    }
+
+    internal ComposedSoapExecutionStrategy(
+        IConnectorConfigurationStore store,
+        ISecretValueProvider secrets,
+        OpaqueSessionLeaseProvider sessions,
+        IHostResolver resolver,
+        IRestrictedTransport transport,
+        IGatewayClock clock,
+        IPrivateDestinationAllowance? privateDestinationAllowance,
+        IEnumerable<ITypedComposedSoapRequestAdapter> requestAdapters,
+        Func<CancellationToken, Task>? beforeFinalAuthorization)
+        : this(store, secrets, sessions, resolver, transport, clock, privateDestinationAllowance,
+            new TypedComposedSoapRequestAdapterRegistry(requestAdapters), beforeFinalAuthorization)
+    {
+    }
+
+    private ComposedSoapExecutionStrategy(
+        IConnectorConfigurationStore store,
+        ISecretValueProvider secrets,
+        OpaqueSessionLeaseProvider sessions,
+        IHostResolver resolver,
+        IRestrictedTransport transport,
+        IGatewayClock clock,
+        IPrivateDestinationAllowance? privateDestinationAllowance,
+        TypedComposedSoapRequestAdapterRegistry requestAdapters,
+        Func<CancellationToken, Task>? beforeFinalAuthorization)
+    {
+        ISecretValueProvider secretProvider = secrets ?? throw new ArgumentNullException(nameof(secrets));
+        authority = new(store ?? throw new ArgumentNullException(nameof(store)), clock ?? throw new ArgumentNullException(nameof(clock)), requestAdapters);
+        requestComposer = new(secretProvider);
+        client = new(secretProvider, sessions ?? throw new ArgumentNullException(nameof(sessions)),
             resolver ?? throw new ArgumentNullException(nameof(resolver)), transport ?? throw new ArgumentNullException(nameof(transport)), clock,
             privateDestinationAllowance, beforeFinalAuthorization);
     }
@@ -79,7 +114,10 @@ public sealed class ComposedSoapExecutionStrategy : IConnectorExecutionStrategy,
             if (!string.Equals(resolved.State.SessionAuthority.ConnectorVersion, operation.Version, StringComparison.Ordinal) ||
                 !string.Equals(resolved.State.SessionAuthority.ProfileId, operation.SessionProfileId, StringComparison.Ordinal))
                 throw AuthenticationFailure();
-            ComposedSoapHttpResponse response = await client.SendAuthorizedAsync(resolved, execution.Payload, cancellationToken).ConfigureAwait(false);
+            using TypedComposedSoapRequestSnapshot? typedRequest = await requestComposer.ComposeAsync(
+                resolved, execution.Payload, cancellationToken).ConfigureAwait(false);
+            ReadOnlyMemory<byte> exactEnvelope = typedRequest?.Bytes ?? execution.Payload;
+            ComposedSoapHttpResponse response = await client.SendAuthorizedAsync(resolved, exactEnvelope, cancellationToken).ConfigureAwait(false);
             return new(response.StatusCode, response.ContentType, response.Body);
         }
         catch (OperationCanceledException) { throw; }
@@ -92,7 +130,9 @@ public sealed class ComposedSoapExecutionStrategy : IConnectorExecutionStrategy,
                 "SOAP-AUTHORITY-STALE" when !requireSelectedKey => new GatewayException("BGW-CONNECTOR-CONFIGURATION-STALE", 503, true),
                 "SOAP-RESPONSE-TOO-LARGE" => new GatewayException("BGW-EGRESS-RESPONSE-TOO-LARGE", 502),
                 "SOAP-TRANSPORT-FAILED" or "SOAP-TIMEOUT" => new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502),
-                "SOAP-REQUEST-INVALID" or "SOAP-XML-INVALID" => new GatewayException("BGW-PROTOCOL-PAYLOAD", 400),
+                "SOAP-TYPED-COMPOSED-BINDING-INPUT-UNAVAILABLE" => new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502),
+                "SOAP-REQUEST-INVALID" or "SOAP-XML-INVALID" or "SOAP-REQUEST-TOO-LARGE" or
+                "SOAP-TYPED-COMPOSED-REQUEST-REJECTED" => new GatewayException("BGW-PROTOCOL-PAYLOAD", 400),
                 _ => AuthenticationFailure()
             };
         }

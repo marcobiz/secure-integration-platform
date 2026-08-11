@@ -84,6 +84,7 @@
           "pattern": "^[a-z][a-z0-9._-]*[a-z0-9]$|^[a-z]$"
         },
         "typedSessionHandshake": { "$ref": "#/$defs/typedSessionHandshake" },
+        "typedComposedSoapRequest": { "$ref": "#/$defs/typedComposedSoapRequest" },
         "extensionConfiguration": { "$ref": "#/$defs/extensionConfiguration" },
         "authorizedCapabilities": { "$ref": "#/$defs/authorizedCapabilities" },
         "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 120000 },
@@ -274,6 +275,16 @@
             "maximumResponseBytes": { "type": "integer", "minimum": 256, "maximum": 16777216 }
           }
         }
+      }
+    },
+    "typedComposedSoapRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestAdapter", "requestElement"],
+      "properties": {
+        "requestAdapter": { "$ref": "#/$defs/compiledAdapter" },
+        "requestElement": { "$ref": "#/$defs/xmlQualifiedName" },
+        "serverOwnedInputs": { "$ref": "#/$defs/serverOwnedInputs" }
       }
     },
     "serverOwnedInputs": {

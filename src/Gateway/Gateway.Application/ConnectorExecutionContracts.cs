@@ -531,6 +531,8 @@ public interface IConnectorExecutionStrategyRegistrar
     void AddTypedSessionHandshakeResponseAdapter<TAdapter>() where TAdapter : class;
     /// <summary>Registers one module-owned implementation of the existing external-session validator contract.</summary>
     void AddExternalSessionValidationAdapter<TAdapter>() where TAdapter : class;
+    /// <summary>Registers one module-owned composed-SOAP business request adapter.</summary>
+    void AddTypedComposedSoapRequestAdapter<TAdapter>() where TAdapter : class;
 }
 
 /// <summary>Explicit startup-only module that registers known execution strategies and their own services.</summary>

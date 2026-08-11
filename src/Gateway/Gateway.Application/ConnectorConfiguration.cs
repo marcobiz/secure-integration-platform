@@ -311,6 +311,8 @@ public static class ConnectorOperationBindings
             AddServerOwnedInputs(handshake, secrets);
             if (handshake.TryGetProperty("externalAdmission", out admission)) AddServerOwnedInputs(admission, secrets);
         }
+        if (operation.TryGetProperty("typedComposedSoapRequest", out JsonElement typedComposedRequest))
+            AddServerOwnedInputs(typedComposedRequest, secrets);
         if (operation.TryGetProperty("authorizedCapabilities", out JsonElement capabilities))
         {
             if (capabilities.TryGetProperty("signing", out JsonElement legacySigning))
@@ -659,6 +661,17 @@ public sealed class ConnectorDefinitionValidator
                 ValidateServerOwnedInputs(handshake, secrets, issues, $"$.operations[{index}].typedSessionHandshake");
                 if (handshake.TryGetProperty("externalAdmission", out admission))
                     ValidateServerOwnedInputs(admission, secrets, issues, $"$.operations[{index}].typedSessionHandshake.externalAdmission");
+            }
+            if (operation.TryGetProperty("typedComposedSoapRequest", out JsonElement typedComposedRequest))
+            {
+                string method = operation.GetProperty("method").GetString()!;
+                string authenticationKind = authentication.GetProperty("kind").GetString()!;
+                if (!string.Equals(method, "POST", StringComparison.Ordinal))
+                    issues.Add(new("BGW-CONNECTOR-TYPED-COMPOSED-METHOD", $"$.operations[{index}].method"));
+                if (!string.Equals(authenticationKind, "soapBasicOpaqueSession", StringComparison.Ordinal))
+                    issues.Add(new("BGW-CONNECTOR-TYPED-COMPOSED-AUTH", $"$.operations[{index}].authentication.kind"));
+                ValidateServerOwnedInputs(typedComposedRequest, secrets, issues,
+                    $"$.operations[{index}].typedComposedSoapRequest");
             }
             if (operation.TryGetProperty("extensionConfiguration", out JsonElement extensionConfiguration))
                 ValidateExtensionConfiguration(extensionConfiguration, issues, $"$.operations[{index}].extensionConfiguration");

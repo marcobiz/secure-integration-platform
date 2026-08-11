@@ -205,6 +205,8 @@ public static class BackendRuntimeWireCodes
         new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-SOAP-METHOD-INVALID"),
         new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-STATE"),
         new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-STORE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-TYPED-COMPOSED-AUTH"),
+        new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-TYPED-COMPOSED-METHOD"),
         new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-TYPED-HANDSHAKE-AUTH"),
         new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-TYPED-HANDSHAKE-CONTENT-TYPE"),
         new(RuntimeWireCodeKind.Reason, "BGW-CONNECTOR-TYPED-HANDSHAKE-METHOD"),

@@ -154,7 +154,7 @@ builder.Services.AddSingleton<IConnectorExecutionStrategy>(services => new Opaqu
 builder.Services.AddSingleton<ComposedSoapExecutionStrategy>(services => new ComposedSoapExecutionStrategy(
     services.GetRequiredService<IConnectorConfigurationStore>(), services.GetRequiredService<ISecretValueProvider>(), services.GetRequiredService<OpaqueSessionLeaseProvider>(),
     services.GetRequiredService<IHostResolver>(), services.GetRequiredService<IRestrictedTransport>(), services.GetRequiredService<IGatewayClock>(),
-    services.GetService<IPrivateDestinationAllowance>()));
+    services.GetService<IPrivateDestinationAllowance>(), services.GetServices<ITypedComposedSoapRequestAdapter>()));
 builder.Services.AddSingleton<IConnectorExecutionStrategy>(services => services.GetRequiredService<ComposedSoapExecutionStrategy>());
 builder.Services.AddSingleton<ITypedSessionHandshakeRequestAdapter, SyntheticTypedSessionRequestAdapter>();
 builder.Services.AddSingleton<ITypedSessionHandshakeResponseAdapter, SyntheticTypedSessionResponseAdapter>();

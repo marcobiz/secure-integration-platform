@@ -15,18 +15,30 @@ namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 public sealed class PublishedComposedSoapAuthorityResolver
 {
     private readonly PublishedOpaqueSessionAuthorityResolver sessionAuthorities;
+    private readonly TypedComposedSoapRequestAdapterRegistry requestAdapters;
 
     /// <summary>Creates the production resolver over the protected Connector configuration store.</summary>
     public PublishedComposedSoapAuthorityResolver(IConnectorConfigurationStore store, IGatewayClock clock)
+        : this(store, clock, new TypedComposedSoapRequestAdapterRegistry([]))
+    {
+    }
+
+    internal PublishedComposedSoapAuthorityResolver(
+        IConnectorConfigurationStore store,
+        IGatewayClock clock,
+        TypedComposedSoapRequestAdapterRegistry requestAdapters)
     {
         sessionAuthorities = new(store ?? throw new ArgumentNullException(nameof(store)), clock ?? throw new ArgumentNullException(nameof(clock)));
+        this.requestAdapters = requestAdapters ?? throw new ArgumentNullException(nameof(requestAdapters));
     }
 
     internal PublishedComposedSoapAuthorityResolver(
         Func<string, Guid, PublishedConnectorAccessContext, CancellationToken, Task<PublishedConnectorSnapshot?>> snapshotSource,
-        IGatewayClock clock)
+        IGatewayClock clock,
+        TypedComposedSoapRequestAdapterRegistry? requestAdapters = null)
     {
         sessionAuthorities = new(snapshotSource ?? throw new ArgumentNullException(nameof(snapshotSource)), clock ?? throw new ArgumentNullException(nameof(clock)));
+        this.requestAdapters = requestAdapters ?? new TypedComposedSoapRequestAdapterRegistry([]);
     }
 
     /// <summary>
@@ -83,7 +95,7 @@ public sealed class PublishedComposedSoapAuthorityResolver
         return new(expected, Revalidate);
     }
 
-    private static ComposedSoapAuthorityState Parse(OpaqueSessionHttpAuthorityState sessionAuthority)
+    private ComposedSoapAuthorityState Parse(OpaqueSessionHttpAuthorityState sessionAuthority)
     {
         try
         {
@@ -101,14 +113,46 @@ public sealed class PublishedComposedSoapAuthorityResolver
             string usernameBinding = authentication.GetProperty("usernameBinding").GetString()!;
             string passwordBinding = authentication.GetProperty("passwordBinding").GetString()!;
             string sessionBinding = authentication.GetProperty("secretBinding").GetString()!;
-            string[] expectedBindings = [usernameBinding, passwordBinding, sessionBinding];
-            if (expectedBindings.Distinct(StringComparer.Ordinal).Count() != 3 || dependencies.SecretBindingIds.Count != 3 ||
-                !dependencies.SecretBindingIds.Order(StringComparer.Ordinal).SequenceEqual(expectedBindings.Order(StringComparer.Ordinal), StringComparer.Ordinal))
-                throw new SoapAuthException("SOAP-AUTHORITY-REJECTED");
+            List<string> expectedBindings = [usernameBinding, passwordBinding, sessionBinding];
 
             (ProviderResourceBinding UsernameResource, string UsernameReference) = BasicResource(snapshot, usernameBinding, sessionAuthority);
             (ProviderResourceBinding PasswordResource, string PasswordReference) = BasicResource(snapshot, passwordBinding, sessionAuthority);
             _ = BasicResource(snapshot, sessionBinding, sessionAuthority);
+
+            TypedComposedSoapRequestAuthority? typedRequest = null;
+            if (operation.TryGetProperty("typedComposedSoapRequest", out JsonElement typed))
+            {
+                JsonElement adapterElement = typed.GetProperty("requestAdapter");
+                string adapterId = adapterElement.GetProperty("id").GetString()!;
+                string adapterType = adapterElement.GetProperty("type").GetString()!;
+                RegisteredTypedComposedSoapRequestAdapter registration = requestAdapters.Required(adapterId, adapterType);
+                JsonElement requestElement = typed.GetProperty("requestElement");
+                SoapElementRule requestQName = new(
+                    requestElement.GetProperty("localName").GetString()!,
+                    requestElement.GetProperty("namespaceUri").GetString()!);
+                ServerOwnedBindingInputReference[] inputs = ResolveTypedInputs(
+                    document.RootElement,
+                    typed,
+                    registration.RequiredServerOwnedInputs,
+                    snapshot,
+                    sessionAuthority);
+                expectedBindings.AddRange(inputs.Select(value => value.LogicalBindingId));
+                string typedFingerprintInput = string.Join('\n', adapterId, adapterType,
+                    requestQName.NamespaceUri, requestQName.LocalName, sessionAuthority.MaximumRequestBytes,
+                    string.Join('|', inputs.Select(value => string.Join(':', value.Name, value.LogicalBindingId, value.ProviderReference,
+                        snapshot.Bindings.SecretResources[value.LogicalBindingId].ProviderId,
+                        snapshot.Bindings.SecretResources[value.LogicalBindingId].ResourceId,
+                        snapshot.Bindings.SecretResources[value.LogicalBindingId].Version ?? string.Empty,
+                        snapshot.Bindings.SecretResources[value.LogicalBindingId].CatalogRevision,
+                        snapshot.Bindings.SecretResources[value.LogicalBindingId].CatalogChecksumSha256))));
+                string typedFingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(typedFingerprintInput)));
+                typedRequest = new(registration.Adapter, requestQName, inputs, sessionAuthority.MaximumRequestBytes, typedFingerprint);
+            }
+
+            if (expectedBindings.Distinct(StringComparer.Ordinal).Count() != expectedBindings.Count ||
+                dependencies.SecretBindingIds.Count != expectedBindings.Count ||
+                !dependencies.SecretBindingIds.Order(StringComparer.Ordinal).SequenceEqual(expectedBindings.Order(StringComparer.Ordinal), StringComparer.Ordinal))
+                throw new SoapAuthException("SOAP-AUTHORITY-REJECTED");
 
             JsonElement soap = authentication.GetProperty("soapHttp");
             SoapEnvelopeVersion version = soap.GetProperty("version").GetString() switch
@@ -125,9 +169,10 @@ public sealed class PublishedComposedSoapAuthorityResolver
             string fingerprintInput = string.Join('\n', sessionAuthority.SecurityFingerprint, usernameBinding, passwordBinding, sessionBinding,
                 UsernameResource.ProviderId, UsernameResource.ResourceId, UsernameResource.Version ?? string.Empty, UsernameResource.CatalogRevision, UsernameResource.CatalogChecksumSha256,
                 PasswordResource.ProviderId, PasswordResource.ResourceId, PasswordResource.Version ?? string.Empty, PasswordResource.CatalogRevision, PasswordResource.CatalogChecksumSha256,
-                UsernameReference, PasswordReference, version, metadata.Action, configuredContentType);
+                UsernameReference, PasswordReference, version, metadata.Action, configuredContentType,
+                typedRequest?.SecurityFingerprint ?? string.Empty);
             string fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprintInput)));
-            return new(sessionAuthority, new ResolvedBasicCredentialBinding(UsernameReference, PasswordReference), metadata, fingerprint);
+            return new(sessionAuthority, new ResolvedBasicCredentialBinding(UsernameReference, PasswordReference), metadata, typedRequest, fingerprint);
         }
         catch (SoapAuthException) { throw; }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException or KeyNotFoundException or FormatException or OverflowException)
@@ -148,6 +193,39 @@ public sealed class PublishedComposedSoapAuthorityResolver
             !string.Equals(resource.OperationScope, authority.OperationId, StringComparison.Ordinal) && !string.Equals(resource.OperationScope, "*", StringComparison.Ordinal))
             throw new SoapAuthException("SOAP-AUTHORITY-REJECTED");
         return (resource, providerReference);
+    }
+
+    private static ServerOwnedBindingInputReference[] ResolveTypedInputs(
+        JsonElement definition,
+        JsonElement owner,
+        IReadOnlySet<string> requiredNames,
+        PublishedConnectorSnapshot snapshot,
+        OpaqueSessionHttpAuthorityState authority)
+    {
+        if (!owner.TryGetProperty("serverOwnedInputs", out JsonElement configured))
+        {
+            if (requiredNames.Count != 0) throw new SoapAuthException("SOAP-AUTHORITY-REJECTED");
+            return [];
+        }
+        if (configured.ValueKind != JsonValueKind.Array || configured.GetArrayLength() > AuthorizedConnectorBindingInputs.MaximumInputs)
+            throw new SoapAuthException("SOAP-AUTHORITY-REJECTED");
+
+        Dictionary<string, string> logicalKinds = definition.GetProperty("bindings").GetProperty("secrets").EnumerateArray()
+            .ToDictionary(value => value.GetProperty("name").GetString()!, value => value.GetProperty("kind").GetString()!, StringComparer.Ordinal);
+        Dictionary<string, ServerOwnedBindingInputReference> resolved = new(StringComparer.Ordinal);
+        foreach (JsonElement input in configured.EnumerateArray())
+        {
+            string name = input.GetProperty("name").GetString()!;
+            string logicalBinding = input.GetProperty("secretBinding").GetString()!;
+            if (!requiredNames.Contains(name) || resolved.ContainsKey(name) ||
+                !logicalKinds.TryGetValue(logicalBinding, out string? kind) || !string.Equals(kind, "opaque", StringComparison.Ordinal))
+                throw new SoapAuthException("SOAP-AUTHORITY-REJECTED");
+            (_, string providerReference) = BasicResource(snapshot, logicalBinding, authority);
+            resolved.Add(name, new(name, logicalBinding, providerReference));
+        }
+        if (resolved.Count != requiredNames.Count || requiredNames.Any(name => !resolved.ContainsKey(name)))
+            throw new SoapAuthException("SOAP-AUTHORITY-REJECTED");
+        return resolved.Values.OrderBy(value => value.Name, StringComparer.Ordinal).ToArray();
     }
 
     private static SoapAuthException Map(OpaqueSessionAuthException exception) => exception.Code switch

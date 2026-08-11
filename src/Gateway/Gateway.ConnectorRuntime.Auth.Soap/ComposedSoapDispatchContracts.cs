@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text.Json.Serialization;
 using SecureIntegration.Gateway.ConnectorRuntime.Auth.Http.OpaqueSessions;
 
@@ -35,7 +36,7 @@ public sealed class SoapHttpRequestMetadata
         if (request.Content is not null || request.Headers.Contains("SOAPAction"))
             throw new SoapAuthException("SOAP-HTTP-POLICY-VIOLATION");
 
-        request.Content = new ByteArrayContent(envelope);
+        request.Content = new ClearingByteArrayContent(envelope);
         MediaTypeHeaderValue contentType = new(BaseContentType) { CharSet = "utf-8" };
         if (Version == SoapEnvelopeVersion.Soap11)
         {
@@ -76,6 +77,19 @@ public sealed class SoapHttpRequestMetadata
 
     /// <inheritdoc />
     public override string ToString() => $"SoapHttpRequestMetadata(Version={Version})";
+
+    private sealed class ClearingByteArrayContent : ByteArrayContent
+    {
+        private readonly byte[] bytes;
+
+        internal ClearingByteArrayContent(byte[] bytes) : base(bytes) => this.bytes = bytes;
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing) CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
 }
 
 /// <summary>
@@ -119,4 +133,5 @@ internal sealed record ComposedSoapAuthorityState(
     OpaqueSessionHttpAuthorityState SessionAuthority,
     ResolvedBasicCredentialBinding BasicCredential,
     SoapHttpRequestMetadata SoapHttp,
+    TypedComposedSoapRequestAuthority? TypedRequest,
     string SecurityFingerprint);
