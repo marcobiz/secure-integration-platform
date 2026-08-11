@@ -105,23 +105,26 @@ approver, publication, grant, runtime locator, server-owned input resolution and
   the hosted lifecycle security assertions,
   `Wave1_SEC_typed_composed_adapter_exception_and_fake_cancellation_are_sanitized_with_zero_transport`
   and `Wave1_SEC_typed_composed_adapter_preserves_only_the_actually_cancelled_caller_token`;
+- binding plaintext-oracle denial through the synchronized Core writer proxy:
+  `Wave1_SEC_external_no_IVT_binding_plaintext_writer_state_oracles_are_denied_with_zero_transport`
+  covers direct `XmlLang` retrieval and namespace/`LookupPrefix` equality probing;
 - final freshness:
   `Wave1_SEC_external_bridge_typed_composed_SOAP_bound_to_A_denies_mutated_B_after_composition_before_dispatch`;
 - legacy compatibility:
   `Wave1_E2E_PostgreSQL18_legacy_composed_profile_preserves_original_caller_envelope_without_republish_when_configured`.
 
-Targeted worktree evidence is 31/31 composed/configuration unit tests, 41/41 ordinary hosted
+Targeted worktree evidence is 31/31 composed/configuration unit tests, 43/43 ordinary hosted
 execution-seam tests and 15/15 relevant architecture tests. The full local gate is also green:
 
 - Release build with zero warnings/errors, `Gateway.Unit.Tests` 223/223 and the ordinary
-  `Gateway.Integration.Tests` 158 PASS with 30 PostgreSQL-conditional skips;
-- dedicated PostgreSQL 18.4 `Gateway.Integration.Tests` 188/188 with zero skips, migration `0014`
+  `Gateway.Integration.Tests` 160 PASS with 30 PostgreSQL-conditional skips;
+- dedicated PostgreSQL 18.4 `Gateway.Integration.Tests` 190/190 with zero skips, migration `0014`
   fresh apply plus second no-op apply, explicit runtime least privilege and both canonical typed and
   historical legacy hosted paths;
 - Admin 28/28 Vitest, API/runtime drift checks with the runtime negative control, production build,
   2/2 accessibility, 37/37 mock-browser and `FULLSTACK-01` 1/1 with redaction and cleanup;
 - documentation and repository secret scans, full-history Gitleaks, vulnerable-package inventory,
-  SPDX SBOM with 165 container packages, and the 423-file Core export clean-room
+  SPDX SBOM with 165 container packages, and the 424-file Core export clean-room
   build/test/frontend/license/boundary/secret gate.
 
 Exact-head CI and the single independent Core security review remain handoff gates on the final PR;

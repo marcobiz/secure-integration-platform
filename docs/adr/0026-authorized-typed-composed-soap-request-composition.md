@@ -28,6 +28,9 @@ access or arbitrary authenticated request construction to a module would violate
 - Server-owned values remain behind `AuthorizedConnectorBindingInputs.WriteRequiredXmlValue(name)`.
   Required names must equal the Published mapping exactly. The view is bound by reference to the
   current Core writer; alternate-writer use, retained use and plaintext retrieval are unavailable.
+  A callback-scoped synchronized proxy serializes every adapter writer action with binding emission.
+  Binding values can be emitted only as element text, never into attributes, so `XmlLang`,
+  `XmlSpace`, namespace declarations and `LookupPrefix` cannot become plaintext/equality oracles.
 - Core resolves only the operation dependencies in Published A, checks A after every provider await,
   clears transient payload/input buffers, hardens the adapter fragment, adds the exact SOAP
   Envelope/Body/QName and freezes the result as a bounded exact-byte snapshot.

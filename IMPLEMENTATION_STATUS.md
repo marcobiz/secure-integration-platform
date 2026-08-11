@@ -6,7 +6,7 @@ Aggiornato: 2026-08-11
 
 | Ambito richiesto | Stato | Evidenza principale |
 |---|---|---|
-| Wave 1 — Authorized typed composed-SOAP request composition | Freeze-exception Core implementata; full gate, CI exact-head e review indipendente pending | adapter request exact Published, payload business read-only, input server-owned write-only, envelope/auth/session/transport Core-owned, legacy unchanged; targeted unit/hosted/architecture PASS |
+| Wave 1 — Authorized typed composed-SOAP request composition | Freeze-exception Core implementata; full gate locale PASS, CI exact-head e review indipendente pending | adapter request exact Published, payload business read-only, input server-owned write-only senza writer-state oracle, envelope/auth/session/transport Core-owned, legacy unchanged |
 | M0 — fondamenta repository | Implementato; baseline congelata | commit `7f68442`, tag `baseline-m0-m1-vslice-2026-08-03` |
 | M1 — Local Broker minimo | Implementato; **gate live tecnico PASS** | run `m0-m1-20260803-232955`; AC-002/004 PASS-LIVE sul commit testato |
 | Primo vertical slice E2E | Completato come harness ripetibile | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` |
@@ -320,20 +320,23 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
   oversized payload, adapter exception/fake cancellation, duplicate/wrong-module e input mismatch
   sono negati con zero business transport e diagnostica redatta; cancellation reale conserva il
   token effettivo;
+- un proxy writer Core callback-scoped e sincronizzato serializza ogni writer action con l'emissione
+  binding e consente il valore solo come element text: attributi stateful (`xml:lang`/`xml:space`) e
+  namespace/`LookupPrefix` non possono diventare plaintext o equality oracle;
 - ogni provider await rivalida A e il controllo finale copre adapter, mapping, binding/resource,
   endpoint, Basic, sessione, action, policy e strategy. Race deterministici dopo composizione su
   adapter/mapping/QName/binding/resource/action/endpoint/strategy non adottano B e producono zero rete;
 - migration additiva `0014_typed_composed_soap_request_inputs.sql` estende soltanto il locator
   operation-scoped all'esatto nuovo path e conserva owner, `SECURITY DEFINER`, `search_path`, grant,
   RLS e non-enumerabilità; `0012` e `0013` restano immutate;
-- evidenza mirata: 31/31 unit composed/configuration, 41/41 hosted execution seam ordinari e 15/15
+- evidenza mirata: 31/31 unit composed/configuration, 43/43 hosted execution seam ordinari e 15/15
   architecture PASS. Il gate completo registra build Release zero-warning/error, 223/223 Gateway
-  unit e 158 Gateway integration ordinarie con 30 casi PostgreSQL condizionali; il gate dedicato
-  PostgreSQL 18.4 esegue 188/188 Gateway integration con zero skip, migration `0014` fresh/no-op e
+  unit e 160 Gateway integration ordinarie con 30 casi PostgreSQL condizionali; il gate dedicato
+  PostgreSQL 18.4 esegue 190/190 Gateway integration con zero skip, migration `0014` fresh/no-op e
   least privilege runtime verificato;
 - Admin registra 28/28 Vitest, drift API/runtime con negative control, build, 2/2 a11y, 37/37 browser
   mock e `FULLSTACK-01` 1/1 con redazione e cleanup PASS. Document validation, repository secret scan,
-  Gitleaks full-history, vulnerability inventory, SBOM container da 165 package e Core export da 423
+  Gitleaks full-history, vulnerability inventory, SBOM container da 165 package e Core export da 424
   file con build/test/frontend/license/boundary/secret gate sono PASS sul candidate locale;
 - exact-head CI e l'unica review Core security indipendente restano i gate di handoff sulla PR;
   merge non autorizzato;
