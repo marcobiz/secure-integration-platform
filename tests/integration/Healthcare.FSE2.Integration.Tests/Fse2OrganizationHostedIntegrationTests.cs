@@ -29,6 +29,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     internal const string IntegrityIssuer = "integrity:M6 Synthetic JWT Signing R1";
     internal const string Boundary = "broker-gateway-fse2-v1";
     internal const int TokenLifetimeSeconds = 300;
+    private const string RequirePostgresGateVariable = "REQUIRE_FSE2_POSTGRES_GATE";
     private static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web);
 
     [Fact]
@@ -38,12 +39,8 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     [Fact]
     public async Task FSE2_IT_PRODUCTION_HOST_PostgreSQL18_Published_Organization_dual_JWT_mTLS_exact_bytes()
     {
-        string? adminConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
-        if (string.IsNullOrWhiteSpace(adminConnection))
-            Assert.Skip("PostgreSQL admin connection is not configured; the dedicated PostgreSQL gate must provide it.");
-        string? migrationConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
-        if (string.IsNullOrWhiteSpace(migrationConnection))
-            Assert.Skip("PostgreSQL migration connection is not configured; the dedicated PostgreSQL gate must provide it.");
+        string adminConnection = GetRequiredPostgresConnectionOrSkip("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        string migrationConnection = GetRequiredPostgresConnectionOrSkip("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
         await HostedPostgresTestSupport.ApplyMigrationAsync();
         await using AdminApiSecurityTests.PostgresRuntimeRoleLease runtimeRole =
             await AdminApiSecurityTests.PostgresRuntimeRoleLease.CreateAsync(
@@ -51,6 +48,22 @@ public sealed class Fse2OrganizationHostedIntegrationTests
                 migrationConnection,
                 TestContext.Current.CancellationToken);
         await RunSuccessAsync(runtimeRole.ConnectionString, adminConnection, requirePostgres: true, includeNegatives: false);
+    }
+
+    private static string GetRequiredPostgresConnectionOrSkip(string variableName)
+    {
+        string? value = Environment.GetEnvironmentVariable(variableName);
+        if (!string.IsNullOrWhiteSpace(value)) return value;
+        if (string.Equals(
+            Environment.GetEnvironmentVariable(RequirePostgresGateVariable),
+            "1",
+            StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"FSE2_POSTGRES_GATE_REQUIRED_CONFIGURATION_MISSING:{variableName}");
+        }
+
+        Assert.Skip($"{variableName} is not configured; the dedicated PostgreSQL gate must provide it.");
+        throw new InvalidOperationException("FSE2_POSTGRES_GATE_SKIP_DID_NOT_TERMINATE");
     }
 
     [Fact]
