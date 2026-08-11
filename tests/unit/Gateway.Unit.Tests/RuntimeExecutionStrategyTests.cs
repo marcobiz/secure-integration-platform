@@ -92,6 +92,9 @@ public sealed class RuntimeExecutionStrategyTests
         Assert.Equal([nameof(AuthorizedConnectorBindingInputs.Contains), nameof(AuthorizedConnectorBindingInputs.ToString), nameof(AuthorizedConnectorBindingInputs.WriteRequiredXmlValue)],
             typeof(AuthorizedConnectorBindingInputs).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
                 .Where(value => !value.IsSpecialName).Select(value => value.Name).Order(StringComparer.Ordinal));
+        MethodInfo bindingWrite = typeof(AuthorizedConnectorBindingInputs).GetMethod(nameof(AuthorizedConnectorBindingInputs.WriteRequiredXmlValue))!;
+        Assert.Equal([typeof(string)], bindingWrite.GetParameters().Select(value => value.ParameterType));
+        Assert.DoesNotContain(bindingWrite.GetParameters(), value => typeof(System.Xml.XmlWriter).IsAssignableFrom(value.ParameterType));
         Assert.DoesNotContain(typeof(IAuthorizedConnectorCapabilityBridge).GetMethods().SelectMany(method => method.GetParameters()), parameter =>
             parameter.Name is "endpoint" or "provider" or "key" or "certificate" or "profileId");
         Assert.DoesNotContain(typeof(AuthorizedConnectorExecution).Assembly.GetExportedTypes(), type =>

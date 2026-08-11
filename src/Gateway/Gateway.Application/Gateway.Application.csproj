@@ -5,6 +5,7 @@
     <RootNamespace>SecureIntegration.Gateway.Application</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\..\Shared\Security\BoundedJwtClaimValidation.cs" Link="Security\BoundedJwtClaimValidation.cs" />
     <ProjectReference Include="..\Gateway.Domain\Gateway.Domain.csproj" />
     <ProjectReference Include="..\..\Providers\Abstractions\Providers.Abstractions.csproj" />
     <PackageReference Include="JsonSchema.Net" />

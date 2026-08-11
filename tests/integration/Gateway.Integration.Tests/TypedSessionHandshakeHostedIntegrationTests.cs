@@ -356,7 +356,7 @@ internal sealed class HostedTypedSessionFixture : IAsyncDisposable
     private const string SyntheticHost = "typed-session.synthetic.test";
     internal const string SyntheticUsername = "synthetic-user";
     internal const string SyntheticPassword = "synthetic-password";
-    internal const string SyntheticOrganizationCode = "core-owned-organization";
+    internal const string SyntheticOrganizationCode = "core-owned<&organization";
     internal const string BusinessOperationId = "session-business";
     private readonly HostedServerCertificates certificates;
     private readonly HttpClient api;

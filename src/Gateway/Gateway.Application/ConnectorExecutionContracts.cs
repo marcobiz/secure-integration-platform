@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Text.Json;
+using SecureIntegration.Security;
 
 namespace SecureIntegration.Gateway.Application;
 
@@ -136,17 +137,24 @@ public sealed class AuthorizedConnectorExecution
     private readonly AuthorizedPublishedExecutionStamp? publishedAuthority;
     private readonly AuthorizedPublishedExtensionConfiguration extensionConfiguration;
 
-    internal IDisposable EnterCapabilityScope() => capabilities.EnterExecutionScope();
+    internal AuthorizedConnectorCapabilityScope EnterCapabilityScope(CancellationToken invocationCancellation) =>
+        capabilities.EnterExecutionScope(invocationCancellation);
 
     internal bool Owns(AuthorizedConnectorCapabilityFailureException exception) =>
         ReferenceEquals(capabilities, exception.Authority);
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable",
+        Justification = "The private bridge is externally retained for denial tests; its host-owned scope deterministically cancels, drains and disposes all owned sources without exposing IDisposable authority.")]
     private sealed class AuthorizedConnectorCapabilityBridge(
         AuthorizedConnectorExecution execution,
         IAuthorizedConnectorCapabilityDispatcher? dispatcher) : IAuthorizedConnectorCapabilityBridge
     {
         private static readonly AsyncLocal<AuthorizedConnectorCapabilityBridge?> Current = new();
-        private int active;
+        private readonly object synchronization = new();
+        private readonly List<TrackedCapabilityOperation> operations = [];
+        private CancellationToken invocationCancellation;
+        private CancellationTokenSource? lifetimeCancellation;
+        private int state;
         private int consumedCapabilities;
 
         private const int TypedSessionHandshakeCapability = 1;
@@ -155,63 +163,104 @@ public sealed class AuthorizedConnectorExecution
         private const int RestrictedTransportCapability = 8;
 
         public Task<QualifiedGatewayExecutionResult> ExecuteTypedSessionHandshakeAsync(CancellationToken cancellationToken) =>
-            InvokeAsync(TypedSessionHandshakeCapability,
+            StartOperation(TypedSessionHandshakeCapability,
                 static (value, handoff, token) => value.ExecuteTypedSessionHandshakeAsync(handoff, token), cancellationToken);
 
         public Task<QualifiedGatewayExecutionResult> ExecuteComposedSoapAsync(CancellationToken cancellationToken) =>
-            InvokeAsync(ComposedSoapCapability,
+            StartOperation(ComposedSoapCapability,
                 static (value, handoff, token) => value.ExecuteComposedSoapAsync(handoff, token), cancellationToken);
 
-        public async Task<AuthorizedConnectorSignedToken> CreateSignedTokenAsync(
+        public Task<AuthorizedConnectorSignedToken> CreateSignedTokenAsync(
             IReadOnlyDictionary<string, JsonElement> claims,
-            CancellationToken cancellationToken)
-        {
-            ArgumentNullException.ThrowIfNull(claims);
-            Dictionary<string, JsonElement> snapshot = new(StringComparer.Ordinal);
-            foreach ((string name, JsonElement value) in claims)
-                if (name is null || !snapshot.TryAdd(name, value.Clone()))
-                    throw Failure(new GatewayException("BGW-EGRESS-AUTHENTICATION", 409));
-            string compactToken = await InvokeAsync(SigningCapability,
-                (value, handoff, token) => value.CreateSignedTokenAsync(handoff, snapshot, token), cancellationToken).ConfigureAwait(false);
-            return new(this, compactToken);
-        }
+            CancellationToken cancellationToken) =>
+            StartOperation(SigningCapability, async (value, handoff, token) =>
+            {
+                IReadOnlyDictionary<string, JsonElement> snapshot;
+                try { snapshot = BoundedJwtClaimSnapshot.Create(claims); }
+                catch (Exception exception) when (exception is BoundedJwtClaimValidationException or ArgumentException or InvalidOperationException or JsonException or OverflowException)
+                {
+                    throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+                }
+                string compactToken = await value.CreateSignedTokenAsync(handoff, snapshot, token).ConfigureAwait(false);
+                return new AuthorizedConnectorSignedToken(this, compactToken);
+            }, cancellationToken);
 
         public Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
             AuthorizedConnectorRestrictedTransportRequest request,
             CancellationToken cancellationToken)
+            => StartOperation(RestrictedTransportCapability, (value, handoff, token) =>
+            {
+                ArgumentNullException.ThrowIfNull(request);
+                if (!request.SignedToken.IsOwnedBy(this))
+                    throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+                return value.ExecuteRestrictedTransportAsync(handoff, request, token);
+            }, cancellationToken);
+
+        internal AuthorizedConnectorCapabilityScope EnterExecutionScope(CancellationToken actualInvocationCancellation)
         {
-            ArgumentNullException.ThrowIfNull(request);
-            if (!request.SignedToken.IsOwnedBy(this))
-                throw Failure(new GatewayException("BGW-EGRESS-AUTHENTICATION", 409));
-            return InvokeAsync(RestrictedTransportCapability,
-                (value, handoff, token) => value.ExecuteRestrictedTransportAsync(handoff, request, token), cancellationToken);
+            lock (synchronization)
+            {
+                if (state != 0)
+                    throw new InvalidOperationException("Authorized Connector capability scope is already active.");
+                invocationCancellation = actualInvocationCancellation;
+                lifetimeCancellation = new CancellationTokenSource();
+                state = 1;
+                AuthorizedConnectorCapabilityBridge? previous = Current.Value;
+                Current.Value = this;
+                return new AuthorizedConnectorCapabilityScope(() =>
+                {
+                    Current.Value = previous;
+                    return CloseExecutionScopeAsync();
+                });
+            }
         }
 
-        internal IDisposable EnterExecutionScope()
-        {
-            if (Interlocked.CompareExchange(ref active, 1, 0) != 0)
-                throw new InvalidOperationException("Authorized Connector capability scope is already active.");
-            AuthorizedConnectorCapabilityBridge? previous = Current.Value;
-            Current.Value = this;
-            return new ExecutionScope(this, previous);
-        }
-
-        private async Task<TResult> InvokeAsync<TResult>(
+        private Task<TResult> StartOperation<TResult>(
             int capability,
             Func<IAuthorizedConnectorCapabilityDispatcher, AuthorizedConnectorExecution, CancellationToken, Task<TResult>> invoke,
             CancellationToken cancellationToken)
         {
-            if (Volatile.Read(ref active) != 1 || !ReferenceEquals(Current.Value, this) ||
-                !TryConsume(capability) || dispatcher is null)
-                throw Failure(new GatewayException("BGW-EGRESS-AUTHENTICATION", 409));
+            TrackedCapabilityOperation operation = BeginOperation(capability, cancellationToken);
+            Task<TResult> task = InvokeTrackedAsync(operation, invoke, cancellationToken);
+            operation.Attach(task);
+            return task;
+        }
 
+        private TrackedCapabilityOperation BeginOperation(int capability, CancellationToken methodCancellation)
+        {
+            lock (synchronization)
+            {
+                if (state != 1 || !ReferenceEquals(Current.Value, this) || dispatcher is null ||
+                    (consumedCapabilities & capability) != 0 || lifetimeCancellation is null)
+                    throw Failure(new GatewayException("BGW-EGRESS-AUTHENTICATION", 409));
+
+                consumedCapabilities |= capability;
+                CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
+                    invocationCancellation,
+                    lifetimeCancellation.Token,
+                    methodCancellation);
+                TrackedCapabilityOperation operation = new(linked);
+                operations.Add(operation);
+                return operation;
+            }
+        }
+
+        private async Task<TResult> InvokeTrackedAsync<TResult>(
+            TrackedCapabilityOperation operation,
+            Func<IAuthorizedConnectorCapabilityDispatcher, AuthorizedConnectorExecution, CancellationToken, Task<TResult>> invoke,
+            CancellationToken methodCancellation)
+        {
             try
             {
-                return await invoke(dispatcher, execution, cancellationToken).ConfigureAwait(false);
+                return await invoke(dispatcher!, execution, operation.CancellationToken).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (invocationCancellation.IsCancellationRequested)
             {
-                throw new OperationCanceledException(cancellationToken);
+                throw new OperationCanceledException(invocationCancellation);
+            }
+            catch (OperationCanceledException) when (methodCancellation.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(methodCancellation);
             }
             catch (GatewayException exception)
             {
@@ -227,35 +276,97 @@ public sealed class AuthorizedConnectorExecution
             }
         }
 
-        private bool TryConsume(int capability)
+        private async Task<AuthorizedConnectorCapabilityScopeCloseResult> CloseExecutionScopeAsync()
         {
-            int observed;
-            int updated;
-            do
+            TrackedCapabilityOperation[] tracked;
+            CancellationTokenSource? lifetime;
+            bool hadInFlight;
+            lock (synchronization)
             {
-                observed = Volatile.Read(ref consumedCapabilities);
-                if ((observed & capability) != 0) return false;
-                updated = observed | capability;
+                if (state != 1)
+                    return new(false);
+                state = 2;
+                tracked = operations.ToArray();
+                hadInFlight = tracked.Any(value => !value.IsCompleted);
+                lifetime = lifetimeCancellation;
             }
-            while (Interlocked.CompareExchange(ref consumedCapabilities, updated, observed) != observed);
-            return true;
+
+            try { lifetime?.Cancel(); }
+            catch (AggregateException) { }
+
+            foreach (TrackedCapabilityOperation operation in tracked)
+            {
+                try
+                {
+                    Task task = await operation.AttachedTask.ConfigureAwait(false);
+                    await task.ConfigureAwait(false);
+                }
+                catch (Exception) { }
+                finally { operation.Dispose(); }
+            }
+
+            lifetime?.Dispose();
+            lock (synchronization)
+            {
+                lifetimeCancellation = null;
+                state = 3;
+            }
+            return new(hadInFlight);
         }
 
         private AuthorizedConnectorCapabilityFailureException Failure(GatewayException failure) => new(this, failure);
 
-        private sealed class ExecutionScope(
-            AuthorizedConnectorCapabilityBridge owner,
-            AuthorizedConnectorCapabilityBridge? previous) : IDisposable
+        private sealed class TrackedCapabilityOperation(CancellationTokenSource cancellation) : IDisposable
         {
-            private int disposed;
+            private readonly TaskCompletionSource<Task> attached = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            private Task? task;
 
-            public void Dispose()
+            internal CancellationToken CancellationToken => cancellation.Token;
+            internal Task<Task> AttachedTask => attached.Task;
+            internal bool IsCompleted => Volatile.Read(ref task)?.IsCompleted == true;
+
+            internal void Attach(Task value)
             {
-                if (Interlocked.Exchange(ref disposed, 1) != 0) return;
-                Current.Value = previous;
-                Volatile.Write(ref owner.active, 0);
+                if (Interlocked.CompareExchange(ref task, value, null) is not null)
+                    throw new InvalidOperationException("Authorized Connector capability task was already attached.");
+                attached.TrySetResult(value);
             }
+
+            public void Dispose() => cancellation.Dispose();
         }
+    }
+}
+
+internal readonly record struct AuthorizedConnectorCapabilityScopeCloseResult(bool HadInFlightOperations);
+
+internal sealed class AuthorizedConnectorCapabilityScope(
+    Func<Task<AuthorizedConnectorCapabilityScopeCloseResult>> close)
+{
+    private readonly object synchronization = new();
+    private Task<AuthorizedConnectorCapabilityScopeCloseResult>? closeTask;
+
+    internal Task<AuthorizedConnectorCapabilityScopeCloseResult> CloseAsync()
+    {
+        lock (synchronization)
+            return closeTask ??= close();
+    }
+}
+
+internal static class BoundedJwtClaimSnapshot
+{
+    internal static IReadOnlyDictionary<string, JsonElement> Create(IReadOnlyDictionary<string, JsonElement> claims)
+    {
+        ArgumentNullException.ThrowIfNull(claims);
+        Dictionary<string, JsonElement> snapshot = new(StringComparer.Ordinal);
+        int actualCount = 0;
+        int aggregateCharacters = 0;
+        foreach ((string name, JsonElement value) in claims)
+        {
+            BoundedJwtClaimValidation.ValidateNext(name, value, ref actualCount, ref aggregateCharacters);
+            if (!snapshot.TryAdd(name, value.Clone()))
+                throw new BoundedJwtClaimValidationException(BoundedJwtClaimFailure.Name);
+        }
+        return snapshot;
     }
 }
 

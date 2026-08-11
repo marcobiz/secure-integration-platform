@@ -1,6 +1,6 @@
 # Implementation status
 
-Aggiornato: 2026-08-10
+Aggiornato: 2026-08-11
 
 ## Stato sintetico
 
@@ -21,7 +21,7 @@ Aggiornato: 2026-08-10
 | Wave 1 — Typed composed SOAP authenticated dispatch | Remediation product gate locale PASS; CI exact-head e re-review pending | strategia runtime production exact-kind post grant/Published, Basic helper non esportato, compatibilità Connector v1 preservata; 433 ordinary PASS + 23 PG conditional, 124/124 Gateway integration con PostgreSQL, 99 unit mirati, 20 real-HTTPS regression, 11/11 store→publish→runtime→TLS, 24 architecture e `FULLSTACK-01` PASS; nessun connector production |
 | Wave 1 — Typed SOAP session handshake + authorized external admission | Shared-lifecycle wiring remediation qualificata localmente; CI exact-head e targeted re-review pending | PR #23 commit `f08eb9762fcc21dc7d6d7ba236cf6a80840dfac9`: `OpaqueSessionLeaseProvider` è l'alias del lifecycle singleton posseduto da `SoapSessionClient`; vero host `Program`/HTTP/BGW1/Published/`ComposedSoapExecutionStrategy` riusa la sessione promossa senza reacquire; 120 unit session/composed, 38 integration mirati, 509 ordinary e 10×133 PostgreSQL integration PASS |
 | Wave 1 — Provider-neutral Connector execution seam | Ultima remediation mirata implementata; full gate/CI exact-head e targeted re-review pending | bridge no-IVT vincolato allo snapshot Published iniziale con stale A→B zero-effect; full lifecycle PostgreSQL aggiunto; negativi cross-module/ciclo descriptor-atomic; loader invariato |
-| Wave 1 — Connector capability completion | Implementata; qualificazione exact-head/CI e review indipendente pending | tre adapter esistenti registrabili da modulo esterno, input server-owned exact-Published, profilo verticale bounded, signing RS256/x5c opaco e restricted HTTPS/mTLS invocation-bound; E2E reali in-memory e PostgreSQL 18 PASS senza connector production |
+| Wave 1 — Connector capability completion | Remediation P1/P2 qualificata localmente; exact-head CI e micro-rereview pending | writer input Core-bound/callback-only, scope capability ACTIVE/CLOSING/CLOSED con cancel+drain, claim bounds pre-clone; 549 ordinary PASS, 172/172 PostgreSQL 18, M3/Admin full-stack/Core export/scans/SBOM PASS; nessuna nuova capability o connector production |
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | Wave 1 - Generic JWT/X.509 extensions | Remediation mirata local gate PASS; CI exact-head e rereview pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 304 ordinary, 71 PostgreSQL relevant, scan/SBOM/vulnerability/Core export PASS |
 | Healthcare Wave 1 — Regional ePrescription | Foundation compilata; profili regionali non pubblicabili | capability opaca Core post-auth con stato/grant verificati indipendentemente dalle credenziali, adapter al vero store Published, schema estensioni e safe-code allowlist server-owned, isolamento cross-profile; 14 test pack + 4 architecture PASS locali; Lombardia ed Emilia-Romagna `BLOCKED_BY_SPEC` |
@@ -235,10 +235,18 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
   costruttori restano fail-closed prima del commit DI;
 - request e validator dichiarano nomi statici bounded; il profilo Published li associa uno-a-uno a
   binding opachi approvati. Core risolve i locator e fornisce una view non costruibile con sola
-  scrittura XML nominata, senza getter stringa/provider reference;
+  scrittura XML nominata name-only, vincolata internamente al writer Core per l'esatta callback;
+  alternate writer e riuso della view chiusa non possono ricevere plaintext;
 - il bridge privato aggiunge signing RS256 e restricted transport mTLS one-shot. Claim, policy,
   binding, SPKI, x5c, endpoint, metodo, header Authorization, certificato, timeout e response bound
   restano server-owned; il token compatto non è leggibile e vale solo sullo stesso bridge;
+- ogni operazione capability si registra prima di claim/provider/network work nello scope host
+  ACTIVE/CLOSING/CLOSED con token linked caller+metodo+lifetime; il ritorno strategy chiude nuove
+  registrazioni, cancella, drena/osserva task e nega un fire-and-forget con 502 non retryable prima
+  di result validation e audit success;
+- le claim sono contate dall'enumerazione effettiva e validate incrementalmente per nome, scalar
+  kind, valore e aggregato con buffer fixed-capacity prima di ogni clone, senza fidarsi di `Count`
+  e senza `GetRawText`;
 - la migration additiva `0012_connector_capability_locator_scope.sql` estende il locator PostgreSQL
   soltanto ai binding di signing e input dichiarati dalla stessa operation Published e conserva
   principal/grant/scope/revision/checksum e privilegi runtime least-privilege;
@@ -248,7 +256,14 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
   grant e reale effetto esterno;
 - negativi mirati coprono spoof caller, mapping missing/extra/duplicate, adapter duplicate/wrong
   module, provider/store/transport DI, claim non ammessa, endpoint/key/certificate/profile arbitrari,
+  alternate writer/retained input view, signing/transport fire-and-forget, dishonest claim collection,
   retained bridge e race A→B durante input, signing/public material e dopo DNS prima del transport;
+- qualifica locale della remediation: build Release senza warning/errori; 549 test ordinari PASS con
+  30 PostgreSQL conditional skip; 172/172 Gateway integration su PostgreSQL 18 fresh migration/no-op;
+  signing 93/93; architecture 33/33; Admin 28 unit, 37 UI mock, 2 a11y e `FULLSTACK-01`;
+  M3 deterministic 17 scenari più regressioni split-host; Core export 416 file; secret scan,
+  Gitleaks sui 23 path staged e su 285 commit, vulnerability inventory e SBOM container da 165
+  package PASS. Exact-head CI e micro-rereview restano i soli gate di handoff; merge non autorizzato;
 - nessun connector sanitario/commerciale, provider, adapter family ipotetica, generic store/provider
   capability, signing oracle, arbitrary authenticated HTTP o public certificate view è stato aggiunto;
 - decisione e inventory: ADR-0024 e
@@ -343,11 +358,12 @@ Dettagli: `docs/reviews/M3A-SPLIT-HOST-BLOCKED-20260805.md`.
 | `Broker.Core.Tests` | 26 PASS | lifecycle/grant, AEAD/nonce/AAD/version, framing e hard limits |
 | `Broker.Integration.Tests` | 28 PASS | DPAPI, pipe/storage ACL, persistence/corruption, identity/handle, IPC, redaction, CNG, handshake Schannel e regressioni harness M3 |
 | `VerticalSlice.Tests` | 1 PASS | vertical slice e negative/security path |
-| `Gateway.Unit.Tests` | 80 PASS | security M2-M6, contract/lifecycle/cache/bounds/corruption, runtime principal, OAuth e SOAP/session |
-| `Authentication.CertificateSigning.Tests` | 91 PASS | RS256/policy/claim/replay, generic trusted runtime subject, immutable/bounded public DER/x5c and policy snapshot, temporal, provider redaction, mTLS e rotate/disable |
-| `Gateway.Integration.Tests` | 61 PASS, 10 conditional SKIP | API/Admin/OAuth/SOAP/schema; i 10 test PostgreSQL condizionali richiedono il gate dedicato |
-| `Architecture.Tests` | 17 PASS | boundary Core/provider/auth writer, generic JWT/X.509, CI, provisioning e OpenAPI |
-| Totale suite locale ordinaria | 304 PASS, 10 conditional SKIP | 26 Broker Core + 28 Broker integration + 80 Gateway unit + 61 Gateway integration + 91 certificate/signing + 17 architecture + 1 E2E |
+| `Gateway.Unit.Tests` | 212 PASS | security M2-M6, contract/lifecycle/cache/bounds/corruption, runtime principal, OAuth e SOAP/session |
+| `Authentication.CertificateSigning.Tests` | 93 PASS | RS256/policy/claim/replay, actual enumerated claim bound, generic trusted runtime subject, immutable/bounded public DER/x5c and policy snapshot, temporal, provider redaction, mTLS e rotate/disable |
+| `Gateway.Integration.Tests` | 142 PASS, 30 conditional SKIP | API/Admin/OAuth/SOAP/schema/capability remediation; i test PostgreSQL condizionali richiedono il gate dedicato |
+| `Healthcare.RegionalEPrescription.Tests` | 14 PASS | foundation verticale separata; nessun profilo production pubblicabile |
+| `Architecture.Tests` | 33 PASS | boundary Core/provider/auth writer, generic JWT/X.509, CI, provisioning e OpenAPI |
+| Totale suite locale ordinaria | 549 PASS, 30 conditional SKIP | 26 Broker Core + 28 Broker integration + 212 Gateway unit + 142 Gateway integration + 93 certificate/signing + 14 healthcare foundation + 33 architecture + 1 E2E |
 | CI `m3-deterministic-container-slice` | PASS, run `30903757495`, commit `91963ce` | Gateway/PostgreSQL 18/Vault/vendor reali, matrice positiva/negativa, non-root/read-only, redazione, cleanup ed evidence SHA-256 `A52CACB8…FCA30` |
 | PostgreSQL 18.4 effimero locale | 71 PASS | suite relevant completa; fresh apply/no-op; container rimosso |
 | CI `gateway-postgresql-18` | PASS | run `30896803567`: PostgreSQL 18, migration apply/no-op, checksum, ruoli, FORCE RLS, tenant isolation e cleanup |

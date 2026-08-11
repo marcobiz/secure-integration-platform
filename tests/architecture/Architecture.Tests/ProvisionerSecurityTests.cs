@@ -20,10 +20,11 @@ public sealed class ProvisionerSecurityTests
     }
 
     [Fact]
-    public void M5_ARCH_Selective_container_builds_include_the_runtime_wire_contract()
+    public void M5_ARCH_Selective_container_builds_include_linked_shared_sources_and_the_runtime_wire_contract()
     {
         string dockerfile = File.ReadAllText(Path.Combine(Root, "tools", "m3", "Provisioner", "Dockerfile"));
 
+        Assert.Contains("COPY src/Shared/Security/BoundedJwtClaimValidation.cs src/Shared/Security/BoundedJwtClaimValidation.cs", dockerfile, StringComparison.Ordinal);
         Assert.Contains("COPY docs/api/runtime-wire-codes.json docs/api/runtime-wire-codes.json", dockerfile, StringComparison.Ordinal);
     }
 

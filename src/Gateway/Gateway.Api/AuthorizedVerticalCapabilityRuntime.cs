@@ -69,7 +69,7 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
                 clock,
                 certificatePublicMaterial: certificatePublicMaterial);
             JwtBoundClaim[] boundedClaims = claims.OrderBy(value => value.Key, StringComparer.Ordinal)
-                .Select(value => new JwtBoundClaim(value.Key, value.Value.Clone())).ToArray();
+                .Select(value => new JwtBoundClaim(value.Key, value.Value)).ToArray();
             return await signer.SignJwtAsync(context, profile.SigningProfileId, boundedClaims, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

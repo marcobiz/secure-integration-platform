@@ -3,6 +3,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using SecureIntegration.Providers.Abstractions;
+using SecureIntegration.Security;
 
 namespace SecureIntegration.Authentication.CertificateSigning;
 
@@ -130,20 +131,33 @@ public sealed class Rs256JwtSigner(
 
     internal static bool IsReservedClaim(string claim) => ReservedClaims.Contains(claim);
 
-    private static IReadOnlyList<JwtBoundClaim> ValidateClaims(ServerOwnedRs256PolicySnapshot policy, IReadOnlyList<JwtBoundClaim> claims)
+    private static List<JwtBoundClaim> ValidateClaims(ServerOwnedRs256PolicySnapshot policy, IReadOnlyList<JwtBoundClaim> claims)
     {
-        if (claims.Count > 32) throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-CLAIMS");
+        List<JwtBoundClaim> validated = [];
         HashSet<string> names = new(StringComparer.Ordinal);
+        int actualCount = 0;
+        int aggregateCharacters = 0;
         foreach (JwtBoundClaim claim in claims)
         {
-            if (!BindingPolicy.ValidClaimName(claim.Name) || ReservedClaims.Contains(claim.Name) || !policy.AllowedClaims.Contains(claim.Name))
+            try
+            {
+                BoundedJwtClaimValidation.ValidateNext(claim.Name, claim.Value, ref actualCount, ref aggregateCharacters);
+            }
+            catch (BoundedJwtClaimValidationException exception)
+            {
+                throw new AuthenticationPrimitiveException(exception.Failure switch
+                {
+                    BoundedJwtClaimFailure.Count => "BGW-AUTH-JWT-CLAIMS",
+                    BoundedJwtClaimFailure.Name => "BGW-AUTH-JWT-CLAIM-DENIED",
+                    _ => "BGW-AUTH-JWT-CLAIM-VALUE"
+                });
+            }
+            if (ReservedClaims.Contains(claim.Name) || !policy.AllowedClaims.Contains(claim.Name))
                 throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-CLAIM-DENIED");
             if (!names.Add(claim.Name)) throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-CLAIM-DUPLICATE");
-            if (claim.Value.ValueKind is JsonValueKind.Array or JsonValueKind.Object or JsonValueKind.Undefined || claim.Value.GetRawText().Length > 4096 ||
-                (claim.Value.ValueKind == JsonValueKind.String && claim.Value.GetString()!.Length > 1024))
-                throw new AuthenticationPrimitiveException("BGW-AUTH-JWT-CLAIM-VALUE");
+            validated.Add(claim);
         }
-        return claims;
+        return validated;
     }
 
     private static byte[] BuildPayload(

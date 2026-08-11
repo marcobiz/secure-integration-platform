@@ -13,6 +13,7 @@ using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
+using SecureIntegration.Synthetic.ConnectorExecutionModule;
 using Xunit;
 
 namespace SecureIntegration.Gateway.Integration.Tests;
@@ -127,6 +128,10 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
         RunExternalBridgeLifecycleAsync(runtimeConnection: null, adminConnection: null, requirePostgres: false);
 
     [Fact]
+    public Task Wave1_SEC_external_no_IVT_binding_input_cannot_redirect_Core_writer_and_retained_view_is_denied() =>
+        RunExternalBridgeLifecycleAsync(runtimeConnection: null, adminConnection: null, requirePostgres: false);
+
+    [Fact]
     public async Task Wave1_IT_PRODUCTION_HOST_PostgreSQL_full_external_no_IVT_bridge_lifecycle_uses_real_Published_authority_and_HTTPS()
     {
         string? adminConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
@@ -142,6 +147,7 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
 
     private static async Task RunExternalBridgeLifecycleAsync(string? runtimeConnection, string? adminConnection, bool requirePostgres)
     {
+        SyntheticBindingInputLifetimeProbe.Reset();
         const string candidate = "external-bridge-admission-candidate";
         HostedExecutionModuleConfiguration module = Module("synthetic-execution", "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticExecutionModule");
         await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
@@ -201,6 +207,9 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
         Assert.False(string.IsNullOrWhiteSpace(acquired.IntentReference));
         Assert.Equal(1, fixture.Transport.AcquisitionRequests);
         Assert.Equal(0, fixture.Transport.ValidationRequests);
+        Assert.DoesNotContain(HostedTypedSessionFixture.SyntheticOrganizationCode,
+            SyntheticBindingInputLifetimeProbe.AlternateWriterOutput, StringComparison.Ordinal);
+        Assert.True(SyntheticBindingInputLifetimeProbe.RetainedWriteIsDenied());
 
         using HttpResponseMessage completionResponse = await fixture.SendSignedAsync(identity, HttpMethod.Post,
             $"/v1/session-admissions/{acquired.IntentReference}:complete", Encoding.UTF8.GetBytes(candidate));

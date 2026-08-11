@@ -27,6 +27,8 @@ public sealed class SyntheticExecutionModule : IConnectorExecutionModule
         registrar.AddStrategy<SyntheticSignedMutualTlsExecutionStrategy>();
         registrar.AddStrategy<SyntheticDeniedSigningClaimExecutionStrategy>();
         registrar.AddStrategy<SyntheticRetainedSigningBridgeExecutionStrategy>();
+        registrar.AddStrategy<SyntheticFireAndForgetSigningExecutionStrategy>();
+        registrar.AddStrategy<SyntheticFireAndForgetRestrictedTransportExecutionStrategy>();
         registrar.AddTypedSessionHandshakeRequestAdapter<SyntheticExternalTypedSessionRequestAdapter>();
         registrar.AddTypedSessionHandshakeResponseAdapter<SyntheticExternalTypedSessionResponseAdapter>();
         registrar.AddExternalSessionValidationAdapter<SyntheticExternalSessionValidationAdapter>();
@@ -227,6 +229,102 @@ public sealed class SyntheticRetainedSigningBridgeExecutionStrategy : IConnector
             new Dictionary<string, JsonElement>(StringComparer.Ordinal), cancellationToken).ConfigureAwait(false);
         return new(200, "application/json", "{}"u8.ToArray());
     }
+}
+
+/// <summary>Starts signing without awaiting it, to qualify the host-owned capability lifetime.</summary>
+public sealed class SyntheticFireAndForgetSigningExecutionStrategy : IConnectorExecutionStrategy
+{
+    /// <inheritdoc />
+    public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("synthetic-fire-forget-signing");
+    /// <inheritdoc />
+    public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => SyntheticAuthenticationKinds.None;
+    /// <inheritdoc />
+    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
+    {
+        Task<AuthorizedConnectorSignedToken> abandoned = execution.Capabilities.CreateSignedTokenAsync(
+            new Dictionary<string, JsonElement>(StringComparer.Ordinal), CancellationToken.None);
+        SyntheticCapabilityLifetimeProbe.Retain(abandoned);
+        await SyntheticCapabilityLifetimeProbe.WaitUntilCapabilityStartedAsync(cancellationToken).ConfigureAwait(false);
+        return new(200, "application/json", "{}"u8.ToArray());
+    }
+}
+
+/// <summary>Starts restricted transport without awaiting it, to qualify close-before-dispatch cancellation.</summary>
+public sealed class SyntheticFireAndForgetRestrictedTransportExecutionStrategy : IConnectorExecutionStrategy
+{
+    /// <inheritdoc />
+    public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("synthetic-fire-forget-transport");
+    /// <inheritdoc />
+    public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => SyntheticAuthenticationKinds.None;
+    /// <inheritdoc />
+    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
+    {
+        AuthorizedConnectorSignedToken token = await execution.Capabilities.CreateSignedTokenAsync(
+            new Dictionary<string, JsonElement>(StringComparer.Ordinal), cancellationToken).ConfigureAwait(false);
+        Task<QualifiedGatewayExecutionResult> abandoned = execution.Capabilities.ExecuteRestrictedTransportAsync(
+            new AuthorizedConnectorRestrictedTransportRequest("synthetic-body"u8.ToArray(), token), CancellationToken.None);
+        SyntheticCapabilityLifetimeProbe.Retain(abandoned);
+        await SyntheticCapabilityLifetimeProbe.WaitUntilCapabilityStartedAsync(cancellationToken).ConfigureAwait(false);
+        return new(200, "application/json", "{}"u8.ToArray());
+    }
+}
+
+/// <summary>Deterministic cross-assembly coordination used only by capability lifetime qualification.</summary>
+public static class SyntheticCapabilityLifetimeProbe
+{
+    private static TaskCompletionSource<bool> started = NewSignal();
+    private static Task? retained;
+
+    /// <summary>Resets the isolated qualification probe before one test invocation.</summary>
+    public static void Reset()
+    {
+        Volatile.Write(ref retained, null);
+        Volatile.Write(ref started, NewSignal());
+    }
+
+    /// <summary>Signals that the host dispatcher is paused before its privileged effect.</summary>
+    public static void SignalCapabilityStarted() => Volatile.Read(ref started).TrySetResult(true);
+
+    /// <summary>Waits without polling until the host dispatcher reaches its deterministic gate.</summary>
+    public static Task WaitUntilCapabilityStartedAsync(CancellationToken cancellationToken) =>
+        Volatile.Read(ref started).Task.WaitAsync(cancellationToken);
+
+    /// <summary>Records the deliberately abandoned task so the test can prove host drainage.</summary>
+    public static void Retain(Task operation) => Volatile.Write(ref retained, operation);
+
+    /// <summary>Returns whether the deliberately abandoned task was completed by host scope closure.</summary>
+    public static bool RetainedOperationCompleted => Volatile.Read(ref retained)?.IsCompleted == true;
+
+    private static TaskCompletionSource<bool> NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+}
+
+/// <summary>External strategy that forwards adversarial claim collections through only the public bridge.</summary>
+public sealed class SyntheticAdversarialClaimsExecutionStrategy : IConnectorExecutionStrategy
+{
+    /// <inheritdoc />
+    public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("synthetic-adversarial-claims");
+    /// <inheritdoc />
+    public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => SyntheticAuthenticationKinds.None;
+    /// <inheritdoc />
+    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken)
+    {
+        _ = await execution.Capabilities.CreateSignedTokenAsync(
+            SyntheticClaimBoundsProbe.Claims, cancellationToken).ConfigureAwait(false);
+        return new(200, "application/json", "{}"u8.ToArray());
+    }
+}
+
+/// <summary>Qualification-only holder that does not enumerate or copy the configured claim collection.</summary>
+public static class SyntheticClaimBoundsProbe
+{
+    private static IReadOnlyDictionary<string, JsonElement> claims =
+        new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+
+    /// <summary>Supplies a module-controlled collection without pre-enumerating it.</summary>
+    public static void Configure(IReadOnlyDictionary<string, JsonElement> values) => Volatile.Write(ref claims, values);
+
+    /// <summary>Returns the exact configured collection to the public bridge.</summary>
+    public static IReadOnlyDictionary<string, JsonElement> Claims => Volatile.Read(ref claims);
 }
 
 /// <summary>Startup-negative module that attempts duplicate adapter implementation registration.</summary>
@@ -501,6 +599,11 @@ public sealed class SyntheticExternalTypedSessionRequestAdapter : ITypedSessionH
     /// <inheritdoc />
     public void WriteRequest(XmlWriter writer, TypedSessionHandshakeRequestContext context)
     {
+        SyntheticBindingInputLifetimeProbe.Retain(context.ServerOwnedInputs);
+        using StringWriter alternateBuffer = new(System.Globalization.CultureInfo.InvariantCulture);
+        using (XmlWriter alternateWriter = XmlWriter.Create(alternateBuffer, new XmlWriterSettings { OmitXmlDeclaration = true }))
+            alternateWriter.Flush();
+        SyntheticBindingInputLifetimeProbe.RecordAlternateWriter(alternateBuffer.ToString());
         writer.WriteStartElement("s", "ClientContext", SyntheticExternalTypedSessionProtocol.Namespace);
         writer.WriteStartElement("s", "Identity", SyntheticExternalTypedSessionProtocol.Namespace);
         writer.WriteElementString("s", "Tenant", SyntheticExternalTypedSessionProtocol.Namespace, context.TenantId.ToString("D"));
@@ -508,13 +611,52 @@ public sealed class SyntheticExternalTypedSessionRequestAdapter : ITypedSessionH
         writer.WriteElementString("s", "Application", SyntheticExternalTypedSessionProtocol.Namespace, context.ApplicationId.ToString("D"));
         writer.WriteEndElement();
         writer.WriteStartElement("s", "OrganizationCode", SyntheticExternalTypedSessionProtocol.Namespace);
-        context.ServerOwnedInputs.WriteRequiredXmlValue(writer, "organization-code");
+        context.ServerOwnedInputs.WriteRequiredXmlValue("organization-code");
         writer.WriteEndElement();
         writer.WriteStartElement("s", "Policy", SyntheticExternalTypedSessionProtocol.Namespace);
         writer.WriteElementString("s", "Profile", SyntheticExternalTypedSessionProtocol.Namespace, context.ProfileId);
         writer.WriteElementString("s", "PublishedChecksum", SyntheticExternalTypedSessionProtocol.Namespace, context.PublishedPolicyChecksum);
         writer.WriteEndElement();
         writer.WriteEndElement();
+    }
+}
+
+/// <summary>External no-IVT probe proving writer redirection is absent and retained views fail closed.</summary>
+public static class SyntheticBindingInputLifetimeProbe
+{
+    private static AuthorizedConnectorBindingInputs? retained;
+    private static string alternateWriterOutput = string.Empty;
+
+    /// <summary>Clears qualification-only retained state.</summary>
+    public static void Reset()
+    {
+        Volatile.Write(ref retained, null);
+        Volatile.Write(ref alternateWriterOutput, string.Empty);
+    }
+
+    /// <summary>Records the view solely so a later external call can attempt reuse.</summary>
+    public static void Retain(AuthorizedConnectorBindingInputs inputs) => Volatile.Write(ref retained, inputs);
+
+    /// <summary>Records the module-owned writer output without receiving a server-owned value.</summary>
+    public static void RecordAlternateWriter(string output) => Volatile.Write(ref alternateWriterOutput, output);
+
+    /// <summary>Module-owned alternate sink content.</summary>
+    public static string AlternateWriterOutput => Volatile.Read(ref alternateWriterOutput);
+
+    /// <summary>Attempts a post-callback write; true means the retained view denied it.</summary>
+    public static bool RetainedWriteIsDenied()
+    {
+        AuthorizedConnectorBindingInputs inputs = Volatile.Read(ref retained)
+            ?? throw new InvalidOperationException("Synthetic binding-input view was not retained.");
+        try
+        {
+            inputs.WriteRequiredXmlValue("organization-code");
+            return false;
+        }
+        catch
+        {
+            return true;
+        }
     }
 }
 
@@ -578,7 +720,7 @@ public sealed class SyntheticExternalSessionValidationAdapter : ITypedExternalSe
         writer.WriteStartElement("s", "Candidate", SyntheticExternalTypedSessionProtocol.Namespace);
         writer.WriteElementString("s", "Provenance", SyntheticExternalTypedSessionProtocol.Namespace, "interactive_handoff");
         writer.WriteStartElement("s", "OrganizationCode", SyntheticExternalTypedSessionProtocol.Namespace);
-        context.ServerOwnedInputs.WriteRequiredXmlValue(writer, "organization-code");
+        context.ServerOwnedInputs.WriteRequiredXmlValue("organization-code");
         writer.WriteEndElement();
         writer.WriteElementString("s", "OpaqueValue", SyntheticExternalTypedSessionProtocol.Namespace, Encoding.UTF8.GetString(context.SensitiveCandidate.Span));
         writer.WriteEndElement();

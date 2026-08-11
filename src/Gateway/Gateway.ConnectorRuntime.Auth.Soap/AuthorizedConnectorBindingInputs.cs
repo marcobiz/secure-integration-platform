@@ -14,7 +14,9 @@ public sealed class AuthorizedConnectorBindingInputs
     internal const int MaximumTotalValueCharacters = 32_768;
 
     private readonly Dictionary<string, char[]> values;
-    private int active = 1;
+    private readonly object synchronization = new();
+    private XmlWriter? boundWriter;
+    private int state;
 
     internal AuthorizedConnectorBindingInputs(IReadOnlyDictionary<string, string> resolved)
     {
@@ -45,24 +47,48 @@ public sealed class AuthorizedConnectorBindingInputs
     public int Count => values.Count;
 
     /// <summary>Returns whether the exact declared name is present; it never reveals a value.</summary>
-    public bool Contains(string name) => Volatile.Read(ref active) == 1 && values.ContainsKey(name);
+    public bool Contains(string name)
+    {
+        lock (synchronization)
+            return state == 1 && values.ContainsKey(name);
+    }
 
     /// <summary>
     /// Writes the required value into the current Core-owned XML element or attribute. No string,
     /// provider reference or mutable backing buffer is returned to the adapter.
     /// </summary>
-    public void WriteRequiredXmlValue(XmlWriter writer, string name)
+    public void WriteRequiredXmlValue(string name)
+    {
+        lock (synchronization)
+        {
+            if (state != 1 || boundWriter is null || !values.TryGetValue(name, out char[]? value))
+                throw TypedSessionHandshakeFailures.BindingInputRejected();
+            boundWriter.WriteChars(value, 0, value.Length);
+        }
+    }
+
+    internal IDisposable BindToCoreWriter(XmlWriter writer)
     {
         ArgumentNullException.ThrowIfNull(writer);
-        if (Volatile.Read(ref active) != 1 || !values.TryGetValue(name, out char[]? value))
-            throw TypedSessionHandshakeFailures.BindingInputRejected();
-        writer.WriteChars(value, 0, value.Length);
+        lock (synchronization)
+        {
+            if (state != 0 || boundWriter is not null)
+                throw TypedSessionHandshakeFailures.BindingInputRejected();
+            boundWriter = writer;
+            state = 1;
+            return new BindingScope(this);
+        }
     }
 
     internal void Clear()
     {
-        if (Interlocked.Exchange(ref active, 0) != 1) return;
-        ClearValues();
+        lock (synchronization)
+        {
+            if (state == 2) return;
+            state = 2;
+            boundWriter = null;
+            ClearValues();
+        }
     }
 
     private void ClearValues()
@@ -74,6 +100,17 @@ public sealed class AuthorizedConnectorBindingInputs
 
     /// <inheritdoc />
     public override string ToString() => $"AuthorizedConnectorBindingInputs(Count={values.Count}, Redacted=True)";
+
+    private sealed class BindingScope(AuthorizedConnectorBindingInputs owner) : IDisposable
+    {
+        private int disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0)
+                owner.Clear();
+        }
+    }
 }
 
 internal sealed record ServerOwnedBindingInputReference(

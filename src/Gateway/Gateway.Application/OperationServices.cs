@@ -173,8 +173,19 @@ public sealed class RestrictedEgressService
         QualifiedGatewayExecutionResult result;
         try
         {
-            using IDisposable capabilityScope = execution.EnterCapabilityScope();
-            result = await registration.Strategy.ExecuteAsync(execution, cancellationToken).ConfigureAwait(false);
+            AuthorizedConnectorCapabilityScope capabilityScope = execution.EnterCapabilityScope(cancellationToken);
+            AuthorizedConnectorCapabilityScopeCloseResult closeResult = default;
+            try
+            {
+                result = await registration.Strategy.ExecuteAsync(execution, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                closeResult = await capabilityScope.CloseAsync().ConfigureAwait(false);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (closeResult.HadInFlightOperations)
+                throw new InvalidOperationException("External Connector strategy returned with an in-flight capability operation.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

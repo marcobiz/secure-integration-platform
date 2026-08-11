@@ -5,6 +5,7 @@
     <RootNamespace>SecureIntegration.Authentication.CertificateSigning</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="..\..\Shared\Security\BoundedJwtClaimValidation.cs" Link="Security\BoundedJwtClaimValidation.cs" />
     <ProjectReference Include="..\..\Providers\Abstractions\Providers.Abstractions.csproj" />
   </ItemGroup>
 </Project>

@@ -25,13 +25,23 @@ signing oracle or authenticated `HttpClient` would be broader than the demonstra
   names. The exact Published profile maps every name to one logical opaque secret binding. Missing,
   unexpected and duplicate mappings fail closed. Core resolves the provider locator and value;
   the adapter receives a non-constructible view that can only write a named value through the
-  Core-owned XML writer. It receives no string getter, provider reference or DI capability.
+  Core-owned XML writer. The writer is bound internally for only the exact synchronous adapter
+  callback: the public write method accepts the name only, and a retained view is closed and cleared
+  when that callback returns. It receives no string getter, provider reference or DI capability.
 - `AuthorizedConnectorExecution` exposes a defensive, bounded copy of the current operation's
   `extensionConfiguration`. It contains no authority stamp, store access or mutation surface.
 - The existing private invocation bridge gains one RS256 token creation operation and one
   restricted transport operation. Claims are scalar, bounded and checked against the exact
   Published signing allowlist. No algorithm, key, certificate, provider, purpose, endpoint, method,
   header or authorization selector is accepted.
+- Every asynchronous bridge call registers synchronously in a per-invocation host scope before
+  claim processing, provider access or network preparation. Scope close atomically prevents new
+  calls, links caller/method/lifetime cancellation, cancels and drains every tracked task, and
+  observes its failure before a strategy result can be accepted. Returning with an in-flight task is
+  an external-strategy contract violation and becomes the existing sanitized non-retryable 502.
+- Module-controlled claims are counted from actual enumeration and validated incrementally for
+  name, scalar kind, per-value and aggregate bounds using fixed-capacity JSON measurement. A value
+  is cloned only after its own checks pass; the bridge does not trust `Count` or call `GetRawText`.
 - The signed result is non-constructible and exposes no compact token. It can only be supplied to a
   bounded transport request and is accepted only by the same live bridge. Core installs it as the
   server-owned bearer value for the exact Published endpoint and mTLS identity.
@@ -61,3 +71,7 @@ store facade, provider facade, raw signature API, arbitrary authenticated HTTP A
 framework or new adapter category. Modules remain trusted in-process deployment components, not a
 sandbox. No healthcare connector, commercial adapter or provider implementation is part of this
 decision.
+
+Capability closure cannot retract an effect that completed while the strategy was legitimately
+active. It guarantees that once strategy completion begins, tracked work is prevented from
+progressing toward a later effect; an early strategy success is rejected after cancellation/drain.

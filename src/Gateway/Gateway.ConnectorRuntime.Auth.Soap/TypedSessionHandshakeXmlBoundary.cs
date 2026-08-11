@@ -91,7 +91,8 @@ internal static class TypedSessionHandshakeXmlBoundary
                 try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    adapter.WriteValidationRequest(writer, new(state, candidate, provenance, serverOwnedInputs));
+                    using (serverOwnedInputs.BindToCoreWriter(writer))
+                        adapter.WriteValidationRequest(writer, new(state, candidate, provenance, serverOwnedInputs));
                     cancellationToken.ThrowIfCancellationRequested();
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }
@@ -184,7 +185,8 @@ internal static class TypedSessionHandshakeXmlBoundary
                 try
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    state.RequestAdapter.WriteRequest(writer, new(state, serverOwnedInputs));
+                    using (serverOwnedInputs.BindToCoreWriter(writer))
+                        state.RequestAdapter.WriteRequest(writer, new(state, serverOwnedInputs));
                     cancellationToken.ThrowIfCancellationRequested();
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw new OperationCanceledException(cancellationToken); }

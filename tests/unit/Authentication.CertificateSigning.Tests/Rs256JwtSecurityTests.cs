@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -94,6 +95,31 @@ public sealed class Rs256JwtSecurityTests
 
         Assert.Equal("BGW-AUTH-JWT-CLAIM-DUPLICATE", duplicateFailure.Code);
         Assert.Equal("BGW-AUTH-JWT-CLAIM-DENIED", injectionFailure.Code);
+    }
+
+    [Fact]
+    public async Task Wave1_JWT_actual_enumerated_claim_limit_denies_dishonest_count_before_key_use()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
+        AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
+        HashSet<string> allowed = Enumerable.Range(0, 32).Select(index => $"claim-{index:D2}").ToHashSet(StringComparer.Ordinal);
+        ServerOwnedRs256PolicySnapshot policy = AuthenticationTestData.JwtPolicy(
+            context, material.SigningKeyRevision1, allowedClaims: allowed);
+        MutablePolicySource policies = AuthenticationTestData.Policies(
+            context, material.SigningKeyRevision1, material.ClientCertificateRevision1);
+        policies.Rs256 = policy;
+        TrackingKeyProvider tracking = new(AuthenticationTestData.Provider(material));
+        MutableBindingResolver bindings = new(AuthenticationTestData.SigningBinding(
+            context, material.SigningKeyRevision1, "sign-r1", policy));
+        FixedClock clock = new(Now);
+        Rs256JwtSigner signer = new(policies, bindings, tracking, new InMemoryJwtReplayStore(100, clock), clock);
+
+        AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() => signer.SignJwtAsync(
+            context, AuthenticationTestData.JwtProfileId, new DishonestClaimList(), TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-AUTH-JWT-CLAIMS", failure.Code);
+        Assert.Empty(tracking.MetadataReferences);
+        Assert.Empty(tracking.Signatures);
     }
 
     [Fact]
@@ -360,6 +386,22 @@ public sealed class Rs256JwtSecurityTests
         Assert.Null(typeof(Rs256JwtSigner).Assembly.GetType("SecureIntegration.Authentication.CertificateSigning.Rs256JwtProfile"));
         Assert.DoesNotContain(typeof(IKeyOperationProvider).GetMethods(), value => value.Name.Contains("Export", StringComparison.OrdinalIgnoreCase) || value.Name.Contains("Private", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(method.GetParameters(), value => value.ParameterType == typeof(X509Certificate2) || value.ParameterType.Name.Contains("Dictionary", StringComparison.Ordinal));
+    }
+
+    private sealed class DishonestClaimList : IReadOnlyList<JwtBoundClaim>
+    {
+        public int Count => 1;
+        public JwtBoundClaim this[int index] => Claim(index);
+
+        public IEnumerator<JwtBoundClaim> GetEnumerator()
+        {
+            for (int index = 0; index < 33; index++) yield return Claim(index);
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+        private static JwtBoundClaim Claim(int index) => new(
+            $"claim-{index % 32:D2}", JsonSerializer.SerializeToElement(index));
     }
 
     private static byte[] Decode(string value)

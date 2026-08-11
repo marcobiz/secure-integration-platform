@@ -122,8 +122,12 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         string runtime = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "OperationServices.cs"));
 
         Assert.Contains("private sealed class AuthorizedConnectorCapabilityBridge", contracts, StringComparison.Ordinal);
-        Assert.Contains("Interlocked.CompareExchange(ref consumedCapabilities, updated, observed)", contracts, StringComparison.Ordinal);
+        Assert.Contains("lock (synchronization)", contracts, StringComparison.Ordinal);
         Assert.Contains("ReferenceEquals(Current.Value, this)", contracts, StringComparison.Ordinal);
+        Assert.Contains("state = 2", contracts, StringComparison.Ordinal);
+        Assert.Contains("lifetime?.Cancel()", contracts, StringComparison.Ordinal);
+        Assert.Contains("await task.ConfigureAwait(false)", contracts, StringComparison.Ordinal);
+        Assert.Contains("HadInFlightOperations", runtime, StringComparison.Ordinal);
         Assert.Contains("execution.Owns(exception)", runtime, StringComparison.Ordinal);
         Assert.Contains("AcquireAuthorizedAsync", dispatcher, StringComparison.Ordinal);
         Assert.Contains("ExecuteAuthorizedCapabilityAsync", dispatcher, StringComparison.Ordinal);
@@ -141,6 +145,8 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         string publicContracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "AuthorizedVerticalCapabilityContracts.cs"));
         string bindingInputs = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.ConnectorRuntime.Auth.Soap", "AuthorizedConnectorBindingInputs.cs"));
         string hostRuntime = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "AuthorizedVerticalCapabilityRuntime.cs"));
+        string executionContracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"));
+        string claimBounds = File.ReadAllText(Path.Combine(Root, "src", "Shared", "Security", "BoundedJwtClaimValidation.cs"));
         string migration = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0012_connector_capability_locator_scope.sql"));
 
         Assert.Contains("internal string CompactToken", publicContracts, StringComparison.Ordinal);
@@ -149,9 +155,15 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         Assert.DoesNotContain("HttpRequestMessage", publicContracts, StringComparison.Ordinal);
         Assert.DoesNotContain("Uri", publicContracts, StringComparison.Ordinal);
         Assert.DoesNotContain("Provider", publicContracts, StringComparison.Ordinal);
-        Assert.Contains("public void WriteRequiredXmlValue", bindingInputs, StringComparison.Ordinal);
+        Assert.Contains("public void WriteRequiredXmlValue(string name)", bindingInputs, StringComparison.Ordinal);
+        Assert.DoesNotContain("WriteRequiredXmlValue(XmlWriter", bindingInputs, StringComparison.Ordinal);
+        Assert.Contains("internal IDisposable BindToCoreWriter(XmlWriter writer)", bindingInputs, StringComparison.Ordinal);
         Assert.DoesNotContain("public string Get", bindingInputs, StringComparison.Ordinal);
         Assert.DoesNotContain("public string ProviderReference", bindingInputs, StringComparison.Ordinal);
+        Assert.True(executionContracts.IndexOf("BoundedJwtClaimValidation.ValidateNext", StringComparison.Ordinal) <
+            executionContracts.IndexOf("value.Clone()", StringComparison.Ordinal));
+        Assert.DoesNotContain("claims.Count", executionContracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetRawText", claimBounds, StringComparison.Ordinal);
         Assert.Contains("execution.PublishedAuthority.Matches(snapshot)", hostRuntime, StringComparison.Ordinal);
         Assert.Contains("PurposeBoundMutualTlsSender", hostRuntime, StringComparison.Ordinal);
         Assert.Contains("Rs256JwtSigner", hostRuntime, StringComparison.Ordinal);
