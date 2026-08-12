@@ -1,6 +1,6 @@
 # Implementation status
 
-Aggiornato: 2026-08-11
+Aggiornato: 2026-08-12
 
 ## Stato sintetico
 
@@ -29,7 +29,7 @@ Aggiornato: 2026-08-11
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | Wave 1 - Generic JWT/X.509 extensions | Remediation mirata local gate PASS; CI exact-head e rereview pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 304 ordinary, 71 PostgreSQL relevant, scan/SBOM/vulnerability/Core export PASS |
 | Healthcare Wave 1 — Regional ePrescription | Foundation compilata; profili regionali non pubblicabili | capability opaca Core post-auth con stato/grant verificati indipendentemente dalle credenziali, adapter al vero store Published, schema estensioni e safe-code allowlist server-owned, isolamento cross-profile; 14 test pack + 4 architecture PASS locali; Lombardia ed Emilia-Romagna `BLOCKED_BY_SPEC` |
-| Healthcare Wave 1 — FSE2 National Connector | **ORGANIZATION_PROFILE: READY_FOR_INDEPENDENT_REVIEW; HUMAN_ACTOR_PROFILE: DEFERRED** | Modulo esterno `healthcare-fse2`, strategia mTLS minima e solo contratti pubblici `Gateway.Application`; profilo esatto da `AuthorizedPublishedExtensionConfiguration`; slot `authorization`/`integrity`, token opachi e projection Core Bearer + `FSE-JWT-Signature`; subject Organization CX, digest sui byte finali, mTLS/restricted transport e race A→B zero-network. Hosted reale PASS in-memory e PostgreSQL 18; nessuna nuova primitive Core. L'accreditamento ufficiale resta separato; vedere `docs/testing/FSE2-IMPLEMENTATION-REPORT.md`. |
+| Healthcare Wave 1 — FSE2 National Connector | Eccezione Core `contentCommitment` qualificata localmente; exact-head CI e review Core security mirata pending | Tipo provider-neutral bounded con default storico `DigitalSignature`; entrambi gli slot FSE2 esigono `ContentCommitment`, stessa identità sintetica S1 e distinta A1 mTLS. CertificateSigning 100/100, FSE2 unit 43/43, hosted 5/5, PostgreSQL 18 canonico 1/1 zero skip, architecture 40/40 e build Release zero warning/errori. Compatibilità software sintetica soltanto; import operativo e live FSE2 non eseguiti. |
 | M3B e milestone/connector production successivi | Non iniziati | nessun cloud reale, connector sanitario production o adapter commerciale |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
@@ -349,15 +349,26 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
   Il vertical richiede una volta `authorization` e una volta `integrity`, ma non vede i JWT:
   Core possiede issuer/audience/fixed subject/temporali/jti/RS256/SPKI/x5c, applica Bearer e
   `FSE-JWT-Signature`, poi esegue mTLS/restricted transport con freshness finale;
+- ADR-0028 aggiunge il solo requisito Core necessario: `JwtSigningCertificateKeyUsageMode` chiuso
+  su `DigitalSignature` e `ContentCommitment`. Assenza e API storica restano `DigitalSignature`;
+  `ContentCommitment` richiede Key Usage presente con `NonRepudiation`, senza OR globale o inferenza
+  da FSE2/issuer/subject/slot. Il valore Published entra in canonical checksum, four-eyes, preflight
+  esatto e policy digest;
 - il digest lowercase SHA-256 è calcolato sul body finale già composto e gli stessi byte copiati
   entrano nel transport. Il server HTTPS ricalcola il digest sui byte di rete e verifica due token
   e jti distinti, issuer distinti, stessa identità/x5c, subject e claim Organization, certificato
   client esatto, metodo/path/content type e un solo outbound;
 - il percorso canonical hosted con import/validate, editor, approvatore distinto, publication,
-  BGW1 e grant è PASS sia in-memory sia su PostgreSQL 18. La race del vero connector pubblica B
-  durante il secondo slot e ottiene stale con FSE2 network 0 e generic transport 0;
-- targeted checkpoint: 33 unit FSE2, 8 Healthcare architecture, 2 hosted in-memory/race e 1 hosted
-  PostgreSQL 18 PASS. Gate completi, CI exact-head e review indipendente sono registrati nel handoff;
+  BGW1 e grant è PASS sia in-memory sia su PostgreSQL 18. Il mismatch Key Usage è negato prima
+  di firma/DNS/HTTPS/rete; la race pubblica B dopo preflight e prima della prima firma e ottiene
+  stale con firma, FSE2 network e generic transport a zero;
+- checkpoint locale corrente: CertificateSigning 100/100, FSE2 unit 43/43, hosted non-PostgreSQL
+  5/5, PostgreSQL 18 canonico 1/1 con migration fresh/no-op, architecture 40/40 e build Release
+  zero warning/errori. La suite ordinaria completa ha zero failure; CI exact-head e review Core
+  security mirata restano gate di handoff;
+- il test usa solo certificati sintetici runtime: la correlazione/trust offline resta evidenza
+  redatta esterna già verificata e non riaperta; importazione operativa e qualifica live FSE2 non
+  sono state eseguite. Il profilo Human Actor resta `DEFERRED` e non si dichiara accreditamento;
 - report: `docs/testing/FSE2-IMPLEMENTATION-REPORT.md`.
 
 ### Wave 1 — Authorized Published operation contract

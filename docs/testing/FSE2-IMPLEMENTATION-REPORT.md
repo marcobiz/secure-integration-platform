@@ -2,9 +2,13 @@
 
 Date: 2026-08-12
 
-Integrated Core/Auth/Runtime baseline: `2a4ed77123211051d3061616211dceeea5ec23ae`
+Immutable Core/Auth/Runtime baseline: `a40765dfa30dce23c6ce266b18740c3c766c21e3`
 
-Lineage: historical PR #16; replacement branch `wave1/fse2-national-organization`
+Content-commitment remediation branch: `wave1/fse2-content-commitment-signing`
+
+Lineage: historical PR #16; Organization replacement branch
+`wave1/fse2-national-organization`; this branch is a new focused Core exception and does not
+rewrite either lineage.
 
 Official public freeze: guide 2.23 and OpenAPI 1.0.0 at
 `430e6b5d9dde8a35b04ae635c11303db787a977e`.
@@ -31,7 +35,8 @@ validated business CX. DAP, purpose and action are derived from the frozen opera
 
 The module registers `Fse2OrganizationPublishedOperationExpectationProvider`. Before strategy,
 capability scope, signing, DNS or network, Core exact-matches mTLS, mandatory restricted transport,
-the two-slot set, RS256, projection, environment-derived audience, canonical subject, issuer/CN
+the two-slot set, RS256, explicit `ContentCommitment` certificate Key Usage on both slots,
+projection, environment-derived audience, canonical subject, issuer/CN
 relation, 300-second `iat`/`exp` with no `nbf`, `jti`, `x5c`, claim sets, equal signing identities and
 their distinction from mTLS. The strategy then requests exactly one fresh opaque token from
 `authorization` and one from `integrity`. Core owns issuer, temporal values, signing binding, SPKI,
@@ -39,6 +44,17 @@ their distinction from mTLS. The strategy then requests exactly one fresh opaque
 Authorization or `FSE-JWT-Signature` header. Core projects the first as Bearer and the second as the
 FSE header, then performs the existing Published-A freshness, restricted-egress and server-owned
 mTLS flow.
+
+ADR-0028 introduces the only new Core primitive required by the official S1 certificate profile:
+`JwtSigningCertificateKeyUsageMode`, with closed `DigitalSignature` and `ContentCommitment` values.
+The historical public policy factory and an absent Published `certificateKeyUsage` both map exactly
+to `DigitalSignature`. A present value is canonical/checksum/four-eyes covered and the policy digest
+always includes the effective mode. The signer uses separate branches, never a generic OR:
+`DigitalSignature` preserves the old rule (missing Key Usage accepted; present Key Usage must contain
+`DigitalSignature`), while `ContentCommitment` requires a present extension containing
+`X509KeyUsageFlags.NonRepudiation`. No subject, issuer, OID, slot or connector inference exists.
+Private-key handling, chain construction, leaf-first `x5c`, RS256, provider resolution, restricted
+transport and the A1 mTLS validator are unchanged.
 
 FSE2 claim composition remains connector-local. The integrity token receives only allowlisted
 business/derived scalar claims. For document operations, the connector composes one immutable,
@@ -74,15 +90,23 @@ DAP/purpose/action, the exact claim set, organization/locality/application and p
 the SHA-256 of network-observed bytes where required. The matrix observes exactly 11 single
 outbounds. The create operation correlates successfully to both workflow and trace status.
 
+The runtime-only synthetic certificate fixture gives the shared S1 signing identity a critical
+`contentCommitment`/`NonRepudiation` Key Usage and no `DigitalSignature`; the distinct A1 mTLS
+identity retains `DigitalSignature` and no `NonRepudiation`. Both FSE2 slots publish and preflight
+the explicit `contentCommitment` mode, use the same S1 SPKI, and remain distinct from A1.
+
 Connector-specific real-Published negatives cover subject, audience, issuer/CN, projection,
 missing/extra/unknown slots, temporal mode/`nbf`, lifetime, `x5c`, claim set and signing/mTLS
-identity relations. A strategy sentinel plus counters prove zero signing and zero transport/network.
+identity relations, including a Published `digitalSignature` substitution against the connector's
+typed `ContentCommitment` expectation. A strategy sentinel plus counters prove zero signing, DNS,
+HTTPS and generic transport/network effects.
 Token-shape negatives reject missing/empty `jti` and any `nbf`. Dynamic-path negatives cover
 missing and caller-named parameters, slash/backslash, percent form, query/fragment, dot segments,
 non-NFC and over-limit values. Cross-scope workflow tests cover every authority dimension and
-unknown workflow/trace values. The deterministic connector race blocks the second-slot policy
-preflight, publishes B, resumes and receives Core stale denial with zero signing, FSE2 requests and
-generic transport effects. Generic signing-slot, provider,
+unknown workflow/trace values. The deterministic connector race completes mandatory policy
+preflight, blocks public-material resolution immediately before the first signing operation,
+publishes B, resumes and receives Core stale denial with zero signatures, FSE2 requests and generic
+transport effects. Generic signing-slot, provider,
 cancellation, timeout, restricted-egress and binding-substitution matrices remain regression evidence
 from the qualified Core foundation; they are not reimplemented in the vertical.
 
@@ -90,47 +114,46 @@ from the qualified Core foundation; they are not reimplemented in the vertical.
 
 Preliminary failures remain visible and are not PASS evidence:
 
-- the first post-merge compile exposed a positional test-fixture argument mismatch (`CS1503`); the
-  merged fixture signature was corrected before the merge commit was finalized;
-- an early combined hosted/unit invocation timed out before discovery and left testhost processes;
-  the exact orphan command lines were verified and only those processes were terminated;
-- the first FSE2 unit compile after integrating main exposed the two newly required registrar
-  members; the test registrar was updated to record the expectation provider;
-- an initial product compile resolved the machine-wide .NET 8 installation instead of pinned SDK
-  10.0.302 and stopped before compilation; subsequent commands use the existing external pinned SDK;
-- one hosted build encountered DLL locks from a verified orphan FSE2 testhost and failed after copy
-  retries; the orphan was removed and the next clean build completed;
-- initial all-operation test authoring produced C# raw-interpolation errors and then exposed invalid
-  camel-case path placeholder names. Canonical lower-case hyphenated names were applied before the
-  matrix passed;
-- the first explicit FSE2 DNS-counter assertion found the fixture counter was test-assembly
-  internal (`CS1061`); its existing read-only counter was made public in test support, after which
-  the real-Published mismatch suite proved no additional DNS resolution.
+- the first host test command selected machine-wide SDK 8.0.418 and stopped before compilation
+  because `global.json` requires 10.0.302;
+- the first combined container invocation timed out before returning test evidence; its exact
+  transient container was verified absent before the bounded reruns;
+- the first hosted FSE2 compile used incompatible enum assertions (`CS0411`/`CS1503`); the assertions
+  were corrected and the complete hosted class then passed;
+- a later `--no-restore` rerun found an absent `Humanizer.Core` cache entry, and a full-solution
+  Linux restore stopped on Windows targeting (`NETSDK1100`); locked project restores recovered the
+  targeted gates, while an isolated Windows SDK 10.0.302 ran the canonical full build;
+- the Linux architecture run was 39/40 because one pre-existing test treats Windows backslashes in
+  `ProjectReference` paths as native separators; the native Windows rerun passed 40/40;
+- the first PostgreSQL harness assertion expected the wrong `0014` filename after the migration had
+  run. No FSE2 test was claimed, the ephemeral container was removed, and the corrected gate was
+  restarted from a new empty PostgreSQL 18 database.
 
 These are harness/implementation findings, not rerun PASS records. Final exact-head local gates and
 new CI run/job identifiers are appended only after they complete.
 
-The remediation tree then passed the following local gates with repository-pinned SDK 10.0.302:
+The content-commitment remediation tree then passed the following local gates with SDK 10.0.302:
 
 - full Release restore/build, container-base validation and compilation: zero warnings/errors;
+- complete CertificateSigning suite 100/100, including `JwtX509ExtensionSecurityTests` 22/22;
+  the new named matrix proves NonRepudiation-only PASS only under `ContentCommitment`, legacy denial,
+  DigitalSignature-only denial under `ContentCommitment`, absent-extension denial, `x5c: none`
+  validation, legacy missing-extension compatibility and distinct policy digests;
+- focused Gateway Published/expectation contract classes 42/42, including unchanged legacy
+  canonical checksum, explicit-value checksum binding, unknown-value denial and typed expectation
+  compatibility;
 - FSE2 unit 43/43; hosted non-PostgreSQL profile/policy/path/race matrix 5/5; all 11 wire
   operations in the matrix with 22 signatures and 11 single transports;
 - fresh PostgreSQL 18 migrations `0001` through `0014`, second apply no-op, locked FSE2 restore,
   Release build and canonical FSE2 test 1 passed / 0 skipped / 0 failed with
-  `REQUIRE_FSE2_POSTGRES_GATE=1`; missing-configuration negative failed closed with its stable code;
-- full architecture 40/40; Authorized Published operation focused 10/10; CertificateSigning 93/93;
-  typed composed-SOAP focused unit 24/24 and hosted/real-HTTPS 55 passed (two ordinary-harness
-  PostgreSQL skips, qualified separately by their dedicated gate);
-- full ordinary solution test command: zero failures; environment-gated PostgreSQL skips remain
-  explicit and are not used as PostgreSQL evidence;
-- Admin lint/OpenAPI/runtime contract, 29/29 unit, 2/2 accessibility, production build, npm audit
-  with zero vulnerabilities, browser mock 37/37, and production-build full-stack 1/1 with redaction
-  and complete Compose cleanup;
-- documentation, conservative secret scan, TLS hardening, NuGet transitive vulnerability inventory
-  and `git diff --check`: PASS.
+  `REQUIRE_FSE2_POSTGRES_GATE=1`; the dedicated container was removed;
+- full architecture 40/40 on Windows; the complete ordinary solution command has zero failures.
+  Its environment-gated PostgreSQL skips remain explicit and are not used as PostgreSQL evidence
+  (Gateway 167 passed / 31 skipped; FSE2 hosted 5 passed / 1 skipped in that ordinary run).
 
-Core export, Gitleaks, SBOM, final clean-tree checks and exact-head CI are recorded after the focused
-remediation commit; pre-commit artefacts do not qualify the final head.
+Documentation, conservative secret scan, Gitleaks, vulnerability inventory, SBOM, Core export,
+final clean-tree checks and exact-head CI are recorded after the focused remediation commits;
+pre-commit artefacts do not qualify the final head.
 
 ## Historical local qualification before the temporal remediation
 
@@ -187,10 +210,17 @@ official FSE endpoint call or accreditation.
 
 ## Readiness boundary
 
-- `ORGANIZATION_PROFILE = EXACT_HEAD_QUALIFICATION_PENDING`;
+- `ORGANIZATION_PROFILE = SYNTHETIC_SOFTWARE_COMPATIBILITY_PASS_EXACT_HEAD_CI_PENDING`;
 - `HUMAN_ACTOR_PROFILE = DEFERRED`;
-- `NEW_CORE_PRIMITIVE_REQUIRED = NO`;
+- `NEW_CORE_PRIMITIVE_REQUIRED = YES`;
+- `OFFLINE_CERTIFICATE_CORRELATION_AND_TRUST = PREVIOUSLY_VERIFIED_OUTSIDE_REPOSITORY_NOT_REEXECUTED`;
+- `OPERATIONAL_CERTIFICATE_IMPORT = NOT_PERFORMED`;
+- `LIVE_FSE2_QUALIFICATION = BLOCKED_NOT_EXECUTED`;
 - `ACCREDITED_PRODUCTION_READY = false`.
 
-Official provisioning, production certificate custody, approved policy values, conformance,
-accreditation, monitoring and live evidence remain required before production readiness.
+The PASS in this report is software compatibility using runtime-only synthetic material. The
+previous offline certificate correlation/trust result remains external, redacted evidence and was
+not opened or reproduced for this change. No real PEM, CSR, certificate, private key or P12 was
+accessed or created; no certificate was imported; and no FSE2 endpoint was called. Official
+provisioning, production certificate custody, approved policy values, conformance, accreditation,
+monitoring and live evidence remain required before production readiness.

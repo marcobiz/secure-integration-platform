@@ -36,6 +36,8 @@ effective Published policies and exact-compares:
 - Authorization Bearer or one exact bounded signed-token header;
 - fixed subject, audience, business-claim allowlist, lifetime and temporal mode;
 - mandatory Core-generated `jti` and exact x5c mode;
+- exact bounded signing-certificate Key Usage mode, with historical absence mapped to
+  `digitalSignature`;
 - exact issuer or fixed prefix plus the verified signing-certificate subject CN;
 - cryptographic signing-identity equality across declared slots;
 - cryptographic inequality between declared signing identities and the approved mTLS identity.

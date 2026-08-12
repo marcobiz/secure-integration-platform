@@ -31,3 +31,4 @@ Formato: contesto, decisione, conseguenze e alternative. Tutti gli ADR elencati 
 | [0025](0025-authorized-signing-slots.md) | Bounded authorized signing slots |
 | [0026](0026-authorized-typed-composed-soap-request-composition.md) | Authorized typed composed-SOAP request composition |
 | [0027](0027-authorized-published-operation-contract.md) | Authorized Published operation contract |
+| [0028](0028-bounded-jwt-signing-certificate-key-usage.md) | Bounded JWT signing-certificate Key Usage |

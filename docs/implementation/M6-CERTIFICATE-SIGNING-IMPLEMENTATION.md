@@ -74,6 +74,13 @@ digest. That exact SPKI is copied into the resolved context and used to verify t
 signature, denying scalar-fingerprint plus substituted-SPKI attacks, wrong-key and
 HS/RS-style confusion.
 
+ADR-0028 adds one bounded signing-certificate Key Usage requirement without relaxing the
+historical signer. `DigitalSignature` remains the default and keeps the original behavior:
+an absent Key Usage extension is accepted, while a present extension must contain
+`digitalSignature`. `ContentCommitment` is explicit, policy-digest-bound and requires a
+present extension containing `contentCommitment`/`nonRepudiation`. The branches are not an
+OR, and no subject, issuer, OID, slot or connector metadata selects the mode.
+
 ## Purpose-bound outbound mTLS
 
 Client certificates require current validity, private-key use, ClientAuth EKU, Digital

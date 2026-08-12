@@ -20,6 +20,11 @@ New definitions use `authorizedCapabilities.signingSlots`, with one to four entr
 - the unchanged qualified `invocationSigning` object;
 - `authorizationBearer`, or `signedTokenHeader` with one Published field name.
 
+ADR-0028 later adds the optional bounded `invocationSigning.certificateKeyUsage` member.
+Absence remains the historical `digitalSignature` rule and leaves existing canonical JSON and
+checksums unchanged. An explicit `contentCommitment` value is checksum/four-eyes covered and never
+changes the acceptance rule of another slot or profile.
+
 The existing `restrictedTransport` profile continues to own mTLS SPKI, revision and near-expiry
 policy. In the new form it does not contain an Authorization selector because projections belong to
 the exact signing slots. The schema and semantic validator reject zero or more than four slots,
