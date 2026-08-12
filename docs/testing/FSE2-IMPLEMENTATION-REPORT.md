@@ -1,8 +1,8 @@
 # FSE2 National Connector Organization profile — implementation report
 
-Date: 2026-08-11
+Date: 2026-08-12
 
-Qualified Core/Auth/Runtime baseline: `feec547a3e0991171fca1f8b22b136d3dd4c4ee3`
+Integrated Core/Auth/Runtime baseline: `2a4ed77123211051d3061616211dceeea5ec23ae`
 
 Lineage: historical PR #16; replacement branch `wave1/fse2-national-organization`
 
@@ -20,15 +20,21 @@ service locator or HTTP client.
 
 The FSE2-specific profile is parsed and validated inside `Healthcare.FSE2` from the immutable
 `AuthorizedPublishedExtensionConfiguration` copied from initially authorized Published A. The
-profile supplies organization/locality/application values, the exact frozen operation semantics,
-request media type and the two vertical slot names. It does not reread a generic store and is not a
-second authority model. The profile's approved P.IVA plus assigning authority produce canonical CX;
+strict extension supplies only common organization/locality/application values and a maximum
+document bound. Operation, method, `pathTemplate`, parameter name, content type, multipart
+boundary, signing slots and security policy cannot be selected there; the operation is the exact
+already-authorized Core context and its semantics come from the frozen catalog. The profile does
+not reread a generic store and is not a second authority model. Its approved P.IVA plus assigning authority produce canonical CX;
 the two server-owned signing policies use that value as fixed `sub`. `person_id` remains a separate
 validated business CX. DAP, purpose and action are derived from the frozen operation matrix and
 `use_subject_as_author` is absent. Human Actor remains deferred.
 
-The strategy requests exactly one fresh opaque token from `authorization` and one from `integrity`.
-Core owns RS256, issuer, audience, fixed subject, temporal values, `jti`, signing binding, SPKI,
+The module registers `Fse2OrganizationPublishedOperationExpectationProvider`. Before strategy,
+capability scope, signing, DNS or network, Core exact-matches mTLS, mandatory restricted transport,
+the two-slot set, RS256, projection, environment-derived audience, canonical subject, issuer/CN
+relation, 300-second `iat`/`exp` with no `nbf`, `jti`, `x5c`, claim sets, equal signing identities and
+their distinction from mTLS. The strategy then requests exactly one fresh opaque token from
+`authorization` and one from `integrity`. Core owns issuer, temporal values, signing binding, SPKI,
 `x5c` and both projections. The vertical never reads either compact JWT and never creates an
 Authorization or `FSE-JWT-Signature` header. Core projects the first as Bearer and the second as the
 FSE header, then performs the existing Published-A freshness, restricted-egress and server-owned
@@ -39,11 +45,15 @@ business/derived scalar claims. For document operations, the connector composes 
 deterministic multipart body and computes lowercase SHA-256 over those exact final outbound bytes;
 the same copied byte array is handed to restricted transport without later serialization. The
 frozen eleven-operation inventory is unchanged: nine Production-available operations, two official
-test-only operations, and no speculative FHIR create/replace, callback or consumer surface.
+test-only operations, and no speculative FHIR create/replace, callback or consumer surface. All
+eleven use Core `pathTemplate`; DELETE and both status GETs use `bodyMode: none`, producing no
+`HttpContent`, body bytes or `Content-Type`. Payload operations use REQUIRED.
 
 Responses are reduced to bounded technical identifiers and safe warnings. The module-owned workflow
 store keeps technical workflow/trace correlations scoped by authenticated identities, Connector
-version and exact FSE profile checksum; it never stores patient or document data. This correlation
+version and `SharedOrganizationProfileChecksumSha256`; it never stores patient or document data.
+The originating `OperationProfileChecksumSha256` is retained separately for validation/audit and is
+not a correlation-key equality requirement between create and status. This correlation
 store is process-local and is not represented as durable PostgreSQL workflow persistence.
 
 ## Production-path evidence
@@ -55,21 +65,72 @@ approver → publication → hosted Gateway → BGW1 request authentication → 
 FSE2 module/strategy → exact Published extension → both authorized signing slots → server-owned
 mTLS/restricted HTTPS → synthetic FSE2 server → bounded response.
 
-The server requires the exact trusted client certificate and checks the real request method, path
-and content type. It verifies two distinct compact tokens and `jti` values, both RS256 signatures,
+The all-operation server requires the exact trusted client certificate and checks the real request
+method, projected path without query/fragment, body mode and content type for every one of the 11
+operations. For every operation it verifies two distinct compact tokens and `jti` values, both RS256 signatures,
 the full expected `x5c` chain, the same signing leaf, distinct `auth:`/`integrity:` issuers, fixed
 organization subject, audience, `iat+exp` without `nbf`, exact Published lifetime,
-DAP/purpose/action, organization/locality/application and person claims, and the SHA-256 of the
-network-observed multipart bytes. The success case observes exactly one outbound request and no
-retry.
+DAP/purpose/action, the exact claim set, organization/locality/application and person claims, and
+the SHA-256 of network-observed bytes where required. The matrix observes exactly 11 single
+outbounds. The create operation correlates successfully to both workflow and trace status.
 
-Connector-specific negatives cover unknown and repeated slot selection, caller attempts to add a
-subject, caller metadata attempts to select endpoint/key/certificate/profile, malformed CX/XON,
-role/operation/environment profile substitution and exact-byte mutation detection. The deterministic
-connector race blocks the second-slot signing flow, publishes B, resumes and receives Core stale
-denial with zero FSE2 requests and zero generic transport effects. Generic signing-slot, provider,
+Connector-specific real-Published negatives cover subject, audience, issuer/CN, projection,
+missing/extra/unknown slots, temporal mode/`nbf`, lifetime, `x5c`, claim set and signing/mTLS
+identity relations. A strategy sentinel plus counters prove zero signing and zero transport/network.
+Token-shape negatives reject missing/empty `jti` and any `nbf`. Dynamic-path negatives cover
+missing and caller-named parameters, slash/backslash, percent form, query/fragment, dot segments,
+non-NFC and over-limit values. Cross-scope workflow tests cover every authority dimension and
+unknown workflow/trace values. The deterministic connector race blocks the second-slot policy
+preflight, publishes B, resumes and receives Core stale denial with zero signing, FSE2 requests and
+generic transport effects. Generic signing-slot, provider,
 cancellation, timeout, restricted-egress and binding-substitution matrices remain regression evidence
 from the qualified Core foundation; they are not reimplemented in the vertical.
+
+## Current remediation qualification ledger
+
+Preliminary failures remain visible and are not PASS evidence:
+
+- the first post-merge compile exposed a positional test-fixture argument mismatch (`CS1503`); the
+  merged fixture signature was corrected before the merge commit was finalized;
+- an early combined hosted/unit invocation timed out before discovery and left testhost processes;
+  the exact orphan command lines were verified and only those processes were terminated;
+- the first FSE2 unit compile after integrating main exposed the two newly required registrar
+  members; the test registrar was updated to record the expectation provider;
+- an initial product compile resolved the machine-wide .NET 8 installation instead of pinned SDK
+  10.0.302 and stopped before compilation; subsequent commands use the existing external pinned SDK;
+- one hosted build encountered DLL locks from a verified orphan FSE2 testhost and failed after copy
+  retries; the orphan was removed and the next clean build completed;
+- initial all-operation test authoring produced C# raw-interpolation errors and then exposed invalid
+  camel-case path placeholder names. Canonical lower-case hyphenated names were applied before the
+  matrix passed;
+- the first explicit FSE2 DNS-counter assertion found the fixture counter was test-assembly
+  internal (`CS1061`); its existing read-only counter was made public in test support, after which
+  the real-Published mismatch suite proved no additional DNS resolution.
+
+These are harness/implementation findings, not rerun PASS records. Final exact-head local gates and
+new CI run/job identifiers are appended only after they complete.
+
+The remediation tree then passed the following local gates with repository-pinned SDK 10.0.302:
+
+- full Release restore/build, container-base validation and compilation: zero warnings/errors;
+- FSE2 unit 43/43; hosted non-PostgreSQL profile/policy/path/race matrix 5/5; all 11 wire
+  operations in the matrix with 22 signatures and 11 single transports;
+- fresh PostgreSQL 18 migrations `0001` through `0014`, second apply no-op, locked FSE2 restore,
+  Release build and canonical FSE2 test 1 passed / 0 skipped / 0 failed with
+  `REQUIRE_FSE2_POSTGRES_GATE=1`; missing-configuration negative failed closed with its stable code;
+- full architecture 40/40; Authorized Published operation focused 10/10; CertificateSigning 93/93;
+  typed composed-SOAP focused unit 24/24 and hosted/real-HTTPS 55 passed (two ordinary-harness
+  PostgreSQL skips, qualified separately by their dedicated gate);
+- full ordinary solution test command: zero failures; environment-gated PostgreSQL skips remain
+  explicit and are not used as PostgreSQL evidence;
+- Admin lint/OpenAPI/runtime contract, 29/29 unit, 2/2 accessibility, production build, npm audit
+  with zero vulnerabilities, browser mock 37/37, and production-build full-stack 1/1 with redaction
+  and complete Compose cleanup;
+- documentation, conservative secret scan, TLS hardening, NuGet transitive vulnerability inventory
+  and `git diff --check`: PASS.
+
+Core export, Gitleaks, SBOM, final clean-tree checks and exact-head CI are recorded after the focused
+remediation commit; pre-commit artefacts do not qualify the final head.
 
 ## Historical local qualification before the temporal remediation
 
@@ -106,9 +167,9 @@ canonical full-stack and pinned-SDK executions do not erase or reclassify those 
   Healthcare or ConnectorPacks path;
 - deterministic M3 split-network, split-firewall and operator-handoff regressions: PASS.
 
-## Canonical PostgreSQL CI qualification
+## Pre-remediation canonical PostgreSQL CI qualification
 
-The connector/CI candidate exact head `c450d7133436a6f7a3a83dcb5c35f594dcadf7b6` qualified on
+The predecessor connector/CI candidate exact head `c450d7133436a6f7a3a83dcb5c35f594dcadf7b6` qualified on
 2026-08-11 without rerun. General run
 [`31495813159`](https://github.com/marcobiz/secure-integration-platform/actions/runs/31495813159)
 passed 6/6 and M5/Admin run
@@ -120,13 +181,13 @@ in Release, and runs the exact PostgreSQL FSE2 FQN with `REQUIRE_FSE2_POSTGRES_G
 always-run cleanup. The explicit result is `Healthcare.FSE2.Integration.Tests.dll`: Failed 0,
 Passed 1, Skipped 0, Total 1.
 
-The historical harness invocation failures above remain failures and are not evidence for this
-qualification. This report does not claim an official FSE endpoint call or accreditation.
+The historical harness invocation failures above remain failures and are not evidence for the new
+remediation head. This older run does not qualify the current delta. This report does not claim an
+official FSE endpoint call or accreditation.
 
 ## Readiness boundary
 
-- `ORGANIZATION_PROFILE = READY_FOR_INDEPENDENT_REVIEW`, after final documentation-only exact-head
-  CI confirmation;
+- `ORGANIZATION_PROFILE = EXACT_HEAD_QUALIFICATION_PENDING`;
 - `HUMAN_ACTOR_PROFILE = DEFERRED`;
 - `NEW_CORE_PRIMITIVE_REQUIRED = NO`;
 - `ACCREDITED_PRODUCTION_READY = false`.

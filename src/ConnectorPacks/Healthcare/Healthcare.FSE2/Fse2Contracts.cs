@@ -262,7 +262,7 @@ public sealed record Fse2WorkflowAuthorityScope(
     Guid EnvironmentId,
     string ConnectorVersion,
     string ConnectorId,
-    string ProfileChecksumSha256);
+    string SharedOrganizationProfileChecksumSha256);
 
 /// <summary>Technical-only persisted reconciliation record. It contains no patient or document data.</summary>
 public sealed record Fse2WorkflowRecord(
@@ -271,6 +271,7 @@ public sealed record Fse2WorkflowRecord(
     string OriginatingOperationId,
     Fse2Action Action,
     Fse2PurposeOfUse PurposeOfUse,
+    string OperationProfileChecksumSha256,
     string? WorkflowInstanceId,
     string? TraceId);
 

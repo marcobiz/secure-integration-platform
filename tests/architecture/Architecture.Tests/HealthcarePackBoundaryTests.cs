@@ -140,9 +140,11 @@ public sealed class HealthcarePackBoundaryTests
 
         string strategy = File.ReadAllText(Path.Combine(packRoot, "Fse2Connector.cs"));
         Assert.Contains("OpenPublishedExtensionConfiguration", strategy, StringComparison.Ordinal);
+        Assert.Contains("AddAuthorizedPublishedOperationExpectationProvider", strategy, StringComparison.Ordinal);
         Assert.Contains("CreateSignedTokenAsync", strategy, StringComparison.Ordinal);
         Assert.Contains("ExecuteRestrictedTransportAsync", strategy, StringComparison.Ordinal);
-        Assert.Contains("new AuthorizedConnectorRestrictedTransportRequest(exactOutboundBody)", strategy, StringComparison.Ordinal);
+        Assert.Contains("new AuthorizedConnectorRestrictedTransportRequest(exactOutboundBody, pathParameters)", strategy, StringComparison.Ordinal);
+        Assert.Contains("new AuthorizedConnectorRestrictedTransportRequest(pathParameters)", strategy, StringComparison.Ordinal);
         Assert.DoesNotContain("Headers", strategy, StringComparison.Ordinal);
     }
 

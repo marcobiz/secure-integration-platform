@@ -16,7 +16,71 @@ public sealed class Fse2OrganizationExecutionModule : IConnectorExecutionModule
     {
         ArgumentNullException.ThrowIfNull(registrar);
         registrar.AddSingleton<IFse2WorkflowCorrelationStore, InMemoryFse2WorkflowCorrelationStore>();
+        registrar.AddAuthorizedPublishedOperationExpectationProvider<Fse2OrganizationPublishedOperationExpectationProvider>();
         registrar.AddStrategy<Fse2OrganizationExecutionStrategy>();
+    }
+}
+
+/// <summary>Exact connector-owned semantic policy expected for every FSE2 Organization operation.</summary>
+public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAuthorizedPublishedOperationExpectationProvider
+{
+    private static readonly ConnectorExecutionStrategyKey StrategyKey =
+        ConnectorExecutionStrategyKey.Parse("healthcare-fse2-organization");
+    private static readonly IReadOnlySet<ConnectorExecutionStrategyKey> StrategyKeys =
+        new HashSet<ConnectorExecutionStrategyKey> { StrategyKey }.ToFrozenSet();
+    private static readonly string[] IntegrityClaims =
+    [
+        "subject_role", "purpose_of_use", "subject_organization", "subject_organization_id", "locality",
+        "person_id", "patient_consent", "resource_hl7_type", "action_id", "attachment_hash",
+        "subject_application_id", "subject_application_vendor", "subject_application_version"
+    ];
+
+    public IReadOnlySet<ConnectorExecutionStrategyKey> SupportedExecutionStrategies => StrategyKeys;
+
+    public AuthorizedPublishedOperationExpectations CreateExpectations(
+        AuthorizedPublishedOperationExpectationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.ExecutionStrategyKey != StrategyKey ||
+            context.AuthenticationKind != GatewayAuthenticationKind.MutualTls)
+            throw new Fse2ConnectorException(Fse2ErrorCategory.PolicyDenied, "FSE2_EXPECTATION_CONTEXT_DENIED");
+
+        Fse2PublishedOrganizationProfile profile = Fse2PublishedOrganizationProfile.Parse(
+            context.OpenPublishedExtensionConfiguration(), context.OperationId);
+        ConnectorSigningSlotKey authorization = profile.AuthorizationSigningSlot;
+        ConnectorSigningSlotKey integrity = profile.IntegritySigningSlot;
+        AuthorizedSigningSlotExpectation authorizationExpectation = new(
+            authorization,
+            required: true,
+            AuthorizedSigningAlgorithm.Rs256,
+            AuthorizedSigningTokenProjectionExpectation.AuthorizationBearer(),
+            profile.Audience,
+            profile.SubjectCx,
+            [],
+            Fse2PublishedOrganizationProfile.TokenLifetimeSeconds,
+            AuthorizedSigningTemporalMode.IssuedAtExpiration,
+            jtiRequired: true,
+            AuthorizedSigningCertificateHeaderMode.Chain,
+            AuthorizedSigningIssuerExpectation.FixedPrefixAndCertificateSubjectCommonName("auth:"));
+        AuthorizedSigningSlotExpectation integrityExpectation = new(
+            integrity,
+            required: true,
+            AuthorizedSigningAlgorithm.Rs256,
+            AuthorizedSigningTokenProjectionExpectation.SignedTokenHeader(Fse2PublishedOrganizationProfile.IntegrityHeaderName),
+            profile.Audience,
+            profile.SubjectCx,
+            IntegrityClaims,
+            Fse2PublishedOrganizationProfile.TokenLifetimeSeconds,
+            AuthorizedSigningTemporalMode.IssuedAtExpiration,
+            jtiRequired: true,
+            AuthorizedSigningCertificateHeaderMode.Chain,
+            AuthorizedSigningIssuerExpectation.FixedPrefixAndCertificateSubjectCommonName("integrity:"));
+        return new(
+            GatewayAuthenticationKind.MutualTls,
+            restrictedTransportRequired: true,
+            [authorizationExpectation, integrityExpectation],
+            [authorization, integrity],
+            [authorization, integrity]);
     }
 }
 
@@ -47,10 +111,7 @@ public sealed class Fse2OrganizationExecutionStrategy(
             throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_EXECUTION_AUTHORITY_DENIED");
 
         Fse2PublishedOrganizationProfile profile =
-            Fse2PublishedOrganizationProfile.Parse(execution.OpenPublishedExtensionConfiguration());
-        if (!string.Equals(profile.Operation.OperationId, execution.OperationId, StringComparison.Ordinal) ||
-            !string.Equals(profile.RequestContentType, execution.RequestContentType, StringComparison.Ordinal))
-            throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_PUBLISHED_OPERATION_MISMATCH");
+            Fse2PublishedOrganizationProfile.Parse(execution.OpenPublishedExtensionConfiguration(), execution.OperationId);
 
         Fse2InboundPayload inbound;
         using (Stream payload = execution.OpenPayloadStream())
@@ -59,7 +120,7 @@ public sealed class Fse2OrganizationExecutionStrategy(
 
         Fse2WorkflowExecutionContext security = await ResolveSecurityContextAsync(
             execution, profile, inbound, cancellationToken).ConfigureAwait(false);
-        byte[] exactOutboundBody = Fse2ExactBodyComposer.Compose(profile, inbound);
+        byte[] exactOutboundBody = Fse2ExactBodyComposer.Compose(profile, inbound, execution.RequestContentType);
         IReadOnlyDictionary<string, JsonElement> integrityClaims = BuildIntegrityClaims(
             profile, inbound, security, exactOutboundBody);
 
@@ -72,9 +133,15 @@ public sealed class Fse2OrganizationExecutionStrategy(
             integrityClaims,
             cancellationToken).ConfigureAwait(false);
 
+        IReadOnlyCollection<AuthorizedConnectorPathParameter> pathParameters = profile.Operation.PathParameterName is null
+            ? []
+            : [new AuthorizedConnectorPathParameter(profile.Operation.PathParameterName, inbound.ResourceIdentifier!)];
+        AuthorizedConnectorRestrictedTransportRequest restrictedRequest =
+            profile.Operation.HasDocument || profile.Operation.HasJsonBody
+                ? new AuthorizedConnectorRestrictedTransportRequest(exactOutboundBody, pathParameters)
+                : new AuthorizedConnectorRestrictedTransportRequest(pathParameters);
         QualifiedGatewayExecutionResult upstream = await execution.Capabilities.ExecuteRestrictedTransportAsync(
-            new AuthorizedConnectorRestrictedTransportRequest(exactOutboundBody),
-            cancellationToken).ConfigureAwait(false);
+            restrictedRequest, cancellationToken).ConfigureAwait(false);
         Fse2Response normalized = Fse2ResponseMapper.Map(upstream, execution.CorrelationId, profile.Operation);
         if (profile.Operation.Operation is not (Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace) &&
             (normalized.WorkflowInstanceId is not null || normalized.TraceId is not null))
@@ -85,6 +152,7 @@ public sealed class Fse2OrganizationExecutionStrategy(
                 security.OperationReference,
                 security.Action,
                 security.PurposeOfUse,
+                profile.OperationProfileChecksumSha256,
                 normalized.WorkflowInstanceId,
                 normalized.TraceId), cancellationToken).ConfigureAwait(false);
         }
@@ -113,11 +181,13 @@ public sealed class Fse2OrganizationExecutionStrategy(
             Fse2WorkflowRecord stored = await workflowStore.ResolveAsync(
                 scope,
                 operation.Operation,
-                profile.ResourceIdentifier!,
+                inbound.ResourceIdentifier!,
                 cancellationToken).ConfigureAwait(false);
             Fse2OperationDescriptor origin = Fse2OperationCatalog.Get(stored.OriginatingOperation);
             if (stored.Authority != scope ||
-                !string.Equals(origin.OperationId, stored.OriginatingOperationId, StringComparison.Ordinal))
+                !string.Equals(origin.OperationId, stored.OriginatingOperationId, StringComparison.Ordinal) ||
+                !string.Equals(stored.OperationProfileChecksumSha256,
+                    profile.CalculateOperationProfileChecksum(origin), StringComparison.Ordinal))
                 throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_WORKFLOW_CONTEXT_DENIED");
             Fse2OperationCatalog.ValidateOrganizationCombination(
                 profile.SubjectRole,
@@ -137,10 +207,16 @@ public sealed class Fse2OrganizationExecutionStrategy(
         if (inbound.Document.Length > profile.MaximumDocumentBytes ||
             operation.HasDocument != !inbound.Document.IsEmpty ||
             operation.HasJsonBody != !inbound.RequestBody.IsEmpty ||
-            operation.RequiresResourceIdentifier != (inbound.ResourceIdentifier is not null) ||
-            !string.Equals(profile.ResourceIdentifier, inbound.ResourceIdentifier, StringComparison.Ordinal))
+            operation.RequiresResourceIdentifier != (inbound.ResourceIdentifier is not null))
             throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_REQUEST_SHAPE_DENIED");
         if (operation.HasJsonBody) Fse2Validation.ValidateJsonObject(inbound.RequestBody);
+        if (inbound.ResourceIdentifier is not null)
+            _ = operation.Operation switch
+            {
+                Fse2Operation.GetStatusByWorkflow => Fse2Validation.ValidateWorkflowId(inbound.ResourceIdentifier),
+                Fse2Operation.GetStatusByTrace => Fse2Validation.ValidateTraceId(inbound.ResourceIdentifier),
+                _ => Fse2Validation.ValidateDocumentId(inbound.ResourceIdentifier)
+            };
         if (operation.HasDocument && inbound.DocumentContentType is not ("application/pdf" or "application/json"))
             throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_DOCUMENT_CONTENT_TYPE_DENIED");
         if (operation.Operation != Fse2Operation.ValidateFhir && inbound.DocumentContentType == "application/json")
@@ -183,7 +259,7 @@ public sealed class Fse2OrganizationExecutionStrategy(
             execution.EnvironmentId,
             execution.ConnectorVersion,
             execution.ConnectorId,
-            profile.ProfileChecksumSha256);
+            profile.SharedOrganizationProfileChecksumSha256);
 
     private static Fse2ConnectorException Denied(Fse2ErrorCategory category, string code) => new(category, code);
 
@@ -302,13 +378,20 @@ internal sealed record Fse2InboundPayload(
 
 internal static class Fse2ExactBodyComposer
 {
-    internal static byte[] Compose(Fse2PublishedOrganizationProfile profile, Fse2InboundPayload inbound)
+    internal static byte[] Compose(
+        Fse2PublishedOrganizationProfile profile,
+        Fse2InboundPayload inbound,
+        string publishedRequestContentType)
     {
         if (!profile.Operation.HasDocument)
-            return inbound.RequestBody.IsEmpty ? "{}"u8.ToArray() : inbound.RequestBody.ToArray();
+            return inbound.RequestBody.ToArray();
 
         using MemoryStream output = new();
-        string boundary = profile.MultipartBoundary!;
+        const string prefix = "multipart/form-data; boundary=";
+        if (!publishedRequestContentType.StartsWith(prefix, StringComparison.Ordinal) ||
+            !IsSafeBoundary(publishedRequestContentType[prefix.Length..]))
+            throw new Fse2ConnectorException(Fse2ErrorCategory.PolicyDenied, "FSE2_PUBLISHED_CONTENT_TYPE_DENIED");
+        string boundary = publishedRequestContentType[prefix.Length..];
         WriteAscii(output, $"--{boundary}\r\nContent-Disposition: form-data; name=\"requestBody\"\r\nContent-Type: application/json\r\n\r\n");
         output.Write(inbound.RequestBody.Span);
         WriteAscii(output, $"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{(inbound.DocumentContentType == "application/json" ? "bundle.json" : "document.pdf")}\"\r\nContent-Type: {inbound.DocumentContentType}\r\n\r\n");
@@ -318,6 +401,9 @@ internal static class Fse2ExactBodyComposer
     }
 
     private static void WriteAscii(Stream stream, string value) => stream.Write(Encoding.ASCII.GetBytes(value));
+
+    private static bool IsSafeBoundary(string value) => value is { Length: >= 16 and <= 64 } &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 }
 
 /// <summary>RFC7807 and success response mapper retaining technical allowlisted metadata only.</summary>

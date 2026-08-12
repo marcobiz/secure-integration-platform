@@ -382,7 +382,7 @@ public sealed class HostedTypedSessionFixture : IAsyncDisposable
     internal TypedSessionHostFactory Factory { get; }
     internal SyntheticSoapServerInstance Server { get; }
     internal CountingRestrictedTransport Transport => Factory.Transport;
-    internal int HostResolutionCount => Factory.HostResolutionCount;
+    public int HostResolutionCount => Factory.HostResolutionCount;
     internal IConnectorConfigurationStore Store { get; }
     internal SoapSessionClient Sessions { get; }
     internal Uri Endpoint { get; }
@@ -627,7 +627,8 @@ public sealed class HostedTypedSessionFixture : IAsyncDisposable
         string signingProviderReference,
         string clientCertificateProviderReference,
         int expectedCertificateBindingCount = 2,
-        string operationId = "signed-submit")
+        string operationId = "signed-submit",
+        int expectedOperationCount = 1)
     {
         ProviderResourceCatalogRecord signing = await RegisterCertificateAsync(
             "capability-signing-" + Guid.NewGuid().ToString("N"), "Synthetic signing certificate", signingProviderReference);
@@ -664,7 +665,9 @@ public sealed class HostedTypedSessionFixture : IAsyncDisposable
             ConnectorVersion: version), editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
         ConnectorApprovalRecord requested = await approvals.RequestAsync(connectorId, version, editor, Guid.NewGuid(), TestContext.Current.CancellationToken);
         ApprovalReviewResult review = await approvals.ReviewAsync(connectorId, version, approver, TestContext.Current.CancellationToken);
-        Assert.Equal(expectedCertificateBindingCount, Assert.Single(review.Artifact.Operations).CertificateBindings.Count);
+        Assert.Equal(expectedOperationCount, review.Artifact.Operations.Count);
+        Assert.All(review.Artifact.Operations,
+            operation => Assert.Equal(expectedCertificateBindingCount, operation.CertificateBindings.Count));
         ConnectorApprovalRecord approved = await approvals.ApproveAsync(connectorId, version,
             new(requested.Id, review.DigestSha256, "synthetic capability approval"), approver, Guid.NewGuid(), TestContext.Current.CancellationToken);
         Assert.Equal(ConnectorApprovalStatus.Approved, approved.Status);

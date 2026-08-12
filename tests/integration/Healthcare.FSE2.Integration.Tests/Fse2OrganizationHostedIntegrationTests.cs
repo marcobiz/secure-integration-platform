@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -24,7 +25,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
 {
     internal const string Subject = "12345678903^^^&2.16.840.1.113883.2.9.4.1.2&ISO";
     internal const string PersonId = "RSSMRA80A01H501U^^^&2.16.840.1.113883.2.9.4.3.2&ISO";
-    internal const string Audience = "https://modipa.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1";
+    internal const string Audience = "https://fse2.synthetic.test/gateway/v1";
     internal const string AuthorizationIssuer = "auth:M6 Synthetic JWT Signing R1";
     internal const string IntegrityIssuer = "integrity:M6 Synthetic JWT Signing R1";
     internal const string Boundary = "broker-gateway-fse2-v1";
@@ -67,7 +68,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     }
 
     [Fact]
-    public async Task FSE2_SEC_Published_A_to_B_during_second_slot_signing_denies_before_network()
+    public async Task FSE2_SEC_Published_A_to_B_during_second_slot_policy_preflight_denies_before_strategy_signing_and_network()
     {
         TaskCompletionSource secondSlotEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         TaskCompletionSource releaseSecondSlot = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -125,7 +126,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             $"/v1/connectors/{connectorId}/operations/create:invoke",
             InvokeRequest(Payload()));
         await secondSlotEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(1, provider.SignDigestCalls);
+        Assert.Equal(0, provider.SignDigestCalls);
         Assert.Equal(0, server.Requests);
         Assert.Equal(0, fixture.GenericTransportRequests);
         try
@@ -143,7 +144,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Assert.Contains("BGW-CONNECTOR-CONFIGURATION-STALE", responseBody, StringComparison.Ordinal);
         Assert.Equal(0, server.Requests);
         Assert.Equal(0, fixture.GenericTransportRequests);
-        Assert.Equal(1, provider.SignDigestCalls);
+        Assert.Equal(0, provider.SignDigestCalls);
     }
 
     [Fact]
@@ -156,6 +157,184 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         using JsonDocument withNotBefore = JsonDocument.Parse(
             $$"""{"iat":1700000000,"nbf":1700000000,"exp":1700000{{TokenLifetimeSeconds}},"jti":"fse2-exact-jti"}""");
         Assert.False(SyntheticFse2OrganizationServer.TemporalPolicyIsExact(withNotBefore.RootElement));
+
+        using JsonDocument missingJti = JsonDocument.Parse(
+            $$"""{"iat":1700000000,"exp":1700000{{TokenLifetimeSeconds}}}""");
+        Assert.False(SyntheticFse2OrganizationServer.TemporalPolicyIsExact(missingJti.RootElement));
+        using JsonDocument emptyJti = JsonDocument.Parse(
+            $$"""{"iat":1700000000,"exp":1700000{{TokenLifetimeSeconds}},"jti":""}""");
+        Assert.False(SyntheticFse2OrganizationServer.TemporalPolicyIsExact(emptyJti.RootElement));
+    }
+
+    [Fact]
+    public async Task FSE2_IT_all_11_operations_use_Published_path_templates_and_exact_body_modes()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        await using SyntheticFse2OperationMatrixServer server = await SyntheticFse2OperationMatrixServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-matrix",
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
+
+        string connectorId = "fse2-matrix-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-matrix-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-matrix-application");
+        string allOperationsDefinition = DefinitionForOperations(
+            connectorId, "1.0.0", SpkiSha256(material.SigningKeyRevision1),
+            SpkiSha256(material.ClientCertificateRevision1), "1.0.0", Fse2OperationCatalog.All);
+        using (JsonDocument definitionDocument = JsonDocument.Parse(allOperationsDefinition))
+        {
+            ConnectorValidationResult validation = new ConnectorDefinitionValidator().Validate(definitionDocument.RootElement);
+            Assert.True(validation.Valid, string.Join(';', validation.Issues.Select(issue => $"{issue.Code}:{issue.Location}")));
+        }
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId,
+            "1.0.0",
+            environmentId,
+            server.Endpoint,
+            allOperationsDefinition,
+            provider,
+            "sign-r1",
+            "mtls-r1",
+            operationId: "*",
+            expectedOperationCount: Fse2OperationCatalog.All.Length);
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "fse2-matrix-identity");
+        foreach (Fse2OperationDescriptor operation in Fse2OperationCatalog.All)
+            await fixture.AddOperationGrantAsync(identity, connectorId, operation.OperationId);
+
+        Fse2Operation[] ordered =
+        [
+            Fse2Operation.Create,
+            Fse2Operation.GetStatusByWorkflow,
+            Fse2Operation.GetStatusByTrace,
+            .. Fse2OperationCatalog.All.Select(value => value.Operation).Where(value => value is not
+                (Fse2Operation.Create or Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace))
+        ];
+        foreach (Fse2Operation operationValue in ordered)
+        {
+            Fse2OperationDescriptor operation = Fse2OperationCatalog.Get(operationValue);
+            using HttpResponseMessage response = await fixture.SendSignedAsync(
+                identity,
+                HttpMethod.Post,
+                $"/v1/connectors/{connectorId}/operations/{operation.OperationId}:invoke",
+                InvokeRequest(PayloadFor(operation)));
+            string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+            Assert.True(response.StatusCode == HttpStatusCode.OK, $"{operation.OperationId}:{responseBody}");
+        }
+
+        Assert.Equal(11, server.Requests);
+        Assert.Equal(11, server.Observations.Count);
+        Assert.Equal(22, provider.SignDigestCalls);
+        Assert.Equal(11, fixture.GenericTransportRequests);
+        foreach (Fse2OperationDescriptor operation in Fse2OperationCatalog.All)
+        {
+            SyntheticFse2OperationMatrixServer.Observation observed = Assert.Single(
+                server.Observations, value => value.Operation == operation.Operation);
+            Assert.Equal(operation.Method.Method, observed.Method);
+            Assert.Equal(ExpectedPath(operation), observed.RawTarget);
+            Assert.True(observed.ClientCertificateObserved);
+            Assert.True(observed.DualDistinctTokensObserved);
+            Assert.True(observed.ExactJwtPolicyObserved);
+            Assert.True(observed.ExactClaimsObserved);
+            Assert.True(observed.ExactDigestObserved);
+            if (operation.HasDocument)
+            {
+                Assert.Equal($"multipart/form-data; boundary={Boundary}", observed.ContentType);
+                Assert.True(observed.ExactDocumentAndJsonObserved);
+                Assert.True(observed.HasHttpContent);
+            }
+            else if (operation.HasJsonBody)
+            {
+                Assert.Equal("application/json", observed.ContentType);
+                Assert.Equal("{\"metadata\":\"published-exact\"}", Encoding.UTF8.GetString(observed.Body));
+                Assert.True(observed.HasHttpContent);
+            }
+            else
+            {
+                Assert.Empty(observed.Body);
+                Assert.Null(observed.ContentType);
+                Assert.False(observed.HasHttpContent);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task FSE2_SEC_dynamic_path_missing_extra_encoded_and_noncanonical_values_deny_before_signing_and_network()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        await using SyntheticFse2OperationMatrixServer server = await SyntheticFse2OperationMatrixServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-path-negative",
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
+        Fse2OperationDescriptor replace = Fse2OperationCatalog.Get(Fse2Operation.Replace);
+        string connectorId = "fse2-path-negative-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-path-negative-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-path-negative-application");
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId,
+            "1.0.0",
+            environmentId,
+            server.Endpoint,
+            DefinitionForOperations(connectorId, "1.0.0", SpkiSha256(material.SigningKeyRevision1),
+                SpkiSha256(material.ClientCertificateRevision1), "1.0.0", [replace]),
+            provider,
+            "sign-r1",
+            "mtls-r1",
+            operationId: replace.OperationId);
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "fse2-path-negative-identity");
+        await fixture.AddOperationGrantAsync(identity, connectorId, replace.OperationId);
+
+        string exact = PayloadFor(replace);
+        string exactIdentifier = "2.16.840.1.113883.2.9.99.1";
+        string withoutIdentifier = exact.Replace(
+            $",\"resourceIdentifier\":\"{exactIdentifier}\"", string.Empty, StringComparison.Ordinal);
+        string[] invalidPayloads =
+        [
+            withoutIdentifier,
+            exact.Replace(exactIdentifier, "a/b", StringComparison.Ordinal),
+            exact.Replace(exactIdentifier, "a\\b", StringComparison.Ordinal),
+            exact.Replace(exactIdentifier, "%2f", StringComparison.Ordinal),
+            exact.Replace(exactIdentifier, "a?b", StringComparison.Ordinal),
+            exact.Replace(exactIdentifier, "a#b", StringComparison.Ordinal),
+            exact.Replace(exactIdentifier, ".", StringComparison.Ordinal),
+            exact.Replace(exactIdentifier, "..", StringComparison.Ordinal),
+            exact.Replace(exactIdentifier, "e\u0301", StringComparison.Ordinal),
+            exact.Replace(exactIdentifier, new string('a', 513), StringComparison.Ordinal),
+            exact.Replace("{", "{\"pathParameters\":[{\"name\":\"unknown\",\"value\":\"extra\"}],", StringComparison.Ordinal),
+            exact.Replace("{", "{\"pathParameterName\":\"document-id\",", StringComparison.Ordinal)
+        ];
+        foreach (string invalidPayload in invalidPayloads)
+        {
+            int signingBefore = provider.SignDigestCalls;
+            using HttpResponseMessage response = await fixture.SendSignedAsync(
+                identity,
+                HttpMethod.Post,
+                $"/v1/connectors/{connectorId}/operations/{replace.OperationId}:invoke",
+                InvokeRequest(invalidPayload));
+            Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+            Assert.Equal(signingBefore, provider.SignDigestCalls);
+            Assert.Equal(0, server.Requests);
+            Assert.Equal(0, fixture.GenericTransportRequests);
+        }
     }
 
     private static async Task RunSuccessAsync(
@@ -231,66 +410,63 @@ public sealed class Fse2OrganizationHostedIntegrationTests
 
         if (!includeNegatives) return;
 
-        int callsBeforeCallerOverride = provider.TotalCalls;
         using HttpResponseMessage callerOverride = await fixture.SendSignedAsync(
             identity,
             HttpMethod.Post,
             $"/v1/connectors/{connectorId}/operations/create:invoke",
             InvokeRequest(Payload(extraProperty: "\"subject\":\"caller-controlled\",")));
         Assert.Equal(HttpStatusCode.BadGateway, callerOverride.StatusCode);
-        Assert.Equal(callsBeforeCallerOverride, provider.TotalCalls);
         Assert.Equal(1, server.Requests);
 
-        HostedCapabilityAuthority repeatedSlot = await fixture.PrepareCapabilityConnectorVersionAsync(
-            connectorId,
-            "2.0.0",
-            environmentId,
-            server.Endpoint,
-            Definition(connectorId, "2.0.0", signingSpki, clientSpki, "2.0.0").Replace(
-                "\"integritySigningSlot\":\"integrity\"",
-                "\"integritySigningSlot\":\"authorization\"",
-                StringComparison.Ordinal),
-            provider,
-            "sign-r1",
-            "mtls-r1",
-            operationId: "create");
-        await fixture.PublishAsync(repeatedSlot, expectedPublicationRevision: 1);
-        int signingBeforeRepeated = provider.SignDigestCalls;
-        using HttpResponseMessage repeated = await fixture.SendSignedAsync(
-            identity,
-            HttpMethod.Post,
-            $"/v1/connectors/{connectorId}/operations/create:invoke",
-            InvokeRequest(Payload()));
-        string repeatedBody = await repeated.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.Conflict, repeated.StatusCode);
-        Assert.Contains("BGW-EGRESS-AUTHENTICATION", repeatedBody, StringComparison.Ordinal);
-        Assert.Equal(signingBeforeRepeated + 1, provider.SignDigestCalls);
-        Assert.Equal(1, server.Requests);
-
-        HostedCapabilityAuthority unknownSlot = await fixture.PrepareCapabilityConnectorVersionAsync(
-            connectorId,
-            "3.0.0",
-            environmentId,
-            server.Endpoint,
-            Definition(connectorId, "3.0.0", signingSpki, clientSpki, "3.0.0").Replace(
-                "\"integritySigningSlot\":\"integrity\"",
-                "\"integritySigningSlot\":\"unknown\"",
-                StringComparison.Ordinal),
-            provider,
-            "sign-r1",
-            "mtls-r1",
-            operationId: "create");
-        await fixture.PublishAsync(unknownSlot, expectedPublicationRevision: 2);
-        int signingBeforeUnknown = provider.SignDigestCalls;
-        using HttpResponseMessage unknown = await fixture.SendSignedAsync(
-            identity,
-            HttpMethod.Post,
-            $"/v1/connectors/{connectorId}/operations/create:invoke",
-            InvokeRequest(Payload()));
-        string unknownBody = await unknown.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.Conflict, unknown.StatusCode);
-        Assert.Contains("BGW-EGRESS-AUTHENTICATION", unknownBody, StringComparison.Ordinal);
-        Assert.Equal(signingBeforeUnknown + 1, provider.SignDigestCalls);
+        Func<string, string>[] mismatches =
+        [
+            definition => definition.Replace(IntegrityIssuer, "integrity:Wrong Synthetic Signing CN", StringComparison.Ordinal),
+            definition => definition.Replace(Audience, "https://fse2.wrong.test/gateway/v1", StringComparison.Ordinal),
+            definition => definition.Replace(Subject, "12345678903^^^&2.16.840.1.113883.2.9.4.1.3&ISO", StringComparison.Ordinal),
+            definition => definition.Replace("\"attachment_hash\",", string.Empty, StringComparison.Ordinal),
+            definition => definition.Replace("\"tokenLifetimeSeconds\":300", "\"tokenLifetimeSeconds\":301", StringComparison.Ordinal),
+            definition => definition.Replace("\"temporalClaims\":\"iat-exp\"", "\"temporalClaims\":\"iat-nbf-exp\"", StringComparison.Ordinal),
+            definition => definition.Replace("\"certificateHeader\":\"chain\"", "\"certificateHeader\":\"leaf\"", StringComparison.Ordinal),
+            definition => definition.Replace("\"headerName\":\"FSE-JWT-Signature\"", "\"headerName\":\"X-Wrong-Signature\"", StringComparison.Ordinal),
+            definition => RemoveIntegritySigningSlot(definition),
+            definition => AddExtraSigningSlot(definition),
+            definition => definition.Replace("\"slot\":\"integrity\"", "\"slot\":\"unknown\"", StringComparison.Ordinal),
+            definition => BindIntegritySigningToMutualTls(definition, clientSpki)
+        ];
+        long publicationRevision = 1;
+        int version = 2;
+        foreach (Func<string, string> mismatch in mismatches)
+        {
+            string connectorVersion = $"{version}.0.0";
+            HostedCapabilityAuthority mismatchAuthority = await fixture.PrepareCapabilityConnectorVersionAsync(
+                connectorId,
+                connectorVersion,
+                environmentId,
+                server.Endpoint,
+                mismatch(Definition(connectorId, connectorVersion, signingSpki, clientSpki, "1.0.0")),
+                provider,
+                "sign-r1",
+                "mtls-r1",
+                operationId: "create");
+            await fixture.PublishAsync(mismatchAuthority, expectedPublicationRevision: publicationRevision++);
+            int signingBeforeMismatch = provider.SignDigestCalls;
+            int networkBeforeMismatch = server.Requests;
+            int genericTransportBeforeMismatch = fixture.GenericTransportRequests;
+            int dnsBeforeMismatch = fixture.HostResolutionCount;
+            using HttpResponseMessage mismatchResponse = await fixture.SendSignedAsync(
+                identity,
+                HttpMethod.Post,
+                $"/v1/connectors/{connectorId}/operations/create:invoke",
+                InvokeRequest(Payload(extraProperty: "\"subject\":\"strategy-sentinel\",")));
+            string mismatchBody = await mismatchResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.Conflict, mismatchResponse.StatusCode);
+            Assert.Contains("BGW-EGRESS-AUTHENTICATION", mismatchBody, StringComparison.Ordinal);
+            Assert.Equal(signingBeforeMismatch, provider.SignDigestCalls);
+            Assert.Equal(dnsBeforeMismatch, fixture.HostResolutionCount);
+            Assert.Equal(networkBeforeMismatch, server.Requests);
+            Assert.Equal(genericTransportBeforeMismatch, fixture.GenericTransportRequests);
+            version++;
+        }
         Assert.Equal(1, server.Requests);
         Assert.Equal(1, fixture.GenericTransportRequests);
     }
@@ -307,8 +483,40 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         },
         certificateChains: new Dictionary<string, IReadOnlyList<X509Certificate2>>(StringComparer.Ordinal)
         {
-            ["sign-r1"] = [material.RootCertificate]
+            ["sign-r1"] = [material.RootCertificate],
+            ["mtls-r1"] = [material.RootCertificate]
         });
+
+    private static string RemoveIntegritySigningSlot(string definition)
+    {
+        JsonObject root = JsonNode.Parse(definition)!.AsObject();
+        JsonArray slots = root["operations"]![0]!["authorizedCapabilities"]!["signingSlots"]!.AsArray();
+        slots.RemoveAt(1);
+        return root.ToJsonString();
+    }
+
+    private static string AddExtraSigningSlot(string definition)
+    {
+        JsonObject root = JsonNode.Parse(definition)!.AsObject();
+        JsonArray slots = root["operations"]![0]!["authorizedCapabilities"]!["signingSlots"]!.AsArray();
+        JsonObject extra = JsonNode.Parse(slots[1]!.ToJsonString())!.AsObject();
+        extra["slot"] = "extra";
+        extra["signing"]!["profileId"] = "fse2-extra";
+        extra["signing"]!["issuer"] = AuthorizationIssuer;
+        extra["projection"]!["headerName"] = "X-FSE2-Extra-Signature";
+        slots.Add(extra);
+        return root.ToJsonString();
+    }
+
+    private static string BindIntegritySigningToMutualTls(string definition, string clientSpki)
+    {
+        JsonObject root = JsonNode.Parse(definition)!.AsObject();
+        JsonObject signing = root["operations"]![0]!["authorizedCapabilities"]!["signingSlots"]![1]!["signing"]!.AsObject();
+        signing["keyBinding"] = "mtls-certificate";
+        signing["publicKeySpkiSha256"] = clientSpki;
+        signing["issuer"] = "integrity:M6 Synthetic Client R1";
+        return root.ToJsonString();
+    }
 
     private static HostedExecutionModuleConfiguration Module()
     {
@@ -336,6 +544,48 @@ public sealed class Fse2OrganizationHostedIntegrationTests
           "documentContentType":"application/pdf"
         }
         """;
+
+    private static string PayloadFor(Fse2OperationDescriptor operation)
+    {
+        string? resourceIdentifier = operation.Operation switch
+        {
+            Fse2Operation.GetStatusByWorkflow => "workflow-fse2-1",
+            Fse2Operation.GetStatusByTrace => "trace-fse2-1",
+            _ when operation.RequiresResourceIdentifier => "2.16.840.1.113883.2.9.99.1",
+            _ => null
+        };
+        Dictionary<string, object?> payload = new(StringComparer.Ordinal)
+        {
+            ["personId"] = PersonId,
+            ["patientConsent"] = true,
+            ["resourceHl7Type"] = "('11502-2^^2.16.840.1.113883.6.1')"
+        };
+        if (operation.HasDocument)
+        {
+            payload["documentBase64"] = Convert.ToBase64String(DocumentBytes());
+            payload["documentContentType"] = operation.Operation == Fse2Operation.ValidateFhir
+                ? "application/json"
+                : "application/pdf";
+        }
+        if (operation.HasJsonBody)
+            payload["requestBodyBase64"] = Convert.ToBase64String("{\"metadata\":\"published-exact\"}"u8);
+        if (resourceIdentifier is not null) payload["resourceIdentifier"] = resourceIdentifier;
+        return JsonSerializer.Serialize(payload, WebJson);
+    }
+
+    private static string ExpectedPath(Fse2OperationDescriptor operation) => operation.PathTemplate switch
+    {
+        string value when operation.PathParameterName is null => value,
+        string value => value.Replace(
+            "{" + operation.PathParameterName + "}",
+            operation.Operation switch
+            {
+                Fse2Operation.GetStatusByWorkflow => "workflow-fse2-1",
+                Fse2Operation.GetStatusByTrace => "trace-fse2-1",
+                _ => "2.16.840.1.113883.2.9.99.1"
+            },
+            StringComparison.Ordinal)
+    };
 
     private static GatewayInvokeRequest Request(string payload) => new(
         "1.0",
@@ -369,13 +619,38 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         string version,
         string signingSpki,
         string clientSpki,
-        string applicationVersion) => $$$"""
+        string applicationVersion) => DefinitionForOperations(
+            connectorId, version, signingSpki, clientSpki, applicationVersion,
+            [Fse2OperationCatalog.Get(Fse2Operation.Create)]);
+
+    private static string DefinitionForOperations(
+        string connectorId,
+        string version,
+        string signingSpki,
+        string clientSpki,
+        string applicationVersion,
+        IReadOnlyCollection<Fse2OperationDescriptor> operations) => $$$"""
         {
           "schemaVersion":"1.0","connectorId":"{{{connectorId}}}","version":"{{{version}}}","displayName":"FSE2 Organization",
           "bindings":{"endpoints":[{"name":"service"}],"secrets":[{"name":"signing-certificate","kind":"clientCertificate"},{"name":"mtls-certificate","kind":"clientCertificate"}]},
-          "operations":[{
-            "operationId":"create","endpointBinding":"service","method":"POST","path":"/documents",
-            "request":{"contentType":"multipart/form-data; boundary={{{Boundary}}}","maximumBytes":2097152},"response":{"maximumBytes":4096},
+          "operations":[{{{string.Join(",", operations.Select(operation => OperationDefinition(operation, signingSpki, clientSpki, applicationVersion)))}}}]
+        }
+        """;
+
+    private static string OperationDefinition(
+        Fse2OperationDescriptor operation,
+        string signingSpki,
+        string clientSpki,
+        string applicationVersion)
+    {
+        string contentType = operation.HasDocument
+            ? $"multipart/form-data; boundary={Boundary}"
+            : "application/json";
+        string bodyMode = operation.HasDocument || operation.HasJsonBody ? "required" : "none";
+        return $$$"""
+          {
+            "operationId":"{{{operation.OperationId}}}","endpointBinding":"service","method":"{{{operation.Method.Method}}}","pathTemplate":"{{{operation.PathTemplate}}}",
+            "request":{"contentType":"{{{contentType}}}","maximumBytes":2097152},"response":{"maximumBytes":4096},
             "authentication":{"kind":"mtls","certificateBinding":"mtls-certificate"},"executionStrategy":"healthcare-fse2-organization",
             "extensionConfiguration":{
               "profile":"fse2-organization-v1","environmentClass":"synthetic",
@@ -383,9 +658,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
               "organizationDescription":"ASL Roma 1","organizationDomainId":"asl-roma-1",
               "localityName":"ASL Roma 1","localityAssigningAuthorityOid":"2.16.840.1.113883.2.9.4.1.2","localityCode":"ASLROMA1",
               "subjectRole":"DAP","applicationId":"broker-gateway","applicationVendor":"Secure Integration","applicationVersion":"{{{applicationVersion}}}",
-              "operationId":"create","method":"POST","relativePath":"documents",
-              "requestContentType":"multipart/form-data; boundary={{{Boundary}}}","multipartBoundary":"{{{Boundary}}}",
-              "authorizationSigningSlot":"authorization","integritySigningSlot":"integrity","maximumDocumentBytes":1048576
+              "maximumDocumentBytes":1048576
             },
             "authorizedCapabilities":{
               "signingSlots":[
@@ -400,12 +673,244 @@ public sealed class Fse2OrganizationHostedIntegrationTests
                   "projection":{"kind":"signedTokenHeader","headerName":"FSE-JWT-Signature"}
                 }
               ],
-              "restrictedTransport":{"profileId":"fse2-transport","revision":1,"clientCertificateSpkiSha256":"{{{clientSpki}}}","nearExpirySeconds":30}
+              "restrictedTransport":{"profileId":"fse2-transport","revision":1,"clientCertificateSpkiSha256":"{{{clientSpki}}}","nearExpirySeconds":30,"bodyMode":"{{{bodyMode}}}"}
             },
             "timeoutMs":5000,"redirectPolicy":"deny","allowedClientHeaders":[],"idempotent":false,"maximumRetries":0
-          }]
-        }
+          }
         """;
+    }
+}
+
+internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
+{
+    private readonly WebApplication application;
+    private readonly string expectedClientFingerprint;
+    private readonly string expectedSigningFingerprint;
+    private readonly byte[] expectedRoot;
+    private readonly List<Observation> observations = [];
+    private readonly object observationGate = new();
+    private int requests;
+
+    private SyntheticFse2OperationMatrixServer(
+        WebApplication application,
+        Uri endpoint,
+        string expectedClientFingerprint,
+        string expectedSigningFingerprint,
+        byte[] expectedRoot)
+    {
+        this.application = application;
+        Endpoint = endpoint;
+        this.expectedClientFingerprint = expectedClientFingerprint;
+        this.expectedSigningFingerprint = expectedSigningFingerprint;
+        this.expectedRoot = expectedRoot;
+    }
+
+    internal Uri Endpoint { get; }
+    internal int Requests => Volatile.Read(ref requests);
+    internal IReadOnlyList<Observation> Observations
+    {
+        get { lock (observationGate) return observations.ToArray(); }
+    }
+
+    internal static async Task<SyntheticFse2OperationMatrixServer> StartAsync(
+        X509Certificate2 serverCertificate,
+        X509Certificate2 expectedClientCertificate,
+        X509Certificate2 expectedSigningCertificate,
+        X509Certificate2 trustedRootCertificate,
+        CancellationToken cancellationToken)
+    {
+        WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
+        builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0, listen => listen.UseHttps(https =>
+        {
+            https.ServerCertificate = serverCertificate;
+            https.ClientCertificateMode = ClientCertificateMode.RequireCertificate;
+            https.ClientCertificateValidation = (certificate, _, _) =>
+                SyntheticSignedMutualTlsServer.ValidateClientCertificate(
+                    certificate, expectedClientCertificate, trustedRootCertificate);
+        })));
+        WebApplication app = builder.Build();
+        SyntheticFse2OperationMatrixServer? server = null;
+        app.Run(context => server!.HandleAsync(context));
+        await app.StartAsync(cancellationToken);
+        string address = app.Services.GetRequiredService<IServer>().Features
+            .Get<IServerAddressesFeature>()!.Addresses.Single();
+        Uri listening = new(address, UriKind.Absolute);
+        server = new(
+            app,
+            new Uri($"https://localhost:{listening.Port}/", UriKind.Absolute),
+            Convert.ToHexString(SHA256.HashData(expectedClientCertificate.RawData)),
+            Convert.ToHexString(SHA256.HashData(expectedSigningCertificate.RawData)),
+            trustedRootCertificate.RawData.ToArray());
+        return server;
+    }
+
+    private async Task HandleAsync(HttpContext context)
+    {
+        Interlocked.Increment(ref requests);
+        string rawTarget = context.Request.Path + context.Request.QueryString;
+        Fse2OperationDescriptor operation = Fse2OperationCatalog.All.Single(value =>
+            string.Equals(value.Method.Method, context.Request.Method, StringComparison.Ordinal) &&
+            PathMatches(value, context.Request.Path));
+        X509Certificate2? clientCertificate = await context.Connection.GetClientCertificateAsync(context.RequestAborted);
+        bool clientObserved = clientCertificate is not null && string.Equals(
+            Convert.ToHexString(SHA256.HashData(clientCertificate.RawData)),
+            expectedClientFingerprint,
+            StringComparison.Ordinal);
+        using MemoryStream bodyBuffer = new();
+        await context.Request.Body.CopyToAsync(bodyBuffer, context.RequestAborted);
+        byte[] body = bodyBuffer.ToArray();
+        string authorization = context.Request.Headers.Authorization.ToString();
+        string integrity = context.Request.Headers[Fse2PublishedOrganizationProfile.IntegrityHeaderName].ToString();
+        bool dualDistinct = authorization.StartsWith("Bearer ", StringComparison.Ordinal) &&
+            !string.IsNullOrWhiteSpace(integrity) &&
+            !string.Equals(authorization[7..], integrity, StringComparison.Ordinal);
+        MatrixToken? authorizationToken = dualDistinct ? ValidateToken(
+            authorization[7..], Fse2OrganizationHostedIntegrationTests.AuthorizationIssuer) : null;
+        MatrixToken? integrityToken = dualDistinct ? ValidateToken(
+            integrity, Fse2OrganizationHostedIntegrationTests.IntegrityIssuer) : null;
+        bool exactJwtPolicy = authorizationToken is not null && integrityToken is not null &&
+            SyntheticFse2OrganizationServer.TemporalPolicyIsExact(authorizationToken.Payload) &&
+            SyntheticFse2OrganizationServer.TemporalPolicyIsExact(integrityToken.Payload) &&
+            !string.Equals(
+                authorizationToken.Payload.GetProperty("jti").GetString(),
+                integrityToken.Payload.GetProperty("jti").GetString(),
+                StringComparison.Ordinal);
+        bool exactClaims = exactJwtPolicy && AuthorizationClaimsAreExact(authorizationToken!.Payload) &&
+            IntegrityClaimsAreExact(integrityToken!.Payload, operation);
+        bool exactDigest = exactClaims && (!operation.RequiresAttachmentHash || string.Equals(
+            integrityToken!.Payload.GetProperty("attachment_hash").GetString(),
+            Convert.ToHexStringLower(SHA256.HashData(body)),
+            StringComparison.Ordinal));
+        bool exactDocumentAndJson = body.AsSpan().IndexOf(Fse2OrganizationHostedIntegrationTests.DocumentBytes()) >= 0 &&
+            body.AsSpan().IndexOf("{\"metadata\":\"published-exact\"}"u8) >= 0;
+        bool hasHttpContent = context.Request.ContentLength.HasValue ||
+            context.Request.Headers.ContainsKey("Content-Type") ||
+            context.Request.Headers.ContainsKey("Transfer-Encoding");
+        lock (observationGate)
+        {
+            observations.Add(new(
+                operation.Operation,
+                context.Request.Method,
+                rawTarget,
+                context.Request.ContentType,
+                body,
+                hasHttpContent,
+                clientObserved,
+                dualDistinct,
+                exactJwtPolicy,
+                exactClaims,
+                exactDigest,
+                exactDocumentAndJson));
+        }
+
+        context.Response.StatusCode = operation.SuccessStatusCodes.Min();
+        context.Response.ContentType = "application/json";
+        string response = operation.Operation == Fse2Operation.Create
+            ? "{\"workflowInstanceId\":\"workflow-fse2-1\",\"traceID\":\"trace-fse2-1\",\"spanID\":\"span-fse2-1\"}"
+            : "{}";
+        await context.Response.WriteAsync(response, context.RequestAborted);
+    }
+
+    private MatrixToken? ValidateToken(string compactToken, string expectedIssuer)
+    {
+        string[] parts = compactToken.Split('.');
+        if (parts.Length != 3) return null;
+        try
+        {
+            using JsonDocument header = JsonDocument.Parse(Decode(parts[0]));
+            using JsonDocument payload = JsonDocument.Parse(Decode(parts[1]));
+            if (!string.Equals(header.RootElement.GetProperty("alg").GetString(), "RS256", StringComparison.Ordinal) ||
+                !header.RootElement.TryGetProperty("x5c", out JsonElement chain) ||
+                chain.ValueKind != JsonValueKind.Array || chain.GetArrayLength() != 2 ||
+                !CryptographicOperations.FixedTimeEquals(Convert.FromBase64String(chain[1].GetString()!), expectedRoot))
+                return null;
+            using X509Certificate2 leaf = X509CertificateLoader.LoadCertificate(
+                Convert.FromBase64String(chain[0].GetString()!));
+            using RSA rsa = leaf.GetRSAPublicKey() ?? throw new CryptographicException();
+            string fingerprint = Convert.ToHexString(SHA256.HashData(leaf.RawData));
+            if (!string.Equals(fingerprint, expectedSigningFingerprint, StringComparison.Ordinal) ||
+                string.Equals(fingerprint, expectedClientFingerprint, StringComparison.Ordinal) ||
+                !rsa.VerifyData(Encoding.ASCII.GetBytes(parts[0] + "." + parts[1]), Decode(parts[2]),
+                    HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1) ||
+                !string.Equals(payload.RootElement.GetProperty("iss").GetString(), expectedIssuer, StringComparison.Ordinal) ||
+                !string.Equals(payload.RootElement.GetProperty("aud").GetString(), Fse2OrganizationHostedIntegrationTests.Audience, StringComparison.Ordinal) ||
+                !string.Equals(payload.RootElement.GetProperty("sub").GetString(), Fse2OrganizationHostedIntegrationTests.Subject, StringComparison.Ordinal))
+                return null;
+            return new(payload.RootElement.Clone());
+        }
+        catch (Exception exception) when (exception is JsonException or FormatException or CryptographicException or KeyNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    private static bool AuthorizationClaimsAreExact(JsonElement payload) =>
+        payload.EnumerateObject().Select(value => value.Name).ToHashSet(StringComparer.Ordinal)
+            .SetEquals(["iss", "aud", "sub", "iat", "exp", "jti"]);
+
+    private static bool IntegrityClaimsAreExact(JsonElement payload, Fse2OperationDescriptor operation)
+    {
+        HashSet<string> expected =
+        [
+            "iss", "aud", "sub", "iat", "exp", "jti", "subject_role", "purpose_of_use",
+            "subject_organization", "subject_organization_id", "locality", "person_id", "patient_consent",
+            "resource_hl7_type", "action_id", "subject_application_id", "subject_application_vendor",
+            "subject_application_version"
+        ];
+        if (operation.RequiresAttachmentHash) expected.Add("attachment_hash");
+        Fse2PurposeOfUse purpose = operation.PurposeOfUse ?? Fse2PurposeOfUse.Treatment;
+        Fse2Action action = operation.Action ?? Fse2Action.Create;
+        return payload.EnumerateObject().Select(value => value.Name).ToHashSet(StringComparer.Ordinal).SetEquals(expected) &&
+            string.Equals(payload.GetProperty("subject_role").GetString(), "DAP", StringComparison.Ordinal) &&
+            string.Equals(payload.GetProperty("purpose_of_use").GetString(), Fse2OperationCatalog.ClaimValue(purpose), StringComparison.Ordinal) &&
+            string.Equals(payload.GetProperty("action_id").GetString(), Fse2OperationCatalog.ClaimValue(action), StringComparison.Ordinal) &&
+            string.Equals(payload.GetProperty("subject_organization").GetString(), "ASL Roma 1", StringComparison.Ordinal) &&
+            string.Equals(payload.GetProperty("subject_organization_id").GetString(), "asl-roma-1", StringComparison.Ordinal) &&
+            string.Equals(payload.GetProperty("person_id").GetString(), Fse2OrganizationHostedIntegrationTests.PersonId, StringComparison.Ordinal) &&
+            payload.GetProperty("patient_consent").GetBoolean() &&
+            string.Equals(payload.GetProperty("subject_application_id").GetString(), "broker-gateway", StringComparison.Ordinal) &&
+            string.Equals(payload.GetProperty("subject_application_vendor").GetString(), "Secure Integration", StringComparison.Ordinal) &&
+            string.Equals(payload.GetProperty("subject_application_version").GetString(), "1.0.0", StringComparison.Ordinal);
+    }
+
+    private static byte[] Decode(string value)
+    {
+        string padded = value.Replace('-', '+').Replace('_', '/');
+        padded += new string('=', (4 - padded.Length % 4) % 4);
+        return Convert.FromBase64String(padded);
+    }
+
+    private static bool PathMatches(Fse2OperationDescriptor operation, PathString path)
+    {
+        string[] expected = operation.PathTemplate.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        string[] candidate = (path.Value ?? string.Empty).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return expected.Length == candidate.Length && expected.Zip(candidate).All(pair =>
+            pair.First.Length >= 3 && pair.First[0] == '{' && pair.First[^1] == '}'
+                ? pair.Second.Length > 0
+                : string.Equals(pair.First, pair.Second, StringComparison.Ordinal));
+    }
+
+    internal sealed record Observation(
+        Fse2Operation Operation,
+        string Method,
+        string RawTarget,
+        string? ContentType,
+        byte[] Body,
+        bool HasHttpContent,
+        bool ClientCertificateObserved,
+        bool DualDistinctTokensObserved,
+        bool ExactJwtPolicyObserved,
+        bool ExactClaimsObserved,
+        bool ExactDigestObserved,
+        bool ExactDocumentAndJsonObserved);
+
+    private sealed record MatrixToken(JsonElement Payload);
+
+    public async ValueTask DisposeAsync()
+    {
+        await application.StopAsync();
+        await application.DisposeAsync();
+    }
 }
 
 internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable

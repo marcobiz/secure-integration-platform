@@ -1,94 +1,105 @@
-# FSE2 National Connector — initial organization profile
+# FSE2 National Connector — Organization profile
 
-Status: **REMEDIATED pending targeted independent re-review**. This is not an official
-accreditation statement and is not `ACCREDITED_PRODUCTION_READY`.
+Status: **remediated; exact-head qualification pending**. This is neither an accreditation
+statement nor an `ACCREDITED_PRODUCTION_READY` claim.
 
-## Supported authority model
+## Authority model
 
-The only implemented actor profile is `ORGANIZATION`. The production resolver reads the real
-`IConnectorConfigurationStore` with `PublishedConnectorAccessContext`, validates the exact
-Published lifecycle/version/operation/canonical checksum, and requires a current exact-digest
-four-eyes record from `IAdminSecurityStore`. The approved definition and active bindings bind
-Tenant, Application, Installation, Environment, ConnectorVersion, Connector and operation to
-an organization P.IVA and assigning-authority OID. The pack
-formats the canonical CX and supplies it to the existing Core signer as
-`JwtSubjectPolicy.Fixed`/`FixedSubject`.
+The only implemented actor profile is `ORGANIZATION`; Human Actor is deferred. Core authenticates
+the caller, resolves the grant and one immutable Published operation, verifies freshness, and then
+hands the external `healthcare-fse2` module an `AuthorizedConnectorExecution`. The pack depends only
+on `Gateway.Application`. It has no store/provider/certificate access, signing primitive,
+`HttpClient`, generic HTTP surface, direct restricted transport, IVT, or Core-internal invocation
+type.
 
-Caller business data cannot select or override subject, organization P.IVA, endpoint,
-algorithm, issuer, audience, role, purpose, action, signing identity, mTLS identity, x5c or
-token lifetime. `person_id` identifies the assistito/genitore/tutore and is never promoted
-to authenticated actor. `use_subject_as_author` is absent and unsupported.
+The strict Published extension contains only common Organization configuration: environment,
+P.IVA and assigning authority, organization/locality, `DAP`, application identity, and the maximum
+document size. It cannot select an operation, method, path, parameter name, content type, multipart
+boundary, signing slot, key, certificate, endpoint, issuer, audience, subject, temporal profile, or
+claim policy. Unknown fields fail closed. The exact operation comes from the already-authorized
+Core context and is looked up in the frozen FSE2 catalog.
+
+P.IVA plus assigning-authority OID produce the exact fixed-subject CX. `person_id` remains a
+separate validated business CX and is never promoted to authenticated actor.
+`use_subject_as_author` is absent.
+
+## Frozen operation and wire matrix
+
+| Operation ID | Availability | Method and Published `pathTemplate` | Body mode |
+|---|---|---|---|
+| `validate-cda` | Production | `POST /documents/validation` | REQUIRED multipart |
+| `validate-fhir` | Official test only | `POST /documents/fhir-validation` | REQUIRED multipart |
+| `create` | Production | `POST /documents` | REQUIRED multipart |
+| `replace` | Production | `PUT /documents/{document-id}` | REQUIRED multipart |
+| `delete` | Production | `DELETE /documents/{document-id}` | NONE |
+| `update-metadata` | Production | `PUT /documents/{document-id}/metadata-iti-57` | REQUIRED JSON |
+| `update-metadata-chain-concealment` | Official test only | `PUT /documents/{document-id}/metadata-oscuramento-catena` | REQUIRED JSON |
+| `validate-and-create` | Production | `POST /documents/validate-and-create` | REQUIRED multipart |
+| `validate-and-replace` | Production | `PUT /documents/validate-and-replace/{document-id}` | REQUIRED multipart |
+| `get-status-by-workflow` | Production | `GET /status/{workflow-instance-id}` | NONE |
+| `get-status-by-trace` | Production | `GET /status/search/{trace-id}` | NONE |
+
+Parameter names are catalog-owned. The caller supplies only the one opaque identifier value
+required by the selected operation. Core accepts only whole-segment Published placeholders,
+canonical bounded names, and NFC values of at most 512 UTF-8 bytes; slash, backslash, percent,
+query, fragment, dot-segment, missing, unknown, extra, and duplicate forms fail closed. There is no
+connector-side URI concatenation. Core retains scheme, host, port, origin, method, template, DNS,
+restricted-egress, redirect, timeout, and response-bound authority.
+
+`bodyMode: none` creates no `HttpContent`, body bytes, or `Content-Type` on DELETE and status GET.
+Payload operations use REQUIRED; omitting `bodyMode` retains Core's historical REQUIRED default.
+For document operations the pack creates one deterministic multipart byte sequence. The same bytes
+feed `attachment_hash` and restricted transport without reserialization.
+
+## Exact outbound policy
+
+`Fse2OrganizationPublishedOperationExpectationProvider` supplies mandatory semantic expectations
+for `healthcare-fse2-organization`. Core compares them with the effective Published operation before
+strategy entry, capability scope, signing, DNS, HTTPS, or network:
+
+- authentication is mTLS and restricted transport is required;
+- the exact slots are `authorization` and `integrity`;
+- both require RS256, a leaf-first `x5c` chain, 300-second `iat`/`exp`, no `nbf`, and non-empty `jti`;
+- authorization projects only as `Authorization: Bearer` and permits no business claims;
+- integrity projects only as `FSE-JWT-Signature` and has the exact FSE2 claim allowlist;
+- audience is derived from the strict environment class;
+- subject is the canonical Organization CX;
+- issuers are `auth:<verified signing-certificate CN>` and
+  `integrity:<verified signing-certificate CN>`;
+- the two slots use the same verified signing identity, and each is distinct from mTLS.
+
+The pack requests two fresh opaque tokens but never reads compact JWTs or creates transport
+headers. Core owns signing/key authority, certificate validation and header projection.
 
 Claim provenance is frozen as follows:
 
 | Authority | Claims |
 |---|---|
-| `SERVER_OWNED` | `iss`, `aud`, `sub`, `iat`, `exp`, `jti`, organization/role/locality/application fields |
-| `TRUSTED_RUNTIME` | none in the initial organization profile |
-| `BUSINESS_ALLOWLISTED` | `person_id`, `patient_consent`, `resource_hl7_type` |
-| `DERIVED` | `purpose_of_use`, `action_id`, exact-byte `attachment_hash` |
+| Server-owned | `iss`, `aud`, `sub`, `iat`, `exp`, `jti`, organization/role/locality/application fields |
+| Business allowlisted | `person_id`, `patient_consent`, `resource_hl7_type` |
+| Derived | `purpose_of_use`, `action_id`, exact-byte `attachment_hash` |
 
-The v1 generic Connector schema has no pack extension object. Without changing Core, the FSE2
-production adapter therefore requires one checksum-bound, non-secret profile envelope in the
-canonical definition `description`, prefixed `fse2-organization-profile-v1:` and encoded as
-base64url JSON. Unknown envelope fields fail closed. The exact operation uses the existing
-`apiKeyAndMtls` dependency shape only as a two-resource Published binding carrier: its
-`secretBinding` is a provider-owned signing-key handle consumed solely through
-`IKeyOperationProvider`, while `certificateBinding` is the distinct mTLS client certificate.
-The FSE2 runtime never projects the former as an API-key header or retrieves a secret value.
-The definition checksum and binding-bundle digest are both required by the four-eyes record.
+## Workflow correlation
 
-## Frozen operation matrix
+`SharedOrganizationProfileChecksumSha256` is a canonical deterministic hash of common
+Organization authority only. It excludes operation ID, method, path, path/resource parameters,
+content type, multipart boundary, payload, workflow/trace IDs, and all per-request data. It scopes
+correlation together with Tenant, Application, Installation, Environment, Connector version and
+Connector ID, allowing `create` to correlate with both status operations.
 
-| Operation | Availability | Purpose | Action | Retry |
-|---|---|---|---|---|
-| CDA validation | Production | `TREATMENT` | `CREATE` | No automatic retry |
-| FHIR validation | Official test only | `TREATMENT` | `CREATE` | No automatic retry |
-| Create | Production | `TREATMENT` | `CREATE` | No automatic retry |
-| Replace | Production | `UPDATE` | `UPDATE` | No automatic retry |
-| Delete | Production | `UPDATE` | `DELETE` | No automatic retry |
-| Metadata update | Production | `UPDATE` | `UPDATE` | No automatic retry |
-| Chain concealment | Official test only | `ACCESS UPDATE` | `UPDATE` | No automatic retry |
-| Validate and create | Production | `TREATMENT` | `CREATE` | No automatic retry |
-| Validate and replace | Production | `UPDATE` | `UPDATE` | No automatic retry |
-| Workflow status | Production | stored original context | stored original context | Safe retry |
-| Trace status | Production | stored original context | stored original context | Safe retry |
+`OperationProfileChecksumSha256` separately binds the originating catalog operation and is retained
+in the technical workflow record for validation/audit; it is not part of the status lookup key.
+Records contain only technical operation/action/purpose and workflow/trace values—never patient or
+document content. The current store is bounded and process-local; durable cross-process workflow
+persistence is not claimed.
 
-All supported organization operations use the official `DAP` organization role. The pack
-checks the exact role/purpose/action tuple for the selected operation and rechecks the
-stored tuple used by status calls. Direct FHIR create/replace and inbound callback/consumer
-surfaces are not available.
+## Environment and deferred scope
 
-## Outbound security
+Production permits only the nine Production operations and uses audience
+`https://modipa.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1`. OfficialTest uses
+`https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1`. The synthetic audience and
+HTTPS origin are test-only.
 
-Every call prepares a fresh `Authorization: Bearer` JWT and a fresh
-`FSE-JWT-Signature` JWT. Both are RS256, contain the exact approved leaf DER in standard
-Base64 `x5c`, and use `iat` plus `exp` without `nbf`. Issuers are `auth:<verified CN>` and
-`integrity:<verified CN>`, where CN is read from the exact DER already matched to the
-approved fingerprint/SPKI. CN means exactly one DER Subject attribute with OID `2.5.4.3`;
-absence, duplicates, empty/non-normalized values and unsupported encodings fail closed. Signing
-and mTLS use different logical bindings and purposes, each carrying its actual Published catalog
-revision/checksum, provider reference, binding revision/checksum and approved public identity.
-
-Both JWTs and mTLS consume one internal `Fse2DispatchLease`. After JWT signing, public `x5c`
-resolution, mTLS material resolution, DNS and request preparation, the final Healthcare transport
-re-reads and compares the complete Published/profile/resource/endpoint authority. Only after that
-check are the two JWT headers projected synchronously and the restricted network transport called.
-
-Production accepts only
-`https://modipa.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1`; OfficialTest accepts only
-`https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1`. Variable synthetic HTTPS
-origins require an internal test-only authority and cannot be declared Production. DNS/IP policy,
-redirect/proxy restrictions, timeout, cancellation and bounded responses remain enforced by Core.
-
-Workflow persistence uses a full immutable Tenant/Application/Installation/Environment/
-ConnectorVersion/profile checksum+revision key plus the originating operation and technical
-workflow/trace identifiers. It stores no patient claims or document body. Status callers provide
-their current allowlisted clinical claims; those claims never become actor authority.
-
-## Deferred scope
-
-`HUMAN_ACTOR_PROFILE = NOT_IMPLEMENTED` because it requires a separately authenticated and
-authorized trusted actor source. Possible future integration sources are not selected by
-this PR. No new Core primitive, OIDC/Keycloak integration, client actor attestation or
-global user principal is introduced.
+`HUMAN_ACTOR_PROFILE = DEFERRED`. Official provisioning, production certificate custody,
+conformance, accreditation, monitoring, and live evidence remain outside this PR. Tests use only
+ephemeral synthetic certificates.
