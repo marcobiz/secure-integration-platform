@@ -28,7 +28,7 @@ public sealed class LocalPkcs12ProviderPackFactory : IProviderPackFactory
                 throw ConfigurationInvalid();
 
             LocalPkcs12Provider provider = LocalPkcs12Provider.Create(context.Endpoint, manifestPath, materialRootPath);
-            return new(provider, provider, provider, provider, SigningKeys: provider,
+            return new(DenyOnlySecretValueProvider.Instance, provider, provider, provider, SigningKeys: provider,
                 CertificateMetadata: provider, CertificatePublicMaterial: provider);
         }
         catch (ProviderAccessException) { throw; }
@@ -37,18 +37,25 @@ public sealed class LocalPkcs12ProviderPackFactory : IProviderPackFactory
 
     private static ProviderAccessException ConfigurationInvalid() =>
         new("BGW-PROVIDER-CONFIGURATION-INVALID");
+
+    private sealed class DenyOnlySecretValueProvider : ISecretValueProvider
+    {
+        internal static DenyOnlySecretValueProvider Instance { get; } = new();
+
+        public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken) =>
+            Task.FromException<string>(new ProviderAccessException("BGW-PROVIDER-CAPABILITY-DENIED"));
+    }
 }
 
 /// <summary>
-/// Self-hosted provider for explicitly allowlisted read-only secret files and PKCS#12 identities.
+/// Self-hosted provider for explicitly allowlisted PKCS#12 identities.
 /// It never accepts a caller-selected path and never exports private-key material.
 /// </summary>
-public sealed class LocalPkcs12Provider : ISecretValueProvider, IClientCertificateProvider,
+public sealed class LocalPkcs12Provider : IClientCertificateProvider,
     ICertificateMetadataProvider, ICertificatePublicMaterialProvider, IKeyOperationProvider,
     IProviderHealthCheck, IProviderCapabilitySource
 {
     private const int MaximumManifestBytes = 256 * 1024;
-    private const int MaximumSecretBytes = 64 * 1024;
     private const int MaximumPkcs12Bytes = 1024 * 1024;
     private const int MaximumPublicCertificateBytes = 128 * 1024;
     private const int MaximumPasswordBytes = 2048;
@@ -61,19 +68,25 @@ public sealed class LocalPkcs12Provider : ISecretValueProvider, IClientCertifica
     };
 
     private readonly string authority;
+    private readonly string manifestPath;
     private readonly string materialRootPath;
     private readonly FrozenDictionary<string, LocalResource> resources;
 
-    private LocalPkcs12Provider(string authority, string materialRootPath, FrozenDictionary<string, LocalResource> resources)
+    private LocalPkcs12Provider(
+        string authority,
+        string manifestPath,
+        string materialRootPath,
+        FrozenDictionary<string, LocalResource> resources)
     {
         this.authority = authority;
+        this.manifestPath = manifestPath;
         this.materialRootPath = materialRootPath;
         this.resources = resources;
     }
 
     /// <inheritdoc />
     public ProviderCapabilities Capabilities { get; } = new(
-        SecretValues: true,
+        SecretValues: false,
         ClientCertificates: true,
         SigningKeys: true,
         Mac: false,
@@ -89,7 +102,7 @@ public sealed class LocalPkcs12Provider : ISecretValueProvider, IClientCertifica
             LocalProviderManifest manifest = JsonSerializer.Deserialize<LocalProviderManifest>(encoded, ManifestJson)
                 ?? throw ConfigurationInvalid();
             FrozenDictionary<string, LocalResource> resources = ValidateManifest(manifest);
-            return new(endpoint.IdnHost.ToLowerInvariant(), materialRootFullPath, resources);
+            return new(endpoint.IdnHost.ToLowerInvariant(), manifestFullPath, materialRootFullPath, resources);
         }
         catch (ProviderAccessException) { throw; }
         catch (Exception) { throw ConfigurationInvalid(); }
@@ -97,20 +110,10 @@ public sealed class LocalPkcs12Provider : ISecretValueProvider, IClientCertifica
     }
 
     /// <inheritdoc />
-    public async Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken)
-    {
-        LocalResource resource = Resolve(logicalReference, LocalResourceKind.Secret);
-        byte[] encoded = await ReadFileAsync(MaterialPath(resource.FileName!), MaximumSecretBytes, cancellationToken).ConfigureAwait(false);
-        try { return StrictUtf8.GetString(encoded); }
-        catch (DecoderFallbackException) { throw MaterialInvalid(); }
-        finally { CryptographicOperations.ZeroMemory(encoded); }
-    }
-
-    /// <inheritdoc />
     public async Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken)
     {
         LocalResource resource = Resolve(logicalReference, LocalResourceKind.ClientCertificate);
-        return await LoadPrivateCertificateAsync(resource, cancellationToken).ConfigureAwait(false);
+        return await LoadValidatedPrivateMaterialAsync(resource, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -147,7 +150,7 @@ public sealed class LocalPkcs12Provider : ISecretValueProvider, IClientCertifica
         if (!string.Equals(algorithm, "RS256", StringComparison.Ordinal) || digest.Length != 32)
             throw new ProviderAccessException("BGW-PROVIDER-SIGNING-ALGORITHM-DENIED");
         LocalResource resource = Resolve(logicalReference, LocalResourceKind.SigningCertificate);
-        using X509Certificate2 certificate = await LoadPrivateCertificateAsync(resource, cancellationToken).ConfigureAwait(false);
+        using X509Certificate2 certificate = await LoadValidatedPrivateMaterialAsync(resource, cancellationToken).ConfigureAwait(false);
         try
         {
             using RSA rsa = certificate.GetRSAPrivateKey() ?? throw MaterialInvalid();
@@ -181,16 +184,8 @@ public sealed class LocalPkcs12Provider : ISecretValueProvider, IClientCertifica
             foreach (LocalResource resource in resources.Values)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (resource.Kind == LocalResourceKind.Secret)
-                {
-                    byte[] secret = await ReadFileAsync(MaterialPath(resource.FileName!), MaximumSecretBytes, cancellationToken).ConfigureAwait(false);
-                    try { _ = StrictUtf8.GetCharCount(secret); }
-                    finally { CryptographicOperations.ZeroMemory(secret); }
-                    continue;
-                }
-
                 using X509Certificate2 leaf = await LoadPublicCertificateAsync(resource, cancellationToken).ConfigureAwait(false);
-                using X509Certificate2 privateCertificate = await LoadPrivateCertificateAsync(resource, cancellationToken).ConfigureAwait(false);
+                using X509Certificate2 privateCertificate = await LoadValidatedPrivateMaterialAsync(resource, cancellationToken).ConfigureAwait(false);
                 List<X509Certificate2> issuers = await LoadChainAsync(resource, cancellationToken).ConfigureAwait(false);
                 try { ValidateChain(leaf, issuers); }
                 finally { foreach (X509Certificate2 issuer in issuers) issuer.Dispose(); }
@@ -247,13 +242,67 @@ public sealed class LocalPkcs12Provider : ISecretValueProvider, IClientCertifica
         finally { CryptographicOperations.ZeroMemory(encoded); }
     }
 
-    private async Task<X509Certificate2> LoadPrivateCertificateAsync(LocalResource resource, CancellationToken cancellationToken)
+    private async Task<X509Certificate2> LoadValidatedPrivateMaterialAsync(
+        LocalResource expectedResource,
+        CancellationToken cancellationToken)
+    {
+        LocalResource resource = await RevalidateManifestResourceAsync(expectedResource, cancellationToken).ConfigureAwait(false);
+        X509Certificate2? privateCertificate = null;
+        X509Certificate2? publicLeaf = null;
+        List<X509Certificate2> issuers = [];
+        try
+        {
+            privateCertificate = await LoadPrivateCertificateOnlyAsync(resource, cancellationToken).ConfigureAwait(false);
+            publicLeaf = await LoadPublicCertificateAsync(resource, cancellationToken).ConfigureAwait(false);
+            issuers = await LoadChainAsync(resource, cancellationToken).ConfigureAwait(false);
+            if (!CryptographicOperations.FixedTimeEquals(privateCertificate.RawData, publicLeaf.RawData))
+                throw MaterialInvalid();
+            ValidateChain(privateCertificate, issuers);
+            X509Certificate2 result = privateCertificate;
+            privateCertificate = null;
+            return result;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (ProviderAccessException) { throw; }
+        catch (Exception) { throw MaterialInvalid(); }
+        finally
+        {
+            privateCertificate?.Dispose();
+            publicLeaf?.Dispose();
+            foreach (X509Certificate2 issuer in issuers) issuer.Dispose();
+        }
+    }
+
+    private async Task<LocalResource> RevalidateManifestResourceAsync(
+        LocalResource expectedResource,
+        CancellationToken cancellationToken)
+    {
+        byte[] encoded = await ReadFileAsync(manifestPath, MaximumManifestBytes, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            LocalProviderManifest manifest = JsonSerializer.Deserialize<LocalProviderManifest>(encoded, ManifestJson)
+                ?? throw MaterialInvalid();
+            FrozenDictionary<string, LocalResource> currentResources = ValidateManifest(manifest);
+            if (!currentResources.TryGetValue(expectedResource.Id, out LocalResource? currentResource) ||
+                !ResourceEquals(expectedResource, currentResource))
+                throw MaterialInvalid();
+            return currentResource;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception) { throw MaterialInvalid(); }
+        finally { CryptographicOperations.ZeroMemory(encoded); }
+    }
+
+    private async Task<X509Certificate2> LoadPrivateCertificateOnlyAsync(LocalResource resource, CancellationToken cancellationToken)
     {
         byte[] encodedPkcs12 = await ReadFileAsync(MaterialPath(resource.Pkcs12FileName!), MaximumPkcs12Bytes, cancellationToken).ConfigureAwait(false);
         byte[] encodedPassword = await ReadFileAsync(MaterialPath(resource.PasswordFileName!), MaximumPasswordBytes, cancellationToken).ConfigureAwait(false);
         char[] password = DecodePassword(encodedPassword);
         try
         {
+            if (!FixedHexEquals(Convert.ToHexString(SHA256.HashData(encodedPkcs12)), resource.Pkcs12Sha256!) ||
+                !FixedHexEquals(Convert.ToHexString(SHA256.HashData(encodedPassword)), resource.PasswordFileSha256!))
+                throw MaterialInvalid();
             X509Certificate2 certificate = X509CertificateLoader.LoadPkcs12(
                 encodedPkcs12,
                 password,
@@ -322,7 +371,9 @@ public sealed class LocalPkcs12Provider : ISecretValueProvider, IClientCertifica
         for (int index = 0; index < chain.ChainElements.Count; index++)
         {
             X509Certificate2 expected = index == 0 ? leaf : issuers[index - 1];
-            if (!FixedHexEquals(Fingerprint(chain.ChainElements[index].Certificate), Fingerprint(expected)))
+            if (!CryptographicOperations.FixedTimeEquals(
+                    chain.ChainElements[index].Certificate.RawData,
+                    expected.RawData))
                 throw MaterialInvalid();
         }
     }
@@ -397,17 +448,10 @@ public sealed class LocalPkcs12Provider : ISecretValueProvider, IClientCertifica
                 !resources.TryAdd(value.Id!, ValidateResource(value, kind)))
                 throw ConfigurationInvalid();
             LocalResource resource = resources[value.Id!];
-            if (kind == LocalResourceKind.Secret)
-            {
-                if (!privateFiles.Add(resource.FileName!)) throw ConfigurationInvalid();
-            }
-            else
-            {
-                if (!privateFiles.Add(resource.Pkcs12FileName!) || !privateFiles.Add(resource.PasswordFileName!) ||
-                    !leafFiles.Add(resource.LeafFileName!))
-                    throw ConfigurationInvalid();
-                foreach (LocalChainCertificate chain in resource.Chain) chainFiles.Add(chain.FileName);
-            }
+            if (!privateFiles.Add(resource.Pkcs12FileName!) || !privateFiles.Add(resource.PasswordFileName!) ||
+                !leafFiles.Add(resource.LeafFileName!))
+                throw ConfigurationInvalid();
+            foreach (LocalChainCertificate chain in resource.Chain) chainFiles.Add(chain.FileName);
         }
         if (privateFiles.Overlaps(leafFiles) || privateFiles.Overlaps(chainFiles) || leafFiles.Overlaps(chainFiles))
             throw ConfigurationInvalid();
@@ -416,16 +460,8 @@ public sealed class LocalPkcs12Provider : ISecretValueProvider, IClientCertifica
 
     private static LocalResource ValidateResource(LocalResourceManifest value, LocalResourceKind kind)
     {
-        if (kind == LocalResourceKind.Secret)
-        {
-            if (!IsFileName(value.FileName) || value.Pkcs12FileName is not null || value.PasswordFileName is not null ||
-                value.LeafFileName is not null || value.CertificateSha256 is not null || value.SubjectPublicKeyInfoSha256 is not null ||
-                value.Version is not null || value.Chain is { Length: > 0 })
-                throw ConfigurationInvalid();
-            return new(value.Id!, kind, value.FileName, null, null, null, null, null, null, []);
-        }
-
-        if (value.FileName is not null || !IsFileName(value.Pkcs12FileName) || !IsFileName(value.PasswordFileName) ||
+        if (value.FileName is not null || !IsFileName(value.Pkcs12FileName) || !IsSha256(value.Pkcs12Sha256) ||
+            !IsFileName(value.PasswordFileName) || !IsSha256(value.PasswordFileSha256) ||
             !IsFileName(value.LeafFileName) || !IsSha256(value.CertificateSha256) || !IsSha256(value.SubjectPublicKeyInfoSha256) ||
             !IsVersion(value.Version) || value.Chain is null || value.Chain.Length is < 1 ||
             value.Chain.Length > ProviderCertificatePublicMaterial.MaximumCertificateChainCount)
@@ -437,8 +473,31 @@ public sealed class LocalPkcs12Provider : ISecretValueProvider, IClientCertifica
                 throw ConfigurationInvalid();
             return new LocalChainCertificate(item.FileName!, item.CertificateSha256!.ToUpperInvariant());
         }).ToArray();
-        return new(value.Id!, kind, null, value.Pkcs12FileName, value.PasswordFileName, value.LeafFileName,
+        return new(value.Id!, kind, value.Pkcs12FileName, value.Pkcs12Sha256!.ToUpperInvariant(),
+            value.PasswordFileName, value.PasswordFileSha256!.ToUpperInvariant(), value.LeafFileName,
             value.CertificateSha256!.ToUpperInvariant(), value.SubjectPublicKeyInfoSha256!.ToUpperInvariant(), value.Version, chain);
+    }
+
+    private static bool ResourceEquals(LocalResource expected, LocalResource current)
+    {
+        if (!string.Equals(expected.Id, current.Id, StringComparison.Ordinal) || expected.Kind != current.Kind ||
+            !string.Equals(expected.Pkcs12FileName, current.Pkcs12FileName, StringComparison.Ordinal) ||
+            !string.Equals(expected.Pkcs12Sha256, current.Pkcs12Sha256, StringComparison.Ordinal) ||
+            !string.Equals(expected.PasswordFileName, current.PasswordFileName, StringComparison.Ordinal) ||
+            !string.Equals(expected.PasswordFileSha256, current.PasswordFileSha256, StringComparison.Ordinal) ||
+            !string.Equals(expected.LeafFileName, current.LeafFileName, StringComparison.Ordinal) ||
+            !string.Equals(expected.CertificateSha256, current.CertificateSha256, StringComparison.Ordinal) ||
+            !string.Equals(expected.SubjectPublicKeyInfoSha256, current.SubjectPublicKeyInfoSha256, StringComparison.Ordinal) ||
+            !string.Equals(expected.Version, current.Version, StringComparison.Ordinal) ||
+            expected.Chain.Count != current.Chain.Count)
+            return false;
+        for (int index = 0; index < expected.Chain.Count; index++)
+        {
+            if (!string.Equals(expected.Chain[index].FileName, current.Chain[index].FileName, StringComparison.Ordinal) ||
+                !string.Equals(expected.Chain[index].CertificateSha256, current.Chain[index].CertificateSha256, StringComparison.Ordinal))
+                return false;
+        }
+        return true;
     }
 
     private string MaterialPath(string fileName) => Path.Combine(materialRootPath, fileName);
@@ -544,9 +603,10 @@ public sealed class LocalPkcs12Provider : ISecretValueProvider, IClientCertifica
     private sealed record LocalResource(
         string Id,
         LocalResourceKind Kind,
-        string? FileName,
         string? Pkcs12FileName,
+        string? Pkcs12Sha256,
         string? PasswordFileName,
+        string? PasswordFileSha256,
         string? LeafFileName,
         string? CertificateSha256,
         string? SubjectPublicKeyInfoSha256,
@@ -557,7 +617,6 @@ public sealed class LocalPkcs12Provider : ISecretValueProvider, IClientCertifica
 
     private enum LocalResourceKind
     {
-        Secret,
         ClientCertificate,
         SigningCertificate
     }
@@ -569,7 +628,9 @@ public sealed class LocalPkcs12Provider : ISecretValueProvider, IClientCertifica
         string? Kind,
         string? FileName,
         string? Pkcs12FileName,
+        string? Pkcs12Sha256,
         string? PasswordFileName,
+        string? PasswordFileSha256,
         string? LeafFileName,
         string? CertificateSha256,
         string? SubjectPublicKeyInfoSha256,

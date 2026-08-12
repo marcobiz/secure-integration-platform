@@ -973,8 +973,8 @@ static ProviderServices CreateProviderServices(GatewayProviderOptions options, I
             throw new InvalidOperationException("External provider pack factory does not implement the required contract.");
         IProviderPackFactory factory = (IProviderPackFactory)Activator.CreateInstance(factoryType)!;
         ProviderServices services = factory.Create(new ProviderPackContext(endpoint, options.ClientIdentity, options.Settings));
-        if (!services.CapabilitySource.Capabilities.SecretValues || !services.CapabilitySource.Capabilities.ClientCertificates)
-            throw new InvalidOperationException("External provider pack lacks required capabilities.");
+        if (!services.CapabilitySource.Capabilities.ClientCertificates)
+            throw new InvalidOperationException("External provider pack lacks required client-certificate capability.");
         return services;
     }
 

@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using SecureIntegration.Providers.Abstractions;
-using SecureIntegration.Providers.Synthetic;
 using Xunit;
 
 namespace SecureIntegration.Providers.LocalPkcs12.Tests;
@@ -18,6 +17,7 @@ public sealed class LocalPkcs12ProviderTests
         Assert.True(services.CapabilitySource.Capabilities.ClientCertificates);
         Assert.True(services.CapabilitySource.Capabilities.SigningKeys);
         Assert.True(services.CapabilitySource.Capabilities.CertificatePublicMaterial);
+        Assert.False(services.CapabilitySource.Capabilities.SecretValues);
         Assert.False(services.CapabilitySource.Capabilities.Mac);
 
         using X509Certificate2 client = await services.ClientCertificates.GetClientCertificateAsync(Fixture.AuthReference, TestContext.Current.CancellationToken);
@@ -35,8 +35,9 @@ public sealed class LocalPkcs12ProviderTests
 
         ProviderCertificatePublicMaterial material = await services.CertificatePublicMaterial!.GetPublicMaterialAsync(Fixture.SignReference, TestContext.Current.CancellationToken);
         Assert.Equal(fixture.SignFingerprint, Convert.ToHexString(SHA256.HashData(material.LeafCertificateDer.Span)));
-        ReadOnlyMemory<byte> issuer = Assert.Single(material.CertificateChainDer);
-        Assert.Equal(fixture.RootFingerprint, Convert.ToHexString(SHA256.HashData(issuer.Span)));
+        Assert.Equal(2, material.CertificateChainDer.Count);
+        Assert.Equal(fixture.IntermediateFingerprint, Convert.ToHexString(SHA256.HashData(material.CertificateChainDer[0].Span)));
+        Assert.Equal(fixture.RootFingerprint, Convert.ToHexString(SHA256.HashData(material.CertificateChainDer[1].Span)));
         Assert.Equal(X509KeyUsageFlags.NonRepudiation, material.Metadata.KeyUsage);
         Assert.NotEqual(fixture.AuthSpki, material.SubjectPublicKeyInfoSha256);
         Assert.True(await services.Health.IsReadyAsync(TestContext.Current.CancellationToken));
@@ -82,7 +83,7 @@ public sealed class LocalPkcs12ProviderTests
     {
         using Fixture fixture = Fixture.Create();
         ProviderServices services = fixture.CreateServices();
-        File.WriteAllText(Path.Combine(fixture.MaterialRoot, "sign-leaf.pem"), fixture.Material.RootCertificate.ExportCertificatePem());
+        File.WriteAllText(Path.Combine(fixture.MaterialRoot, "sign-leaf.pem"), fixture.RootCertificatePem);
 
         ProviderAccessException denied = await Assert.ThrowsAsync<ProviderAccessException>(() =>
             services.CertificatePublicMaterial!.GetPublicMaterialAsync(Fixture.SignReference, TestContext.Current.CancellationToken));
@@ -94,7 +95,7 @@ public sealed class LocalPkcs12ProviderTests
     public async Task LOCAL_P12_unrelated_pinned_chain_is_denied_and_readiness_fails_closed()
     {
         using Fixture fixture = Fixture.Create();
-        File.WriteAllText(Path.Combine(fixture.MaterialRoot, "root.pem"), fixture.Material.ClientCertificateRevision1.ExportCertificatePem());
+        File.WriteAllText(Path.Combine(fixture.MaterialRoot, "root.pem"), fixture.AuthCertificatePem);
         File.WriteAllText(fixture.ManifestPath, File.ReadAllText(fixture.ManifestPath)
             .Replace(fixture.RootFingerprint, fixture.AuthFingerprint, StringComparison.Ordinal));
         ProviderServices services = fixture.CreateServices();
@@ -117,6 +118,81 @@ public sealed class LocalPkcs12ProviderTests
         Assert.Equal("BGW-PROVIDER-MATERIAL-INVALID", denied.Code);
         Assert.Null(denied.InnerException);
         Assert.False(await services.Health.IsReadyAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData("sign", "chain-deleted")]
+    [InlineData("sign", "chain-substituted")]
+    [InlineData("sign", "chain-reordered")]
+    [InlineData("sign", "root-substituted")]
+    [InlineData("sign", "leaf-substituted")]
+    [InlineData("sign", "pkcs12-substituted")]
+    [InlineData("sign", "pkcs12-reencoded")]
+    [InlineData("auth", "chain-deleted")]
+    [InlineData("auth", "chain-substituted")]
+    [InlineData("auth", "chain-reordered")]
+    [InlineData("auth", "root-substituted")]
+    [InlineData("auth", "leaf-substituted")]
+    [InlineData("auth", "pkcs12-substituted")]
+    [InlineData("auth", "pkcs12-reencoded")]
+    public async Task LOCAL_P12_private_use_revalidates_exact_chain_leaf_and_pkcs12_after_preflight(
+        string role,
+        string mutation)
+    {
+        using Fixture fixture = Fixture.Create();
+        ProviderServices services = fixture.CreateServices();
+        fixture.ApplyPrivateUseMutation(role, mutation);
+
+        ProviderAccessException denied = role == "sign"
+            ? await Assert.ThrowsAsync<ProviderAccessException>(() => services.SigningKeys!.SignDigestAsync(
+                Fixture.SignReference,
+                "RS256",
+                SHA256.HashData("must-not-sign"u8),
+                TestContext.Current.CancellationToken))
+            : await Assert.ThrowsAsync<ProviderAccessException>(() => services.ClientCertificates.GetClientCertificateAsync(
+                Fixture.AuthReference,
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-PROVIDER-MATERIAL-INVALID", denied.Code);
+        Assert.Null(denied.InnerException);
+        Assert.False(await services.Health.IsReadyAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task LOCAL_P12_private_use_rereads_and_exact_matches_the_initial_manifest_resource()
+    {
+        using Fixture fixture = Fixture.Create();
+        ProviderServices services = fixture.CreateServices();
+        File.WriteAllText(fixture.ManifestPath, File.ReadAllText(fixture.ManifestPath)
+            .Replace(fixture.SignVersion, fixture.SignVersion + "-changed", StringComparison.Ordinal));
+
+        ProviderAccessException denied = await Assert.ThrowsAsync<ProviderAccessException>(() =>
+            services.SigningKeys!.SignDigestAsync(
+                Fixture.SignReference,
+                "RS256",
+                SHA256.HashData("must-not-sign"u8),
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-PROVIDER-MATERIAL-INVALID", denied.Code);
+        Assert.Null(denied.InnerException);
+        Assert.False(await services.Health.IsReadyAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task LOCAL_P12_generic_secret_retrieval_is_deny_only_without_filesystem_resolution()
+    {
+        using Fixture fixture = Fixture.Create();
+        ProviderServices services = fixture.CreateServices();
+        string sentinel = Path.Combine(fixture.MaterialRoot, "must-not-be-read.txt");
+        File.WriteAllText(sentinel, "synthetic-canary");
+
+        ProviderAccessException denied = await Assert.ThrowsAsync<ProviderAccessException>(() =>
+            services.SecretValues.GetSecretAsync(sentinel, TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-PROVIDER-CAPABILITY-DENIED", denied.Code);
+        Assert.Null(denied.InnerException);
+        Assert.Equal("synthetic-canary", File.ReadAllText(sentinel));
+        Assert.False(services.CapabilitySource.Capabilities.SecretValues);
     }
 
     [Fact]
@@ -164,6 +240,19 @@ public sealed class LocalPkcs12ProviderTests
         AssertConfigurationDenied(() => fixture.CreateServices());
     }
 
+    [Fact]
+    public void LOCAL_P12_manifest_rejects_every_secret_resource_kind()
+    {
+        using Fixture fixture = Fixture.Create();
+        File.WriteAllText(fixture.ManifestPath, JsonSerializer.Serialize(new
+        {
+            schemaVersion = 1,
+            resources = new[] { new { id = "secret", kind = "Secret", fileName = "value.txt" } }
+        }));
+
+        AssertConfigurationDenied(() => fixture.CreateServices());
+    }
+
     private static void AssertConfigurationDenied(Action action)
     {
         ProviderAccessException denied = Assert.Throws<ProviderAccessException>(action);
@@ -176,26 +265,44 @@ public sealed class LocalPkcs12ProviderTests
     private sealed class Fixture : IDisposable
     {
         private readonly string root;
+        private readonly X509Certificate2 rootCertificate;
+        private readonly X509Certificate2 intermediateCertificate;
+        private readonly X509Certificate2 authCertificate;
+        private readonly X509Certificate2 signCertificate;
 
-        private Fixture(string root, SyntheticAuthenticationMaterial material, string manifestPath)
+        private Fixture(
+            string root,
+            X509Certificate2 rootCertificate,
+            X509Certificate2 intermediateCertificate,
+            X509Certificate2 authCertificate,
+            X509Certificate2 signCertificate,
+            string manifestPath)
         {
             this.root = root;
-            Material = material;
+            this.rootCertificate = rootCertificate;
+            this.intermediateCertificate = intermediateCertificate;
+            this.authCertificate = authCertificate;
+            this.signCertificate = signCertificate;
             ManifestPath = manifestPath;
             MaterialRoot = Path.Combine(root, "material");
-            AuthFingerprint = Fingerprint(material.ClientCertificateRevision1);
-            SignFingerprint = Fingerprint(material.SigningKeyRevision1);
-            RootFingerprint = Fingerprint(material.RootCertificate);
-            AuthSpki = Spki(material.ClientCertificateRevision1);
+            AuthFingerprint = Fingerprint(authCertificate);
+            SignFingerprint = Fingerprint(signCertificate);
+            IntermediateFingerprint = Fingerprint(intermediateCertificate);
+            RootFingerprint = Fingerprint(rootCertificate);
+            AuthSpki = Spki(authCertificate);
+            SignVersion = signCertificate.SerialNumber;
         }
 
-        internal SyntheticAuthenticationMaterial Material { get; }
         internal string ManifestPath { get; }
         internal string MaterialRoot { get; }
         internal string AuthFingerprint { get; }
         internal string SignFingerprint { get; }
+        internal string IntermediateFingerprint { get; }
         internal string RootFingerprint { get; }
         internal string AuthSpki { get; }
+        internal string SignVersion { get; }
+        internal string RootCertificatePem => rootCertificate.ExportCertificatePem();
+        internal string AuthCertificatePem => authCertificate.ExportCertificatePem();
         internal const string AuthReference = "local-pkcs12://fse2-lab/auth";
         internal const string SignReference = "local-pkcs12://fse2-lab/sign";
 
@@ -204,39 +311,100 @@ public sealed class LocalPkcs12ProviderTests
             string root = Path.Combine(Path.GetTempPath(), "local-pkcs12-provider-tests-" + Guid.NewGuid().ToString("N"));
             string materialRoot = Path.Combine(root, "material");
             Directory.CreateDirectory(materialRoot);
-            SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            X509Certificate2 rootCertificate = CreateRoot(now);
+            X509Certificate2 intermediateCertificate = CreateIntermediate(rootCertificate, now);
+            X509Certificate2 authCertificate = CreateLeaf(
+                intermediateCertificate,
+                "CN=Local PKCS12 Synthetic A1",
+                X509KeyUsageFlags.DigitalSignature,
+                "1.3.6.1.5.5.7.3.2",
+                now);
+            X509Certificate2 signCertificate = CreateLeaf(
+                intermediateCertificate,
+                "CN=Local PKCS12 Synthetic S1",
+                X509KeyUsageFlags.NonRepudiation,
+                null,
+                now);
             string password = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-            WritePrivate(Path.Combine(materialRoot, "auth.p12"), material.ClientCertificateRevision1, password);
-            WritePrivate(Path.Combine(materialRoot, "sign.p12"), material.SigningKeyRevision1, password);
+            WritePrivate(Path.Combine(materialRoot, "auth.p12"), authCertificate, password);
+            WritePrivate(Path.Combine(materialRoot, "sign.p12"), signCertificate, password);
             File.WriteAllText(Path.Combine(materialRoot, "auth.password"), password);
             File.WriteAllText(Path.Combine(materialRoot, "sign.password"), password);
-            File.WriteAllText(Path.Combine(materialRoot, "auth-leaf.pem"), material.ClientCertificateRevision1.ExportCertificatePem());
-            File.WriteAllText(Path.Combine(materialRoot, "sign-leaf.pem"), material.SigningKeyRevision1.ExportCertificatePem());
-            File.WriteAllText(Path.Combine(materialRoot, "root.pem"), material.RootCertificate.ExportCertificatePem());
+            File.WriteAllText(Path.Combine(materialRoot, "auth-leaf.pem"), authCertificate.ExportCertificatePem());
+            File.WriteAllText(Path.Combine(materialRoot, "sign-leaf.pem"), signCertificate.ExportCertificatePem());
+            File.WriteAllText(Path.Combine(materialRoot, "intermediate.pem"), intermediateCertificate.ExportCertificatePem());
+            File.WriteAllText(Path.Combine(materialRoot, "root.pem"), rootCertificate.ExportCertificatePem());
             string manifestPath = Path.Combine(root, "manifest.json");
             File.WriteAllText(manifestPath, JsonSerializer.Serialize(new
             {
                 schemaVersion = 1,
                 resources = new object[]
                 {
-                    Resource("auth", "ClientCertificate", material.ClientCertificateRevision1),
-                    Resource("sign", "SigningCertificate", material.SigningKeyRevision1)
+                    Resource("auth", "ClientCertificate", authCertificate),
+                    Resource("sign", "SigningCertificate", signCertificate)
                 }
             }));
-            return new(root, material, manifestPath);
+            return new(root, rootCertificate, intermediateCertificate, authCertificate, signCertificate, manifestPath);
 
             object Resource(string id, string kind, X509Certificate2 certificate) => new
             {
                 id,
                 kind,
                 pkcs12FileName = id + ".p12",
+                pkcs12Sha256 = FileHash(Path.Combine(materialRoot, id + ".p12")),
                 passwordFileName = id + ".password",
+                passwordFileSha256 = FileHash(Path.Combine(materialRoot, id + ".password")),
                 leafFileName = id + "-leaf.pem",
                 certificateSha256 = Fingerprint(certificate),
                 subjectPublicKeyInfoSha256 = Spki(certificate),
                 version = certificate.SerialNumber,
-                chain = new[] { new { fileName = "root.pem", certificateSha256 = Fingerprint(material.RootCertificate) } }
+                chain = new[]
+                {
+                    new { fileName = "intermediate.pem", certificateSha256 = Fingerprint(intermediateCertificate) },
+                    new { fileName = "root.pem", certificateSha256 = Fingerprint(rootCertificate) }
+                }
             };
+
+            static string FileHash(string path) => Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path)));
+        }
+
+        internal void ApplyPrivateUseMutation(string role, string mutation)
+        {
+            string otherRole = role == "sign" ? "auth" : "sign";
+            switch (mutation)
+            {
+                case "chain-deleted":
+                    File.Delete(Path.Combine(MaterialRoot, "intermediate.pem"));
+                    break;
+                case "chain-substituted":
+                    File.WriteAllText(Path.Combine(MaterialRoot, "intermediate.pem"), authCertificate.ExportCertificatePem());
+                    break;
+                case "chain-reordered":
+                    string intermediate = File.ReadAllText(Path.Combine(MaterialRoot, "intermediate.pem"));
+                    string rootValue = File.ReadAllText(Path.Combine(MaterialRoot, "root.pem"));
+                    File.WriteAllText(Path.Combine(MaterialRoot, "intermediate.pem"), rootValue);
+                    File.WriteAllText(Path.Combine(MaterialRoot, "root.pem"), intermediate);
+                    break;
+                case "root-substituted":
+                    File.WriteAllText(Path.Combine(MaterialRoot, "root.pem"), authCertificate.ExportCertificatePem());
+                    break;
+                case "leaf-substituted":
+                    File.Copy(Path.Combine(MaterialRoot, otherRole + "-leaf.pem"), Path.Combine(MaterialRoot, role + "-leaf.pem"), overwrite: true);
+                    break;
+                case "pkcs12-substituted":
+                    File.Copy(Path.Combine(MaterialRoot, otherRole + ".p12"), Path.Combine(MaterialRoot, role + ".p12"), overwrite: true);
+                    break;
+                case "pkcs12-reencoded":
+                    X509Certificate2 certificate = role == "sign" ? signCertificate : authCertificate;
+                    WritePrivate(
+                        Path.Combine(MaterialRoot, role + ".p12"),
+                        certificate,
+                        File.ReadAllText(Path.Combine(MaterialRoot, role + ".password")));
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(mutation));
+            }
         }
 
         internal ProviderServices CreateServices() => new LocalPkcs12ProviderPackFactory().Create(
@@ -256,6 +424,45 @@ public sealed class LocalPkcs12ProviderTests
             return Convert.ToHexString(SHA256.HashData(spki));
         }
 
+        private static X509Certificate2 CreateRoot(DateTimeOffset now)
+        {
+            using RSA key = RSA.Create(2048);
+            CertificateRequest request = new("CN=Local PKCS12 Synthetic Root", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, true, 1, true));
+            request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
+            request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
+            return request.CreateSelfSigned(now.AddDays(-1), now.AddDays(30));
+        }
+
+        private static X509Certificate2 CreateIntermediate(X509Certificate2 issuer, DateTimeOffset now)
+        {
+            using RSA key = RSA.Create(2048);
+            CertificateRequest request = new("CN=Local PKCS12 Synthetic Intermediate", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, true, 0, true));
+            request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
+            request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
+            using X509Certificate2 publicCertificate = request.Create(issuer, now.AddDays(-1), now.AddDays(20), RandomNumberGenerator.GetBytes(16));
+            return publicCertificate.CopyWithPrivateKey(key);
+        }
+
+        private static X509Certificate2 CreateLeaf(
+            X509Certificate2 issuer,
+            string subject,
+            X509KeyUsageFlags keyUsage,
+            string? enhancedKeyUsage,
+            DateTimeOffset now)
+        {
+            using RSA key = RSA.Create(2048);
+            CertificateRequest request = new(subject, key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+            request.CertificateExtensions.Add(new X509KeyUsageExtension(keyUsage, true));
+            if (enhancedKeyUsage is not null)
+                request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new Oid(enhancedKeyUsage) }, true));
+            request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
+            using X509Certificate2 publicCertificate = request.Create(issuer, now.AddDays(-1), now.AddDays(10), RandomNumberGenerator.GetBytes(16));
+            return publicCertificate.CopyWithPrivateKey(key);
+        }
+
         private static void WritePrivate(string path, X509Certificate2 certificate, string password)
         {
             byte[] encoded = certificate.Export(X509ContentType.Pkcs12, password);
@@ -265,7 +472,10 @@ public sealed class LocalPkcs12ProviderTests
 
         public void Dispose()
         {
-            Material.Dispose();
+            signCertificate.Dispose();
+            authCertificate.Dispose();
+            intermediateCertificate.Dispose();
+            rootCertificate.Dispose();
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
         }
     }
