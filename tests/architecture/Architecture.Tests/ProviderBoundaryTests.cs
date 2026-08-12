@@ -104,6 +104,20 @@ public sealed class ProviderBoundaryTests
     }
 
     [Fact]
+    public void Local_pkcs12_stop_input_cleanup_is_exact_revalidated_and_foreign_uid_safe()
+    {
+        string selfTest = File.ReadAllText(Path.Combine(Root, "tools", "fse2", "Test-Fse2LocalPkcs12Material.ps1"));
+
+        Assert.Contains("function Remove-SyntheticStopInput", selfTest, StringComparison.Ordinal);
+        Assert.Contains("Get-Fse2PathSnapshot -Path $Path -Kind File", selfTest, StringComparison.Ordinal);
+        Assert.Contains("Assert-Fse2PathSnapshot -Snapshot $fileSnapshot", selfTest, StringComparison.Ordinal);
+        Assert.Contains("$removeTool = '/bin/rm'", selfTest, StringComparison.Ordinal);
+        Assert.Contains("FSE2_LOCAL_FOREIGN_UID_STOP_INPUT_CLEANUP_PASS", selfTest, StringComparison.Ordinal);
+        Assert.DoesNotContain("Remove-Item -LiteralPath $manifestForStop", selfTest, StringComparison.Ordinal);
+        Assert.DoesNotContain("Remove-Item -LiteralPath $pkcs12ForStop", selfTest, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Generic_certificate_signing_extensions_have_no_vertical_content_or_arbitrary_header_bag()
     {
         string[] roots =

@@ -84,6 +84,46 @@ function Grant-SyntheticTamperControl {
     }
 }
 
+function Remove-SyntheticStopInput {
+    param(
+        [Parameter(Mandatory = $true)][string] $Path,
+        [Parameter(Mandatory = $true)][string] $AllowedRoot,
+        [Parameter(Mandatory = $true)][string] $ErrorCodePrefix
+    )
+
+    $allowedRootSnapshot = Get-Fse2PathSnapshot -Path $AllowedRoot -Kind Directory -RepositoryRoot $root `
+        -ErrorCodePrefix ($ErrorCodePrefix + '_ROOT')
+    $fileSnapshot = Get-Fse2PathSnapshot -Path $Path -Kind File -RepositoryRoot $root `
+        -ErrorCodePrefix ($ErrorCodePrefix + '_FILE') -MaximumBytes 1048576
+    Assert-Fse2PathSnapshot -Snapshot $allowedRootSnapshot | Out-Null
+    Assert-Fse2PathSnapshot -Snapshot $fileSnapshot | Out-Null
+
+    $separator = [IO.Path]::DirectorySeparatorChar
+    $allowedPrefix = $allowedRootSnapshot.FullPath.TrimEnd($separator) + $separator
+    $comparison = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        [StringComparison]::OrdinalIgnoreCase
+    } else {
+        [StringComparison]::Ordinal
+    }
+    if (-not $fileSnapshot.FullPath.StartsWith($allowedPrefix, $comparison)) {
+        throw ($ErrorCodePrefix + '_OUTSIDE_SYNTHETIC_ROOT')
+    }
+
+    Assert-Fse2PathSnapshot -Snapshot $allowedRootSnapshot | Out-Null
+    Assert-Fse2PathSnapshot -Snapshot $fileSnapshot | Out-Null
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        Remove-Item -LiteralPath $fileSnapshot.FullPath -Force
+    } else {
+        $removeTool = '/bin/rm'
+        if (-not (Test-Path -LiteralPath $removeTool -PathType Leaf)) {
+            throw ($ErrorCodePrefix + '_REMOVE_TOOL_MISSING')
+        }
+        & $removeTool '--' $fileSnapshot.FullPath
+        if ($LASTEXITCODE -ne 0) { throw ($ErrorCodePrefix + '_REMOVE_FAILED') }
+    }
+    if (Test-Path -LiteralPath $fileSnapshot.FullPath) { throw ($ErrorCodePrefix + '_REMOVE_INCOMPLETE') }
+}
+
 function Restore-ProcessEnvironmentValue {
     param([Parameter(Mandatory = $true)][string] $Name, [AllowNull()][object] $Value)
     if ($null -eq $Value) {
@@ -370,10 +410,16 @@ try {
             $pkcs12ForStop = Join-Path $output 'material\auth.p12'
             Grant-SyntheticTamperControl $manifestForStop
             Grant-SyntheticTamperControl $pkcs12ForStop
-            Remove-Item -LiteralPath $manifestForStop -Force
-            Remove-Item -LiteralPath $pkcs12ForStop -Force
+            Remove-SyntheticStopInput -Path $manifestForStop -AllowedRoot $testRoot `
+                -ErrorCodePrefix 'FSE2_LOCAL_SELF_TEST_STOP_MANIFEST'
+            Remove-SyntheticStopInput -Path $pkcs12ForStop -AllowedRoot $testRoot `
+                -ErrorCodePrefix 'FSE2_LOCAL_SELF_TEST_STOP_PKCS12'
             $quickstartEnv = Join-Path $m5ArtifactRoot 'raw\m3a.env'
-            if (Test-Path -LiteralPath $quickstartEnv) { Remove-Item -LiteralPath $quickstartEnv -Force }
+            if (Test-Path -LiteralPath $quickstartEnv) {
+                Remove-SyntheticStopInput -Path $quickstartEnv -AllowedRoot $testRoot `
+                    -ErrorCodePrefix 'FSE2_LOCAL_SELF_TEST_STOP_ENV'
+            }
+            Write-Host 'FSE2_LOCAL_FOREIGN_UID_STOP_INPUT_CLEANUP_PASS'
             Write-Host 'FSE2_LOCAL_STOP_NEGATIVE_INPUTS=MANIFEST_DELETED,PKCS12_DELETED,ENV_DELETED,PROVIDER_UNHEALTHY'
         }
         finally {
