@@ -61,7 +61,7 @@ $databaseAdminPassword = [Convert]::ToBase64String($databaseAdminPasswordBytes)
 [Array]::Clear($databaseAdminPasswordBytes, 0, $databaseAdminPasswordBytes.Length)
 [IO.File]::AppendAllText($envFile, "M4_QUICKSTART_DB_ADMIN_PASSWORD=$databaseAdminPassword`n", [Text.UTF8Encoding]::new($false))
 Invoke-Checked 'docker' (ComposeArguments @('config', '--quiet'))
-Invoke-Checked 'docker' (ComposeArguments @('up', '--build', '--detach'))
+Invoke-Checked 'docker' (ComposeArguments @('up', '--build', '--pull', 'always', '--detach'))
 
 $deadline = [DateTimeOffset]::UtcNow.AddMinutes(4)
 $ready = $false

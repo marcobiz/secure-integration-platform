@@ -61,16 +61,16 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | AC-015 | `M4_UT_Lifecycle_is_immutable_concurrent_and_rollback_reactivates_prior_publication`, PostgreSQL rollback test |
 | AC-016 | `M4_CT_Sample_conforms_to_Draft_2020_12_and_is_canonical`, invalid schema/version/binding/header/retry/checksum corpus |
 | AC-017 | `M4_UT_Runtime_denies_Draft_Validated_Retired_missing_and_missing_bindings`, stale cache and corrupted store tests |
-| AC-018 | PASS `gateway-container` run `30896803567`: build/esecuzione, non-root, read-only, live/ready, fail-closed, secret scan, SBOM e shutdown |
+| AC-018 | PASS `gateway-container` run `30896803567`: build/esecuzione, non-root, read-only, live/ready, fail-closed, secret scan, SBOM e shutdown; nuova exact-head qualification richiede base image tag+digest, inventario Dockerfile esatto, parser fail-closed e build indipendente del Dockerfile Azure con pull/no-cache e revision verificata |
 | AC-019 | ADR-0017 Accepted; MSI install/upgrade/repair/uninstall/reinstall matrix prevista in M9 |
-| AC-020 | `eng/build.ps1`, pinned toolchain e istruzioni root |
+| AC-020 | `eng/build.ps1`, `global.json` SDK `10.0.302`, 12 base image tag+manifest-list digest e test Git sintetici end-to-end del validator fail-closed su inventario, parsing, platform, tag, digest e allineamento SDK |
 | AC-021 | primo slice storico; M3A container e Windows Service PASS con evidence redatta correlata; M3B PENDING |
 | AC-022 | SDK plus native/COM compatibility report |
 | AC-023 | E2E storico + M3 synthetic vendor API key/mTLS container PASS; smoke Azure PENDING |
 | AC-024 | Managed Connector example execution |
 | AC-025 | runbook exercise and diagnostics evidence |
 | AC-026 | threat-model review checklist |
-| AC-027 | `eng/generate-sbom.ps1` — SPDX generato e validato |
+| AC-027 | `eng/generate-sbom.ps1` — SPDX generato e validato; ogni rotazione di base image riesegue container SBOM dopo pull |
 | AC-028 | signature/tamper verification suite |
 | AC-029 | pilot rotation/revocation evidence |
 | AC-030 | pilot code/package/network bypass evidence |
@@ -303,6 +303,23 @@ was reused without a new subsystem.
 | No token/provider/certificate/generic HTTP or connector-specific Core surface | reflection/API inventory; `Wave1_CT_authorized_signing_slots_are_bounded_opaque_slot_bound_and_server_projected`; no-vertical source guard | PASS local |
 | TM-079/TM-080/TM-081/TM-082 | `SEC-W1-SLOT-001/002/003/004` mappings in the threat model | Targeted, ordinary, PostgreSQL 18, Admin/full-stack, scans and deterministic M3 split regressions PASS; full M3 Linux, final-HEAD Core export/Gitleaks, CI exact-head and independent review pending |
 
+## Wave 1 authorized Published operation contract
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| Mandatory authoritative Published authority, exact-one provider and dispatcher before every external strategy | `Wave1_SEC_external_strategy_requires_authoritative_Published_provider_and_dispatcher_before_scope_entry`; `Wave1_SEC_authorized_operation_missing_expectation_provider_denies_before_signing_and_network`; bounded/duplicate registry behavior; non-authoritative/provider/dispatcher negatives keep provider/validation/scope/strategy/network counters at zero as applicable; built-in regression remains qualified | PASS targeted local |
+| `false/empty` means exact verified absence, not preflight opt-out | `Wave1_SEC_false_empty_expectations_verify_exact_Published_absence_before_scope_signing_DNS_and_network` covers actual two-slot policy denial, exact absence positive, expected-transport/actual-absent and expected-slot/actual-empty denial with provider count one and scope/signing/DNS/network/HTTPS zero on negatives; existing missing/extra slot matrix remains zero-effect | PASS hosted no-IVT targeted local |
+| Safe non-constructible context and no public bridge/store/provider/policy/certificate surface | expectation-context and bridge reflection inventory in `Wave1_CT_qualified_execution_handoff_is_non_forgeable_and_hides_payload_and_operation_authority`; external synthetic module no-IVT build | PASS targeted local |
+| Exact two-slot semantic coherence before signing | `Wave1_SEC_authorized_operation_policy_mismatches_deny_before_signing_and_network` covers missing/extra/required/projection/algorithm/subject/audience/issuer/CN/lifetime/temporal/nbf/jti/x5c/claims/identity/authentication | PASS targeted local; every case signing/network count zero |
+| Same approved signing identity, distinct mTLS identity and server-owned issuer semantics | `Wave1_IT_PRODUCTION_HOST_in_memory_authorized_operation_projects_Published_paths_and_body_modes` verifies both signatures, exact issuer plus CN-derived issuer, shared signing fingerprint, mTLS client identity and restricted HTTPS | PASS local |
+| Static and bounded dynamic Published path projection | `Wave1_CT_Published_path_projection_is_exact_single_encoded_and_origin_preserving`; hosted static/single/multiple wire paths; `Wave1_SEC_authorized_operation_path_and_body_mismatches_deny_before_network` | PASS local |
+| Path injection, traversal, delimiter, percent/double-encoding and template-shape denial | `AuthorizedPublishedOperationContractTests` value/template theories plus exact missing/extra/duplicate set tests and hosted template-not-Published/unknown denial | PASS targeted local |
+| Explicit REQUIRED/NONE without module method/Content-Type authority | hosted REQUIRED, NONE GET, NONE DELETE and exact wire assertions; `Wave1_SEC_authorized_operation_path_and_body_mismatches_deny_before_network` covers missing REQUIRED body and body with NONE | PASS local |
+| Exact Published A before signing and after DNS | `Wave1_SEC_Published_A_to_B_during_policy_preflight_denies_before_signing_and_network`; dynamic-template `Wave1_SEC_Published_A_to_B_after_DNS_denies_before_restricted_transport` | PASS local; zero later signing/network effect |
+| Historical static path/body request/checksum and immutable Published compatibility | fixed `D0FF…D7A` checksum regression, legacy hosted Bearer/restricted body continuation, constructor reflection inventory; no storage/locator change | PASS local; no migration or republish required |
+| Production-host PostgreSQL 18 path | `Wave1_IT_PRODUCTION_HOST_PostgreSQL18_authorized_operation_projects_Published_paths_and_body_modes` | PASS in the dedicated PostgreSQL 18.4 gate; fresh apply/no-op and 198/198 Gateway integration tests with no skip |
+| TM-087/TM-088/TM-089/TM-090 | `SEC-W1-OP-001/002/003/004` mappings in the threat model | Targeted and full local product gates PASS, including Admin/full-stack, scans and complete SBOM; final documentation-head Core export/local rerun, exact-head CI and independent review remain gates |
+
 ## Healthcare Wave 1 — Regional ePrescription foundation
 
 | Requirement | Automated evidence | Status |
@@ -342,6 +359,21 @@ available. Generic M6 auth tests are regression evidence only, not regional supp
 | Canonical hosted PostgreSQL 18 FSE2 path | `FSE2_IT_PRODUCTION_HOST_PostgreSQL18_Published_Organization_dual_JWT_mTLS_exact_bytes`; migrations through `0013`, real store/four-eyes/BGW1/grant/module/HTTPS; General run `31495813159`, job `gateway-postgresql-18` / `93793113966`, exact head `c450d7133436a6f7a3a83dcb5c35f594dcadf7b6` | PASS local and canonical CI: FSE2 project locked restore + Release build + exact FQN, Failed 0 / Passed 1 / Skipped 0; no official call |
 | Human actor profile | No dynamic human subject, OIDC/Keycloak, client attestation or global principal in this PR | DEFERRED |
 | Production accreditation | Requires official provisioning, certificates, conformance execution and operational evidence | NOT ACCREDITED |
+
+## Wave 1 authorized typed composed-SOAP request composition
+
+| Requirement | Automated evidence | Status |
+|---|---|---|
+| Exact schema, adapter/QName/mapping bounds and canonical/four-eyes coverage | `Wave1_CT_typed_composed_SOAP_request_is_canonical_checksum_and_dependency_complete`; `Wave1_SEC_typed_composed_SOAP_schema_QName_bounds_auth_and_input_kinds_fail_closed`; distinct editor/approver hosted publication and non-empty resource stamp assertions | PASS targeted local |
+| No new bridge method and one bounded module-owned adapter category | `Wave1_CT_typed_composed_request_has_no_new_bridge_or_arbitrary_body_binding_provider_or_transport_escape`; `Wave1_CT_external_module_registers_existing_session_adapters_and_one_bounded_composed_request_category`; duplicate/wrong-module startup matrix | PASS targeted local |
+| Real BGW1, grant, exact Published operation, business payload plus server-owned input and one HTTPS request | `Wave1_IT_PRODUCTION_HOST_external_no_IVT_module_uses_authorized_handshake_admission_and_composed_SOAP_on_one_session_lifecycle` asserts exact envelope/QName/order/escaping, SOAP version, Content-Type, SOAPAction, Basic, opaque session and request count | PASS targeted local |
+| Caller final envelope/arbitrary body and server-owned field spoof cannot bypass the adapter | hosted caller-envelope denial, malformed/oversized payload cases and exact server-owned organization assertion; zero business transport and redacted canaries | PASS targeted local |
+| No binding plaintext or retained/alternate-writer escape | public API inventory; synchronized callback-scoped Core writer proxy permits binding values only as element text and denies both `WriteRaw` overloads; `Wave1_SEC_external_no_IVT_binding_plaintext_writer_state_oracles_are_denied_with_zero_transport` denies direct `XmlLang`, namespace/`LookupPrefix` and raw lexical-state channels; existing alternate-writer/retained-view and cleared-payload assertions | PASS targeted local |
+| Adapter/input exact match, exception and cancellation fail closed | `Wave1_SEC_typed_composed_request_adapter_and_inputs_match_exact_Published_operation_before_provider_or_transport`; config duplicate mapping; unknown adapter; `Wave1_SEC_typed_composed_adapter_exception_and_fake_cancellation_are_sanitized_with_zero_transport`; actual-token cancellation unit | PASS targeted local |
+| Immutable exact bytes and complete Published A freshness before network | `Wave1_SEC_external_bridge_typed_composed_SOAP_bound_to_A_denies_mutated_B_after_composition_before_dispatch` covers adapter, mapping, QName, binding, resource, action, endpoint and strategy; all keep business network at zero and never adopt B | PASS targeted local |
+| Historical composed-SOAP uses the original caller envelope without rewrite/republish | `Wave1_E2E_PostgreSQL18_legacy_composed_profile_preserves_original_caller_envelope_without_republish_when_configured`; architecture assertion `typedRequest?.Bytes ?? execution.Payload`; existing composed regression suites | PASS local including PostgreSQL 18.4 |
+| PostgreSQL 18 locator, fresh/second apply and least privilege | additive migration `0014_typed_composed_soap_request_inputs.sql`; static owner/revoke/grant/no-enumeration assertions; canonical full external no-IVT hosted E2E | PASS: 191/191 Gateway integration, zero skip, fresh/no-op migration and runtime least privilege |
+| TM-083/TM-084/TM-085/TM-086 | `SEC-W1-COMPOSE-001/002/003/004` mappings in the threat model | Targeted, full repository, PostgreSQL, Admin/full-stack, scans/SBOM/Gitleaks and Core export PASS; exact-head CI and independent review pending |
 
 ## Security threats
 

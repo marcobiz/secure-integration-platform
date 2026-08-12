@@ -15,6 +15,16 @@ internal sealed class AuthorizedConnectorCapabilityDispatcher(
 {
     private static readonly JsonSerializerOptions ResultJson = CreateResultJson();
 
+    public Task ValidatePublishedOperationExpectationsAsync(
+        AuthorizedConnectorExecution execution,
+        AuthorizedPublishedOperationExpectations expectations,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(execution);
+        ArgumentNullException.ThrowIfNull(expectations);
+        return verticalCapabilities.ValidatePublishedOperationExpectationsAsync(execution, expectations, cancellationToken);
+    }
+
     public async Task<QualifiedGatewayExecutionResult> ExecuteTypedSessionHandshakeAsync(
         AuthorizedConnectorExecution execution,
         CancellationToken cancellationToken)

@@ -6,6 +6,8 @@ Aggiornato: 2026-08-11
 
 | Ambito richiesto | Stato | Evidenza principale |
 |---|---|---|
+| Release/container supply chain — .NET base-image provenance | Remediation implementata; gate locale ed exact-head CI sono controlli di handoff | 12 `FROM` fissati a tag patch + manifest-list digest; validator Git-tracked fail-closed; build container con pull; failure exact-main `31526932941`/`31526932939` conservate |
+| Wave 1 — Authorized typed composed-SOAP request composition | Freeze-exception Core implementata; full gate locale PASS, CI exact-head e review indipendente pending | adapter request exact Published, payload business read-only, input server-owned write-only senza writer-state oracle, envelope/auth/session/transport Core-owned, legacy unchanged |
 | M0 — fondamenta repository | Implementato; baseline congelata | commit `7f68442`, tag `baseline-m0-m1-vslice-2026-08-03` |
 | M1 — Local Broker minimo | Implementato; **gate live tecnico PASS** | run `m0-m1-20260803-232955`; AC-002/004 PASS-LIVE sul commit testato |
 | Primo vertical slice E2E | Completato come harness ripetibile | `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` |
@@ -23,6 +25,7 @@ Aggiornato: 2026-08-11
 | Wave 1 — Provider-neutral Connector execution seam | Ultima remediation mirata implementata; full gate/CI exact-head e targeted re-review pending | bridge no-IVT vincolato allo snapshot Published iniziale con stale A→B zero-effect; full lifecycle PostgreSQL aggiunto; negativi cross-module/ciclo descriptor-atomic; loader invariato |
 | Wave 1 — Connector capability completion | Remediation P1/P2 qualificata localmente; exact-head CI e micro-rereview pending | writer input Core-bound/callback-only, scope capability ACTIVE/CLOSING/CLOSED con cancel+drain, claim bounds pre-clone; 549 ordinary PASS, 172/172 PostgreSQL 18, M3/Admin full-stack/Core export/scans/SBOM PASS; nessuna nuova capability o connector production |
 | Wave 1 — Authorized signing slots | Freeze-exception Core/Auth implementata; product gate locale qualificato salvo full M3 demandato alla CI Linux; exact-head CI e review indipendente pending | massimo 4 slot Published, un token opaco per slot/invocation, projection server-owned, compatibilità legacy senza rewrite; targeted, PostgreSQL 18, Admin/full-stack e scans PASS |
+| Wave 1 — Authorized Published operation contract | Remediation P1-01/P1-02 e full local product gate PASS; exact-head CI e micro-rereview pending | `false/empty` è assenza Published verificata, ogni strategy external richiede authority/provider/dispatcher prima dello scope; 198/198 PostgreSQL 18, Admin/full-stack, scans e SBOM PASS; path/body/legacy invariati |
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | Wave 1 - Generic JWT/X.509 extensions | Remediation mirata local gate PASS; CI exact-head e rereview pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 304 ordinary, 71 PostgreSQL relevant, scan/SBOM/vulnerability/Core export PASS |
 | Healthcare Wave 1 — Regional ePrescription | Foundation compilata; profili regionali non pubblicabili | capability opaca Core post-auth con stato/grant verificati indipendentemente dalle credenziali, adapter al vero store Published, schema estensioni e safe-code allowlist server-owned, isolamento cross-profile; 14 test pack + 4 architecture PASS locali; Lombardia ed Emilia-Romagna `BLOCKED_BY_SPEC` |
@@ -85,6 +88,36 @@ Esito conclusivo: **GO per M2**. La lineage live è stata integrata linearmente:
 - Basic, API key e mTLS applicati esclusivamente dal Gateway senza esporre secret reference;
 - API health/readiness, Problem Details redatti, Docker non-root/read-only-compatible, health probe e Bicep contract skeleton;
 - architettura, runbook, piano e report in `docs/architecture/m2-gateway-architecture.md`, `docs/operations/M2-GATEWAY-RUNBOOK.md`, `docs/implementation/M2-IMPLEMENTATION-PLAN.md` e `docs/testing/M2-IMPLEMENTATION-REPORT.md`.
+
+### Release/container supply chain — pin delle immagini .NET
+
+- le failure exact-main General `31526932941` e M5/Admin `31526932939` sul commit
+  `33552f1572f649c2ce534484674e0305debb6fde` restano visibili e non sono state
+  nascoste da un rerun same-SHA. La causa deterministica era il movimento del tag SDK
+  `10.0` dal manifest-list digest `sha256:72dd7437…01b0` a un'immagine contenente solo
+  SDK `10.0.400`, incompatibile con `global.json` `10.0.302` + `latestPatch`;
+- tutti e soli i 12 `FROM` .NET dei sei Dockerfile tracciati sono ora riferimenti
+  `exact-tag@sha256:manifest-list-digest`. Le SDK sono `10.0.302` (Debian e
+  Alpine 3.24); ASP.NET e runtime sono `10.0.11` (Debian e Alpine 3.24). Nessuna
+  famiglia o semantica degli stage è cambiata;
+- MCR è stato interrogato nuovamente per ciascun tag: tutti i digest approvati
+  corrispondono e conservano `linux/amd64`, `linux/arm/v7` e `linux/arm64`. Pull ed
+  esecuzione per digest confermano SDK `10.0.302` e runtime/ASP.NET `10.0.11`;
+- `eng/validate-container-base-images.ps1`, compatibile Windows PowerShell 5.1,
+  confronta in modo normalizzato, ordinale ed esatto l'inventario Git-tracked con i sei
+  Dockerfile approvati; file mancanti, aggiuntivi o ambigui falliscono anche senza `FROM`
+  .NET. Il parser fail-closed vieta `--platform`, interpolazione e ARG nei `FROM` .NET,
+  richiede famiglia/tag/digest e mapping ordinato delle 12 occorrenze, e confronta i tag
+  SDK con `global.json`. I test end-to-end usano repository Git sintetici e coprono
+  inventario, bypass platform/mobile, marker Core export ostile, file mancante, tag mobile,
+  digest incrociato, mismatch SDK e positivo canonico. In presenza di metadata `.git` il
+  profilo repository resta autoritativo e il manifest Core export non può ridurlo;
+- il build canonico invoca il validator. General CI e le superfici container M5/Admin
+  lo espongono come step nominato prima dei build; i build usano pull esplicito. General
+  `gateway-container` costruisce inoltre il Dockerfile Azure con `--pull --no-cache` e
+  verifica image ID e label dell'exact candidate SHA. Ogni successivo aggiornamento dei
+  pin o dell'inventario deve ripetere container qualification, security scan e SBOM
+  secondo `docs/deployment/deployment-architecture.md`.
 
 ### M3 — vertical slice production-like
 
@@ -326,6 +359,90 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
 - targeted checkpoint: 33 unit FSE2, 8 Healthcare architecture, 2 hosted in-memory/race e 1 hosted
   PostgreSQL 18 PASS. Gate completi, CI exact-head e review indipendente sono registrati nel handoff;
 - report: `docs/testing/FSE2-IMPLEMENTATION-REPORT.md`.
+
+### Wave 1 — Authorized Published operation contract
+
+- remediation targeted P1-01/P1-02: il confronto di presenza è simmetrico sulla stessa exact
+  Published A; `false/empty` richiede assenza reale di `restrictedTransport`, legacy `signing` e
+  `signingSlots`. Un actual policy con aspettative vuote e ogni mismatch presenza/set sono negati
+  prima di scope, strategy, firma, DNS e rete;
+- ogni strategy external/non-Core richiede ora catalogo autoritativo, non-null exact Published
+  authority, provider exact-key e dispatcher prima dell'expectation creation/validation. Il vecchio
+  dispatch external con `GatewayOperationCatalog` non autoritativo è intenzionalmente negato come
+  breaking-security behavior; le strategy built-in Core conservano il comportamento qualificato;
+- ogni execution strategy esterna scelta da una operation Published autoritativa richiede un
+  expectation provider module-owned, bounded ed exact-one. Il provider riceve solo identity/config
+  aperta difensiva e restituisce aspettative generiche immutabili; assenza, duplicato, exception o
+  mismatch negano prima di strategy, signing e rete;
+- Core exact-compara slot, required/projection, RS256, fixed subject, audience, claim allowlist,
+  lifetime/temporal/jti/x5c, issuer exact o prefix+subject-CN verificato, uguaglianza tra identità di
+  firma e distinzione dalla mTLS. Materiale pubblico, policy effettive, store/provider e bridge non
+  attraversano il contratto pubblico;
+- `pathTemplate` è alternativo a `path`, ammette soltanto placeholder whole-segment canonicali e
+  proiezione di valori opachi NFC bounded. Core valida set esatto, rifiuta delimiter/traversal/
+  percent/double-encoding/injection, codifica una volta e conserva scheme/host/port senza query o
+  fragment;
+- `restrictedTransport.bodyMode` è `required` oppure `none`; assenza significa `required`. `none` è
+  limitato a GET/DELETE e produce `HttpContent` nullo, body wire zero e nessun Content-Type;
+- exact Published A viene ricontrollata dopo ogni public-material await e dopo DNS. Race deterministici
+  prima della firma e prima della rete non adottano B; preflight negativi conservano signing/network
+  count a zero;
+- definizioni storiche, checksum e record Published non cambiano, non esiste mass republish e non è
+  necessaria una migration perché storage/locator restano invariati;
+- il modulo sintetico esterno no-IVT prova due slot, stessa identità firma distinta dalla mTLS,
+  issuer exact e CN-related, path statico/singolo/multiplo, canonical encoding, REQUIRED, NONE GET e
+  NONE DELETE su vero HTTPS/mTLS. La stessa prova è predisposta per il gate PostgreSQL 18;
+- full local product gate PASS sul remediation commit: build Release zero warning/errori, suite
+  repository ordinaria PASS (Gateway integration 167 PASS e 31 PostgreSQL-conditional SKIP;
+  architecture 36/36), PostgreSQL 18.4 fresh apply/no-op e Gateway integration 198/198 senza skip,
+  Admin 29/29 unit, drift API/runtime, build, 37/37 browser mock, 2/2 a11y e `FULLSTACK-01` con
+  cleanup Docker 0/0/0; docs, secret scan, vulnerability inventory e SBOM completo con 165 package
+  container indicizzati PASS;
+- decisione e inventory: ADR-0027 e
+  `docs/implementation/WAVE1-AUTHORIZED-PUBLISHED-OPERATION-CONTRACT.md`. Core export e riesecuzione
+  locale sul commit documentale finale precedono il push; exact-head CI e review indipendente
+  restano pending; merge non autorizzato.
+
+### Wave 1 — Authorized typed composed-SOAP request composition
+
+- `IAuthorizedConnectorCapabilityBridge` non cambia: `ExecuteComposedSoapAsync` compone internamente
+  solo quando l'esatta operation Published dichiara `typedComposedSoapRequest`; in assenza del blocco
+  usa ancora il payload caller originale senza rewrite o republish;
+- la sola nuova categoria `ITypedComposedSoapRequestAdapter` è registrata tramite il registrar
+  startup bounded esistente, con ownership del modulo, grafo costruttori e duplicate/cap fail-closed;
+- ID/type adapter, QName e mapping name→binding `opaque` sono canonical/checksum/four-eyes owned.
+  Core copia il business payload in stream read-only ripetibili callback-scoped e mantiene gli input
+  dietro `WriteRequiredXmlValue(name)`, legato per reference al proprio writer;
+- Core possiede writer hardened, Envelope/Body/QName, body bound, exact-byte snapshot, Basic, sessione
+  opaca, Content-Type/SOAPAction, DNS e one-shot restricted transport. Nessun body/header/provider/
+  store/transport selector, plaintext getter o nuovo bridge method è stato aggiunto;
+- retained context/stream, alternate writer, caller final envelope, spoof server-owned, malformed e
+  oversized payload, adapter exception/fake cancellation, duplicate/wrong-module e input mismatch
+  sono negati con zero business transport e diagnostica redatta; cancellation reale conserva il
+  token effettivo;
+- un proxy writer Core callback-scoped e sincronizzato serializza ogni writer action con l'emissione
+  binding e consente il valore solo come element text: attributi stateful (`xml:lang`/`xml:space`) e
+  namespace/`LookupPrefix` non possono diventare plaintext o equality oracle; entrambe le overload
+  `WriteRaw` sono negate per impedire desincronizzazione fra stato e output lessicale;
+- ogni provider await rivalida A e il controllo finale copre adapter, mapping, binding/resource,
+  endpoint, Basic, sessione, action, policy e strategy. Race deterministici dopo composizione su
+  adapter/mapping/QName/binding/resource/action/endpoint/strategy non adottano B e producono zero rete;
+- migration additiva `0014_typed_composed_soap_request_inputs.sql` estende soltanto il locator
+  operation-scoped all'esatto nuovo path e conserva owner, `SECURITY DEFINER`, `search_path`, grant,
+  RLS e non-enumerabilità; `0012` e `0013` restano immutate;
+- evidenza mirata: 31/31 unit composed/configuration, 44/44 hosted execution seam ordinari e 15/15
+  architecture PASS. Il gate completo registra build Release zero-warning/error, 223/223 Gateway
+  unit e 161 Gateway integration ordinarie con 30 casi PostgreSQL condizionali; il gate dedicato
+  PostgreSQL 18.4 esegue 191/191 Gateway integration con zero skip, migration `0014` fresh/no-op e
+  least privilege runtime verificato;
+- Admin registra 28/28 Vitest, drift API/runtime con negative control, build, 2/2 a11y, 37/37 browser
+  mock e `FULLSTACK-01` 1/1 con redazione e cleanup PASS. Document validation, repository secret scan,
+  Gitleaks full-history, vulnerability inventory, SBOM container da 165 package e Core export da 424
+  file con build/test/frontend/license/boundary/secret gate sono PASS sul candidate locale;
+- exact-head CI e l'unica review Core security indipendente restano i gate di handoff sulla PR;
+  merge non autorizzato;
+- decisione e inventory: ADR-0026 e
+  `docs/implementation/WAVE1-AUTHORIZED-TYPED-COMPOSED-SOAP-REQUEST.md`.
 
 ### M6 — Certificate, Signing and outbound mTLS primitives
 

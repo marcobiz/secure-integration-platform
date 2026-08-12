@@ -75,7 +75,7 @@ if (-not $SkipContainer) {
     & docker image inspect $GatewayImage *> $null
     if ($LASTEXITCODE -ne 0) {
         $GatewayImage = 'secure-integration-gateway:m5-sbom'
-        & docker build --file (Join-Path $root 'src\Gateway\Gateway.Api\Dockerfile') --tag $GatewayImage $root
+        & docker build --pull --file (Join-Path $root 'src\Gateway\Gateway.Api\Dockerfile') --tag $GatewayImage $root
         if ($LASTEXITCODE -ne 0) { throw 'SBOM_GATEWAY_IMAGE_BUILD_FAILED' }
     }
 

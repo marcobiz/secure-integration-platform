@@ -131,8 +131,18 @@ public sealed class PublishedOpaqueSessionAuthorityResolver
                 throw OpaqueSessionHttpFailures.Rejected();
 
             string credentialBinding = authentication.GetProperty("secretBinding").GetString()!;
-            int requiredSecretBindings = profileKind == OpaqueSessionAuthorityProfileKind.HttpOnly ? 1 : 3;
-            if (dependencies.SecretBindingIds.Count != requiredSecretBindings || !dependencies.SecretBindingIds.Contains(credentialBinding, StringComparer.Ordinal) ||
+            List<string> expectedSecretBindings = [credentialBinding];
+            if (profileKind == OpaqueSessionAuthorityProfileKind.ComposedSoapBasic)
+            {
+                expectedSecretBindings.Add(authentication.GetProperty("usernameBinding").GetString()!);
+                expectedSecretBindings.Add(authentication.GetProperty("passwordBinding").GetString()!);
+                if (operation.TryGetProperty("typedComposedSoapRequest", out JsonElement typedRequest) &&
+                    typedRequest.TryGetProperty("serverOwnedInputs", out JsonElement inputs))
+                    expectedSecretBindings.AddRange(inputs.EnumerateArray().Select(value => value.GetProperty("secretBinding").GetString()!));
+            }
+            if (expectedSecretBindings.Distinct(StringComparer.Ordinal).Count() != expectedSecretBindings.Count ||
+                dependencies.SecretBindingIds.Count != expectedSecretBindings.Count ||
+                !dependencies.SecretBindingIds.Order(StringComparer.Ordinal).SequenceEqual(expectedSecretBindings.Order(StringComparer.Ordinal), StringComparer.Ordinal) ||
                 !snapshot.Bindings.SecretResources.TryGetValue(credentialBinding, out ProviderResourceBinding? credential) ||
                 !snapshot.Bindings.Endpoints.TryGetValue(dependencies.EndpointBindingId, out Uri? baseEndpoint))
                 throw OpaqueSessionHttpFailures.Rejected();

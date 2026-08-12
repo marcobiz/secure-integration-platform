@@ -148,6 +148,7 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
     private static async Task RunExternalBridgeLifecycleAsync(string? runtimeConnection, string? adminConnection, bool requirePostgres)
     {
         SyntheticBindingInputLifetimeProbe.Reset();
+        SyntheticTypedComposedSoapRequestProbe.Reset();
         const string candidate = "external-bridge-admission-candidate";
         HostedExecutionModuleConfiguration module = Module("synthetic-execution", "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticExecutionModule");
         await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
@@ -224,18 +225,50 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
         int acquisitionBeforeBusiness = fixture.Transport.AcquisitionRequests;
         int validationBeforeBusiness = fixture.Transport.ValidationRequests;
         int businessBefore = fixture.Transport.BusinessRequests;
-        GatewayInvokeRequest malformedBusiness = new("1.0", new("text/xml", "utf8", "not-xml"), Guid.NewGuid());
+        GatewayInvokeRequest malformedBusiness = new("1.0", new("text/xml", "utf8",
+            "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\"><soap:Body><evil:Bypass xmlns:evil=\"urn:attacker\"/></soap:Body></soap:Envelope>"), Guid.NewGuid());
         using HttpResponseMessage malformedResponse = await fixture.SendSignedAsync(identity, HttpMethod.Post,
             $"/v1/connectors/{connectorId}/operations/{HostedTypedSessionFixture.BusinessOperationId}:invoke",
             JsonSerializer.SerializeToUtf8Bytes(malformedBusiness, WebJson));
         string malformedBody = await malformedResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.Conflict, malformedResponse.StatusCode);
-        Assert.Contains("BGW-EGRESS-AUTHENTICATION", malformedBody, StringComparison.Ordinal);
+        Assert.True(malformedResponse.StatusCode == HttpStatusCode.BadRequest, malformedBody);
+        Assert.Contains("BGW-PROTOCOL-PAYLOAD", malformedBody, StringComparison.Ordinal);
         Assert.Equal(businessBefore, fixture.Transport.BusinessRequests);
+
+        const string malformedBusinessCanary = "malformed-business-canary";
+        int secretsBeforeMalformedBusiness = fixture.Factory.Secrets.TotalRequests;
+        using HttpResponseMessage malformedBusinessResponse = await fixture.SendSignedAsync(identity, HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{HostedTypedSessionFixture.BusinessOperationId}:invoke",
+            TypedBusinessInvocationBodyRaw(
+                "<BusinessPayload xmlns=\"urn:synthetic:business-input\"><Payload>" + malformedBusinessCanary));
+        string malformedBusinessBody = await malformedBusinessResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, malformedBusinessResponse.StatusCode);
+        Assert.Contains("BGW-PROTOCOL-PAYLOAD", malformedBusinessBody, StringComparison.Ordinal);
+        Assert.Equal(secretsBeforeMalformedBusiness + 1, fixture.Factory.Secrets.TotalRequests);
+        Assert.Equal(businessBefore, fixture.Transport.BusinessRequests);
+
+        const string oversizedBusinessCanary = "oversized-business-canary";
+        int secretsBeforeOversizedBusiness = fixture.Factory.Secrets.TotalRequests;
+        string oversizedBusinessPayload =
+            "<BusinessPayload xmlns=\"urn:synthetic:business-input\"><Payload>" +
+            oversizedBusinessCanary + new string('x', 32_768) +
+            "</Payload></BusinessPayload>";
+        using HttpResponseMessage oversizedBusinessResponse = await fixture.SendSignedAsync(identity, HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{HostedTypedSessionFixture.BusinessOperationId}:invoke",
+            TypedBusinessInvocationBodyRaw(oversizedBusinessPayload));
+        string oversizedBusinessBody = await oversizedBusinessResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, oversizedBusinessResponse.StatusCode);
+        Assert.Contains("BGW-PROTOCOL-PAYLOAD", oversizedBusinessBody, StringComparison.Ordinal);
+        Assert.Equal(secretsBeforeOversizedBusiness, fixture.Factory.Secrets.TotalRequests);
+        Assert.Equal(businessBefore, fixture.Transport.BusinessRequests);
+
+        string negativeLogs = string.Join('\n', fixture.Factory.Logs);
+        Assert.DoesNotContain(malformedBusinessCanary, malformedBusinessBody + negativeLogs, StringComparison.Ordinal);
+        Assert.DoesNotContain(oversizedBusinessCanary, oversizedBusinessBody + negativeLogs, StringComparison.Ordinal);
 
         using HttpResponseMessage businessResponse = await fixture.SendSignedAsync(identity, HttpMethod.Post,
             $"/v1/connectors/{connectorId}/operations/{HostedTypedSessionFixture.BusinessOperationId}:invoke",
-            HostedTypedSessionFixture.BusinessInvocationBody());
+            TypedBusinessInvocationBody());
         string businessBody = await businessResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, businessResponse.StatusCode);
         Assert.Contains("BusinessOperationResponse", Encoding.UTF8.GetString(Convert.FromBase64String(
@@ -246,6 +279,15 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
         Assert.Equal(validationBeforeBusiness, fixture.Transport.ValidationRequests);
         Assert.Equal(businessBefore + 1, fixture.Transport.BusinessRequests);
         Assert.Equal(0, fixture.Transport.GenericRequests);
+        Assert.Equal("text/xml; charset=utf-8", fixture.Transport.LastBusinessContentType);
+        Assert.Equal("\"urn:synthetic:BusinessOperation\"", fixture.Transport.LastBusinessSoapAction);
+        Assert.Equal("Basic", fixture.Transport.LastBusinessAuthorizationScheme);
+        Assert.Equal(1, fixture.Transport.LastBusinessSessionHeaderCount);
+        Assert.Equal(
+            "<soap:Envelope xmlns:soap=\"http://schemas.xmlsoap.org/soap/envelope/\"><soap:Body><op:BusinessOperation xmlns:op=\"urn:synthetic:session\"><op:Payload xmlns:op=\"urn:synthetic:session\">normal&lt;&amp;</op:Payload><op:OrganizationCode xmlns:op=\"urn:synthetic:session\">core-owned&lt;&amp;organization</op:OrganizationCode></op:BusinessOperation></soap:Body></soap:Envelope>",
+            fixture.Transport.LastBusinessEnvelope);
+        Assert.True(SyntheticBindingInputLifetimeProbe.RetainedWriteIsDenied());
+        Assert.True(SyntheticTypedComposedSoapRequestProbe.RetainedPayloadViewIsClearedAndContextIsDenied());
         Assert.DoesNotContain(candidate, acquireEnvelope + completionBody + businessBody, StringComparison.Ordinal);
     }
 
@@ -379,8 +421,145 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
         Assert.Equal(0, fixture.Sessions.CachedSessionCount);
     }
 
-    [Fact]
-    public async Task Wave1_SEC_external_bridge_composed_SOAP_bound_to_A_denies_strategy_changed_B_before_dispatch()
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("unexpected")]
+    [InlineData("unknown-adapter")]
+    public async Task Wave1_SEC_typed_composed_request_adapter_and_inputs_match_exact_Published_operation_before_provider_or_transport(string mutation)
+    {
+        HostedExecutionModuleConfiguration module = Module(
+            "synthetic-execution",
+            "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticExecutionModule");
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-typed-composed-mismatch-candidate",
+            executionModule: module);
+        string connectorId = "execution-typed-composed-mismatch-" + mutation + "-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("typed-composed-mismatch-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("typed-composed-mismatch-application");
+        JsonNode definition = BridgeDefinition(connectorId, "1.0.0");
+        JsonNode typed = definition["operations"]![1]!["typedComposedSoapRequest"]!;
+        if (mutation == "missing") typed["serverOwnedInputs"] = new JsonArray();
+        else if (mutation == "unexpected")
+            typed["serverOwnedInputs"] = new JsonArray(
+                new JsonObject { ["name"] = "organization-code", ["secretBinding"] = "organization" },
+                new JsonObject { ["name"] = "unexpected-input", ["secretBinding"] = "organization" });
+        else
+            typed["requestAdapter"]!["id"] = "unregistered-business-request";
+
+        HostedConnectorAuthority authority = await fixture.PrepareConnectorVersionAsync(
+            connectorId, "1.0.0", environmentId, definition.ToJsonString());
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "typed-composed-mismatch-identity");
+        await fixture.GrantAsync(connectorId, identity);
+
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{HostedTypedSessionFixture.BusinessOperationId}:invoke",
+            TypedBusinessInvocationBody());
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("BGW-EGRESS-AUTHENTICATION", body, StringComparison.Ordinal);
+        Assert.Equal(0, fixture.Factory.Secrets.TotalRequests);
+        Assert.Equal(0, fixture.Transport.TotalSoapRequests);
+        Assert.Equal(0, fixture.Sessions.CachedSessionCount);
+    }
+
+    [Theory]
+    [InlineData("adapter-throws-canary")]
+    [InlineData("adapter-fake-cancellation")]
+    public async Task Wave1_SEC_typed_composed_adapter_exception_and_fake_cancellation_are_sanitized_with_zero_transport(string payload)
+    {
+        HostedExecutionModuleConfiguration module = Module(
+            "synthetic-execution",
+            "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticExecutionModule");
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-typed-composed-adapter-failure-candidate",
+            executionModule: module);
+        string connectorId = "execution-typed-composed-adapter-failure-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("typed-composed-adapter-failure-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("typed-composed-adapter-failure-application");
+        HostedConnectorAuthority authority = await fixture.PrepareConnectorVersionAsync(
+            connectorId, "1.0.0", environmentId, BridgeDefinition(connectorId, "1.0.0").ToJsonString());
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "typed-composed-adapter-failure-identity");
+        await fixture.GrantAsync(connectorId, identity);
+
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{HostedTypedSessionFixture.BusinessOperationId}:invoke",
+            TypedBusinessInvocationBody(payload));
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        string logs = string.Join('\n', fixture.Factory.Logs);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("BGW-PROTOCOL-PAYLOAD", body, StringComparison.Ordinal);
+        Assert.Equal(1, fixture.Factory.Secrets.TotalRequests);
+        Assert.Equal(0, fixture.Transport.TotalSoapRequests);
+        Assert.DoesNotContain(payload, body, StringComparison.Ordinal);
+        Assert.DoesNotContain(payload, logs, StringComparison.Ordinal);
+        Assert.DoesNotContain(HostedTypedSessionFixture.SyntheticOrganizationCode, body + logs, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("binding-oracle-xml-lang")]
+    [InlineData("binding-oracle-namespace")]
+    [InlineData("binding-oracle-raw-lexical")]
+    public async Task Wave1_SEC_external_no_IVT_binding_plaintext_writer_state_oracles_are_denied_with_zero_transport(string payload)
+    {
+        const string oracleOrganizationCode = "coreownedorganization";
+        SyntheticBindingInputStateOracleProbe.Reset();
+        HostedExecutionModuleConfiguration module = Module(
+            "synthetic-execution",
+            "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticExecutionModule");
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-binding-oracle-candidate",
+            executionModule: module,
+            serverOwnedOrganizationCode: oracleOrganizationCode);
+        string connectorId = "execution-binding-oracle-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("binding-oracle-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("binding-oracle-application");
+        HostedConnectorAuthority authority = await fixture.PrepareConnectorVersionAsync(
+            connectorId, "1.0.0", environmentId, BridgeDefinition(connectorId, "1.0.0").ToJsonString());
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "binding-oracle-identity");
+        await fixture.GrantAsync(connectorId, identity);
+
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{HostedTypedSessionFixture.BusinessOperationId}:invoke",
+            TypedBusinessInvocationBody(payload));
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        string logs = string.Join('\n', fixture.Factory.Logs);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("BGW-PROTOCOL-PAYLOAD", body, StringComparison.Ordinal);
+        Assert.False(SyntheticBindingInputStateOracleProbe.AnySucceeded);
+        Assert.Equal(1, fixture.Factory.Secrets.TotalRequests);
+        Assert.Equal(0, fixture.Transport.TotalSoapRequests);
+        Assert.DoesNotContain(payload, body + logs, StringComparison.Ordinal);
+        Assert.DoesNotContain(oracleOrganizationCode, body + logs, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("adapter")]
+    [InlineData("mapping")]
+    [InlineData("qname")]
+    [InlineData("binding")]
+    [InlineData("resource")]
+    [InlineData("action")]
+    [InlineData("endpoint")]
+    [InlineData("strategy")]
+    public async Task Wave1_SEC_external_bridge_typed_composed_SOAP_bound_to_A_denies_mutated_B_after_composition_before_dispatch(string mutation)
     {
         TaskCompletionSource finalCheckReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
         TaskCompletionSource releaseFinalCheck = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -396,7 +575,7 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
             candidate,
             executionModule: module,
             beforeComposedFinalAuthorization: BeforeFinalCheck);
-        string connectorId = "execution-composed-race-" + Guid.NewGuid().ToString("N");
+        string connectorId = "execution-composed-race-" + mutation + "-" + Guid.NewGuid().ToString("N");
         Guid environmentId = await fixture.CreateEnvironmentAsync();
         Guid tenantId = await fixture.CreateTenantAsync("composed-race-tenant");
         Guid applicationId = await fixture.CreateApplicationAsync("composed-race-application");
@@ -405,7 +584,14 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
             connectorId, "1.0.0", environmentId, definitionA.ToJsonString());
         await fixture.PublishAsync(authorityA, expectedPublicationRevision: 0);
         JsonNode definitionB = BridgeDefinition(connectorId, "2.0.0");
-        definitionB["operations"]![1]!["executionStrategy"] = "composed-soap";
+        JsonNode businessB = definitionB["operations"]![1]!;
+        JsonNode typedB = businessB["typedComposedSoapRequest"]!;
+        if (mutation == "adapter") typedB["requestAdapter"]!["id"] = "changed-business-request";
+        else if (mutation == "mapping") typedB["serverOwnedInputs"]![0]!["secretBinding"] = "session";
+        else if (mutation == "qname") typedB["requestElement"]!["localName"] = "ChangedBusinessOperation";
+        else if (mutation == "action") businessB["authentication"]!["soapHttp"]!["action"] = "urn:synthetic:ChangedBusinessOperation";
+        else if (mutation == "endpoint") businessB["path"] = "/composed-v2";
+        else if (mutation == "strategy") businessB["executionStrategy"] = "composed-soap";
         HostedConnectorAuthority authorityB = await fixture.PrepareConnectorVersionAsync(
             connectorId, "2.0.0", environmentId, definitionB.ToJsonString());
         HostedIdentity identity = await fixture.EnrollIdentityAsync(tenantId, applicationId, environmentId, "composed-race-identity");
@@ -429,15 +615,20 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
 
         Task<HttpResponseMessage> pending = fixture.SendSignedAsync(identity, HttpMethod.Post,
             $"/v1/connectors/{connectorId}/operations/{HostedTypedSessionFixture.BusinessOperationId}:invoke",
-            HostedTypedSessionFixture.BusinessInvocationBody());
+            TypedBusinessInvocationBody());
         await finalCheckReached.Task.WaitAsync(TestContext.Current.CancellationToken);
         int secretRequestsAtStaleBoundary = fixture.Factory.Secrets.TotalRequests;
-        Assert.Equal(secretRequestsBeforeBusiness + 2, secretRequestsAtStaleBoundary);
+        Assert.Equal(secretRequestsBeforeBusiness + 3, secretRequestsAtStaleBoundary);
         Assert.Equal(0, fixture.Transport.BusinessRequests);
 
         try
         {
-            await fixture.PublishAsync(authorityB, expectedPublicationRevision: 1);
+            if (mutation == "binding")
+                await fixture.MutatePublishedBindingRevisionAsync(authorityA, identity);
+            else if (mutation == "resource")
+                await fixture.RotateOrganizationResourceAsync(authorityA);
+            else
+                await fixture.PublishAsync(authorityB, expectedPublicationRevision: 1);
         }
         finally
         {
@@ -446,8 +637,16 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
 
         using HttpResponseMessage response = await pending;
         string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-        Assert.Contains("BGW-CONNECTOR-CONFIGURATION-STALE", body, StringComparison.Ordinal);
+        if (mutation == "resource")
+        {
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+            Assert.Contains("BGW-EGRESS-AUTHENTICATION", body, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+            Assert.Contains("BGW-CONNECTOR-CONFIGURATION-STALE", body, StringComparison.Ordinal);
+        }
         Assert.Equal(secretRequestsAtStaleBoundary, fixture.Factory.Secrets.TotalRequests);
         Assert.Equal(acquisitionBeforeBusiness, fixture.Transport.AcquisitionRequests);
         Assert.Equal(validationBeforeBusiness, fixture.Transport.ValidationRequests);
@@ -524,7 +723,7 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
     }
 
     [Fact]
-    public void Wave1_CT_external_module_registers_the_three_existing_typed_adapter_contracts()
+    public void Wave1_CT_external_module_registers_existing_session_adapters_and_one_bounded_composed_request_category()
     {
         HostedExecutionModuleConfiguration module = Module("synthetic-execution", "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticExecutionModule");
         ServiceCollection services = new();
@@ -537,6 +736,8 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
             descriptor.ImplementationType?.Name == "SyntheticExternalTypedSessionResponseAdapter");
         Assert.Contains(services, descriptor => descriptor.ServiceType == typeof(ITypedExternalSessionValidationAdapter) &&
             descriptor.ImplementationType?.Name == "SyntheticExternalSessionValidationAdapter");
+        Assert.Contains(services, descriptor => descriptor.ServiceType == typeof(ITypedComposedSoapRequestAdapter) &&
+            descriptor.ImplementationType?.Name == "SyntheticExternalTypedComposedSoapRequestAdapter");
     }
 
     [Theory]
@@ -546,6 +747,8 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
     [InlineData("synthetic-secret-provider", "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticSecretProviderDependencyModule")]
     [InlineData("synthetic-key-provider", "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticKeyProviderDependencyModule")]
     [InlineData("synthetic-transport-provider", "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticTransportDependencyModule")]
+    [InlineData("synthetic-duplicate-composed-adapter", "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticDuplicateComposedRequestAdapterModule")]
+    [InlineData("synthetic-wrong-composed-adapter", "SecureIntegration.Synthetic.ConnectorExecutionModule.SyntheticWrongModuleComposedRequestAdapterModule")]
     public void Wave1_SEC_duplicate_wrong_module_and_direct_authority_adapter_modules_fail_at_startup(string moduleId, string moduleType)
     {
         HostedExecutionModuleConfiguration module = Module(moduleId, moduleType);
@@ -791,16 +994,52 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
         foreach (JsonNode? operation in definition["operations"]!.AsArray())
         {
             operation!["executionStrategy"] = "synthetic-capability-bridge";
-            if (!string.Equals(operation["operationId"]!.GetValue<string>(), "session-bootstrap", StringComparison.Ordinal)) continue;
-            JsonNode handshake = operation["typedSessionHandshake"]!;
-            handshake["requestAdapter"] = new JsonObject { ["id"] = "external-create-session-request", ["type"] = "external-compiled-request" };
-            handshake["responseAdapter"] = new JsonObject { ["id"] = "external-create-session-response", ["type"] = "external-compiled-response" };
-            handshake["serverOwnedInputs"] = new JsonArray(new JsonObject { ["name"] = "organization-code", ["secretBinding"] = "organization" });
-            JsonNode admission = handshake["externalAdmission"]!;
-            admission["validator"] = new JsonObject { ["id"] = "external-session-validator", ["type"] = "external-compiled-validator" };
-            admission["serverOwnedInputs"] = new JsonArray(new JsonObject { ["name"] = "organization-code", ["secretBinding"] = "organization" });
+            string operationId = operation["operationId"]!.GetValue<string>();
+            if (string.Equals(operationId, "session-bootstrap", StringComparison.Ordinal))
+            {
+                JsonNode handshake = operation["typedSessionHandshake"]!;
+                handshake["requestAdapter"] = new JsonObject { ["id"] = "external-create-session-request", ["type"] = "external-compiled-request" };
+                handshake["responseAdapter"] = new JsonObject { ["id"] = "external-create-session-response", ["type"] = "external-compiled-response" };
+                handshake["serverOwnedInputs"] = new JsonArray(new JsonObject { ["name"] = "organization-code", ["secretBinding"] = "organization" });
+                JsonNode admission = handshake["externalAdmission"]!;
+                admission["validator"] = new JsonObject { ["id"] = "external-session-validator", ["type"] = "external-compiled-validator" };
+                admission["serverOwnedInputs"] = new JsonArray(new JsonObject { ["name"] = "organization-code", ["secretBinding"] = "organization" });
+            }
+            else if (string.Equals(operationId, HostedTypedSessionFixture.BusinessOperationId, StringComparison.Ordinal))
+            {
+                operation["typedComposedSoapRequest"] = new JsonObject
+                {
+                    ["requestAdapter"] = new JsonObject
+                    {
+                        ["id"] = "external-business-request",
+                        ["type"] = "external-compiled-business-request"
+                    },
+                    ["requestElement"] = new JsonObject
+                    {
+                        ["localName"] = "BusinessOperation",
+                        ["namespaceUri"] = "urn:synthetic:session"
+                    },
+                    ["serverOwnedInputs"] = new JsonArray(new JsonObject
+                    {
+                        ["name"] = "organization-code",
+                        ["secretBinding"] = "organization"
+                    })
+                };
+            }
         }
         return definition;
+    }
+
+    private static byte[] TypedBusinessInvocationBody(string payload = "normal&lt;&amp;")
+    {
+        string businessPayload = $"<BusinessPayload xmlns=\"urn:synthetic:business-input\"><Payload>{payload}</Payload><OrganizationCode>caller-spoof</OrganizationCode></BusinessPayload>";
+        return TypedBusinessInvocationBodyRaw(businessPayload);
+    }
+
+    private static byte[] TypedBusinessInvocationBodyRaw(string businessPayload)
+    {
+        return JsonSerializer.SerializeToUtf8Bytes(new GatewayInvokeRequest(
+            "1.0", new("text/xml", "utf8", businessPayload), Guid.NewGuid()));
     }
 
     private static HostedExecutionModuleConfiguration Module(string id, string type)

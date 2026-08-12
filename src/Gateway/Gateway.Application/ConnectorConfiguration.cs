@@ -311,6 +311,8 @@ public static class ConnectorOperationBindings
             AddServerOwnedInputs(handshake, secrets);
             if (handshake.TryGetProperty("externalAdmission", out admission)) AddServerOwnedInputs(admission, secrets);
         }
+        if (operation.TryGetProperty("typedComposedSoapRequest", out JsonElement typedComposedRequest))
+            AddServerOwnedInputs(typedComposedRequest, secrets);
         if (operation.TryGetProperty("authorizedCapabilities", out JsonElement capabilities))
         {
             if (capabilities.TryGetProperty("signing", out JsonElement legacySigning))
@@ -387,7 +389,9 @@ public static class ConnectorApprovalArtifacts
         OperationBindingDependencies dependencies = ConnectorOperationBindings.Required(version.CanonicalJson, operationId);
         string endpointName = operation.GetProperty("endpointBinding").GetString()!;
         if (!binding.Endpoints.TryGetValue(endpointName, out Uri? baseUri)) throw new GatewayException("BGW-CONNECTOR-ENDPOINT-BINDING-MISSING", 503);
-        string path = operation.GetProperty("path").GetString()!;
+        string path = operation.TryGetProperty("pathTemplate", out JsonElement pathTemplate)
+            ? pathTemplate.GetString()!
+            : operation.GetProperty("path").GetString()!;
         Uri effective = new(baseUri, path);
         string method = operation.GetProperty("method").GetString()!;
         string redirect = operation.TryGetProperty("redirectPolicy", out JsonElement redirectElement) ? redirectElement.GetString() ?? "deny" : "deny";
@@ -634,6 +638,16 @@ public sealed class ConnectorDefinitionValidator
             if (!operations.Add(operationId)) issues.Add(new("BGW-CONNECTOR-OPERATION-DUPLICATE", $"$.operations[{index}].operationId"));
             string endpoint = operation.GetProperty("endpointBinding").GetString()!;
             if (!endpoints.ContainsKey(endpoint)) issues.Add(new("BGW-CONNECTOR-ENDPOINT-BINDING-UNKNOWN", $"$.operations[{index}].endpointBinding"));
+            if (operation.TryGetProperty("pathTemplate", out JsonElement pathTemplate))
+            {
+                try { _ = PublishedPathTemplate.Validate(pathTemplate.GetString()!, nameof(pathTemplate)); }
+                catch (ArgumentException)
+                {
+                    issues.Add(new("BGW-CONNECTOR-PATH-TEMPLATE-INVALID", $"$.operations[{index}].pathTemplate"));
+                }
+                if (!operation.TryGetProperty("authorizedCapabilities", out _))
+                    issues.Add(new("BGW-CONNECTOR-PATH-TEMPLATE-CAPABILITY-REQUIRED", $"$.operations[{index}].authorizedCapabilities"));
+            }
             JsonElement authentication = operation.GetProperty("authentication");
             foreach (string property in new[] { "authorizationEndpointBinding", "tokenEndpointBinding" })
                 if (authentication.TryGetProperty(property, out JsonElement oauthEndpoint) && !endpoints.ContainsKey(oauthEndpoint.GetString()!))
@@ -659,6 +673,17 @@ public sealed class ConnectorDefinitionValidator
                 ValidateServerOwnedInputs(handshake, secrets, issues, $"$.operations[{index}].typedSessionHandshake");
                 if (handshake.TryGetProperty("externalAdmission", out admission))
                     ValidateServerOwnedInputs(admission, secrets, issues, $"$.operations[{index}].typedSessionHandshake.externalAdmission");
+            }
+            if (operation.TryGetProperty("typedComposedSoapRequest", out JsonElement typedComposedRequest))
+            {
+                string method = operation.GetProperty("method").GetString()!;
+                string authenticationKind = authentication.GetProperty("kind").GetString()!;
+                if (!string.Equals(method, "POST", StringComparison.Ordinal))
+                    issues.Add(new("BGW-CONNECTOR-TYPED-COMPOSED-METHOD", $"$.operations[{index}].method"));
+                if (!string.Equals(authenticationKind, "soapBasicOpaqueSession", StringComparison.Ordinal))
+                    issues.Add(new("BGW-CONNECTOR-TYPED-COMPOSED-AUTH", $"$.operations[{index}].authentication.kind"));
+                ValidateServerOwnedInputs(typedComposedRequest, secrets, issues,
+                    $"$.operations[{index}].typedComposedSoapRequest");
             }
             if (operation.TryGetProperty("extensionConfiguration", out JsonElement extensionConfiguration))
                 ValidateExtensionConfiguration(extensionConfiguration, issues, $"$.operations[{index}].extensionConfiguration");
@@ -735,6 +760,13 @@ public sealed class ConnectorDefinitionValidator
             issues.Add(new("BGW-CONNECTOR-CAPABILITY-AUTH-INVALID", $"$.operations[{operationIndex}].authentication.kind"));
         if (!operation.TryGetProperty("executionStrategy", out _))
             issues.Add(new("BGW-CONNECTOR-CAPABILITY-STRATEGY-REQUIRED", $"$.operations[{operationIndex}].executionStrategy"));
+        JsonElement restrictedTransport = capabilities.GetProperty("restrictedTransport");
+        string bodyMode = restrictedTransport.TryGetProperty("bodyMode", out JsonElement bodyModeElement)
+            ? bodyModeElement.GetString()!
+            : "required";
+        string method = operation.GetProperty("method").GetString()!;
+        if (string.Equals(bodyMode, "none", StringComparison.Ordinal) && method is not ("GET" or "DELETE"))
+            issues.Add(new("BGW-CONNECTOR-RESTRICTED-BODY-NONE-METHOD", $"{location}.restrictedTransport.bodyMode"));
         bool hasLegacy = capabilities.TryGetProperty("signing", out JsonElement legacySigning);
         bool hasSlots = capabilities.TryGetProperty("signingSlots", out JsonElement signingSlots);
         if (hasLegacy && hasSlots)
@@ -1099,7 +1131,9 @@ public sealed class PublishedConnectorCatalog(
             if (!string.Equals(operationId, requiredOperationId, StringComparison.Ordinal)) continue;
             string endpointName = operation.GetProperty("endpointBinding").GetString()!;
             if (!snapshot.Bindings.Endpoints.TryGetValue(endpointName, out Uri? baseUri)) throw new GatewayException("BGW-CONNECTOR-ENDPOINT-BINDING-MISSING", 503);
-            Uri endpoint = new(baseUri, operation.GetProperty("path").GetString()!);
+            Uri endpoint = operation.TryGetProperty("pathTemplate", out JsonElement pathTemplate)
+                ? ValidateTemplateBase(baseUri, pathTemplate.GetString()!)
+                : new Uri(baseUri, operation.GetProperty("path").GetString()!);
             JsonElement auth = operation.GetProperty("authentication");
             GatewayAuthenticationKind authKind = ParseAuthentication(auth.GetProperty("kind").GetString()!);
             string? Resolve(string property) => auth.TryGetProperty(property, out JsonElement logical) && (property == "certificateBinding" ? snapshot.CertificateProviderReferences : snapshot.SecretProviderReferences).TryGetValue(logical.GetString()!, out string? reference)
@@ -1142,6 +1176,15 @@ public sealed class PublishedConnectorCatalog(
         "soapBasicOpaqueSession" => GatewayAuthenticationKind.SoapBasicOpaqueSession,
         _ => throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-CORRUPT", 503)
     };
+
+    private static Uri ValidateTemplateBase(Uri baseUri, string pathTemplate)
+    {
+        _ = PublishedPathTemplate.Validate(pathTemplate, nameof(pathTemplate));
+        if (!baseUri.IsAbsoluteUri || !string.IsNullOrEmpty(baseUri.UserInfo) ||
+            !string.IsNullOrEmpty(baseUri.Query) || !string.IsNullOrEmpty(baseUri.Fragment))
+            throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-CORRUPT", 503);
+        return baseUri;
+    }
 
     private sealed record CacheEntry(PublishedConnectorStamp Stamp, DateTimeOffset ExpiresAt, IReadOnlyDictionary<string, AuthorizedPublishedOperation> Operations);
 }

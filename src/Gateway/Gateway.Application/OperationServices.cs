@@ -87,6 +87,7 @@ public sealed class RestrictedEgressService
     private readonly IGatewayOperationCatalog catalog;
     private readonly IGatewayClock clock;
     private readonly ConnectorExecutionStrategyRegistry executionStrategyRegistry;
+    private readonly AuthorizedPublishedOperationExpectationProviderRegistry expectationProviderRegistry;
     private readonly IAuthorizedConnectorCapabilityDispatcher? capabilityDispatcher;
 
     /// <summary>Creates the provider-neutral egress service with optional startup-fixed strategies.</summary>
@@ -101,7 +102,7 @@ public sealed class RestrictedEgressService
         IPrivateDestinationAllowance? privateDestinationAllowance = null,
         IEnumerable<IConnectorExecutionStrategy>? executionStrategies = null)
         : this(registry, catalog, secrets, certificates, resolver, transport, clock, privateDestinationAllowance,
-            executionStrategies, capabilityDispatcher: null)
+            executionStrategies, expectationProviders: null, capabilityDispatcher: null)
     {
     }
 
@@ -115,6 +116,7 @@ public sealed class RestrictedEgressService
         IGatewayClock clock,
         IPrivateDestinationAllowance? privateDestinationAllowance,
         IEnumerable<IConnectorExecutionStrategy>? executionStrategies,
+        IEnumerable<IAuthorizedPublishedOperationExpectationProvider>? expectationProviders,
         IAuthorizedConnectorCapabilityDispatcher? capabilityDispatcher)
     {
         this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
@@ -123,6 +125,7 @@ public sealed class RestrictedEgressService
         executionStrategyRegistry = new(PrependDefault(
             new DefaultHttpExecutionStrategy(secrets, certificates, resolver, transport, privateDestinationAllowance),
             executionStrategies));
+        expectationProviderRegistry = new(expectationProviders);
         this.capabilityDispatcher = capabilityDispatcher;
     }
 
@@ -161,6 +164,16 @@ public sealed class RestrictedEgressService
             throw new GatewayException("BGW-PROTOCOL-PAYLOAD", 413);
         ConnectorExecutionStrategyKey strategyKey = ConnectorExecutionStrategyKeys.Resolve(operation);
         ConnectorExecutionStrategyRegistration registration = executionStrategyRegistry.Required(strategyKey, operation.Authentication);
+        IAuthorizedPublishedOperationExpectationProvider? expectationProvider = null;
+        IAuthorizedConnectorCapabilityDispatcher? expectationDispatcher = null;
+        if (!registration.PreservesCoreFailures)
+        {
+            if (!HasExactPublishedAuthority(published, connectorId, operationId, identity.EnvironmentId, operation, strategyKey))
+                throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+            expectationProvider = expectationProviderRegistry.Required(strategyKey);
+            expectationDispatcher = capabilityDispatcher ??
+                throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+        }
         AuthorizedGatewayInvocation invocation = new(authenticated, connectorId, operationId);
         AuthorizedConnectorExecution execution = new(
             invocation,
@@ -170,6 +183,26 @@ public sealed class RestrictedEgressService
             capabilityDispatcher,
             published?.Authority,
             published?.ExtensionConfiguration);
+        if (!registration.PreservesCoreFailures)
+        {
+            AuthorizedPublishedOperationExpectations expectations;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                expectations = expectationProvider!.CreateExpectations(new AuthorizedPublishedOperationExpectationContext(execution)) ??
+                    throw new InvalidOperationException("Published operation expectation provider returned no expectations.");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+            catch (Exception)
+            {
+                throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+            }
+            await expectationDispatcher!.ValidatePublishedOperationExpectationsAsync(
+                execution, expectations, cancellationToken).ConfigureAwait(false);
+        }
         QualifiedGatewayExecutionResult result;
         try
         {
@@ -209,6 +242,24 @@ public sealed class RestrictedEgressService
         await registry.AppendAuditAsync(new GatewayAuditEvent(Guid.NewGuid(), clock.UtcNow, identity.TenantId, "installation", identity.InstallationId.ToString("D"), "operation.invoke", "operation", connectorId + "/" + operationId, request.CorrelationId, "success", "BGW-OPERATION-OK", new Dictionary<string, string> { ["connectorVersion"] = operation.Version, ["statusCategory"] = (result.StatusCode / 100).ToString(System.Globalization.CultureInfo.InvariantCulture) + "xx", ["callerKind"] = identity.InstallationKind.ToString() }), cancellationToken).ConfigureAwait(false);
         return new GatewayInvokeResponse(request.CorrelationId, operation.Version, new GatewayPayload(result.ContentType, "base64", Convert.ToBase64String(responseBody)));
     }
+
+    private static bool HasExactPublishedAuthority(
+        AuthorizedPublishedOperation? published,
+        string connectorId,
+        string operationId,
+        Guid environmentId,
+        GatewayOperationDefinition operation,
+        ConnectorExecutionStrategyKey strategyKey) =>
+        published?.Operation is not null && published.Authority is not null &&
+        published.ExtensionConfiguration is not null && ReferenceEquals(published.Operation, operation) &&
+        string.Equals(published.Operation.ConnectorId, connectorId, StringComparison.Ordinal) &&
+        string.Equals(published.Operation.OperationId, operationId, StringComparison.Ordinal) &&
+        string.Equals(published.Authority.ConnectorId, connectorId, StringComparison.Ordinal) &&
+        string.Equals(published.Authority.OperationId, operationId, StringComparison.Ordinal) &&
+        published.Authority.EnvironmentId == environmentId &&
+        string.Equals(published.Authority.ConnectorVersion, operation.Version, StringComparison.Ordinal) &&
+        published.Authority.AuthenticationKind == operation.Authentication &&
+        published.Authority.ExecutionStrategyKey == strategyKey;
 
     private static IEnumerable<IConnectorExecutionStrategy> PrependDefault(
         IConnectorExecutionStrategy defaultStrategy,

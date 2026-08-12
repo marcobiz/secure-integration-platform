@@ -176,6 +176,52 @@ public sealed class ConnectorExecutionSeamBoundaryTests
     }
 
     [Fact]
+    public void Wave1_CT_typed_composed_request_has_no_new_bridge_or_arbitrary_body_binding_provider_or_transport_escape()
+    {
+        string soapRoot = Path.Combine(Root, "src", "Gateway", "Gateway.ConnectorRuntime.Auth.Soap");
+        string contracts = File.ReadAllText(Path.Combine(soapRoot, "TypedComposedSoapRequestContracts.cs"));
+        string boundary = File.ReadAllText(Path.Combine(soapRoot, "TypedComposedSoapRequestXmlBoundary.cs"));
+        string bindingInputs = File.ReadAllText(Path.Combine(soapRoot, "AuthorizedConnectorBindingInputs.cs"));
+        string adapterWriter = File.ReadAllText(Path.Combine(soapRoot, "CoreOwnedAdapterXmlWriter.cs"));
+        string executionContracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"));
+        string loader = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "ConnectorExecutionModuleLoader.cs"));
+        string migration = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0014_typed_composed_soap_request_inputs.sql"));
+
+        Assert.Contains("public interface ITypedComposedSoapRequestAdapter", contracts, StringComparison.Ordinal);
+        Assert.Contains("void WriteRequest(XmlWriter writer, TypedComposedSoapRequestContext context)", contracts, StringComparison.Ordinal);
+        Assert.Contains("public Stream OpenBusinessPayloadStream()", contracts, StringComparison.Ordinal);
+        Assert.Contains("public AuthorizedConnectorBindingInputs ServerOwnedInputs", contracts, StringComparison.Ordinal);
+        Assert.Contains("using (serverOwnedInputs.BindToCoreWriter(adapterWriter))", boundary, StringComparison.Ordinal);
+        Assert.Contains("private CoreOwnedAdapterXmlWriter? boundWriter", bindingInputs, StringComparison.Ordinal);
+        Assert.Contains("boundWriter.WriteAuthorizedElementValue(value)", bindingInputs, StringComparison.Ordinal);
+        Assert.DoesNotContain("boundWriter.WriteChars", bindingInputs, StringComparison.Ordinal);
+        Assert.Contains("attributeOpen || inner.WriteState is not (WriteState.Element or WriteState.Content)", adapterWriter, StringComparison.Ordinal);
+        Assert.Contains("lock (synchronization)", adapterWriter, StringComparison.Ordinal);
+        Assert.DoesNotContain("inner.WriteRaw", adapterWriter, StringComparison.Ordinal);
+        Assert.Equal(2, Regex.Count(adapterWriter, @"public override void WriteRaw\([^)]*\) => DenyRaw\(\);"));
+        Assert.Contains("writer.WriteStartElement(\"op\", authority.RequestElement.LocalName", boundary, StringComparison.Ordinal);
+        Assert.Contains("TypedComposedSoapRequestAdapterRegistry", contracts, StringComparison.Ordinal);
+        Assert.Contains("RegisterAdapter(typeof(ITypedComposedSoapRequestAdapter)", loader, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExecuteTypedComposedSoap", executionContracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public byte[]", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public ReadOnlyMemory", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public Memory", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public Span", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("public Uri", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpClient", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpRequestMessage", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("ISecretValueProvider", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("IConnectorConfigurationStore", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("IRestrictedTransport", contracts, StringComparison.Ordinal);
+        Assert.DoesNotContain("Dictionary<string, object", contracts, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("XPath", contracts, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("typedComposedSoapRequest' -> 'serverOwnedInputs'", migration, StringComparison.Ordinal);
+        Assert.Contains("installation_connector_grant", migration, StringComparison.Ordinal);
+        Assert.Contains("TO gateway_runtime", migration, StringComparison.Ordinal);
+        Assert.Contains("FROM PUBLIC, gateway_admin, gateway_readonly", migration, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Wave1_CT_authorized_signing_slots_are_bounded_opaque_slot_bound_and_server_projected()
     {
         string executionContracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"));
@@ -209,6 +255,65 @@ public sealed class ConnectorExecutionSeamBoundaryTests
     }
 
     [Fact]
+    public void Wave1_CT_authorized_Published_operation_preflight_path_and_body_authority_remain_Core_owned()
+    {
+        string expectations = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Application", "AuthorizedPublishedOperationExpectationContracts.cs"));
+        string executionContracts = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"));
+        string publicRequests = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Application", "AuthorizedVerticalCapabilityContracts.cs"));
+        string pathProjection = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Application", "PublishedPathTemplate.cs"));
+        string dispatch = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Application", "OperationServices.cs"));
+        string runtime = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Api", "AuthorizedVerticalCapabilityRuntime.cs"));
+        string schema = File.ReadAllText(Path.Combine(
+            Root, "docs", "connectors", "connector-definition.schema.json"));
+
+        Assert.Contains("public interface IAuthorizedPublishedOperationExpectationProvider", expectations, StringComparison.Ordinal);
+        Assert.Contains("internal AuthorizedPublishedOperationExpectationContext(", expectations, StringComparison.Ordinal);
+        Assert.Contains("public AuthorizedPublishedExtensionConfiguration OpenPublishedExtensionConfiguration()", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("public AuthorizedPublishedOperationExpectationContext(", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("IAuthorizedConnectorCapabilityBridge", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("IConnectorConfigurationStore", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("IKeyOperationProvider", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("ICertificatePublicMaterialProvider", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpClient", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("HttpRequestMessage", expectations, StringComparison.Ordinal);
+        Assert.DoesNotContain("ValidatePublishedOperationExpectations", executionContracts[..executionContracts.IndexOf("internal interface IAuthorizedConnectorCapabilityDispatcher", StringComparison.Ordinal)], StringComparison.Ordinal);
+
+        int authoritativeGuard = dispatch.IndexOf("HasExactPublishedAuthority(published", StringComparison.Ordinal);
+        int providerLookup = dispatch.IndexOf("expectationProviderRegistry.Required(strategyKey)", StringComparison.Ordinal);
+        int preflight = dispatch.IndexOf("capabilityDispatcher.ValidatePublishedOperationExpectationsAsync", StringComparison.Ordinal);
+        if (preflight < 0)
+            preflight = dispatch.IndexOf("expectationDispatcher!.ValidatePublishedOperationExpectationsAsync", StringComparison.Ordinal);
+        int scope = dispatch.IndexOf("execution.EnterCapabilityScope", StringComparison.Ordinal);
+        int strategy = dispatch.IndexOf("registration.Strategy.ExecuteAsync", StringComparison.Ordinal);
+        Assert.True(authoritativeGuard >= 0 && providerLookup > authoritativeGuard && preflight > providerLookup && scope > preflight && strategy > scope);
+        Assert.DoesNotContain("!registration.PreservesCoreFailures && published is not null", dispatch, StringComparison.Ordinal);
+        Assert.Contains("expectationDispatcher = capabilityDispatcher ??", dispatch, StringComparison.Ordinal);
+
+        Assert.Contains("public sealed class AuthorizedConnectorPathParameter", publicRequests, StringComparison.Ordinal);
+        Assert.DoesNotContain("Uri", publicRequests, StringComparison.Ordinal);
+        Assert.Contains("internal static class PublishedPathTemplate", pathProjection, StringComparison.Ordinal);
+        Assert.Contains("Uri.EscapeDataString(value)", pathProjection, StringComparison.Ordinal);
+        Assert.Contains("projected.Port != baseEndpoint.Port", pathProjection, StringComparison.Ordinal);
+        Assert.Contains("string.IsNullOrEmpty(projected.Query)", pathProjection, StringComparison.Ordinal);
+        Assert.Contains("string.IsNullOrEmpty(projected.Fragment)", pathProjection, StringComparison.Ordinal);
+        Assert.Contains("outbound.Content = new ByteArrayContent", runtime, StringComparison.Ordinal);
+        Assert.Contains("else if (request.HasBody)", runtime, StringComparison.Ordinal);
+        Assert.Contains("PublishedRestrictedTransportBodyMode.None", runtime, StringComparison.Ordinal);
+        Assert.Contains("await authority.ResolveCapabilityPresenceAsync(cancellationToken)", runtime, StringComparison.Ordinal);
+        Assert.Contains("expectations.RestrictedTransportRequired != actualPresence.RestrictedTransportPresent", runtime, StringComparison.Ordinal);
+        Assert.Contains("expectations.SigningSlots.Count != actualPresence.SigningSlots.Count", runtime, StringComparison.Ordinal);
+        Assert.Contains("await authority.ResolveCurrentAsync(cancellationToken)", runtime, StringComparison.Ordinal);
+        Assert.Contains("\"pathTemplate\"", schema, StringComparison.Ordinal);
+        Assert.Contains("\"bodyMode\"", schema, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Wave1_CT_generic_seam_and_Core_solution_have_no_vertical_dependency_or_logic()
     {
         string[] files =
@@ -219,6 +324,8 @@ public sealed class ConnectorExecutionSeamBoundaryTests
             Path.Combine(Root, "src", "Gateway", "Gateway.Api", "GatewayHostOptions.cs"),
             Path.Combine(Root, "src", "Gateway", "Gateway.Api", "AuthorizedVerticalCapabilityRuntime.cs"),
             Path.Combine(Root, "src", "Gateway", "Gateway.Application", "AuthorizedVerticalCapabilityContracts.cs"),
+            Path.Combine(Root, "src", "Gateway", "Gateway.Application", "AuthorizedPublishedOperationExpectationContracts.cs"),
+            Path.Combine(Root, "src", "Gateway", "Gateway.Application", "PublishedPathTemplate.cs"),
             Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorConfiguration.cs"),
             Path.Combine(Root, "tests", "support", "Synthetic.ConnectorExecutionModule", "SyntheticExecutionModule.cs")
         ];

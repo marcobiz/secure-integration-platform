@@ -225,6 +225,8 @@ internal static class ConnectorExecutionModuleLoader
         private int requestAdapterCount;
         private int responseAdapterCount;
         private int validationAdapterCount;
+        private int composedRequestAdapterCount;
+        private int expectationProviderCount;
 
         internal ConnectorExecutionStrategyRegistrar(IServiceCollection services, Assembly moduleAssembly)
         {
@@ -266,6 +268,13 @@ internal static class ConnectorExecutionModuleLoader
 
         public void AddExternalSessionValidationAdapter<TAdapter>() where TAdapter : class =>
             RegisterAdapter(typeof(ITypedExternalSessionValidationAdapter), typeof(TAdapter), ref validationAdapterCount);
+
+        public void AddTypedComposedSoapRequestAdapter<TAdapter>() where TAdapter : class =>
+            RegisterAdapter(typeof(ITypedComposedSoapRequestAdapter), typeof(TAdapter), ref composedRequestAdapterCount);
+
+        public void AddAuthorizedPublishedOperationExpectationProvider<TProvider>()
+            where TProvider : class, IAuthorizedPublishedOperationExpectationProvider =>
+            RegisterAdapter(typeof(IAuthorizedPublishedOperationExpectationProvider), typeof(TProvider), ref expectationProviderCount);
 
         internal void ValidateAndCommit()
         {

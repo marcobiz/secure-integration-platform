@@ -1,7 +1,9 @@
 using System.Collections.Frozen;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Xml;
+using System.Xml.Linq;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 using SecureIntegration.Providers.Abstractions;
@@ -18,6 +20,7 @@ public sealed class SyntheticExecutionModule : IConnectorExecutionModule
     public void RegisterExecutionStrategies(IConnectorExecutionStrategyRegistrar registrar)
     {
         registrar.AddSingleton<SyntheticExecutionResultWriter>();
+        registrar.AddAuthorizedPublishedOperationExpectationProvider<SyntheticPublishedOperationExpectationProvider>();
         registrar.AddStrategy<SyntheticEchoExecutionStrategy>();
         registrar.AddStrategy<SyntheticThrowingExecutionStrategy>();
         registrar.AddStrategy<SyntheticFakeCancellationExecutionStrategy>();
@@ -33,10 +36,129 @@ public sealed class SyntheticExecutionModule : IConnectorExecutionModule
         registrar.AddStrategy<SyntheticRetainedSigningBridgeExecutionStrategy>();
         registrar.AddStrategy<SyntheticFireAndForgetSigningExecutionStrategy>();
         registrar.AddStrategy<SyntheticFireAndForgetRestrictedTransportExecutionStrategy>();
+        registrar.AddStrategy<SyntheticAuthorizedPublishedOperationExecutionStrategy>();
+        registrar.AddStrategy<SyntheticExpectationProbeExecutionStrategy>();
         registrar.AddTypedSessionHandshakeRequestAdapter<SyntheticExternalTypedSessionRequestAdapter>();
         registrar.AddTypedSessionHandshakeResponseAdapter<SyntheticExternalTypedSessionResponseAdapter>();
         registrar.AddExternalSessionValidationAdapter<SyntheticExternalSessionValidationAdapter>();
+        registrar.AddTypedComposedSoapRequestAdapter<SyntheticExternalTypedComposedSoapRequestAdapter>();
     }
+}
+
+/// <summary>
+/// Neutral module-owned expectation source. Only the dedicated authorized-operation strategy has a
+/// semantic profile; the other qualification strategies still receive a mandatory exact-A check.
+/// </summary>
+public sealed class SyntheticPublishedOperationExpectationProvider : IAuthorizedPublishedOperationExpectationProvider
+{
+    private static readonly IReadOnlySet<ConnectorExecutionStrategyKey> Strategies = new[]
+    {
+        "synthetic-echo", "synthetic-throw", "synthetic-fake-cancel", "synthetic-forged-error",
+        "synthetic-capability-bridge", "synthetic-retained-bridge", "synthetic-signed-mtls",
+        "synthetic-dual-slot", "synthetic-unknown-slot", "synthetic-repeat-slot", "synthetic-missing-slot",
+        "synthetic-denied-signing-claim", "synthetic-retained-signing", "synthetic-fire-forget-signing",
+        "synthetic-fire-forget-transport", "synthetic-authorized-operation", "synthetic-expectation-probe"
+    }.Select(ConnectorExecutionStrategyKey.Parse).ToFrozenSet();
+
+    /// <inheritdoc />
+    public IReadOnlySet<ConnectorExecutionStrategyKey> SupportedExecutionStrategies => Strategies;
+
+    /// <inheritdoc />
+    public AuthorizedPublishedOperationExpectations CreateExpectations(AuthorizedPublishedOperationExpectationContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        bool expectationProbe = string.Equals(
+            context.ExecutionStrategyKey.Value, "synthetic-expectation-probe", StringComparison.Ordinal);
+        if (expectationProbe) SyntheticExpectationProbe.RecordProviderInvocation();
+
+        using Stream stream = context.OpenPublishedExtensionConfiguration().OpenJsonStream();
+        using JsonDocument document = JsonDocument.Parse(stream, new JsonDocumentOptions { MaxDepth = 8 });
+        if (!document.RootElement.TryGetProperty("policyExpectations", out JsonElement profile))
+            return new(context.AuthenticationKind, restrictedTransportRequired: false, []);
+        if (!string.Equals(profile.GetProperty("algorithm").GetString(), "RS256", StringComparison.Ordinal))
+            throw new InvalidOperationException("Synthetic expectation algorithm is unsupported.");
+        GatewayAuthenticationKind authentication = profile.GetProperty("authenticationKind").GetString() switch
+        {
+            "mtls" => GatewayAuthenticationKind.MutualTls,
+            "none" => GatewayAuthenticationKind.None,
+            _ => throw new InvalidOperationException("Synthetic expectation authentication kind is unsupported.")
+        };
+        AuthorizedSigningSlotExpectation[] slots = profile.GetProperty("signingSlots").EnumerateArray()
+            .Select(ParseSlot).ToArray();
+        ConnectorSigningSlotKey[] sameIdentity = profile.GetProperty("sameSigningIdentitySlots").EnumerateArray()
+            .Select(value => ConnectorSigningSlotKey.Parse(value.GetString()!)).ToArray();
+        ConnectorSigningSlotKey[] distinctFromMutualTls = profile.GetProperty("signingIdentityDistinctFromMutualTlsSlots").EnumerateArray()
+            .Select(value => ConnectorSigningSlotKey.Parse(value.GetString()!)).ToArray();
+        bool restrictedTransportRequired = !profile.TryGetProperty("restrictedTransportRequired", out JsonElement required) ||
+            required.GetBoolean();
+        return new(authentication, restrictedTransportRequired, slots, sameIdentity, distinctFromMutualTls);
+    }
+
+    private static AuthorizedSigningSlotExpectation ParseSlot(JsonElement value)
+    {
+        JsonElement projectionValue = value.GetProperty("projection");
+        AuthorizedSigningTokenProjectionExpectation projection = projectionValue.GetProperty("kind").GetString() switch
+        {
+            "authorizationBearer" => AuthorizedSigningTokenProjectionExpectation.AuthorizationBearer(),
+            "signedTokenHeader" => AuthorizedSigningTokenProjectionExpectation.SignedTokenHeader(
+                projectionValue.GetProperty("headerName").GetString()!),
+            _ => throw new InvalidOperationException("Synthetic expectation projection is unsupported.")
+        };
+        JsonElement issuerValue = value.GetProperty("issuer");
+        AuthorizedSigningIssuerExpectation issuer = issuerValue.GetProperty("kind").GetString() switch
+        {
+            "exact" => AuthorizedSigningIssuerExpectation.Exact(issuerValue.GetProperty("value").GetString()!),
+            "prefixAndCertificateSubjectCn" => AuthorizedSigningIssuerExpectation.FixedPrefixAndCertificateSubjectCommonName(
+                issuerValue.GetProperty("value").GetString()!),
+            _ => throw new InvalidOperationException("Synthetic expectation issuer relation is unsupported.")
+        };
+        return new(
+            ConnectorSigningSlotKey.Parse(value.GetProperty("slot").GetString()!),
+            value.GetProperty("required").GetBoolean(),
+            AuthorizedSigningAlgorithm.Rs256,
+            projection,
+            value.GetProperty("audience").GetString()!,
+            value.GetProperty("fixedSubject").GetString()!,
+            value.GetProperty("allowedClaims").EnumerateArray().Select(claim => claim.GetString()!).ToArray(),
+            value.GetProperty("tokenLifetimeSeconds").GetInt32(),
+            value.GetProperty("temporalMode").GetString() switch
+            {
+                "iat-exp" => AuthorizedSigningTemporalMode.IssuedAtExpiration,
+                "iat-nbf-exp" => AuthorizedSigningTemporalMode.IssuedAtNotBeforeExpiration,
+                _ => throw new InvalidOperationException("Synthetic expectation temporal mode is unsupported.")
+            },
+            value.GetProperty("jtiRequired").GetBoolean(),
+            value.GetProperty("certificateHeader").GetString() switch
+            {
+                "none" => AuthorizedSigningCertificateHeaderMode.None,
+                "leaf" => AuthorizedSigningCertificateHeaderMode.Leaf,
+                "chain" => AuthorizedSigningCertificateHeaderMode.Chain,
+                _ => throw new InvalidOperationException("Synthetic expectation certificate header is unsupported.")
+            },
+            issuer);
+    }
+}
+
+/// <summary>Counts mandatory expectation-provider and strategy-scope entry for hosted security proof.</summary>
+public static class SyntheticExpectationProbe
+{
+    private static int providerInvocations;
+    private static int capabilityScopeEntries;
+
+    /// <summary>Clears isolated counters before one hosted invocation.</summary>
+    public static void Reset()
+    {
+        Interlocked.Exchange(ref providerInvocations, 0);
+        Interlocked.Exchange(ref capabilityScopeEntries, 0);
+    }
+
+    /// <summary>Number of expectation-provider invocations.</summary>
+    public static int ProviderInvocations => Volatile.Read(ref providerInvocations);
+    /// <summary>Number of strategy entries, each necessarily after host capability-scope entry.</summary>
+    public static int CapabilityScopeEntries => Volatile.Read(ref capabilityScopeEntries);
+
+    internal static void RecordProviderInvocation() => Interlocked.Increment(ref providerInvocations);
+    internal static void RecordCapabilityScopeEntry() => Interlocked.Increment(ref capabilityScopeEntries);
 }
 
 /// <summary>Qualification-only module that deliberately registers a duplicate key.</summary>
@@ -51,6 +173,19 @@ public sealed class SyntheticDuplicateExecutionModule : IConnectorExecutionModul
         registrar.AddSingleton<SyntheticExecutionResultWriter>();
         registrar.AddStrategy<SyntheticEchoExecutionStrategy>();
         registrar.AddStrategy<DuplicateSyntheticEchoExecutionStrategy>();
+    }
+}
+
+/// <summary>Qualification-only module that deliberately omits its mandatory expectation provider.</summary>
+public sealed class SyntheticMissingExpectationProviderModule : IConnectorExecutionModule
+{
+    /// <inheritdoc />
+    public ConnectorExecutionModuleId Id => ConnectorExecutionModuleId.Parse("synthetic-missing-expectation");
+
+    /// <inheritdoc />
+    public void RegisterExecutionStrategies(IConnectorExecutionStrategyRegistrar registrar)
+    {
+        registrar.AddStrategy<SyntheticAuthorizedPublishedOperationExecutionStrategy>();
     }
 }
 
@@ -227,6 +362,73 @@ public sealed class SyntheticDualSlotExecutionStrategy : IConnectorExecutionStra
         return await execution.Capabilities.ExecuteRestrictedTransportAsync(
             new AuthorizedConnectorRestrictedTransportRequest(Encoding.UTF8.GetBytes(bodyValue)),
             cancellationToken).ConfigureAwait(false);
+    }
+}
+
+/// <summary>
+/// Neutral positive strategy for mandatory policy preflight, bounded Published path projection and
+/// explicit REQUIRED/NONE body modes. It receives no policy metadata, URI, method or header surface.
+/// </summary>
+public sealed class SyntheticAuthorizedPublishedOperationExecutionStrategy : IConnectorExecutionStrategy
+{
+    /// <inheritdoc />
+    public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("synthetic-authorized-operation");
+
+    /// <inheritdoc />
+    public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => SyntheticAuthenticationKinds.MutualTls;
+
+    /// <inheritdoc />
+    public async Task<QualifiedGatewayExecutionResult> ExecuteAsync(
+        AuthorizedConnectorExecution execution,
+        CancellationToken cancellationToken)
+    {
+        using Stream configuration = execution.OpenPublishedExtensionConfiguration().OpenJsonStream();
+        using JsonDocument document = await JsonDocument.ParseAsync(configuration, cancellationToken: cancellationToken).ConfigureAwait(false);
+        JsonElement requestProfile = document.RootElement.GetProperty("requestProjection");
+        string claimName = requestProfile.GetProperty("claimName").GetString()!;
+        JsonElement claimValue = requestProfile.GetProperty("claimValue").Clone();
+        IReadOnlyDictionary<string, JsonElement> claims = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            [claimName] = claimValue
+        };
+        _ = await execution.Capabilities.CreateSignedTokenAsync(
+            ConnectorSigningSlotKey.Parse("primary"), claims, cancellationToken).ConfigureAwait(false);
+        _ = await execution.Capabilities.CreateSignedTokenAsync(
+            ConnectorSigningSlotKey.Parse("secondary"), claims, cancellationToken).ConfigureAwait(false);
+
+        AuthorizedConnectorPathParameter[] pathParameters = requestProfile.GetProperty("pathParameters")
+            .EnumerateArray()
+            .Select(value => new AuthorizedConnectorPathParameter(
+                value.GetProperty("name").GetString()!,
+                value.GetProperty("value").GetString()!))
+            .ToArray();
+        AuthorizedConnectorRestrictedTransportRequest request = requestProfile.GetProperty("bodyMode").GetString() switch
+        {
+            "required" => new AuthorizedConnectorRestrictedTransportRequest(
+                Encoding.UTF8.GetBytes(requestProfile.GetProperty("body").GetString()!), pathParameters),
+            "none" => new AuthorizedConnectorRestrictedTransportRequest(pathParameters),
+            _ => throw new InvalidOperationException("Synthetic request body mode is unsupported.")
+        };
+        return await execution.Capabilities.ExecuteRestrictedTransportAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+}
+
+/// <summary>Side-effect-free strategy used to prove exact presence and absence preflight semantics.</summary>
+public sealed class SyntheticExpectationProbeExecutionStrategy : IConnectorExecutionStrategy
+{
+    /// <inheritdoc />
+    public ConnectorExecutionStrategyKey Key => ConnectorExecutionStrategyKey.Parse("synthetic-expectation-probe");
+    /// <inheritdoc />
+    public IReadOnlySet<GatewayAuthenticationKind> SupportedAuthenticationKinds => SyntheticAuthenticationKinds.MutualTls;
+
+    /// <inheritdoc />
+    public Task<QualifiedGatewayExecutionResult> ExecuteAsync(
+        AuthorizedConnectorExecution execution,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        SyntheticExpectationProbe.RecordCapabilityScopeEntry();
+        return Task.FromResult(new QualifiedGatewayExecutionResult(200, "application/json", "{}"u8.ToArray()));
     }
 }
 
@@ -447,6 +649,29 @@ public sealed class SyntheticWrongModuleAdapterModule : IConnectorExecutionModul
     /// <inheritdoc />
     public void RegisterExecutionStrategies(IConnectorExecutionStrategyRegistrar registrar) =>
         registrar.AddTypedSessionHandshakeRequestAdapter<ITypedSessionHandshakeRequestAdapter>();
+}
+
+/// <summary>Startup-negative module that duplicates the composed request adapter category.</summary>
+public sealed class SyntheticDuplicateComposedRequestAdapterModule : IConnectorExecutionModule
+{
+    /// <inheritdoc />
+    public ConnectorExecutionModuleId Id => ConnectorExecutionModuleId.Parse("synthetic-duplicate-composed-adapter");
+    /// <inheritdoc />
+    public void RegisterExecutionStrategies(IConnectorExecutionStrategyRegistrar registrar)
+    {
+        registrar.AddTypedComposedSoapRequestAdapter<SyntheticExternalTypedComposedSoapRequestAdapter>();
+        registrar.AddTypedComposedSoapRequestAdapter<SyntheticExternalTypedComposedSoapRequestAdapter>();
+    }
+}
+
+/// <summary>Startup-negative module that attempts a non-module composed adapter registration.</summary>
+public sealed class SyntheticWrongModuleComposedRequestAdapterModule : IConnectorExecutionModule
+{
+    /// <inheritdoc />
+    public ConnectorExecutionModuleId Id => ConnectorExecutionModuleId.Parse("synthetic-wrong-composed-adapter");
+    /// <inheritdoc />
+    public void RegisterExecutionStrategies(IConnectorExecutionStrategyRegistrar registrar) =>
+        registrar.AddTypedComposedSoapRequestAdapter<ITypedComposedSoapRequestAdapter>();
 }
 
 /// <summary>Startup-negative module that requests direct provider and transport authorities.</summary>
@@ -683,6 +908,178 @@ internal static class SyntheticExternalTypedSessionProtocol
     internal const string Namespace = "urn:synthetic:typed-session";
     internal static readonly FrozenSet<string> RequiredInputs =
         new[] { "organization-code" }.ToFrozenSet(StringComparer.Ordinal);
+}
+
+internal static class SyntheticExternalTypedComposedSoapProtocol
+{
+    internal const string Namespace = "urn:synthetic:session";
+    internal static readonly FrozenSet<string> RequiredInputs =
+        new[] { "organization-code" }.ToFrozenSet(StringComparer.Ordinal);
+}
+
+/// <summary>External no-IVT adapter for one neutral typed composed-SOAP business request.</summary>
+public sealed class SyntheticExternalTypedComposedSoapRequestAdapter : ITypedComposedSoapRequestAdapter
+{
+    /// <inheritdoc />
+    public string AdapterId => "external-business-request";
+    /// <inheritdoc />
+    public string AdapterType => "external-compiled-business-request";
+    /// <inheritdoc />
+    public IReadOnlySet<string> RequiredServerOwnedInputs => SyntheticExternalTypedComposedSoapProtocol.RequiredInputs;
+
+    /// <inheritdoc />
+    public void WriteRequest(XmlWriter writer, TypedComposedSoapRequestContext context)
+    {
+        Stream retainedPayload = context.OpenBusinessPayloadStream();
+        SyntheticTypedComposedSoapRequestProbe.Retain(context, retainedPayload);
+        SyntheticBindingInputLifetimeProbe.Retain(context.ServerOwnedInputs);
+        using Stream first = context.OpenBusinessPayloadStream();
+        using Stream second = context.OpenBusinessPayloadStream();
+        XDocument firstDocument = ReadBusinessPayload(first);
+        XDocument secondDocument = ReadBusinessPayload(second);
+        XElement root = firstDocument.Root ?? throw new XmlException();
+        if (secondDocument.Root?.Name != root.Name) throw new XmlException();
+        XName payloadName = XName.Get("Payload", "urn:synthetic:business-input");
+        XElement payloadElement = root.Elements(payloadName).Single();
+        if (root.Elements().Any(value => value.Name != payloadName &&
+            value.Name != XName.Get("OrganizationCode", "urn:synthetic:business-input")))
+            throw new XmlException();
+        string payload = payloadElement.Value;
+        if (payload.Length > 4_096) throw new XmlException();
+        if (string.Equals(payload, "adapter-throws-canary", StringComparison.Ordinal))
+            throw new InvalidOperationException("synthetic-typed-composed-adapter-canary");
+        if (string.Equals(payload, "adapter-fake-cancellation", StringComparison.Ordinal))
+            throw new OperationCanceledException("synthetic-typed-composed-fake-cancellation", new CancellationToken(canceled: true));
+        if (string.Equals(payload, "binding-oracle-xml-lang", StringComparison.Ordinal))
+        {
+            writer.WriteStartAttribute("xml", "lang", "http://www.w3.org/XML/1998/namespace");
+            context.ServerOwnedInputs.WriteRequiredXmlValue("organization-code");
+            writer.WriteEndAttribute();
+            SyntheticBindingInputStateOracleProbe.RecordXmlLang(
+                string.Equals(writer.XmlLang, "coreownedorganization", StringComparison.Ordinal));
+            throw new InvalidOperationException("synthetic-binding-oracle-must-not-complete");
+        }
+        if (string.Equals(payload, "binding-oracle-namespace", StringComparison.Ordinal))
+        {
+            writer.WriteStartAttribute("xmlns", "probe", "http://www.w3.org/2000/xmlns/");
+            context.ServerOwnedInputs.WriteRequiredXmlValue("organization-code");
+            writer.WriteEndAttribute();
+            SyntheticBindingInputStateOracleProbe.RecordNamespace(
+                string.Equals(writer.LookupPrefix("coreownedorganization"), "probe", StringComparison.Ordinal));
+            throw new InvalidOperationException("synthetic-binding-oracle-must-not-complete");
+        }
+        if (string.Equals(payload, "binding-oracle-raw-lexical", StringComparison.Ordinal))
+        {
+            writer.WriteRaw("<probe ");
+            SyntheticBindingInputStateOracleProbe.RecordRawLexicalContext();
+            context.ServerOwnedInputs.WriteRequiredXmlValue("organization-code");
+            writer.WriteRaw("=\"\" coreownedorganization=\"\"/>");
+            return;
+        }
+
+        writer.WriteElementString("op", "Payload", SyntheticExternalTypedComposedSoapProtocol.Namespace, payload);
+        writer.WriteStartElement("op", "OrganizationCode", SyntheticExternalTypedComposedSoapProtocol.Namespace);
+        context.ServerOwnedInputs.WriteRequiredXmlValue("organization-code");
+        writer.WriteEndElement();
+
+        static XDocument ReadBusinessPayload(Stream stream)
+        {
+            XmlReaderSettings settings = new()
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+                MaxCharactersFromEntities = 0,
+                MaxCharactersInDocument = 32_768
+            };
+            using XmlReader reader = XmlReader.Create(stream, settings);
+            XDocument document = XDocument.Load(reader, LoadOptions.None);
+            XElement root = document.Root ?? throw new XmlException();
+            if (root.Name != XName.Get("BusinessPayload", "urn:synthetic:business-input") ||
+                root.Attributes().Any(attribute => !attribute.IsNamespaceDeclaration))
+                throw new XmlException();
+            return document;
+        }
+    }
+}
+
+/// <summary>External no-IVT probe for XML writer state that must never observe binding plaintext.</summary>
+public static class SyntheticBindingInputStateOracleProbe
+{
+    private static int xmlLangSucceeded;
+    private static int namespaceSucceeded;
+    private static int rawLexicalContextOpened;
+
+    /// <summary>Clears qualification-only boolean observations without retaining any value.</summary>
+    public static void Reset()
+    {
+        Volatile.Write(ref xmlLangSucceeded, 0);
+        Volatile.Write(ref namespaceSucceeded, 0);
+        Volatile.Write(ref rawLexicalContextOpened, 0);
+    }
+
+    /// <summary>Records only whether the reserved XML attribute exposed the known synthetic value.</summary>
+    public static void RecordXmlLang(bool succeeded) => Volatile.Write(ref xmlLangSucceeded, succeeded ? 1 : 0);
+
+    /// <summary>Records only whether namespace lookup confirmed the known synthetic value.</summary>
+    public static void RecordNamespace(bool succeeded) => Volatile.Write(ref namespaceSucceeded, succeeded ? 1 : 0);
+
+    /// <summary>Records whether raw lexical state was opened before a write-only binding emission.</summary>
+    public static void RecordRawLexicalContext() => Volatile.Write(ref rawLexicalContextOpened, 1);
+
+    /// <summary>Whether any adapter-visible writer-state oracle succeeded.</summary>
+    public static bool AnySucceeded => Volatile.Read(ref xmlLangSucceeded) != 0 ||
+        Volatile.Read(ref namespaceSucceeded) != 0 || Volatile.Read(ref rawLexicalContextOpened) != 0;
+}
+
+/// <summary>External probes for callback lifetime and read-only repeatable business payload views.</summary>
+public static class SyntheticTypedComposedSoapRequestProbe
+{
+    private static TypedComposedSoapRequestContext? retained;
+    private static Stream? retainedPayload;
+
+    /// <summary>Clears qualification-only retained state.</summary>
+    public static void Reset()
+    {
+        Volatile.Write(ref retained, null);
+        Interlocked.Exchange(ref retainedPayload, null)?.Dispose();
+    }
+
+    /// <summary>Retains only to prove callback-scoped context denial and payload clearing.</summary>
+    public static void Retain(TypedComposedSoapRequestContext context, Stream payload)
+    {
+        Volatile.Write(ref retained, context);
+        Interlocked.Exchange(ref retainedPayload, payload)?.Dispose();
+    }
+
+    /// <summary>Returns true only when the retained stream is cleared and the context cannot reopen it.</summary>
+    public static bool RetainedPayloadViewIsClearedAndContextIsDenied()
+    {
+        TypedComposedSoapRequestContext context = Volatile.Read(ref retained)
+            ?? throw new InvalidOperationException("Synthetic typed composed request context was not retained.");
+        Stream payload = Interlocked.Exchange(ref retainedPayload, null)
+            ?? throw new InvalidOperationException("Synthetic typed composed payload stream was not retained.");
+        byte[] observed = new byte[context.BusinessPayloadLength];
+        try
+        {
+            payload.Position = 0;
+            int count = payload.ReadAtLeast(observed, observed.Length, throwOnEndOfStream: false);
+            if (count != observed.Length || observed.Any(value => value != 0)) return false;
+            try
+            {
+                using Stream _ = context.OpenBusinessPayloadStream();
+                return false;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(observed);
+            payload.Dispose();
+        }
+    }
 }
 
 /// <summary>Externally registered neutral request adapter with one server-owned input.</summary>

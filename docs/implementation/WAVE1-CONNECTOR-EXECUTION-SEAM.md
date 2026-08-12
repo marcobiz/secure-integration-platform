@@ -12,9 +12,14 @@ qualified outbound authentication implementations. The invocation sequence is:
 4. Core obtains the explicit execution key, or its legacy server-side mapping;
 5. the bounded registry resolves exactly one strategy and verifies its startup-snapshotted auth-kind
    compatibility;
-6. Core creates `AuthorizedConnectorExecution` over an owned bounded payload snapshot and the
+6. for every external/non-Core strategy, Core requires an authoritative current Published operation,
+   exact authority stamp, exact-key expectation provider and internal dispatcher; a non-authoritative
+   external path is denied;
+7. Core creates `AuthorizedConnectorExecution` over an owned bounded payload snapshot and the
    exact internal Published stamp used for operation/authentication/key resolution;
-7. the strategy returns the existing bounded `QualifiedGatewayExecutionResult`.
+8. Core validates complete module expectations against that exact Published A; `false/empty` means
+   exact verified absence of restricted transport and signing, not an opt-out;
+9. only then does the strategy return the existing bounded `QualifiedGatewayExecutionResult`.
 
 Outbound authentication remains a separate Published property. Core rejects an incompatible
 strategy/auth-kind pair before `ExecuteAsync`; the request caller cannot choose either the
@@ -97,6 +102,9 @@ belongs to the current execution. An external strategy cannot construct that pat
 | duplicate strategy key | startup failure before serving |
 | explicit key absent from deployment | stable `BGW-EGRESS-AUTHENTICATION`, no default fallback |
 | strategy does not declare the current Published authentication kind | stable `BGW-EGRESS-AUTHENTICATION` before strategy/network |
+| external strategy has no authoritative Published operation/authority | stable `BGW-EGRESS-AUTHENTICATION`; provider, scope and strategy are not entered |
+| external strategy lacks exact provider or dispatcher | stable `BGW-EGRESS-AUTHENTICATION` before expectation creation/scope/strategy |
+| empty expectations but Published transport/signing is present | stable `BGW-EGRESS-AUTHENTICATION` before scope/signing/DNS/network |
 | unexpected strategy exception or fake cancellation | stable `BGW-EGRESS-UPSTREAM-REJECTED`, no extension diagnostic |
 | external strategy throws a valid-looking `GatewayException` | code/status/retryability discarded; stable `BGW-EGRESS-UPSTREAM-REJECTED` |
 | provider failure raised by Core's built-in `default-http` strategy | existing sanitized `BGW-PROVIDER-*` code and retryability are preserved; an external module cannot forge this path |
@@ -118,6 +126,7 @@ referenced key.
 | `ConnectorExecutionModuleId`, `MaximumLength`, `Value`, `Parse`, `ToString` | a module proves its identity against deployment configuration | contains no invocation authority; construction is validated and immutable |
 | `IConnectorExecutionStrategy.Key`, `SupportedAuthenticationKinds` and `ExecuteAsync` | minimum execution contract and immutable startup compatibility declaration | Core snapshots metadata and receives only Core-created authority; no service locator or transport parameter |
 | `IConnectorExecutionModule.Id` and `RegisterExecutionStrategies` | explicit startup hook | gets only the restricted registrar and is invoked once at startup |
+| `IAuthorizedPublishedOperationExpectationProvider` and bounded expectation types | declare complete strategy semantics or exact absence for the current safe context | mandatory for every external strategy; exposes no policy, endpoint, provider, certificate, store or bridge authority |
 | `IConnectorExecutionStrategyRegistrar.AddSingleton` overloads and `AddStrategy` | register module-owned dependencies and strategies | implementation rejects non-module-owned types and bounds registrations |
 | `AuthorizedConnectorExecution` identity/version/operation/correlation/auth/key/content-type/length getters, `OpenPayloadStream` and `Capabilities` | read safe facts/business payload and invoke only sanctioned current-operation capabilities | no public constructor/factory/setter; payload is copied; the private bridge is scope-bound and one-shot |
 | `IAuthorizedConnectorCapabilityBridge.ExecuteTypedSessionHandshakeAsync` and `ExecuteComposedSoapAsync` | reuse the two original qualified host capabilities without friend access | no selector parameters or exported implementation; exact current authority only |

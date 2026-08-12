@@ -176,6 +176,9 @@ public sealed class CapabilityLifetimeRemediationTests
         internal int PrivilegedEffects => Volatile.Read(ref privilegedEffects);
         internal bool LifetimeCancellationObserved => Volatile.Read(ref lifetimeCancellationObserved) == 1;
 
+        public Task ValidatePublishedOperationExpectationsAsync(AuthorizedConnectorExecution execution, AuthorizedPublishedOperationExpectations expectations, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
         public Task<QualifiedGatewayExecutionResult> ExecuteTypedSessionHandshakeAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
             throw new InvalidOperationException();
         public Task<QualifiedGatewayExecutionResult> ExecuteComposedSoapAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) =>
@@ -220,6 +223,7 @@ public sealed class CapabilityLifetimeRemediationTests
         {
             get { lock (signingSlots) return signingSlots.ToArray(); }
         }
+        public Task ValidatePublishedOperationExpectationsAsync(AuthorizedConnectorExecution execution, AuthorizedPublishedOperationExpectations expectations, CancellationToken cancellationToken) => Task.CompletedTask;
         public Task<QualifiedGatewayExecutionResult> ExecuteTypedSessionHandshakeAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) => throw new InvalidOperationException();
         public Task<QualifiedGatewayExecutionResult> ExecuteComposedSoapAsync(AuthorizedConnectorExecution execution, CancellationToken cancellationToken) => throw new InvalidOperationException();
         public Task<string> CreateSignedTokenAsync(AuthorizedConnectorExecution execution, ConnectorSigningSlotKey signingSlot, IReadOnlyDictionary<string, JsonElement> claims, CancellationToken cancellationToken)
@@ -314,7 +318,8 @@ public sealed class CapabilityLifetimeRemediationTests
             await registry.AddGrantAsync(new(Guid.NewGuid(), installation, tenant, ConnectorId, OperationId, true, clock.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
             GatewayOperationDefinition operation = new(ConnectorId, OperationId, "1.0.0", new("https://upstream.example.test/invoke"), HttpMethod.Post,
                 "application/json", GatewayAuthenticationKind.None, null, null, null, null, null, 5_000, 4_096, 4_096, false, 0, null, null, strategyKey);
-            GatewayOperationCatalog catalog = new([operation]);
+            GatewayOperationCatalog legacyCatalog = new([operation]);
+            TestAuthorizedOperationCatalog catalog = new(legacyCatalog, operation, environment);
             GatewayInvokeRequest request = new("1.0", new("application/json", "utf8", "{}"), Guid.NewGuid());
             RegisteredInstallationIdentity identity = new(installation, tenant, application, environment,
                 TenantStatus.Active, ApplicationStatus.Active, InstallationStatus.Active, Guid.NewGuid(), CredentialStatus.Active,
@@ -322,8 +327,59 @@ public sealed class CapabilityLifetimeRemediationTests
             GatewayClientPrincipal principal = new(identity, request.CorrelationId);
             NeverTransport transport = new();
             RestrictedEgressService runtime = new(registry, catalog, new NeverSecrets(), new NeverCertificates(), new PublicResolver(),
-                transport, clock, null, [strategy], dispatcher);
+                transport, clock, null, [strategy], [new StaticExpectationProvider(strategyKey)], dispatcher);
             return new(runtime, principal, request, registry, transport);
+        }
+    }
+
+    private sealed class StaticExpectationProvider(ConnectorExecutionStrategyKey strategyKey) :
+        IAuthorizedPublishedOperationExpectationProvider
+    {
+        public IReadOnlySet<ConnectorExecutionStrategyKey> SupportedExecutionStrategies { get; } =
+            new[] { strategyKey }.ToFrozenSet();
+
+        public AuthorizedPublishedOperationExpectations CreateExpectations(AuthorizedPublishedOperationExpectationContext context) =>
+            new(context.AuthenticationKind, restrictedTransportRequired: false, []);
+    }
+
+    private sealed class TestAuthorizedOperationCatalog(
+        GatewayOperationCatalog inner,
+        GatewayOperationDefinition operation,
+        Guid environmentId) : IGatewayOperationCatalog, IAuthorizedPublishedOperationCatalog
+    {
+        private readonly AuthorizedPublishedOperation authorized = new(
+            operation,
+            new(
+                operation.ConnectorId,
+                operation.OperationId,
+                environmentId,
+                operation.Version,
+                Guid.NewGuid(),
+                1,
+                new string('A', 64),
+                Guid.NewGuid(),
+                1,
+                new string('B', 64),
+                new string('C', 64),
+                new string('D', 64),
+                operation.Authentication,
+                ConnectorExecutionStrategyKeys.Resolve(operation)),
+            AuthorizedPublishedExtensionConfiguration.Empty());
+
+        public Task<GatewayOperationDefinition> GetRequiredAsync(string connectorId, string operationId, Guid environment, CancellationToken cancellationToken) =>
+            inner.GetRequiredAsync(connectorId, operationId, environment, cancellationToken);
+
+        public void Invalidate(string connectorId) => inner.Invalidate(connectorId);
+
+        public Task<AuthorizedPublishedOperation> GetRequiredAuthorizedAsync(
+            string connectorId,
+            string operationId,
+            Guid environment,
+            PublishedConnectorAccessContext accessContext,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(authorized);
         }
     }
 

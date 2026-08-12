@@ -17,4 +17,21 @@ describe('canonical Connector Definition client validation', () => {
       message: 'Connector definition validation failed.',
     });
   });
+
+  it('accepts exactly one Published path form under strict AJV validation', () => {
+    const templated: Record<string, unknown> = structuredClone(sample);
+    const templatedOperation = (templated.operations as Array<Record<string, unknown>>)[0];
+    delete templatedOperation.path;
+    templatedOperation.pathTemplate = '/bounded/{tenant}';
+    expect(validateConnectorDefinition(schema, templated)).toEqual([]);
+
+    const ambiguous: Record<string, unknown> = structuredClone(sample);
+    const ambiguousOperation = (ambiguous.operations as Array<Record<string, unknown>>)[0];
+    ambiguousOperation.pathTemplate = '/bounded/{tenant}';
+    expect(validateConnectorDefinition(schema, ambiguous)).toContainEqual({
+      code: 'BGW-CONNECTOR-SCHEMA-ONEOF',
+      location: '/operations/0',
+      message: 'Connector definition validation failed.',
+    });
+  });
 });

@@ -19,7 +19,7 @@ namespace SecureIntegration.Gateway.Integration.Tests.ConnectorRuntime.Auth.Soap
 public sealed class ProductionComposedSoapRuntimeIntegrationTests
 {
     [Fact]
-    public async Task Wave1_E2E_PostgreSQL18_schema_four_eyes_publish_authenticated_grant_strategy_and_real_HTTPS_composed_dispatch_when_configured()
+    public async Task Wave1_E2E_PostgreSQL18_legacy_composed_profile_preserves_original_caller_envelope_without_republish_when_configured()
     {
         await using ProductionFixture fixture = await ProductionFixture.CreateAsync("success");
 
@@ -166,6 +166,7 @@ public sealed class ProductionComposedSoapRuntimeIntegrationTests
                 PublishedConnectorAccessContext? access = mutation == "invalid-grant" ? null : new(installationId, tenantId, applicationId, ConnectorOperation);
                 PublishedConnectorSnapshot snapshot = await store.GetPublishedSnapshotAsync(connectorId, environmentId, access, TestContext.Current.CancellationToken)
                     ?? throw new InvalidOperationException("Published composed snapshot missing.");
+                Assert.DoesNotContain("typedComposedSoapRequest", snapshot.Version.CanonicalJson, StringComparison.Ordinal);
                 SoapSessionCache cache = new();
                 SoapSessionCacheKey sessionKey = new(tenantId, installationId, applicationId, environmentId, connectorId, "1.0.0", snapshot.Bindings.Revision,
                     snapshot.Bindings.Revision, session.Revision, Profile);

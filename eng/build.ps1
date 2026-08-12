@@ -8,6 +8,9 @@ $root = Split-Path -Parent $PSScriptRoot
 $dotnet = Join-Path $root '.dotnet\dotnet.exe'
 if (-not (Test-Path -LiteralPath $dotnet)) { $dotnet = 'dotnet' }
 
+& (Join-Path $PSScriptRoot 'validate-container-base-images.ps1')
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 & $dotnet restore (Join-Path $root 'BrokerGateway.slnx')
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $dotnet build (Join-Path $root 'BrokerGateway.slnx') --configuration $Configuration --no-restore
