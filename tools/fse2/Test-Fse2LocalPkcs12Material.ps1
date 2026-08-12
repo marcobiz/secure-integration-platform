@@ -95,7 +95,10 @@ function Remove-SyntheticStopInput {
         -ErrorCodePrefix ($ErrorCodePrefix + '_ROOT')
     $fileSnapshot = Get-Fse2PathSnapshot -Path $Path -Kind File -RepositoryRoot $root `
         -ErrorCodePrefix ($ErrorCodePrefix + '_FILE') -MaximumBytes 1048576
+    $parentSnapshot = Get-Fse2PathSnapshot -Path $fileSnapshot.ParentFullPath -Kind Directory -RepositoryRoot $root `
+        -ErrorCodePrefix ($ErrorCodePrefix + '_PARENT')
     Assert-Fse2PathSnapshot -Snapshot $allowedRootSnapshot | Out-Null
+    Assert-Fse2PathSnapshot -Snapshot $parentSnapshot | Out-Null
     Assert-Fse2PathSnapshot -Snapshot $fileSnapshot | Out-Null
 
     $separator = [IO.Path]::DirectorySeparatorChar
@@ -110,6 +113,7 @@ function Remove-SyntheticStopInput {
     }
 
     Assert-Fse2PathSnapshot -Snapshot $allowedRootSnapshot | Out-Null
+    Assert-Fse2PathSnapshot -Snapshot $parentSnapshot | Out-Null
     Assert-Fse2PathSnapshot -Snapshot $fileSnapshot | Out-Null
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
         Remove-Item -LiteralPath $fileSnapshot.FullPath -Force
@@ -118,8 +122,32 @@ function Remove-SyntheticStopInput {
         if (-not (Test-Path -LiteralPath $removeTool -PathType Leaf)) {
             throw ($ErrorCodePrefix + '_REMOVE_TOOL_MISSING')
         }
-        & $removeTool '--' $fileSnapshot.FullPath
-        if ($LASTEXITCODE -ne 0) { throw ($ErrorCodePrefix + '_REMOVE_FAILED') }
+        $operatorUid = (& id -u | Out-String).Trim()
+        $parentMetadata = (& stat -Lc '%u:%a' -- $parentSnapshot.FullPath 2>$null | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $operatorUid -notmatch '^\d+$' -or
+            $parentMetadata -notmatch '^(\d+):(\d{3,4})$' -or $Matches[1] -cne $operatorUid) {
+            throw ($ErrorCodePrefix + '_PARENT_OWNER_INVALID')
+        }
+        $originalParentMode = $Matches[2]
+        $parentWriteGranted = $false
+        try {
+            & chmod u+w -- $parentSnapshot.FullPath
+            if ($LASTEXITCODE -ne 0) { throw ($ErrorCodePrefix + '_PARENT_WRITE_GRANT_FAILED') }
+            $parentWriteGranted = $true
+            Assert-Fse2PathSnapshot -Snapshot $allowedRootSnapshot | Out-Null
+            Assert-Fse2PathSnapshot -Snapshot $parentSnapshot | Out-Null
+            Assert-Fse2PathSnapshot -Snapshot $fileSnapshot | Out-Null
+            & $removeTool '--' $fileSnapshot.FullPath
+            if ($LASTEXITCODE -ne 0) { throw ($ErrorCodePrefix + '_REMOVE_FAILED') }
+        }
+        finally {
+            if ($parentWriteGranted -and (Test-Path -LiteralPath $parentSnapshot.FullPath -PathType Container)) {
+                Assert-Fse2PathSnapshot -Snapshot $allowedRootSnapshot | Out-Null
+                Assert-Fse2PathSnapshot -Snapshot $parentSnapshot | Out-Null
+                & chmod $originalParentMode -- $parentSnapshot.FullPath
+                if ($LASTEXITCODE -ne 0) { throw ($ErrorCodePrefix + '_PARENT_MODE_RESTORE_FAILED') }
+            }
+        }
     }
     if (Test-Path -LiteralPath $fileSnapshot.FullPath) { throw ($ErrorCodePrefix + '_REMOVE_INCOMPLETE') }
 }

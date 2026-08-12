@@ -117,7 +117,12 @@ public sealed class ProviderBoundaryTests
 
         Assert.Contains("function Remove-SyntheticStopInput", selfTest, StringComparison.Ordinal);
         Assert.Contains("Get-Fse2PathSnapshot -Path $Path -Kind File", selfTest, StringComparison.Ordinal);
+        Assert.Contains("Get-Fse2PathSnapshot -Path $fileSnapshot.ParentFullPath -Kind Directory", selfTest, StringComparison.Ordinal);
         Assert.Contains("Assert-Fse2PathSnapshot -Snapshot $fileSnapshot", selfTest, StringComparison.Ordinal);
+        Assert.Contains("$parentMetadata = (& stat -Lc '%u:%a' -- $parentSnapshot.FullPath", selfTest, StringComparison.Ordinal);
+        Assert.Contains("$Matches[1] -cne $operatorUid", selfTest, StringComparison.Ordinal);
+        Assert.Contains("& chmod u+w -- $parentSnapshot.FullPath", selfTest, StringComparison.Ordinal);
+        Assert.Contains("& chmod $originalParentMode -- $parentSnapshot.FullPath", selfTest, StringComparison.Ordinal);
         Assert.Contains("$removeTool = '/bin/rm'", selfTest, StringComparison.Ordinal);
         Assert.Contains("FSE2_LOCAL_FOREIGN_UID_STOP_INPUT_CLEANUP_PASS", selfTest, StringComparison.Ordinal);
         Assert.DoesNotContain("Remove-Item -LiteralPath $manifestForStop", selfTest, StringComparison.Ordinal);
