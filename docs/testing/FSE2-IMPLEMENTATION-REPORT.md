@@ -231,6 +231,25 @@ official FSE endpoint call or accreditation.
 - `LIVE_FSE2_QUALIFICATION = BLOCKED_NOT_EXECUTED`;
 - `ACCREDITED_PRODUCTION_READY = false`.
 
+An optional local PKCS#12 provider candidate now supplies a no-cloud laboratory path without
+changing Core or the default Gateway image. Its evidence is synthetic only: the pack validates
+exact server-owned logical references, A1 client-auth role, S1 signing use, leaf/chain/SPKI hashes,
+ephemeral private-key loading and tamper/cross-role denials. The offline importer defaults to
+read-only preflight and requires an explicit execute phase; the Compose overlay is opt-in and does
+not publish or invoke an FSE2 operation. Real source material was not opened and no runtime import,
+revocation check, accreditation or live call is claimed by this change.
+
+Local candidate qualification passed 13/13 provider tests, including custom-root chain validation,
+41/41 architecture tests, the complete ordinary Release build/test gate, documentation/secret and
+package-vulnerability checks, synthetic importer preflight/create/mismatch cleanup, the seven-file
+.NET base-image validator, local image build plus non-root/read-only health/shutdown, and the full
+M5 quickstart followed by the opt-in provider transition and deterministic cleanup. The first
+quickstart attempt applied the new provider before the canonical sample invocation; that invocation
+failed visibly with sanitized `BGW-PROVIDER-REFERENCE-DENIED` and the stack was removed. The final
+design preserves the canonical Synthetic-provider gate first and changes only the Gateway after it
+passes; the affected full gate was then rerun successfully. This is not exact-head CI or live FSE2
+evidence.
+
 The PASS in this report is software compatibility using runtime-only synthetic material. The
 previous offline certificate correlation/trust result remains external, redacted evidence and was
 not opened or reproduced for this change. No real PEM, CSR, certificate, private key or P12 was

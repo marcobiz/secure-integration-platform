@@ -70,12 +70,13 @@ Pin approvati:
 `eng/validate-container-base-images.ps1` è il controllo canonico fail-closed. L'inventario
 repository ammesso è esattamente: `src/Gateway/Gateway.Api/Dockerfile`,
 `src/Gateway/Gateway.Migrations/Dockerfile`, `packs/deployment/azure/Dockerfile`,
+`packs/deployment/local-pkcs12/Dockerfile`,
 `tools/m3/VendorMock/Dockerfile`, `tools/m3/SyntheticVault/Dockerfile` e
 `tools/m3/Provisioner/Dockerfile`. Il confronto dei path Git-tracked è normalizzato,
 ordinale ed esatto: un file mancante, aggiuntivo o ambiguo fallisce anche se non contiene
 un `FROM` .NET. Il parser accetta soltanto `FROM [--platform=<literal>] <reference>
 [AS <stage>]`; per i `FROM` .NET `--platform` è vietato e qualsiasi sintassi non parsata,
-ARG o interpolazione fallisce. Restano obbligatori il mapping ordinato delle 12 occorrenze,
+ARG o interpolazione fallisce. Restano obbligatori il mapping ordinato delle 14 occorrenze,
 l'allowlist tag/digest e l'allineamento SDK con `global.json`.
 La presenza di `OPEN_SOURCE_EXPORT_MANIFEST.json` non può ridurre questo inventario in un
 worktree Git: il profilo repository resta autoritativo quando la root contiene metadata
@@ -99,7 +100,7 @@ image ID indipendentemente dalle immagini Gateway e Migrations.
    `dotnet --list-runtimes`. Aggiornare tag e digest insieme nei Dockerfile e
    nell'allowlist del validator nello stesso commit reviewable.
 4. Eseguire `eng/validate-container-base-images.ps1 -SelfTest`, quindi costruire tutti
-   i sei Dockerfile con `--pull` e, per la qualificazione, senza affidarsi soltanto
+   i sette Dockerfile con `--pull` e, per la qualificazione, senza affidarsi soltanto
    alla cache locale.
 5. Rieseguire non-root/read-only, health/readiness, shutdown, TLS, secret scan,
    vulnerability inventory, SBOM, cleanup e tutti i container/quick-start gate
@@ -149,6 +150,13 @@ Docker Compose di sviluppo/valutazione:
 - PostgreSQL 18;
 - mock external service;
 - opzionale OpenTelemetry collector.
+
+Per il laboratorio FSE2 senza cloud è disponibile l'overlay opt-in
+`deploy/fse2/docker-compose.fse2-local.yml`. Esso usa l'immagine
+`packs/deployment/local-pkcs12/Dockerfile`, monta manifest e materiale esterni a Git in read-only e
+carica il Connector pack FSE2. Non modifica l'immagine Gateway predefinita, non costituisce custody
+di produzione e non abilita call live in modo implicito; si applica il runbook
+`docs/operations/FSE2-LOCAL-PROVIDER-RUNBOOK.md`.
 
 Il provider produttivo iniziale resta Azure Key Vault. Su infrastruttura non Azure, la credenziale di accesso al Vault viene fornita tramite workload identity/federation o secret esterno al repository. Il LocalDevelopment provider rifiuta `Production`.
 

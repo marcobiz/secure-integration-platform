@@ -29,7 +29,8 @@ Aggiornato: 2026-08-12
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | Wave 1 - Generic JWT/X.509 extensions | Remediation mirata local gate PASS; CI exact-head e rereview pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 304 ordinary, 71 PostgreSQL relevant, scan/SBOM/vulnerability/Core export PASS |
 | Healthcare Wave 1 — Regional ePrescription | Foundation compilata; profili regionali non pubblicabili | capability opaca Core post-auth con stato/grant verificati indipendentemente dalle credenziali, adapter al vero store Published, schema estensioni e safe-code allowlist server-owned, isolamento cross-profile; 14 test pack + 4 architecture PASS locali; Lombardia ed Emilia-Romagna `BLOCKED_BY_SPEC` |
-| Healthcare Wave 1 — FSE2 National Connector | Eccezione Core `contentCommitment` qualificata; candidate CI 21/21 PASS, review Core security mirata pending | Tipo provider-neutral bounded con default storico `DigitalSignature`; entrambi gli slot FSE2 esigono `ContentCommitment`, stessa identità sintetica S1 e distinta A1 mTLS. Candidate `02c59240`: General `31600436413` 6/6 e M5/Admin `31600436429` 15/15; CertificateSigning 100/100, FSE2 unit 43/43, hosted 5/5, PostgreSQL 18 canonico 1/1 zero skip, architecture 40/40 e build Release zero warning/errori. Compatibilità software sintetica soltanto; import operativo e live FSE2 non eseguiti. |
+| Healthcare Wave 1 — FSE2 National Connector | Eccezione Core `contentCommitment` integrata su main; exact-main CI 21/21 PASS | Main `152f6f64c0f61a4bc0eceebecd59c6f30ca2f1f1`; General `31602667144` 6/6 e M5/Admin `31602667172` 15/15; entrambi gli slot FSE2 esigono `ContentCommitment`, stessa identità sintetica S1 e distinta A1 mTLS; PostgreSQL FSE2 1/1 zero skip. Compatibilità software sintetica soltanto; import operativo e live FSE2 non eseguiti. |
+| FSE2 local no-cloud provider lab | Candidate locale qualificato; exact-head CI e review pending | Pack PKCS#12 opzionale, importer offline opt-in, overlay Compose separato e settimo build container; provider 13/13, architecture 41/41, build/test ordinari, full quickstart two-phase e cleanup PASS; nessun materiale reale consultato/importato e nessuna call live |
 | M3B e milestone/connector production successivi | Non iniziati | nessun cloud reale, connector sanitario production o adapter commerciale |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
@@ -96,7 +97,7 @@ Esito conclusivo: **GO per M2**. La lineage live è stata integrata linearmente:
   nascoste da un rerun same-SHA. La causa deterministica era il movimento del tag SDK
   `10.0` dal manifest-list digest `sha256:72dd7437…01b0` a un'immagine contenente solo
   SDK `10.0.400`, incompatibile con `global.json` `10.0.302` + `latestPatch`;
-- tutti e soli i 12 `FROM` .NET dei sei Dockerfile tracciati sono ora riferimenti
+- tutti e soli i 14 `FROM` .NET dei sette Dockerfile tracciati sono ora riferimenti
   `exact-tag@sha256:manifest-list-digest`. Le SDK sono `10.0.302` (Debian e
   Alpine 3.24); ASP.NET e runtime sono `10.0.11` (Debian e Alpine 3.24). Nessuna
   famiglia o semantica degli stage è cambiata;
@@ -104,18 +105,18 @@ Esito conclusivo: **GO per M2**. La lineage live è stata integrata linearmente:
   corrispondono e conservano `linux/amd64`, `linux/arm/v7` e `linux/arm64`. Pull ed
   esecuzione per digest confermano SDK `10.0.302` e runtime/ASP.NET `10.0.11`;
 - `eng/validate-container-base-images.ps1`, compatibile Windows PowerShell 5.1,
-  confronta in modo normalizzato, ordinale ed esatto l'inventario Git-tracked con i sei
+  confronta in modo normalizzato, ordinale ed esatto l'inventario Git-tracked con i sette
   Dockerfile approvati; file mancanti, aggiuntivi o ambigui falliscono anche senza `FROM`
   .NET. Il parser fail-closed vieta `--platform`, interpolazione e ARG nei `FROM` .NET,
-  richiede famiglia/tag/digest e mapping ordinato delle 12 occorrenze, e confronta i tag
+  richiede famiglia/tag/digest e mapping ordinato delle 14 occorrenze, e confronta i tag
   SDK con `global.json`. I test end-to-end usano repository Git sintetici e coprono
   inventario, bypass platform/mobile, marker Core export ostile, file mancante, tag mobile,
   digest incrociato, mismatch SDK e positivo canonico. In presenza di metadata `.git` il
   profilo repository resta autoritativo e il manifest Core export non può ridurlo;
 - il build canonico invoca il validator. General CI e le superfici container M5/Admin
   lo espongono come step nominato prima dei build; i build usano pull esplicito. General
-  `gateway-container` costruisce inoltre il Dockerfile Azure con `--pull --no-cache` e
-  verifica image ID e label dell'exact candidate SHA. Ogni successivo aggiornamento dei
+  `gateway-container` costruisce inoltre i Dockerfile Azure e local-pkcs12 con
+  `--pull --no-cache` e verifica image ID e label dell'exact candidate SHA. Ogni successivo aggiornamento dei
   pin o dell'inventario deve ripetere container qualification, security scan e SBOM
   secondo `docs/deployment/deployment-architecture.md`.
 
