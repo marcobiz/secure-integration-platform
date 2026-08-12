@@ -67,11 +67,22 @@ Pin approvati:
 | ASP.NET Alpine | `mcr.microsoft.com/dotnet/aspnet:10.0.11-alpine3.24@sha256:c4b29bf368004ad9076c1ab9bc91fb373561e3905b4345637e14e8b8c57e3be8` |
 | Runtime Alpine | `mcr.microsoft.com/dotnet/runtime:10.0.11-alpine3.24@sha256:216f4e2027da6ae806e0bc4b448669ac0faa00125908e308f31dd70598e58136` |
 
-`eng/validate-container-base-images.ps1` è il controllo canonico fail-closed. Esamina
-i Dockerfile tracciati da Git, confronta le SDK con `global.json`, mantiene l'allowlist
-tag/digest e il mapping esatto delle 12 occorrenze, e rifiuta riferimenti nascosti da
-ARG o interpolazione. `eng/build.ps1` lo esegue sempre e la CI lo espone prima di ogni
-build container interessato.
+`eng/validate-container-base-images.ps1` è il controllo canonico fail-closed. L'inventario
+repository ammesso è esattamente: `src/Gateway/Gateway.Api/Dockerfile`,
+`src/Gateway/Gateway.Migrations/Dockerfile`, `packs/deployment/azure/Dockerfile`,
+`tools/m3/VendorMock/Dockerfile`, `tools/m3/SyntheticVault/Dockerfile` e
+`tools/m3/Provisioner/Dockerfile`. Il confronto dei path Git-tracked è normalizzato,
+ordinale ed esatto: un file mancante, aggiuntivo o ambiguo fallisce anche se non contiene
+un `FROM` .NET. Il parser accetta soltanto `FROM [--platform=<literal>] <reference>
+[AS <stage>]`; per i `FROM` .NET `--platform` è vietato e qualsiasi sintassi non parsata,
+ARG o interpolazione fallisce. Restano obbligatori il mapping ordinato delle 12 occorrenze,
+l'allowlist tag/digest e l'allineamento SDK con `global.json`.
+
+`eng/build.ps1` esegue sempre il validator e la CI lo espone prima di ogni build container
+interessato. Il job General `gateway-container` costruisce obbligatoriamente anche
+`packs/deployment/azure/Dockerfile` con `--pull --no-cache`, applica la label
+`org.opencontainers.image.revision` dell'exact candidate SHA e verifica sia label sia
+image ID indipendentemente dalle immagini Gateway e Migrations.
 
 ### Aggiornamento intenzionale dei pin
 
@@ -89,6 +100,10 @@ build container interessato.
 5. Rieseguire non-root/read-only, health/readiness, shutdown, TLS, secret scan,
    vulnerability inventory, SBOM, cleanup e tutti i container/quick-start gate
    General e M5/Admin sulla nuova exact head.
+
+Un nuovo Dockerfile Git-tracked richiede una modifica intenzionale dell'inventario e del
+mapping nel validator, i relativi test end-to-end e la qualifica completa del nuovo build;
+non può essere introdotto come file non ancora coperto dal controllo.
 
 Non si usa `--pull=false`, non si installa una seconda SDK nel build e non si effettua
 un rerun same-SHA per mascherare un drift già osservato. La failure main che motiva

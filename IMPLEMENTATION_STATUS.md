@@ -103,14 +103,19 @@ Esito conclusivo: **GO per M2**. La lineage live è stata integrata linearmente:
   corrispondono e conservano `linux/amd64`, `linux/arm/v7` e `linux/arm64`. Pull ed
   esecuzione per digest confermano SDK `10.0.302` e runtime/ASP.NET `10.0.11`;
 - `eng/validate-container-base-images.ps1`, compatibile Windows PowerShell 5.1,
-  enumera soltanto i Dockerfile Git-tracked, vieta interpolazione/ARG nei `FROM`,
-  richiede famiglia/tag/digest approvati, confronta i tag SDK con `global.json` e
-  richiede esattamente 12 occorrenze nei sei file attesi. I negative control coprono
-  tag mobile, digest non approvato e mismatch SDK;
+  confronta in modo normalizzato, ordinale ed esatto l'inventario Git-tracked con i sei
+  Dockerfile approvati; file mancanti, aggiuntivi o ambigui falliscono anche senza `FROM`
+  .NET. Il parser fail-closed vieta `--platform`, interpolazione e ARG nei `FROM` .NET,
+  richiede famiglia/tag/digest e mapping ordinato delle 12 occorrenze, e confronta i tag
+  SDK con `global.json`. I test end-to-end usano repository Git sintetici e coprono
+  inventario, bypass platform/mobile, file mancante, tag mobile, digest incrociato,
+  mismatch SDK e positivo canonico;
 - il build canonico invoca il validator. General CI e le superfici container M5/Admin
-  lo espongono come step nominato prima dei build; i build usano pull esplicito. Ogni
-  successivo aggiornamento dei pin deve ripetere container qualification, security
-  scan e SBOM secondo `docs/deployment/deployment-architecture.md`.
+  lo espongono come step nominato prima dei build; i build usano pull esplicito. General
+  `gateway-container` costruisce inoltre il Dockerfile Azure con `--pull --no-cache` e
+  verifica image ID e label dell'exact candidate SHA. Ogni successivo aggiornamento dei
+  pin o dell'inventario deve ripetere container qualification, security scan e SBOM
+  secondo `docs/deployment/deployment-architecture.md`.
 
 ### M3 — vertical slice production-like
 
