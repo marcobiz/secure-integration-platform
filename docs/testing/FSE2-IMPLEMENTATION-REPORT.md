@@ -129,6 +129,19 @@ Preliminary failures remain visible and are not PASS evidence:
   run. No FSE2 test was claimed, the ephemeral container was removed, and the corrected gate was
   restarted from a new empty PostgreSQL 18 database.
 
+The local-provider remediation also retained its intermediate failures: the machine-wide .NET 8
+SDK could not satisfy pinned 10.0.302; the first refactor had two compile errors; Windows `Set-Acl`
+required an unavailable privilege; initial exact-ACL and cleanup checks were too strict for Windows
+normalization; OpenSSL CSR verification required checking both status text and exit code; and local
+Windows symlink creation lacked the privilege, so the Windows test uses a junction surrogate while
+the actual symlink case is mandatory on Linux CI. During the active lab, one host timeout left the
+child process running and a concurrent run produced a migrations exit 139; exact PID ownership,
+marker-safe recovery and exact-label Docker stop returned state to zero. Subsequent runs exposed
+PowerShell quoting in Docker label inspection, the Core host's obsolete requirement that every
+external pack advertise generic secrets, and false-negative readiness probes that used live-only or
+a single short in-container request. Each cause was corrected before the affected whole gate was
+rerun. None of these failed attempts is classified as PASS evidence.
+
 These are harness/implementation findings, not rerun PASS records. Final exact-head local gates and
 new CI run/job identifiers are appended only after they complete.
 
@@ -231,28 +244,44 @@ official FSE endpoint call or accreditation.
 - `LIVE_FSE2_QUALIFICATION = BLOCKED_NOT_EXECUTED`;
 - `ACCREDITED_PRODUCTION_READY = false`.
 
-An optional local PKCS#12 provider candidate now supplies a no-cloud laboratory path without
-changing Core or the default Gateway image. Its evidence is synthetic only: the pack validates
-exact server-owned logical references, A1 client-auth role, S1 signing use, leaf/chain/SPKI hashes,
-ephemeral private-key loading and tamper/cross-role denials. The offline importer defaults to
-read-only preflight and requires an explicit execute phase; the Compose overlay is opt-in and does
-not publish or invoke an FSE2 operation. Real source material was not opened and no runtime import,
-revocation check, accreditation or live call is claimed by this change.
+An optional local PKCS#12 provider candidate supplies a no-cloud laboratory path while remaining
+absent from the Core solution and the default Gateway image. The only Core implementation delta is
+a provider-neutral composition correction: an external pack must expose the client-certificate
+capability but need not advertise generic secrets. No public API or Healthcare/FSE2 logic was added
+to Core. The pack itself declares `SecretValues=false`, rejects Secret manifest entries and returns
+only a stable deny-only `ISecretValueProvider` required by the existing factory contract.
 
-Local candidate qualification passed 13/13 provider tests, including custom-root chain validation,
-41/41 architecture tests, the complete ordinary Release build/test gate, documentation/secret and
-package-vulnerability checks, synthetic importer preflight/create/mismatch cleanup, the seven-file
-.NET base-image validator, local image build plus non-root/read-only health/shutdown, and the full
-M5 quickstart followed by the opt-in provider transition and deterministic cleanup. The first
-quickstart attempt applied the new provider before the canonical sample invocation; that invocation
-failed visibly with sanitized `BGW-PROVIDER-REFERENCE-DENIED` and the stack was removed. The final
-design preserves the canonical Synthetic-provider gate first and changes only the Gateway after it
-passes; the affected full gate was then rerun successfully. This is not exact-head CI or live FSE2
-evidence.
+Before every signature and client-certificate return, one fail-closed routine rereads and exact
+matches manifest/resource version and role, P12, leaf, fingerprint, SPKI and ordered chain; loads the
+P12 with `EphemeralKeySet`; exact-matches the private leaf bytes; and builds the already-loaded chain
+with a pinned `CustomRootTrust`, AIA downloads disabled and no environmental trust fallback. The
+30/30 provider suite covers exact-chain success plus delete/substitute/reorder/root/leaf/P12
+mutations for both signing and mTLS, sanitized errors, readiness false, zero returned signature and
+zero returned certificate, as well as deny-only generic secret behavior.
 
-The PASS in this report is software compatibility using runtime-only synthetic material. The
-previous offline certificate correlation/trust result remains external, redacted evidence and was
-not opened or reproduced for this change. No real PEM, CSR, certificate, private key or P12 was
-accessed or created; no certificate was imported; and no FSE2 endpoint was called. Official
-provisioning, production certificate custody, approved policy values, conformance, accreditation,
-monitoring and live evidence remain required before production readiness.
+The importer now requires both CSR paths, verifies each CSR signature and exact key↔CSR↔certificate
+SPKI before output, and keeps A1/S1 distinct. A shared PowerShell 5.1 path policy denies relative,
+repository-contained, UNC/network, device, ADS and any ancestor/leaf reparse path; snapshots final
+path and parent identity before every sensitive phase; and permits cleanup only through the same
+per-run marker/identity. Final ACLs are exact for the explicit runtime principal, with Windows
+inheritance disabled and no unnecessary interactive FullControl, or Linux runtime ownership with
+0550/0440. The synthetic self-test passes 15 provenance/principal/ACL negatives and the dedicated
+path suite covers ancestor junction/symlink, leaf reparse, parent substitution and hostile marker.
+
+The canonical active lab passed locally with only per-run synthetic material external to the
+repository: provider probe on Windows and in a networkless Linux non-root/read-only container,
+canonical Compose validation, full Synthetic-provider M5 quickstart, opt-in Local PKCS12 Gateway,
+TLS live/ready, one authorized synthetic signature and one client certificate, then root tamper with
+provider signatures/certificates zero and HTTP live 200/ready 503. Stop succeeded after manifest,
+P12 and env-file deletion while the provider was unhealthy; a separate partial-start label fixture
+was removed and a foreign similarly named network was preserved. Independent post-run enumeration
+found zero exact-project container/network/volume/helper and zero per-run material directories.
+General CI invokes this same path; exact-head CI is still pending at this point in the report.
+
+This PASS is software compatibility using runtime-only synthetic material, not operational custody.
+The previously external certificate correlation/trust evidence was not opened or reproduced. No
+real PEM, CSR, certificate, private key or P12 was accessed or created; no certificate was imported;
+and no FSE2 endpoint was called. Local Administrator and SYSTEM remain residual privileged threats.
+Official provisioning, revocation/rotation, production certificate custody, approved policy values,
+conformance, accreditation, monitoring and live evidence remain required before production
+readiness.
