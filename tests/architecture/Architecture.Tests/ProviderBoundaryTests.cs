@@ -41,10 +41,17 @@ public sealed class ProviderBoundaryTests
     [Fact]
     public void Local_pkcs12_pack_remains_optional_provider_only_and_vertical_neutral()
     {
-        string solution = File.ReadAllText(Path.Combine(Root, "BrokerGateway.LocalPkcs12.slnx"));
         string coreSolution = File.ReadAllText(Path.Combine(Root, "BrokerGateway.Core.slnx"));
-        Assert.Contains("packs/deployment/local-pkcs12", solution, StringComparison.Ordinal);
         Assert.DoesNotContain("LocalPkcs12", coreSolution, StringComparison.OrdinalIgnoreCase);
+
+        string localSolutionPath = Path.Combine(Root, "BrokerGateway.LocalPkcs12.slnx");
+        if (!File.Exists(localSolutionPath))
+        {
+            Assert.False(Directory.Exists(Path.Combine(Root, "packs", "deployment", "local-pkcs12")));
+            return;
+        }
+        string solution = File.ReadAllText(localSolutionPath);
+        Assert.Contains("packs/deployment/local-pkcs12", solution, StringComparison.Ordinal);
 
         string projectPath = Path.Combine(Root, "packs", "deployment", "local-pkcs12", "src", "Providers.LocalPkcs12", "Providers.LocalPkcs12.csproj");
         XDocument project = XDocument.Load(projectPath);
