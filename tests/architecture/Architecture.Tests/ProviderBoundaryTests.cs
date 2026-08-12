@@ -39,6 +39,28 @@ public sealed class ProviderBoundaryTests
     }
 
     [Fact]
+    public void Local_pkcs12_pack_remains_optional_provider_only_and_vertical_neutral()
+    {
+        string solution = File.ReadAllText(Path.Combine(Root, "BrokerGateway.LocalPkcs12.slnx"));
+        string coreSolution = File.ReadAllText(Path.Combine(Root, "BrokerGateway.Core.slnx"));
+        Assert.Contains("packs/deployment/local-pkcs12", solution, StringComparison.Ordinal);
+        Assert.DoesNotContain("LocalPkcs12", coreSolution, StringComparison.OrdinalIgnoreCase);
+
+        string projectPath = Path.Combine(Root, "packs", "deployment", "local-pkcs12", "src", "Providers.LocalPkcs12", "Providers.LocalPkcs12.csproj");
+        XDocument project = XDocument.Load(projectPath);
+        string[] references = project.Descendants("ProjectReference")
+            .Select(element => ((string?)element.Attribute("Include") ?? string.Empty).Replace('\\', '/'))
+            .ToArray();
+        Assert.Single(references);
+        Assert.EndsWith("src/Providers/Abstractions/Providers.Abstractions.csproj", references[0], StringComparison.Ordinal);
+        Assert.Empty(project.Descendants("PackageReference"));
+
+        string source = File.ReadAllText(Path.Combine(Path.GetDirectoryName(projectPath)!, "LocalPkcs12Provider.cs"));
+        string[] forbidden = ["ConnectorPacks", "Healthcare", "FSE2", "Gateway.", "HttpClient", "GetPrivateKey", "ExportPkcs12", "ExportPfx"];
+        foreach (string token in forbidden) Assert.DoesNotContain(token, source, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Provider_contracts_are_capability_specific()
     {
         string contracts = File.ReadAllText(Path.Combine(Root, "src", "Providers", "Abstractions", "ProviderContracts.cs"));

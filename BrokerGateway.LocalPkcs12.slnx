@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/core/">
+    <Project Path="src/Providers/Abstractions/Providers.Abstractions.csproj" />
+    <Project Path="src/Providers/Synthetic/Providers.Synthetic.csproj" />
+  </Folder>
+  <Folder Name="/packs/deployment/local-pkcs12/">
+    <Project Path="packs/deployment/local-pkcs12/src/Providers.LocalPkcs12/Providers.LocalPkcs12.csproj" />
+    <Project Path="packs/deployment/local-pkcs12/tests/Providers.LocalPkcs12.Tests/Providers.LocalPkcs12.Tests.csproj" />
+  </Folder>
+</Solution>

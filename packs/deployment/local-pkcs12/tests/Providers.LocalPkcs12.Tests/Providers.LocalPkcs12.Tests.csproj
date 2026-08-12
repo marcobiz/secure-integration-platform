@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>SecureIntegration.Providers.LocalPkcs12.Tests</AssemblyName>
+    <RootNamespace>SecureIntegration.Providers.LocalPkcs12.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Providers.LocalPkcs12\Providers.LocalPkcs12.csproj" />
+    <ProjectReference Include="..\..\..\..\..\src\Providers\Synthetic\Providers.Synthetic.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+</Project>

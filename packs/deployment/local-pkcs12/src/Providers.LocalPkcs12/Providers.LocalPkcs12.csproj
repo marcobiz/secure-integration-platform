@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>SecureIntegration.Providers.LocalPkcs12</AssemblyName>
+    <RootNamespace>SecureIntegration.Providers.LocalPkcs12</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\Providers\Abstractions\Providers.Abstractions.csproj" />
+  </ItemGroup>
+</Project>
