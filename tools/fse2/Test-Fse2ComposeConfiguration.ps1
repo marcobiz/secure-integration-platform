@@ -34,6 +34,19 @@ function New-SyntheticValue {
     try { $rng.GetBytes($bytes); return [Convert]::ToBase64String($bytes) }
     finally { $rng.Dispose(); [Array]::Clear($bytes, 0, $bytes.Length) }
 }
+
+function Restore-ProcessEnvironmentValue {
+    param([Parameter(Mandatory = $true)][string] $Name, [AllowNull()][object] $Value)
+    if ($null -eq $Value) {
+        Remove-Item -LiteralPath ('Env:' + $Name) -ErrorAction SilentlyContinue
+    } else {
+        [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
+    }
+    $restored = [Environment]::GetEnvironmentVariable($Name, 'Process')
+    if (($null -eq $Value -and $null -ne $restored) -or ($null -ne $Value -and $restored -cne $Value)) {
+        throw 'FSE2_COMPOSE_ENVIRONMENT_RESTORE_FAILED'
+    }
+}
 $environmentId = [Guid]::NewGuid().ToString('D')
 $temporaryBase = [IO.Path]::GetTempPath().TrimEnd('\', '/')
 $values = [ordered]@{
@@ -73,7 +86,7 @@ try {
 }
 finally {
     foreach ($entry in $previous.GetEnumerator()) {
-        [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+        Restore-ProcessEnvironmentValue -Name $entry.Key -Value $entry.Value
     }
     foreach ($key in @($values.Keys)) { $values[$key] = $null }
 }

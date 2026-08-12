@@ -84,6 +84,19 @@ function Grant-SyntheticTamperControl {
     }
 }
 
+function Restore-ProcessEnvironmentValue {
+    param([Parameter(Mandatory = $true)][string] $Name, [AllowNull()][object] $Value)
+    if ($null -eq $Value) {
+        Remove-Item -LiteralPath ('Env:' + $Name) -ErrorAction SilentlyContinue
+    } else {
+        [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
+    }
+    $restored = [Environment]::GetEnvironmentVariable($Name, 'Process')
+    if (($null -eq $Value -and $null -ne $restored) -or ($null -ne $Value -and $restored -cne $Value)) {
+        throw 'FSE2_LOCAL_SELF_TEST_ENVIRONMENT_RESTORE_FAILED'
+    }
+}
+
 function Assert-ImporterDenied {
     param(
         [Parameter(Mandatory = $true)][hashtable] $BaseArguments,
@@ -399,7 +412,7 @@ try {
 }
 finally {
     if ($containerRuntimeUidSet) {
-        [Environment]::SetEnvironmentVariable('FSE2_CONTAINER_RUNTIME_UID', $previousContainerRuntimeUid, 'Process')
+        Restore-ProcessEnvironmentValue -Name 'FSE2_CONTAINER_RUNTIME_UID' -Value $previousContainerRuntimeUid
     }
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Fse2OwnedDirectory -DirectorySnapshot $testRootSnapshot -MarkerSnapshot $testRootMarker -RunId $runId

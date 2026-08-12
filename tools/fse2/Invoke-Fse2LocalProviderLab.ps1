@@ -95,9 +95,22 @@ function Set-LabEnvironment {
     }
 }
 
+function Restore-ProcessEnvironmentValue {
+    param([Parameter(Mandatory = $true)][string] $Name, [AllowNull()][object] $Value)
+    if ($null -eq $Value) {
+        Remove-Item -LiteralPath ('Env:' + $Name) -ErrorAction SilentlyContinue
+    } else {
+        [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
+    }
+    $restored = [Environment]::GetEnvironmentVariable($Name, 'Process')
+    if (($null -eq $Value -and $null -ne $restored) -or ($null -ne $Value -and $restored -cne $Value)) {
+        throw 'FSE2_LOCAL_PROVIDER_ENVIRONMENT_RESTORE_FAILED'
+    }
+}
+
 function Clear-LabEnvironment {
     foreach ($entry in $script:previousLabEnvironment.GetEnumerator()) {
-        [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+        Restore-ProcessEnvironmentValue -Name $entry.Key -Value $entry.Value
     }
 }
 
