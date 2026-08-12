@@ -225,38 +225,11 @@ jobs:
       - name: Validate immutable .NET container base images
         shell: pwsh
         run: ./eng/validate-container-base-images.ps1
-      - name: Validate opt-in FSE2 local-provider Compose overlay
-        shell: bash
-        run: |
-          set -euo pipefail
-          export M3_POSTGRES_ADMIN_PASSWORD=synthetic-compose M3_POSTGRES_RUNTIME_PASSWORD=synthetic-compose
-          export M3_ACTIVATION_HMAC_BASE64=synthetic M3_VENDOR_CLIENT_PFX_BASE64=synthetic
-          export M3_WRONG_VENDOR_CLIENT_PFX_BASE64=synthetic M3_CERTIFICATE_PASSWORD=synthetic-compose
-          export M3_SYNTHETIC_VAULT_TOKEN=synthetic M3_VENDOR_API_KEY=synthetic
-          export M3_VENDOR_CLIENT_THUMBPRINT=synthetic M3_VENDOR_CONTROL_TOKEN=synthetic
-          export M5_POSTGRES_ADMIN_API_PASSWORD=synthetic-compose
-          export M3_RAW_EVIDENCE_DIRECTORY=/tmp/fse2-compose-evidence
-          export M3_CERTIFICATE_DIRECTORY=/tmp/fse2-compose-certificates
-          export FSE2_PROVIDER_MANIFEST_PATH=/tmp/fse2-provider/manifest.json
-          export FSE2_PROVIDER_MATERIAL_DIRECTORY=/tmp/fse2-provider/material
-          export FSE2_TEST_ENVIRONMENT_ID=11111111-1111-1111-1111-111111111111
-          export FSE2_AUTH_CERT_VERSION=1 FSE2_SIGN_CERT_VERSION=1
-          docker compose \
-            --file deploy/m3/docker-compose.m3a.yml \
-            --file deploy/m5/docker-compose.m5.yml \
-            --file deploy/fse2/docker-compose.fse2-local.yml \
-            config --quiet
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
           cache: true
           cache-dependency-path: '**/packages.lock.json'
-      - name: Test local PKCS12 provider on Linux
-        shell: bash
-        run: |
-          set -euo pipefail
-          dotnet restore BrokerGateway.LocalPkcs12.slnx --locked-mode
-          dotnet test BrokerGateway.LocalPkcs12.slnx --configuration Release --no-restore
       - name: Build Gateway container
         id: image
         shell: bash
@@ -298,11 +271,16 @@ jobs:
           [[ "$local_image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           test "$local_image_revision" = "$CANDIDATE_COMMIT_SHA"
           printf 'LOCAL_PKCS12_IMAGE_DIGEST=%s\nLOCAL_PKCS12_IMAGE_REVISION=%s\n' "$local_image_digest" "$local_image_revision" | tee local-pkcs12-image-digest.txt
+      - name: Run canonical FSE2 local-provider validator and active-provider lab
+        shell: pwsh
+        run: |
+          ./tools/fse2/Test-Fse2PathPolicy.ps1
+          ./tools/fse2/Test-Fse2LocalPkcs12Material.ps1 -DotNetPath (Get-Command dotnet).Source -ValidateCompose -StartLab
       - name: Verify executable, non-root, read-only, health, readiness and clean shutdown
         shell: bash
         run: |
           set -euo pipefail
-          cleanup() { docker rm -f broker-gateway-m2 broker-gateway-local-pkcs12 gateway-failclosed >/dev/null 2>&1 || true; }
+          cleanup() { docker rm -f broker-gateway-m2 gateway-failclosed >/dev/null 2>&1 || true; }
           trap cleanup EXIT
           configured_user="$(docker image inspect broker-gateway:m2 --format '{{.Config.User}}')"
           test -n "$configured_user"
@@ -320,25 +298,6 @@ jobs:
             sleep 1
           done
           test "$ready" = "true"
-          local_configured_user="$(docker image inspect broker-gateway-local-pkcs12:m2 --format '{{.Config.User}}')"
-          test -n "$local_configured_user"
-          test "$local_configured_user" != "0"
-          docker run -d --name broker-gateway-local-pkcs12 --read-only --tmpfs /tmp:size=64m,mode=1777 -p 18081:8080 -e ASPNETCORE_ENVIRONMENT=Development broker-gateway-local-pkcs12:m2
-          test "$(docker inspect broker-gateway-local-pkcs12 --format '{{.HostConfig.ReadonlyRootfs}}')" = "true"
-          test "$(docker exec broker-gateway-local-pkcs12 id -u)" != "0"
-          docker exec broker-gateway-local-pkcs12 test -r /app/packs/local-pkcs12/SecureIntegration.Providers.LocalPkcs12.dll
-          docker exec broker-gateway-local-pkcs12 test -r /app/packs/healthcare-fse2/SecureIntegration.ConnectorPacks.Healthcare.FSE2.dll
-          local_ready=false
-          for attempt in {1..30}; do
-            if curl --fail --silent http://127.0.0.1:18081/health/live >/dev/null && curl --fail --silent http://127.0.0.1:18081/health/ready >/dev/null; then
-              local_ready=true
-              break
-            fi
-            sleep 1
-          done
-          test "$local_ready" = "true"
-          docker stop --time 15 broker-gateway-local-pkcs12
-          test "$(docker inspect broker-gateway-local-pkcs12 --format '{{.State.ExitCode}}')" = "0"
           docker stop --time 15 broker-gateway-m2
           test "$(docker inspect broker-gateway-m2 --format '{{.State.ExitCode}}')" = "0"
           if docker run --name gateway-failclosed -e ASPNETCORE_ENVIRONMENT=Production broker-gateway:m2; then

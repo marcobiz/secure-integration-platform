@@ -4,13 +4,16 @@ param(
     [string] $Phase = 'Start',
     [switch] $SkipBuild,
     [string] $AdditionalComposeFile,
-    [string] $DotNetPath
+    [string] $DotNetPath,
+    [string] $ArtifactRoot
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
-$artifactRoot = Join-Path $root '.artifacts\m5\quickstart'
+$artifactRoot = if ([string]::IsNullOrWhiteSpace($ArtifactRoot)) {
+    Join-Path $root '.artifacts\m5\quickstart'
+} else { [IO.Path]::GetFullPath($ArtifactRoot) }
 $rawRoot = Join-Path $artifactRoot 'raw'
 $envFile = Join-Path $rawRoot 'm3a.env'
 $baseCompose = Join-Path $root 'deploy\m3\docker-compose.m3a.yml'
@@ -33,6 +36,51 @@ function ComposeArguments {
     $arguments = @('compose', '--project-name', $project, '--env-file', $envFile, '--file', $baseCompose, '--file', $overlayCompose)
     if ($IncludeAdditional -and -not [string]::IsNullOrWhiteSpace($AdditionalComposeFile)) { $arguments += @('--file', $AdditionalComposeFile) }
     return $arguments + $Tail
+}
+
+function Get-ExactProjectResources {
+    param([Parameter(Mandatory = $true)][ValidateSet('container', 'network', 'volume')][string] $Kind)
+    $arguments = switch ($Kind) {
+        'container' { @('ps', '-aq', '--filter', ('label=com.docker.compose.project=' + $project)) }
+        'network' { @('network', 'ls', '-q', '--filter', ('label=com.docker.compose.project=' + $project)) }
+        'volume' { @('volume', 'ls', '-q', '--filter', ('label=com.docker.compose.project=' + $project)) }
+    }
+    $values = @(& docker @arguments)
+    if ($LASTEXITCODE -ne 0) { throw 'M5_QUICKSTART_CLEANUP_ENUMERATION_FAILED' }
+    return @($values | ForEach-Object { ([string]$_).Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+function Assert-ExactProjectOwnership {
+    param([Parameter(Mandatory = $true)][ValidateSet('container', 'network', 'volume')][string] $Kind,
+        [Parameter(Mandatory = $true)][string] $Id)
+    $encodedLabels = switch ($Kind) {
+        'container' { (& docker inspect $Id --format '{{json .Config.Labels}}' | Out-String).Trim() }
+        'network' { (& docker network inspect $Id --format '{{json .Labels}}' | Out-String).Trim() }
+        'volume' { (& docker volume inspect $Id --format '{{json .Labels}}' | Out-String).Trim() }
+    }
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($encodedLabels)) {
+        throw 'M5_QUICKSTART_CLEANUP_OWNERSHIP_INVALID'
+    }
+    try { $labels = $encodedLabels | ConvertFrom-Json }
+    catch { throw 'M5_QUICKSTART_CLEANUP_OWNERSHIP_INVALID' }
+    $projectLabel = $labels.PSObject.Properties['com.docker.compose.project']
+    if ($null -eq $projectLabel -or ([string]$projectLabel.Value).Trim() -cne $project) {
+        throw 'M5_QUICKSTART_CLEANUP_OWNERSHIP_INVALID'
+    }
+}
+
+function Remove-ExactProjectResources {
+    $containers = @(Get-ExactProjectResources -Kind container)
+    foreach ($id in $containers) { Assert-ExactProjectOwnership -Kind container -Id $id; Invoke-Checked 'docker' @('rm', '--force', $id) }
+    $networks = @(Get-ExactProjectResources -Kind network)
+    foreach ($id in $networks) { Assert-ExactProjectOwnership -Kind network -Id $id; Invoke-Checked 'docker' @('network', 'rm', $id) }
+    $volumes = @(Get-ExactProjectResources -Kind volume)
+    foreach ($id in $volumes) { Assert-ExactProjectOwnership -Kind volume -Id $id; Invoke-Checked 'docker' @('volume', 'rm', $id) }
+    if (@(Get-ExactProjectResources -Kind container).Count -ne 0 -or
+        @(Get-ExactProjectResources -Kind network).Count -ne 0 -or
+        @(Get-ExactProjectResources -Kind volume).Count -ne 0) {
+        throw 'M5_QUICKSTART_CLEANUP_FAILED'
+    }
 }
 
 if (-not [string]::IsNullOrWhiteSpace($AdditionalComposeFile)) {
@@ -67,7 +115,7 @@ if ($Phase -eq 'Validate') {
 }
 
 if ($Phase -eq 'Stop') {
-    if (Test-Path -LiteralPath $envFile) { Invoke-Checked 'docker' (ComposeArguments @('down', '--volumes', '--remove-orphans')) }
+    Remove-ExactProjectResources
     Write-Host 'M5_QUICKSTART_STOP_PASS'
     exit 0
 }

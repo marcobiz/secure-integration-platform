@@ -1,5 +1,6 @@
 services:
   gateway:
+    user: ${FSE2_CONTAINER_RUNTIME_UID:-1654}
     build:
       context: ../..
       dockerfile: packs/deployment/local-pkcs12/Dockerfile

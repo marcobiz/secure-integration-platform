@@ -2,52 +2,74 @@
 param(
     [ValidateSet('Validate', 'Start', 'Stop')]
     [string] $Phase = 'Validate',
-    [Parameter(Mandatory = $true)]
     [string] $ProviderManifestPath,
-    [Parameter(Mandatory = $true)]
     [string] $MaterialDirectory,
     [Guid] $EnvironmentId = '907cf0ea-d592-43a7-9b42-2bd5b97fe7b4',
     [string] $DotNetPath,
+    [string] $QuickstartArtifactRoot,
     [switch] $SkipBuild
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
-$manifestPath = [IO.Path]::GetFullPath($ProviderManifestPath)
-$materialRoot = [IO.Path]::GetFullPath($MaterialDirectory).TrimEnd('\', '/')
+Import-Module (Join-Path $PSScriptRoot 'Fse2PathPolicy.psm1') -Force
 $compose = Join-Path $root 'deploy\fse2\docker-compose.fse2-local.yml'
 $quickstart = Join-Path $root 'tools\m5\Invoke-M5Quickstart.ps1'
+$powershell = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'powershell.exe' } else { 'pwsh' }
+$allowedComposeFiles = @(
+    [IO.Path]::GetFullPath((Join-Path $root 'deploy\m3\docker-compose.m3a.yml')),
+    [IO.Path]::GetFullPath((Join-Path $root 'deploy\m5\docker-compose.m5.yml')),
+    [IO.Path]::GetFullPath($compose))
+foreach ($allowedComposeFile in $allowedComposeFiles) {
+    if (-not (Test-Path -LiteralPath $allowedComposeFile -PathType Leaf)) { throw 'FSE2_LOCAL_PROVIDER_COMPOSE_ALLOWLIST_INVALID' }
+}
+
+function Invoke-Checked {
+    param([Parameter(Mandatory = $true)][string] $File, [Parameter(Mandatory = $true)][string[]] $Arguments)
+    & $File @Arguments
+    if ($LASTEXITCODE -ne 0) { throw "FSE2_LOCAL_PROVIDER_COMMAND_FAILED:$File" }
+}
+
+if ($Phase -eq 'Stop') {
+    Invoke-Checked $powershell @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $quickstart,
+        '-Phase', 'Stop', '-AdditionalComposeFile', $compose)
+    $project = 'secure-integration-m5-quickstart'
+    $remainingContainers = @(& docker ps -aq --filter ('label=com.docker.compose.project=' + $project))
+    $remainingNetworks = @(& docker network ls -q --filter ('label=com.docker.compose.project=' + $project))
+    $remainingVolumes = @(& docker volume ls -q --filter ('label=com.docker.compose.project=' + $project))
+    if ($LASTEXITCODE -ne 0 -or $remainingContainers.Count -ne 0 -or $remainingNetworks.Count -ne 0 -or $remainingVolumes.Count -ne 0) {
+        throw 'FSE2_LOCAL_PROVIDER_CLEANUP_FAILED'
+    }
+    Write-Host 'FSE2_LOCAL_PROVIDER_STOP_PASS; CONTAINERS=0; NETWORKS=0; VOLUMES=0; HELPERS=0'
+    return
+}
+
+if ([string]::IsNullOrWhiteSpace($ProviderManifestPath) -or [string]::IsNullOrWhiteSpace($MaterialDirectory)) {
+    throw 'FSE2_LOCAL_PROVIDER_INPUT_MISSING'
+}
+if ($Phase -eq 'Start' -and [string]::IsNullOrWhiteSpace($QuickstartArtifactRoot)) {
+    throw 'FSE2_LOCAL_PROVIDER_ARTIFACT_ROOT_MISSING'
+}
+$manifestSnapshot = Get-Fse2PathSnapshot -Path $ProviderManifestPath -Kind File -RepositoryRoot $root `
+    -ErrorCodePrefix 'FSE2_LOCAL_PROVIDER_MANIFEST_PATH' -MaximumBytes 262144
+$materialSnapshot = Get-Fse2PathSnapshot -Path $MaterialDirectory -Kind Directory -RepositoryRoot $root `
+    -ErrorCodePrefix 'FSE2_LOCAL_PROVIDER_MATERIAL_PATH'
+$manifestPath = $manifestSnapshot.FullPath
+$materialRoot = $materialSnapshot.FullPath
+$quickstartArtifactPlan = if ($Phase -eq 'Start') {
+    Get-Fse2PathSnapshot -Path $QuickstartArtifactRoot -Kind OutputDirectory -RepositoryRoot $root `
+        -ErrorCodePrefix 'FSE2_LOCAL_PROVIDER_ARTIFACT_ROOT'
+} else { $null }
 $dotnet = if ([string]::IsNullOrWhiteSpace($DotNetPath)) { Join-Path $root '.dotnet\dotnet.exe' } else { [IO.Path]::GetFullPath($DotNetPath) }
 if (-not (Test-Path -LiteralPath $dotnet -PathType Leaf)) {
     if (-not [string]::IsNullOrWhiteSpace($DotNetPath)) { throw 'FSE2_LOCAL_PROVIDER_DOTNET_INVALID' }
     $dotnet = 'dotnet'
 }
 
-$manifestFullyQualified = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
-    $ProviderManifestPath -match '^(?:[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+)'
-} else { $ProviderManifestPath.StartsWith('/', [StringComparison]::Ordinal) }
-$materialFullyQualified = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
-    $MaterialDirectory -match '^(?:[A-Za-z]:[\\/]|\\\\[^\\]+\\[^\\]+)'
-} else { $MaterialDirectory.StartsWith('/', [StringComparison]::Ordinal) }
-if (-not $manifestFullyQualified -or -not $materialFullyQualified) { throw 'FSE2_LOCAL_PROVIDER_INPUT_PATH_INVALID' }
-
 if ($EnvironmentId -eq [Guid]::Empty) { throw 'FSE2_LOCAL_ENVIRONMENT_ID_INVALID' }
-if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf) -or
-    -not (Test-Path -LiteralPath $materialRoot -PathType Container)) {
-    throw 'FSE2_LOCAL_PROVIDER_INPUT_MISSING'
-}
-$repositoryPrefix = $root.TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
-if ($manifestPath.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase) -or
-    $materialRoot.StartsWith($repositoryPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-    throw 'FSE2_LOCAL_PROVIDER_INPUT_MUST_BE_OUTSIDE_REPOSITORY'
-}
-
-$manifestInfo = [IO.FileInfo]::new($manifestPath)
-$materialInfo = [IO.DirectoryInfo]::new($materialRoot)
-if (($manifestInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
-    ($materialInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'FSE2_LOCAL_PROVIDER_LINK_DENIED' }
-if ($manifestInfo.Length -lt 1 -or $manifestInfo.Length -gt 262144) { throw 'FSE2_LOCAL_PROVIDER_MANIFEST_SIZE_INVALID' }
+Assert-Fse2PathSnapshot -Snapshot $manifestSnapshot | Out-Null
+Assert-Fse2PathSnapshot -Snapshot $materialSnapshot | Out-Null
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 if ([int]$manifest.schemaVersion -ne 1 -or @($manifest.resources).Count -lt 2) { throw 'FSE2_LOCAL_PROVIDER_MANIFEST_INVALID' }
 $auth = @($manifest.resources | Where-Object { $_.id -eq 'fse2-auth' -and $_.kind -eq 'ClientCertificate' })
@@ -79,12 +101,6 @@ function Clear-LabEnvironment {
     }
 }
 
-function Invoke-Checked {
-    param([Parameter(Mandatory = $true)][string] $File, [Parameter(Mandatory = $true)][string[]] $Arguments)
-    & $File @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "FSE2_LOCAL_PROVIDER_COMMAND_FAILED:$File" }
-}
-
 $previousLabEnvironment = @{}
 Set-LabEnvironment
 try {
@@ -92,10 +108,12 @@ try {
         Invoke-Checked $dotnet @('restore', (Join-Path $root 'BrokerGateway.LocalPkcs12.slnx'), '--locked-mode')
         Invoke-Checked $dotnet @('build', (Join-Path $root 'BrokerGateway.LocalPkcs12.slnx'), '--configuration', 'Release', '--no-restore')
         Invoke-Checked $dotnet @('test', (Join-Path $root 'BrokerGateway.LocalPkcs12.slnx'), '--configuration', 'Release', '--no-build', '--no-restore')
-        Invoke-Checked 'docker' @('compose',
-            '--file', (Join-Path $root 'deploy\m3\docker-compose.m3a.yml'),
-            '--file', (Join-Path $root 'deploy\m5\docker-compose.m5.yml'),
-            '--file', $compose, 'config', '--no-interpolate', '--quiet')
+        & (Join-Path $PSScriptRoot 'Test-Fse2ComposeConfiguration.ps1') `
+            -ProviderManifestPath $manifestPath `
+            -MaterialDirectory $materialRoot `
+            -AuthCertificateVersion ([string]$auth[0].version) `
+            -SignCertificateVersion ([string]$sign[0].version)
+        if ($LASTEXITCODE -ne 0) { throw 'FSE2_LOCAL_PROVIDER_CANONICAL_COMPOSE_VALIDATOR_FAILED' }
         Write-Host 'FSE2_LOCAL_PROVIDER_VALIDATE_PASS'
         return
     }
@@ -103,24 +121,55 @@ try {
     $quickstartArguments = @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $quickstart,
         '-Phase', $Phase, '-AdditionalComposeFile', $compose)
     if ($dotnet -ne 'dotnet') { $quickstartArguments += @('-DotNetPath', $dotnet) }
+    if ($null -ne $quickstartArtifactPlan) {
+        Assert-Fse2PathSnapshot -Snapshot $quickstartArtifactPlan | Out-Null
+        $quickstartArguments += @('-ArtifactRoot', $quickstartArtifactPlan.FullPath)
+    }
     if ($SkipBuild) { $quickstartArguments += '-SkipBuild' }
-    Invoke-Checked 'powershell.exe' $quickstartArguments
+    Invoke-Checked $powershell $quickstartArguments
 
     if ($Phase -eq 'Start') {
         $container = (& docker ps --quiet --filter 'label=com.docker.compose.project=secure-integration-m5-quickstart' --filter 'label=com.docker.compose.service=gateway')
         if ($LASTEXITCODE -ne 0 -or @($container).Count -ne 1) { throw 'FSE2_LOCAL_PROVIDER_GATEWAY_NOT_FOUND' }
         $containerId = [string]@($container)[0]
-        if ((& docker inspect $containerId --format '{{.HostConfig.ReadonlyRootfs}}').Trim() -ne 'true' -or
-            (& docker exec $containerId id -u).Trim() -eq '0') { throw 'FSE2_LOCAL_PROVIDER_CONTAINER_HARDENING_FAILED' }
-        Invoke-Checked 'docker' @('exec', $containerId, 'test', '-r', '/run/fse2-provider/manifest.json')
-        Invoke-Checked 'docker' @('exec', $containerId, 'test', '-r', '/app/packs/local-pkcs12/SecureIntegration.Providers.LocalPkcs12.dll')
-        Invoke-Checked 'docker' @('exec', $containerId, 'test', '-r', '/app/packs/healthcare-fse2/SecureIntegration.ConnectorPacks.Healthcare.FSE2.dll')
+        $readOnly = (& docker inspect $containerId --format '{{.HostConfig.ReadonlyRootfs}}').Trim()
+        if ($LASTEXITCODE -ne 0 -or $readOnly -ne 'true') { throw 'FSE2_LOCAL_PROVIDER_READ_ONLY_FAILED' }
+        $containerUid = (& docker exec $containerId id -u).Trim()
+        if ($LASTEXITCODE -ne 0 -or $containerUid -eq '0') { throw 'FSE2_LOCAL_PROVIDER_NON_ROOT_FAILED' }
+        & docker exec $containerId test -r /run/fse2-provider/manifest.json *> $null
+        if ($LASTEXITCODE -ne 0) { throw 'FSE2_LOCAL_PROVIDER_MANIFEST_MOUNT_UNREADABLE' }
+        foreach ($mountedMaterialFile in @(
+            'auth.p12', 'auth.password', 'auth-leaf.pem',
+            'sign.p12', 'sign.password', 'sign-leaf.pem', 'root.pem')) {
+            & docker exec $containerId test -r ('/run/fse2-provider/material/' + $mountedMaterialFile) *> $null
+            if ($LASTEXITCODE -ne 0) { throw 'FSE2_LOCAL_PROVIDER_MATERIAL_MOUNT_UNREADABLE' }
+        }
+        & docker exec $containerId test -r /app/packs/local-pkcs12/SecureIntegration.Providers.LocalPkcs12.dll *> $null
+        if ($LASTEXITCODE -ne 0) { throw 'FSE2_LOCAL_PROVIDER_PACK_UNREADABLE' }
+        & docker exec $containerId test -r /app/packs/healthcare-fse2/SecureIntegration.ConnectorPacks.Healthcare.FSE2.dll *> $null
+        if ($LASTEXITCODE -ne 0) { throw 'FSE2_LOCAL_PROVIDER_VERTICAL_PACK_UNREADABLE' }
+        $quickstartArtifactSnapshot = Get-Fse2PathSnapshot -Path $quickstartArtifactPlan.FullPath -Kind Directory `
+            -RepositoryRoot $root -ErrorCodePrefix 'FSE2_LOCAL_PROVIDER_ARTIFACT_ROOT'
+        $gatewayCaSnapshot = Get-Fse2PathSnapshot -Path (Join-Path $quickstartArtifactSnapshot.FullPath 'raw\certificates\ca.crt') `
+            -Kind File -RepositoryRoot $root -ErrorCodePrefix 'FSE2_LOCAL_PROVIDER_GATEWAY_CA' -MaximumBytes 1048576
+        $curl = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'curl.exe' } else { 'curl' }
+        $curlBase = @('--fail', '--silent', '--show-error', '--max-time', '15')
+        if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $curlBase += '--ssl-no-revoke' }
+        $curlBase += @('--cacert', $gatewayCaSnapshot.FullPath)
+        Assert-Fse2PathSnapshot -Snapshot $gatewayCaSnapshot | Out-Null
+        & $curl @curlBase 'https://localhost:18443/health/live' *> $null
+        if ($LASTEXITCODE -ne 0) { throw 'FSE2_LOCAL_PROVIDER_LIVE_FAILED' }
+
+        $readyDeadline = [DateTimeOffset]::UtcNow.AddMinutes(1)
+        $providerReady = $false
+        do {
+            Assert-Fse2PathSnapshot -Snapshot $gatewayCaSnapshot | Out-Null
+            & $curl @curlBase 'https://localhost:18443/health/ready' *> $null
+            if ($LASTEXITCODE -eq 0) { $providerReady = $true; break }
+            Start-Sleep -Seconds 2
+        } while ([DateTimeOffset]::UtcNow -lt $readyDeadline)
+        if (-not $providerReady) { throw 'FSE2_LOCAL_PROVIDER_READY_FAILED' }
         Write-Host 'FSE2_LOCAL_PROVIDER_START_PASS; LIVE_FSE2_CALLS=0'
-    }
-    else {
-        $remaining = (& docker ps -aq --filter 'label=com.docker.compose.project=secure-integration-m5-quickstart')
-        if ($LASTEXITCODE -ne 0 -or $remaining) { throw 'FSE2_LOCAL_PROVIDER_CLEANUP_FAILED' }
-        Write-Host 'FSE2_LOCAL_PROVIDER_STOP_PASS'
     }
 }
 finally {

@@ -65,6 +65,24 @@ public sealed class ProviderBoundaryTests
         string source = File.ReadAllText(Path.Combine(Path.GetDirectoryName(projectPath)!, "LocalPkcs12Provider.cs"));
         string[] forbidden = ["ConnectorPacks", "Healthcare", "FSE2", "Gateway.", "HttpClient", "GetPrivateKey", "ExportPkcs12", "ExportPfx"];
         foreach (string token in forbidden) Assert.DoesNotContain(token, source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("LocalPkcs12Provider : ISecretValueProvider", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("LocalResourceKind.Secret", source, StringComparison.Ordinal);
+        Assert.Contains("SecretValues: false", source, StringComparison.Ordinal);
+        Assert.Contains("DenyOnlySecretValueProvider", source, StringComparison.Ordinal);
+
+        string gatewayComposition = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "Program.cs"));
+        Assert.DoesNotContain("Capabilities.SecretValues ||", gatewayComposition, StringComparison.Ordinal);
+        Assert.Contains("!services.CapabilitySource.Capabilities.ClientCertificates", gatewayComposition, StringComparison.Ordinal);
+
+        string workflow = File.ReadAllText(Path.Combine(Root, ".github", "workflows", "ci.yml"));
+        string lab = File.ReadAllText(Path.Combine(Root, "tools", "fse2", "Invoke-Fse2LocalProviderLab.ps1"));
+        string composeValidator = File.ReadAllText(Path.Combine(Root, "tools", "fse2", "Test-Fse2ComposeConfiguration.ps1"));
+        Assert.Contains("Test-Fse2LocalPkcs12Material.ps1", workflow, StringComparison.Ordinal);
+        Assert.Contains("-ValidateCompose -StartLab", workflow, StringComparison.Ordinal);
+        Assert.Contains("Test-Fse2ComposeConfiguration.ps1", lab, StringComparison.Ordinal);
+        Assert.Contains("config --quiet", composeValidator, StringComparison.Ordinal);
+        Assert.DoesNotContain("--no-interpolate", workflow, StringComparison.Ordinal);
+        Assert.DoesNotContain("--no-interpolate", lab, StringComparison.Ordinal);
     }
 
     [Fact]
