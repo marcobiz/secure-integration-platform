@@ -21,34 +21,13 @@ $approvedDigests = @{
     'runtime:10.0.11-alpine3.24' = '216f4e2027da6ae806e0bc4b448669ac0faa00125908e308f31dd70598e58136'
 }
 
-$repositoryExpectedReferencesByPath = @{
-    'src/Gateway/Gateway.Api/Dockerfile' = @($sdkNonAlpine, $aspnetNonAlpine)
-    'src/Gateway/Gateway.Migrations/Dockerfile' = @($sdkNonAlpine, $runtimeNonAlpine)
-    'packs/deployment/azure/Dockerfile' = @($sdkNonAlpine, $aspnetNonAlpine)
-    'tools/m3/VendorMock/Dockerfile' = @($sdkAlpine, $aspnetAlpine)
-    'tools/m3/SyntheticVault/Dockerfile' = @($sdkAlpine, $aspnetAlpine)
-    'tools/m3/Provisioner/Dockerfile' = @($sdkAlpine, $runtimeAlpine)
-}
-
-$coreExportManifestPath = Join-Path $root 'OPEN_SOURCE_EXPORT_MANIFEST.json'
-$isCoreExport = Test-Path -LiteralPath $coreExportManifestPath -PathType Leaf
-if ($isCoreExport) {
-    $expectedReferencesByPath = @{}
-    foreach ($path in @($repositoryExpectedReferencesByPath.Keys)) {
-        if ($path -ne 'packs/deployment/azure/Dockerfile') {
-            $expectedReferencesByPath[$path] = $repositoryExpectedReferencesByPath[$path]
-        }
-    }
-    $validationProfile = 'core-export'
-    $expectedDockerfileCount = 5
-    $expectedDotNetFromCount = 10
-}
-else {
-    $expectedReferencesByPath = $repositoryExpectedReferencesByPath
-    $validationProfile = 'repository'
-    $expectedDockerfileCount = 6
-    $expectedDotNetFromCount = 12
-}
+$repositoryExpectedReferencesByPath = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+$repositoryExpectedReferencesByPath.Add('src/Gateway/Gateway.Api/Dockerfile', [string[]]@($sdkNonAlpine, $aspnetNonAlpine))
+$repositoryExpectedReferencesByPath.Add('src/Gateway/Gateway.Migrations/Dockerfile', [string[]]@($sdkNonAlpine, $runtimeNonAlpine))
+$repositoryExpectedReferencesByPath.Add('packs/deployment/azure/Dockerfile', [string[]]@($sdkNonAlpine, $aspnetNonAlpine))
+$repositoryExpectedReferencesByPath.Add('tools/m3/VendorMock/Dockerfile', [string[]]@($sdkAlpine, $aspnetAlpine))
+$repositoryExpectedReferencesByPath.Add('tools/m3/SyntheticVault/Dockerfile', [string[]]@($sdkAlpine, $aspnetAlpine))
+$repositoryExpectedReferencesByPath.Add('tools/m3/Provisioner/Dockerfile', [string[]]@($sdkAlpine, $runtimeAlpine))
 
 function New-ValidationFinding {
     param(
@@ -61,6 +40,52 @@ function New-ValidationFinding {
         Code = $Code
         Path = $Path
         Line = $Line
+    }
+}
+
+function ConvertTo-NormalizedRepositoryPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $normalized = $Path.Replace('\', '/').Trim()
+    while ($normalized.StartsWith('./', [StringComparison]::Ordinal)) {
+        $normalized = $normalized.Substring(2)
+    }
+
+    if ([string]::IsNullOrWhiteSpace($normalized) -or
+        [IO.Path]::IsPathRooted($normalized) -or
+        $normalized.Contains('//')) {
+        return $null
+    }
+
+    foreach ($segment in $normalized.Split('/')) {
+        if ($segment.Length -eq 0 -or $segment -eq '.' -or $segment -eq '..') {
+            return $null
+        }
+    }
+
+    return $normalized
+}
+
+function Get-ValidationProfile {
+    param([Parameter(Mandatory = $true)][string]$RepositoryRoot)
+
+    $coreExportManifestPath = Join-Path $RepositoryRoot 'OPEN_SOURCE_EXPORT_MANIFEST.json'
+    $isCoreExport = Test-Path -LiteralPath $coreExportManifestPath -PathType Leaf
+    $expectedReferencesByPath = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
+
+    foreach ($entry in $repositoryExpectedReferencesByPath.GetEnumerator()) {
+        if (-not $isCoreExport -or $entry.Key -ne 'packs/deployment/azure/Dockerfile') {
+            $expectedReferencesByPath.Add($entry.Key, [string[]]@($entry.Value))
+        }
+    }
+
+    [pscustomobject]@{
+        Name = $(if ($isCoreExport) { 'core-export' } else { 'repository' })
+        IsCoreExport = $isCoreExport
+        CoreExportManifestPath = $coreExportManifestPath
+        ExpectedReferencesByPath = $expectedReferencesByPath
+        ExpectedDockerfileCount = $(if ($isCoreExport) { 5 } else { 6 })
+        ExpectedDotNetFromCount = $(if ($isCoreExport) { 10 } else { 12 })
     }
 }
 
@@ -122,106 +147,163 @@ function Test-DotNetReference {
 }
 
 function Invoke-RepositoryValidation {
-    $globalJsonPath = Join-Path $root 'global.json'
+    param([Parameter(Mandatory = $true)][string]$RepositoryRoot)
+
+    $profile = Get-ValidationProfile -RepositoryRoot $RepositoryRoot
+    $expectedReferencesByPath = $profile.ExpectedReferencesByPath
+    $findings = @()
+    $globalJsonPath = Join-Path $RepositoryRoot 'global.json'
     if (-not (Test-Path -LiteralPath $globalJsonPath -PathType Leaf)) {
-        return @(New-ValidationFinding -Code 'GLOBAL_JSON_MISSING' -Path 'global.json' -Line 0)
+        $findings += New-ValidationFinding -Code 'GLOBAL_JSON_MISSING' -Path 'global.json' -Line 0
+        return [pscustomobject]@{ Profile = $profile; Findings = $findings; TrackedDockerfileCount = 0; DotNetFromCount = 0 }
     }
 
     $globalJson = Get-Content -LiteralPath $globalJsonPath -Raw | ConvertFrom-Json
     $globalSdkVersion = [string]$globalJson.sdk.version
     if ([string]::IsNullOrWhiteSpace($globalSdkVersion)) {
-        return @(New-ValidationFinding -Code 'GLOBAL_JSON_SDK_VERSION_MISSING' -Path 'global.json' -Line 0)
+        $findings += New-ValidationFinding -Code 'GLOBAL_JSON_SDK_VERSION_MISSING' -Path 'global.json' -Line 0
+        return [pscustomobject]@{ Profile = $profile; Findings = $findings; TrackedDockerfileCount = 0; DotNetFromCount = 0 }
     }
 
-    if ($isCoreExport) {
-        $exportManifest = Get-Content -LiteralPath $coreExportManifestPath -Raw | ConvertFrom-Json
+    if ($profile.IsCoreExport) {
+        $exportManifest = Get-Content -LiteralPath $profile.CoreExportManifestPath -Raw | ConvertFrom-Json
         if ([int]$exportManifest.schemaVersion -ne 1) {
-            return @(New-ValidationFinding -Code 'CORE_EXPORT_MANIFEST_VERSION_INVALID' -Path 'OPEN_SOURCE_EXPORT_MANIFEST.json' -Line 0)
+            $findings += New-ValidationFinding -Code 'CORE_EXPORT_MANIFEST_VERSION_INVALID' -Path 'OPEN_SOURCE_EXPORT_MANIFEST.json' -Line 0
+            return [pscustomobject]@{ Profile = $profile; Findings = $findings; TrackedDockerfileCount = 0; DotNetFromCount = 0 }
         }
-        $trackedCandidates = @($exportManifest.files | ForEach-Object { [string]$_.path } | Where-Object { $_ -like '*Dockerfile*' })
+        $trackedCandidates = @($exportManifest.files | ForEach-Object { [string]$_.path } | Where-Object {
+            [IO.Path]::GetFileName($_) -match 'dockerfile'
+        })
     }
     else {
-        $trackedCandidates = @(& git -C $root ls-files -- '*Dockerfile*')
+        $allTrackedFiles = @(& git -C $RepositoryRoot ls-files)
         if ($LASTEXITCODE -ne 0) {
-            return @(New-ValidationFinding -Code 'GIT_TRACKED_FILE_ENUMERATION_FAILED' -Path 'repository' -Line 0)
+            $findings += New-ValidationFinding -Code 'GIT_TRACKED_FILE_ENUMERATION_FAILED' -Path 'repository' -Line 0
+            return [pscustomobject]@{ Profile = $profile; Findings = $findings; TrackedDockerfileCount = 0; DotNetFromCount = 0 }
+        }
+        $trackedCandidates = @($allTrackedFiles | Where-Object {
+            [IO.Path]::GetFileName($_) -match 'dockerfile'
+        })
+    }
+
+    $trackedPaths = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::Ordinal)
+    $trackedPathsIgnoreCase = [Collections.Generic.Dictionary[string, string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($candidate in $trackedCandidates) {
+        $normalizedPath = ConvertTo-NormalizedRepositoryPath -Path ([string]$candidate)
+        if ($null -eq $normalizedPath) {
+            $findings += New-ValidationFinding -Code 'TRACKED_DOCKERFILE_PATH_AMBIGUOUS' -Path 'repository' -Line 0
+            continue
+        }
+        if ($trackedPaths.ContainsKey($normalizedPath) -or $trackedPathsIgnoreCase.ContainsKey($normalizedPath)) {
+            $findings += New-ValidationFinding -Code 'TRACKED_DOCKERFILE_PATH_AMBIGUOUS' -Path $normalizedPath -Line 0
+            continue
+        }
+        $trackedPaths.Add($normalizedPath, $normalizedPath)
+        $trackedPathsIgnoreCase.Add($normalizedPath, $normalizedPath)
+    }
+
+    $trackedDockerfileCount = $trackedPaths.Count
+    $inventoryMismatch = $trackedDockerfileCount -ne $profile.ExpectedDockerfileCount
+    if ($inventoryMismatch) {
+        $findings += New-ValidationFinding -Code 'TRACKED_DOCKERFILE_COUNT_INVALID' -Path 'repository' -Line $trackedDockerfileCount
+    }
+
+    foreach ($trackedPath in $trackedPaths.Keys) {
+        if (-not $expectedReferencesByPath.ContainsKey($trackedPath)) {
+            $inventoryMismatch = $true
+            $findings += New-ValidationFinding -Code 'TRACKED_DOCKERFILE_UNAPPROVED' -Path $trackedPath -Line 0
         }
     }
-
-    $trackedDockerfiles = @($trackedCandidates | Where-Object {
-        [IO.Path]::GetFileName($_) -match '^Dockerfile(?:\..+)?$'
-    })
-    if ($trackedDockerfiles.Count -eq 0) {
-        return @(New-ValidationFinding -Code 'TRACKED_DOCKERFILES_MISSING' -Path 'repository' -Line 0)
+    foreach ($expectedPath in $expectedReferencesByPath.Keys) {
+        if (-not $trackedPaths.ContainsKey($expectedPath)) {
+            $inventoryMismatch = $true
+            $findings += New-ValidationFinding -Code 'EXPECTED_DOCKERFILE_MISSING' -Path $expectedPath -Line 0
+        }
+    }
+    if ($inventoryMismatch) {
+        $findings += New-ValidationFinding -Code 'TRACKED_DOCKERFILE_SET_MISMATCH' -Path 'repository' -Line 0
     }
 
-    $findings = @()
-    $actualReferencesByPath = @{}
+    $actualReferencesByPath = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
     $dotNetFromCount = 0
+    foreach ($normalizedPath in $trackedPaths.Keys) {
+        $actualReferencesByPath.Add($normalizedPath, [string[]]@())
+        $fullPath = Join-Path $RepositoryRoot ($normalizedPath.Replace('/', [IO.Path]::DirectorySeparatorChar))
+        if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+            $findings += New-ValidationFinding -Code 'TRACKED_DOCKERFILE_WORKTREE_MISSING' -Path $normalizedPath -Line 0
+            continue
+        }
 
-    foreach ($relativePath in $trackedDockerfiles) {
-        $normalizedPath = $relativePath.Replace('\', '/')
-        $actualReferencesByPath[$normalizedPath] = @()
-        $fullPath = Join-Path $root ($normalizedPath.Replace('/', [IO.Path]::DirectorySeparatorChar))
         $lines = [IO.File]::ReadAllLines($fullPath)
-
         for ($index = 0; $index -lt $lines.Length; $index++) {
             $line = $lines[$index]
             $lineNumber = $index + 1
+            $containsDotNetReference = $line -match 'mcr\.microsoft\.com/dotnet/'
 
-            if ($line -match '^\s*ARG\b' -and $line -match 'mcr\.microsoft\.com/dotnet/') {
+            if ($line -match '^\s*ARG\b' -and $containsDotNetReference) {
                 $findings += New-ValidationFinding -Code 'DOTNET_BASE_ARG_FORBIDDEN' -Path $normalizedPath -Line $lineNumber
             }
+            if ($line -notmatch '^\s*FROM\b') {
+                continue
+            }
 
-            if ($line -notmatch '^\s*FROM\b') { continue }
-
+            if ($containsDotNetReference) {
+                $dotNetFromCount++
+            }
             if ($line -match '\$') {
                 $findings += New-ValidationFinding -Code 'CONTAINER_FROM_INTERPOLATION_FORBIDDEN' -Path $normalizedPath -Line $lineNumber
-                continue
             }
 
             $fromMatch = [regex]::Match(
                 $line,
-                '^\s*FROM\s+(?<reference>\S+)(?:\s+AS\s+[A-Za-z0-9_.-]+)?\s*(?:#.*)?$',
+                '^\s*FROM\s+(?:(?<platform>--platform=(?<platformValue>[A-Za-z0-9_./-]+))\s+)?(?<reference>[^\s#]+)(?:\s+AS\s+(?<stage>[A-Za-z0-9_.-]+))?\s*(?:#.*)?$',
                 [Text.RegularExpressions.RegexOptions]::IgnoreCase)
             if (-not $fromMatch.Success) {
-                if ($line -match 'mcr\.microsoft\.com/dotnet/') {
+                $findings += New-ValidationFinding -Code 'CONTAINER_FROM_SYNTAX_UNSUPPORTED' -Path $normalizedPath -Line $lineNumber
+                if ($containsDotNetReference) {
                     $findings += New-ValidationFinding -Code 'DOTNET_FROM_SYNTAX_UNSUPPORTED' -Path $normalizedPath -Line $lineNumber
                 }
                 continue
             }
 
             $reference = $fromMatch.Groups['reference'].Value
-            if ($reference -notmatch '^mcr\.microsoft\.com/dotnet/') { continue }
+            $parsedDotNetReference = $reference -match '^mcr\.microsoft\.com/dotnet/'
+            if ($containsDotNetReference -and -not $parsedDotNetReference) {
+                $findings += New-ValidationFinding -Code 'DOTNET_FROM_REFERENCE_NOT_PARSED' -Path $normalizedPath -Line $lineNumber
+                continue
+            }
+            if (-not $parsedDotNetReference) {
+                continue
+            }
 
-            $dotNetFromCount++
-            $actualReferencesByPath[$normalizedPath] = @($actualReferencesByPath[$normalizedPath]) + $reference
+            if ($fromMatch.Groups['platform'].Success) {
+                $findings += New-ValidationFinding -Code 'DOTNET_FROM_PLATFORM_FORBIDDEN' -Path $normalizedPath -Line $lineNumber
+            }
+
+            $actualReferencesByPath[$normalizedPath] = [string[]]@($actualReferencesByPath[$normalizedPath]) + $reference
             foreach ($finding in @(Test-DotNetReference -Reference $reference -Path $normalizedPath -Line $lineNumber -GlobalSdkVersion $globalSdkVersion)) {
                 $findings += $finding
             }
-
             if (-not $expectedReferencesByPath.ContainsKey($normalizedPath)) {
                 $findings += New-ValidationFinding -Code 'DOTNET_DOCKERFILE_UNAPPROVED' -Path $normalizedPath -Line $lineNumber
             }
         }
     }
 
-    if ($dotNetFromCount -ne $expectedDotNetFromCount) {
+    if ($dotNetFromCount -ne $profile.ExpectedDotNetFromCount) {
         $findings += New-ValidationFinding -Code 'DOTNET_FROM_COUNT_INVALID' -Path 'repository' -Line $dotNetFromCount
     }
 
-    foreach ($expectedPath in @($expectedReferencesByPath.Keys | Sort-Object)) {
+    foreach ($expectedPath in $expectedReferencesByPath.Keys) {
         if (-not $actualReferencesByPath.ContainsKey($expectedPath)) {
-            $findings += New-ValidationFinding -Code 'EXPECTED_DOTNET_DOCKERFILE_MISSING' -Path $expectedPath -Line 0
             continue
         }
-
-        $expected = @($expectedReferencesByPath[$expectedPath])
-        $actual = @($actualReferencesByPath[$expectedPath])
+        $expected = [string[]]@($expectedReferencesByPath[$expectedPath])
+        $actual = [string[]]@($actualReferencesByPath[$expectedPath])
         if ($actual.Count -ne $expected.Count) {
             $findings += New-ValidationFinding -Code 'DOTNET_FROM_FILE_COUNT_INVALID' -Path $expectedPath -Line $actual.Count
             continue
         }
-
         for ($index = 0; $index -lt $expected.Count; $index++) {
             if ($actual[$index] -cne $expected[$index]) {
                 $findings += New-ValidationFinding -Code 'DOTNET_BASE_REFERENCE_NOT_APPROVED_FOR_FILE' -Path $expectedPath -Line ($index + 1)
@@ -229,29 +311,152 @@ function Invoke-RepositoryValidation {
         }
     }
 
-    return $findings
+    [pscustomobject]@{
+        Profile = $profile
+        Findings = $findings
+        TrackedDockerfileCount = $trackedDockerfileCount
+        DotNetFromCount = $dotNetFromCount
+    }
 }
 
-function Test-NegativeControl {
+function New-SyntheticRepository {
     param(
-        [Parameter(Mandatory = $true)][string]$Name,
-        [Parameter(Mandatory = $true)][string]$ExpectedCode,
-        [Parameter(Mandatory = $true)][string]$Reference,
-        [Parameter(Mandatory = $true)][string]$GlobalSdkVersion
+        [Parameter(Mandatory = $true)][string]$Parent,
+        [Parameter(Mandatory = $true)][string]$Name
     )
 
-    $controlFindings = @(Test-DotNetReference -Reference $Reference -Path 'synthetic/Dockerfile' -Line 1 -GlobalSdkVersion $GlobalSdkVersion)
-    if ($ExpectedCode -notin @($controlFindings | ForEach-Object { $_.Code })) {
-        throw ('NEGATIVE_CONTROL_FAILED:{0}' -f $Name)
+    $repositoryRoot = Join-Path $Parent $Name
+    [IO.Directory]::CreateDirectory($repositoryRoot) | Out-Null
+    [IO.File]::WriteAllText(
+        (Join-Path $repositoryRoot 'global.json'),
+        '{"sdk":{"version":"10.0.302","rollForward":"latestPatch"}}')
+
+    foreach ($entry in $repositoryExpectedReferencesByPath.GetEnumerator()) {
+        $fullPath = Join-Path $repositoryRoot ($entry.Key.Replace('/', [IO.Path]::DirectorySeparatorChar))
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $fullPath)) | Out-Null
+        $references = [string[]]@($entry.Value)
+        $content = @(
+            '  from {0} aS build # mixed case and whitespace are supported' -f $references[0]
+            'FROM {0} AS runtime # synthetic validator fixture' -f $references[1]
+        ) -join [Environment]::NewLine
+        [IO.File]::WriteAllText($fullPath, $content)
+    }
+
+    & git -C $repositoryRoot init --quiet 2>$null
+    if ($LASTEXITCODE -ne 0) { throw 'SYNTHETIC_GIT_INIT_FAILED' }
+    & git -C $repositoryRoot add -- . 2>$null
+    if ($LASTEXITCODE -ne 0) { throw 'SYNTHETIC_GIT_ADD_FAILED' }
+    return $repositoryRoot
+}
+
+function Assert-ValidationCase {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)]$Result,
+        [Parameter(Mandatory = $true)][bool]$ShouldPass,
+        [string[]]$ExpectedCodes = @()
+    )
+
+    $codes = @($Result.Findings | ForEach-Object { $_.Code })
+    if ($ShouldPass) {
+        if ($codes.Count -ne 0 -or $Result.TrackedDockerfileCount -ne 6 -or $Result.DotNetFromCount -ne 12) {
+            throw ('END_TO_END_CONTROL_FAILED:{0}' -f $Name)
+        }
+    }
+    else {
+        if ($codes.Count -eq 0) {
+            throw ('END_TO_END_CONTROL_FAILED:{0}' -f $Name)
+        }
+        foreach ($expectedCode in $ExpectedCodes) {
+            if ($expectedCode -notin $codes) {
+                throw ('END_TO_END_CONTROL_FAILED:{0}:{1}' -f $Name, $expectedCode)
+            }
+        }
     }
 
     Write-Output ('{0}_PASS' -f $Name)
 }
 
+function Invoke-EndToEndSelfTests {
+    $tempParent = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/')
+    $selfTestRoot = Join-Path $tempParent ('broker-gateway-container-validator-{0}' -f [guid]::NewGuid().ToString('N'))
+    [IO.Directory]::CreateDirectory($selfTestRoot) | Out-Null
+
+    try {
+        $canonical = New-SyntheticRepository -Parent $selfTestRoot -Name 'canonical'
+        Assert-ValidationCase -Name 'CANONICAL_REPOSITORY_POSITIVE' -Result (Invoke-RepositoryValidation -RepositoryRoot $canonical) -ShouldPass $true
+
+        $platformMobile = New-SyntheticRepository -Parent $selfTestRoot -Name 'platform-mobile'
+        $extraPath = Join-Path $platformMobile 'synthetic\Dockerfile'
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $extraPath)) | Out-Null
+        [IO.File]::WriteAllText($extraPath, 'FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/sdk:10.0')
+        & git -C $platformMobile add -- synthetic/Dockerfile 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'SYNTHETIC_GIT_ADD_FAILED' }
+        Assert-ValidationCase -Name 'EXTRA_DOCKERFILE_NEGATIVE' -Result (Invoke-RepositoryValidation -RepositoryRoot $platformMobile) -ShouldPass $false -ExpectedCodes @('TRACKED_DOCKERFILE_SET_MISMATCH', 'DOTNET_FROM_PLATFORM_FORBIDDEN', 'DOTNET_BASE_TAG_WITHOUT_DIGEST')
+        Write-Output 'PLATFORM_MOBILE_BYPASS_NEGATIVE_PASS'
+
+        $extraNonDotNet = New-SyntheticRepository -Parent $selfTestRoot -Name 'extra-non-dotnet'
+        $extraPath = Join-Path $extraNonDotNet 'synthetic\Dockerfile'
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $extraPath)) | Out-Null
+        [IO.File]::WriteAllText($extraPath, 'FROM alpine:3.24')
+        & git -C $extraNonDotNet add -- synthetic/Dockerfile 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'SYNTHETIC_GIT_ADD_FAILED' }
+        Assert-ValidationCase -Name 'EXTRA_NON_DOTNET_DOCKERFILE_NEGATIVE' -Result (Invoke-RepositoryValidation -RepositoryRoot $extraNonDotNet) -ShouldPass $false -ExpectedCodes @('TRACKED_DOCKERFILE_COUNT_INVALID', 'TRACKED_DOCKERFILE_SET_MISMATCH', 'TRACKED_DOCKERFILE_UNAPPROVED')
+
+        $missing = New-SyntheticRepository -Parent $selfTestRoot -Name 'missing'
+        & git -C $missing rm --quiet --force -- 'packs/deployment/azure/Dockerfile' 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'SYNTHETIC_GIT_REMOVE_FAILED' }
+        Assert-ValidationCase -Name 'MISSING_DOCKERFILE_NEGATIVE' -Result (Invoke-RepositoryValidation -RepositoryRoot $missing) -ShouldPass $false -ExpectedCodes @('TRACKED_DOCKERFILE_COUNT_INVALID', 'TRACKED_DOCKERFILE_SET_MISMATCH', 'EXPECTED_DOCKERFILE_MISSING')
+
+        $pinnedPlatform = New-SyntheticRepository -Parent $selfTestRoot -Name 'pinned-platform'
+        $path = Join-Path $pinnedPlatform 'src\Gateway\Gateway.Api\Dockerfile'
+        $lines = [IO.File]::ReadAllLines($path)
+        $lines[0] = 'FROM --platform=linux/amd64 {0} AS build' -f $sdkNonAlpine
+        [IO.File]::WriteAllLines($path, $lines)
+        & git -C $pinnedPlatform add -- 'src/Gateway/Gateway.Api/Dockerfile' 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'SYNTHETIC_GIT_ADD_FAILED' }
+        Assert-ValidationCase -Name 'PINNED_PLATFORM_NEGATIVE' -Result (Invoke-RepositoryValidation -RepositoryRoot $pinnedPlatform) -ShouldPass $false -ExpectedCodes @('DOTNET_FROM_PLATFORM_FORBIDDEN')
+
+        $mobileCanonical = New-SyntheticRepository -Parent $selfTestRoot -Name 'mobile-canonical'
+        $path = Join-Path $mobileCanonical 'src\Gateway\Gateway.Api\Dockerfile'
+        $lines = [IO.File]::ReadAllLines($path)
+        $lines[0] = 'FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build'
+        [IO.File]::WriteAllLines($path, $lines)
+        & git -C $mobileCanonical add -- 'src/Gateway/Gateway.Api/Dockerfile' 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'SYNTHETIC_GIT_ADD_FAILED' }
+        Assert-ValidationCase -Name 'MOBILE_TAG_NEGATIVE' -Result (Invoke-RepositoryValidation -RepositoryRoot $mobileCanonical) -ShouldPass $false -ExpectedCodes @('DOTNET_BASE_TAG_WITHOUT_DIGEST', 'DOTNET_BASE_REFERENCE_NOT_APPROVED_FOR_FILE')
+
+        $crossImageDigest = New-SyntheticRepository -Parent $selfTestRoot -Name 'cross-image-digest'
+        $path = Join-Path $crossImageDigest 'src\Gateway\Gateway.Api\Dockerfile'
+        $lines = [IO.File]::ReadAllLines($path)
+        $lines[0] = 'FROM mcr.microsoft.com/dotnet/sdk:10.0.302@sha256:207cc51496778557731c81ff670333d8ade4a4fec22768fd1be8e78474a84ecf AS build'
+        [IO.File]::WriteAllLines($path, $lines)
+        & git -C $crossImageDigest add -- 'src/Gateway/Gateway.Api/Dockerfile' 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'SYNTHETIC_GIT_ADD_FAILED' }
+        Assert-ValidationCase -Name 'UNAPPROVED_DIGEST_NEGATIVE' -Result (Invoke-RepositoryValidation -RepositoryRoot $crossImageDigest) -ShouldPass $false -ExpectedCodes @('DOTNET_BASE_DIGEST_UNAPPROVED', 'DOTNET_BASE_REFERENCE_NOT_APPROVED_FOR_FILE')
+
+        $globalMismatch = New-SyntheticRepository -Parent $selfTestRoot -Name 'global-mismatch'
+        [IO.File]::WriteAllText((Join-Path $globalMismatch 'global.json'), '{"sdk":{"version":"10.0.999","rollForward":"latestPatch"}}')
+        & git -C $globalMismatch add -- global.json 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'SYNTHETIC_GIT_ADD_FAILED' }
+        Assert-ValidationCase -Name 'GLOBAL_JSON_MISMATCH_NEGATIVE' -Result (Invoke-RepositoryValidation -RepositoryRoot $globalMismatch) -ShouldPass $false -ExpectedCodes @('DOTNET_SDK_GLOBAL_JSON_MISMATCH')
+    }
+    finally {
+        $resolvedSelfTestRoot = [IO.Path]::GetFullPath($selfTestRoot).TrimEnd('\', '/')
+        $expectedPrefix = $tempParent + [IO.Path]::DirectorySeparatorChar + 'broker-gateway-container-validator-'
+        if (-not $resolvedSelfTestRoot.StartsWith($expectedPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'SELF_TEST_CLEANUP_TARGET_INVALID'
+        }
+        if (Test-Path -LiteralPath $resolvedSelfTestRoot) {
+            Remove-Item -LiteralPath $resolvedSelfTestRoot -Recurse -Force
+        }
+    }
+}
+
 try {
-    $repositoryFindings = @(Invoke-RepositoryValidation)
-    if ($repositoryFindings.Count -ne 0) {
-        foreach ($finding in $repositoryFindings) {
+    $repositoryResult = Invoke-RepositoryValidation -RepositoryRoot $root
+    if (@($repositoryResult.Findings).Count -ne 0) {
+        foreach ($finding in @($repositoryResult.Findings)) {
             [Console]::Error.WriteLine(
                 'CONTAINER_BASE_IMAGE_VALIDATION_FAILED:{0}:{1}:{2}',
                 $finding.Code,
@@ -261,24 +466,14 @@ try {
         exit 1
     }
 
-    Write-Output ('CONTAINER_BASE_IMAGE_VALIDATION_PASS:profile={0}:dockerfiles={1}:dotnet_from={2}' -f $validationProfile, $expectedDockerfileCount, $expectedDotNetFromCount)
+    Write-Output (
+        'CONTAINER_BASE_IMAGE_VALIDATION_PASS:profile={0}:tracked_dockerfiles={1}:tracked_set=exact_match:dotnet_from={2}' -f
+        $repositoryResult.Profile.Name,
+        $repositoryResult.TrackedDockerfileCount,
+        $repositoryResult.DotNetFromCount)
 
     if ($SelfTest) {
-        Test-NegativeControl `
-            -Name 'MOBILE_TAG_NEGATIVE' `
-            -ExpectedCode 'DOTNET_BASE_TAG_WITHOUT_DIGEST' `
-            -Reference 'mcr.microsoft.com/dotnet/sdk:10.0' `
-            -GlobalSdkVersion '10.0.302'
-        Test-NegativeControl `
-            -Name 'UNAPPROVED_DIGEST_NEGATIVE' `
-            -ExpectedCode 'DOTNET_BASE_DIGEST_UNAPPROVED' `
-            -Reference 'mcr.microsoft.com/dotnet/sdk:10.0.302@sha256:0000000000000000000000000000000000000000000000000000000000000000' `
-            -GlobalSdkVersion '10.0.302'
-        Test-NegativeControl `
-            -Name 'GLOBAL_JSON_MISMATCH_NEGATIVE' `
-            -ExpectedCode 'DOTNET_SDK_GLOBAL_JSON_MISMATCH' `
-            -Reference $sdkNonAlpine `
-            -GlobalSdkVersion '10.0.999'
+        Invoke-EndToEndSelfTests
     }
 }
 catch {
