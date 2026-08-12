@@ -50,6 +50,93 @@ public sealed class JwtX509ExtensionSecurityTests
     }
 
     [Fact]
+    public async Task M6_RS256_content_commitment_only_certificate_passes_only_with_explicit_content_commitment_policy()
+    {
+        using X509Certificate2 certificate = CreateSigningCertificate(X509KeyUsageFlags.NonRepudiation);
+
+        await AssertCertificateKeyUsageOutcomeAsync(
+            certificate,
+            JwtSigningCertificateKeyUsageMode.ContentCommitment,
+            expectedSuccess: true);
+    }
+
+    [Fact]
+    public async Task M6_RS256_content_commitment_only_certificate_is_denied_by_legacy_digital_signature_policy()
+    {
+        using X509Certificate2 certificate = CreateSigningCertificate(X509KeyUsageFlags.NonRepudiation);
+
+        await AssertCertificateKeyUsageOutcomeAsync(
+            certificate,
+            JwtSigningCertificateKeyUsageMode.DigitalSignature,
+            expectedSuccess: false);
+    }
+
+    [Fact]
+    public async Task M6_RS256_digital_signature_only_certificate_is_denied_by_content_commitment_policy()
+    {
+        using X509Certificate2 certificate = CreateSigningCertificate(X509KeyUsageFlags.DigitalSignature);
+
+        await AssertCertificateKeyUsageOutcomeAsync(
+            certificate,
+            JwtSigningCertificateKeyUsageMode.ContentCommitment,
+            expectedSuccess: false);
+    }
+
+    [Fact]
+    public async Task M6_RS256_content_commitment_policy_denies_certificate_without_key_usage_extension()
+    {
+        using X509Certificate2 certificate = CreateSigningCertificate(keyUsage: null);
+
+        await AssertCertificateKeyUsageOutcomeAsync(
+            certificate,
+            JwtSigningCertificateKeyUsageMode.ContentCommitment,
+            expectedSuccess: false);
+    }
+
+    [Fact]
+    public async Task M6_RS256_content_commitment_policy_validates_key_usage_when_x5c_is_omitted()
+    {
+        using X509Certificate2 certificate = CreateSigningCertificate(X509KeyUsageFlags.NonRepudiation);
+
+        await AssertCertificateKeyUsageOutcomeAsync(
+            certificate,
+            JwtSigningCertificateKeyUsageMode.ContentCommitment,
+            expectedSuccess: true,
+            certificateHeaderMode: JwtCertificateHeaderMode.None);
+    }
+
+    [Fact]
+    public async Task M6_RS256_legacy_digital_signature_policy_preserves_missing_key_usage_behavior()
+    {
+        using X509Certificate2 certificate = CreateSigningCertificate(keyUsage: null);
+
+        await AssertCertificateKeyUsageOutcomeAsync(
+            certificate,
+            JwtSigningCertificateKeyUsageMode.DigitalSignature,
+            expectedSuccess: true);
+    }
+
+    [Fact]
+    public void M6_RS256_policy_digest_is_bound_to_the_certificate_key_usage_mode()
+    {
+        using X509Certificate2 certificate = CreateSigningCertificate(X509KeyUsageFlags.DigitalSignature);
+        AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
+        ServerOwnedRs256PolicySnapshot historical = AuthenticationTestData.JwtPolicy(
+            context,
+            certificate,
+            certificateHeaderMode: JwtCertificateHeaderMode.Leaf);
+        ServerOwnedRs256PolicySnapshot contentCommitment = AuthenticationTestData.JwtPolicy(
+            context,
+            certificate,
+            certificateHeaderMode: JwtCertificateHeaderMode.Leaf,
+            certificateKeyUsageMode: JwtSigningCertificateKeyUsageMode.ContentCommitment);
+
+        Assert.Equal(JwtSigningCertificateKeyUsageMode.DigitalSignature, historical.CertificateKeyUsageMode);
+        Assert.Equal(JwtSigningCertificateKeyUsageMode.ContentCommitment, contentCommitment.CertificateKeyUsageMode);
+        Assert.NotEqual(historical.PolicyChecksumSha256, contentCommitment.PolicyChecksumSha256);
+    }
+
+    [Fact]
     public async Task Wave1_temporal_mode_omits_nbf_and_trusted_sources_derive_only_authenticated_identity()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
@@ -101,6 +188,8 @@ public sealed class JwtX509ExtensionSecurityTests
             AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, trustedSubjectSource: JwtTrustedValueSource.ExternalActorId),
             AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1, subjectPolicy: JwtSubjectPolicy.TrustedRuntimeValue,
                 trustedSubjectSource: JwtTrustedValueSource.AuthenticatedTenantId),
+            AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1,
+                certificateKeyUsageMode: (JwtSigningCertificateKeyUsageMode)99),
             AuthenticationTestData.JwtPolicy(context, material.SigningKeyRevision1,
                 trustedClaims: [new("tenant_ref", JwtTrustedValueSource.AuthenticatedTenantId), new("tenant_ref", JwtTrustedValueSource.AuthenticatedApplicationId)])
         ];
@@ -364,6 +453,79 @@ public sealed class JwtX509ExtensionSecurityTests
             certificate.SerialNumber,
             usages,
             keyUsage);
+    }
+
+    private static async Task AssertCertificateKeyUsageOutcomeAsync(
+        X509Certificate2 certificate,
+        JwtSigningCertificateKeyUsageMode keyUsageMode,
+        bool expectedSuccess,
+        JwtCertificateHeaderMode certificateHeaderMode = JwtCertificateHeaderMode.Leaf)
+    {
+        AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.JwtProfileId);
+        ServerOwnedRs256PolicySnapshot policy = AuthenticationTestData.JwtPolicy(
+            context,
+            certificate,
+            certificateHeaderMode: certificateHeaderMode,
+            certificateKeyUsageMode: keyUsageMode);
+        ServerOwnedMutualTlsPolicySnapshot unusedMutualTls = AuthenticationTestData.MutualTlsPolicy(
+            AuthenticationTestData.Context(AuthenticationTestData.MutualTlsProfileId),
+            certificate);
+        MutablePolicySource policies = new(policy, unusedMutualTls);
+        const string providerReference = "sign-key-usage";
+        InMemoryProvider inner = new(
+            new Dictionary<string, string>(),
+            signingKeyHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                [providerReference] = certificate
+            });
+        TrackingKeyProvider keys = new(inner);
+        MutableBindingResolver bindings = new(
+            AuthenticationTestData.SigningBinding(context, certificate, providerReference, policy));
+        FixedClock clock = new(Now);
+        Rs256JwtSigner signer = new(
+            policies,
+            bindings,
+            keys,
+            new InMemoryJwtReplayStore(100, clock),
+            clock,
+            certificatePublicMaterial: inner);
+
+        if (expectedSuccess)
+        {
+            string token = await signer.SignJwtAsync(
+                context,
+                AuthenticationTestData.JwtProfileId,
+                [],
+                TestContext.Current.CancellationToken);
+            Assert.Equal(3, token.Split('.').Length);
+            Assert.Single(keys.Signatures);
+        }
+        else
+        {
+            AuthenticationPrimitiveException failure = await Assert.ThrowsAsync<AuthenticationPrimitiveException>(() =>
+                signer.SignJwtAsync(
+                    context,
+                    AuthenticationTestData.JwtProfileId,
+                    [],
+                    TestContext.Current.CancellationToken));
+            Assert.Equal("BGW-AUTH-SIGNING-CERTIFICATE-DENIED", failure.Code);
+            Assert.Empty(keys.Signatures);
+        }
+    }
+
+    private static X509Certificate2 CreateSigningCertificate(X509KeyUsageFlags? keyUsage)
+    {
+        using RSA key = RSA.Create(2048);
+        CertificateRequest request = new(
+            "CN=Synthetic Key Usage Signing",
+            key,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+        if (keyUsage.HasValue)
+            request.CertificateExtensions.Add(new X509KeyUsageExtension(keyUsage.Value, critical: true));
+        request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, critical: false));
+        return request.CreateSelfSigned(Now.AddDays(-1), Now.AddDays(30));
     }
 
     private static byte[] Decode(string value)

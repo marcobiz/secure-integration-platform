@@ -157,7 +157,8 @@ internal static class AuthenticationTestData
         JwtCertificateHeaderMode certificateHeaderMode = JwtCertificateHeaderMode.None,
         JwtTemporalClaimMode temporalClaimMode = JwtTemporalClaimMode.IssuedAtNotBeforeExpiration,
         IReadOnlyList<JwtTrustedClaimBinding>? trustedClaims = null,
-        JwtTrustedValueSource? trustedSubjectSource = null) => ServerOwnedRs256PolicySnapshot.Create(
+        JwtTrustedValueSource? trustedSubjectSource = null,
+        JwtSigningCertificateKeyUsageMode certificateKeyUsageMode = JwtSigningCertificateKeyUsageMode.DigitalSignature) => ServerOwnedRs256PolicySnapshot.Create(
             JwtProfileId,
             revision,
             context.ConnectorVersionId,
@@ -176,6 +177,8 @@ internal static class AuthenticationTestData
             certificate.SerialNumber,
             revision,
             CatalogChecksum(revision),
+            minimumRsaKeySize: 2048,
+            certificateKeyUsageMode: certificateKeyUsageMode,
             certificateHeaderMode: certificateHeaderMode,
             temporalClaimMode: temporalClaimMode,
             trustedClaims: trustedClaims,

@@ -94,6 +94,7 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
                     expected.TokenLifetimeSeconds != checked((int)actual.TokenLifetime.TotalSeconds) ||
                     expected.TemporalMode != TemporalMode(actual.TemporalClaimMode) ||
                     !expected.JtiRequired || expected.CertificateHeaderMode != CertificateHeaderMode(actual.CertificateHeaderMode) ||
+                    expected.CertificateKeyUsageMode != CertificateKeyUsageMode(actual.CertificateKeyUsageMode) ||
                     expected.AllowedBusinessClaims.Count != actual.AllowedClaims.Count ||
                     expected.AllowedBusinessClaims.Any(claim => !actual.AllowedClaims.Contains(claim)) ||
                     expected.Projection.Kind != ProjectionKind(actual.Projection.Kind) ||
@@ -351,6 +352,14 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
         JwtCertificateHeaderMode.None => AuthorizedSigningCertificateHeaderMode.None,
         JwtCertificateHeaderMode.Leaf => AuthorizedSigningCertificateHeaderMode.Leaf,
         JwtCertificateHeaderMode.Chain => AuthorizedSigningCertificateHeaderMode.Chain,
+        _ => throw PolicyMismatch()
+    };
+
+    private static AuthorizedSigningCertificateKeyUsageMode CertificateKeyUsageMode(
+        JwtSigningCertificateKeyUsageMode value) => value switch
+    {
+        JwtSigningCertificateKeyUsageMode.DigitalSignature => AuthorizedSigningCertificateKeyUsageMode.DigitalSignature,
+        JwtSigningCertificateKeyUsageMode.ContentCommitment => AuthorizedSigningCertificateKeyUsageMode.ContentCommitment,
         _ => throw PolicyMismatch()
     };
 
@@ -656,6 +665,7 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
                 binding.CatalogRevision,
                 binding.CatalogChecksumSha256,
                 slot.MinimumRsaKeySize,
+                slot.CertificateKeyUsageMode,
                 slot.CertificateHeaderMode,
                 slot.TemporalClaimMode);
         }
@@ -785,6 +795,14 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
                 TimeSpan.FromSeconds(signing.GetProperty("tokenLifetimeSeconds").GetInt32()),
                 TimeSpan.FromSeconds(signing.GetProperty("clockSkewSeconds").GetInt32()),
                 signing.GetProperty("minimumRsaKeySize").GetInt32(),
+                signing.TryGetProperty("certificateKeyUsage", out JsonElement certificateKeyUsage)
+                    ? certificateKeyUsage.GetString()! switch
+                    {
+                        "digitalSignature" => JwtSigningCertificateKeyUsageMode.DigitalSignature,
+                        "contentCommitment" => JwtSigningCertificateKeyUsageMode.ContentCommitment,
+                        _ => throw Stale()
+                    }
+                    : JwtSigningCertificateKeyUsageMode.DigitalSignature,
                 signing.GetProperty("certificateHeader").GetString()! switch
                 {
                     "none" => JwtCertificateHeaderMode.None,
@@ -857,6 +875,7 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
         TimeSpan TokenLifetime,
         TimeSpan ClockSkew,
         int MinimumRsaKeySize,
+        JwtSigningCertificateKeyUsageMode CertificateKeyUsageMode,
         JwtCertificateHeaderMode CertificateHeaderMode,
         JwtTemporalClaimMode TemporalClaimMode,
         bool Required,

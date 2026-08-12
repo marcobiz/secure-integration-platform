@@ -39,6 +39,15 @@ public enum AuthorizedSigningCertificateHeaderMode
     Chain
 }
 
+/// <summary>Exact signing-certificate Key Usage expected from the Published policy.</summary>
+public enum AuthorizedSigningCertificateKeyUsageMode
+{
+    /// <summary>Historical Published behavior requiring digitalSignature when Key Usage is present.</summary>
+    DigitalSignature,
+    /// <summary>Require a present contentCommitment/nonRepudiation Key Usage.</summary>
+    ContentCommitment
+}
+
 /// <summary>Closed issuer comparison supported by the Core-owned policy preflight.</summary>
 public enum AuthorizedSigningIssuerExpectationKind
 {
@@ -119,12 +128,44 @@ public sealed class AuthorizedSigningSlotExpectation
         AuthorizedSigningTemporalMode temporalMode,
         bool jtiRequired,
         AuthorizedSigningCertificateHeaderMode certificateHeaderMode,
-        AuthorizedSigningIssuerExpectation issuer)
+        AuthorizedSigningIssuerExpectation issuer) : this(
+            signingSlot,
+            required,
+            algorithm,
+            projection,
+            audience,
+            fixedSubject,
+            allowedBusinessClaims,
+            tokenLifetimeSeconds,
+            temporalMode,
+            jtiRequired,
+            certificateHeaderMode,
+            issuer,
+            AuthorizedSigningCertificateKeyUsageMode.DigitalSignature)
+    {
+    }
+
+    /// <summary>Creates an exact slot expectation with an explicit certificate Key Usage mode.</summary>
+    public AuthorizedSigningSlotExpectation(
+        ConnectorSigningSlotKey signingSlot,
+        bool required,
+        AuthorizedSigningAlgorithm algorithm,
+        AuthorizedSigningTokenProjectionExpectation projection,
+        string audience,
+        string fixedSubject,
+        IReadOnlyCollection<string> allowedBusinessClaims,
+        int tokenLifetimeSeconds,
+        AuthorizedSigningTemporalMode temporalMode,
+        bool jtiRequired,
+        AuthorizedSigningCertificateHeaderMode certificateHeaderMode,
+        AuthorizedSigningIssuerExpectation issuer,
+        AuthorizedSigningCertificateKeyUsageMode certificateKeyUsageMode)
     {
         SigningSlot = signingSlot ?? throw new ArgumentNullException(nameof(signingSlot));
         if (!Enum.IsDefined(algorithm)) throw new ArgumentOutOfRangeException(nameof(algorithm));
         if (!Enum.IsDefined(temporalMode)) throw new ArgumentOutOfRangeException(nameof(temporalMode));
         if (!Enum.IsDefined(certificateHeaderMode)) throw new ArgumentOutOfRangeException(nameof(certificateHeaderMode));
+        if (!Enum.IsDefined(certificateKeyUsageMode)) throw new ArgumentOutOfRangeException(nameof(certificateKeyUsageMode));
         Projection = projection ?? throw new ArgumentNullException(nameof(projection));
         Issuer = issuer ?? throw new ArgumentNullException(nameof(issuer));
         Audience = AuthorizedPublishedExpectationBounds.ExactText(audience, nameof(audience), 512);
@@ -137,6 +178,7 @@ public sealed class AuthorizedSigningSlotExpectation
         TemporalMode = temporalMode;
         JtiRequired = jtiRequired;
         CertificateHeaderMode = certificateHeaderMode;
+        CertificateKeyUsageMode = certificateKeyUsageMode;
     }
 
     /// <summary>Exact Published signing-slot key.</summary>
@@ -161,6 +203,8 @@ public sealed class AuthorizedSigningSlotExpectation
     public bool JtiRequired { get; }
     /// <summary>Exact certificate/x5c header mode.</summary>
     public AuthorizedSigningCertificateHeaderMode CertificateHeaderMode { get; }
+    /// <summary>Exact signing-certificate Key Usage requirement.</summary>
+    public AuthorizedSigningCertificateKeyUsageMode CertificateKeyUsageMode { get; }
     /// <summary>Bounded issuer comparison.</summary>
     public AuthorizedSigningIssuerExpectation Issuer { get; }
 

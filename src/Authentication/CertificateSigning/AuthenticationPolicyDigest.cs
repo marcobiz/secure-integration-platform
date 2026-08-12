@@ -21,6 +21,7 @@ internal static class AuthenticationPolicyDigest
         writer.WriteNumber("allowedClockSkewTicks", policy.AllowedClockSkew.Ticks);
         writer.WriteString("certificateHeaderMode", policy.CertificateHeaderMode.ToString());
         writer.WriteString("temporalClaimMode", policy.TemporalClaimMode.ToString());
+        writer.WriteString("certificateKeyUsageMode", policy.CertificateKeyUsageMode.ToString());
         writer.WriteStartArray("trustedClaims");
         foreach (JwtTrustedClaimBinding claim in policy.TrustedClaims.OrderBy(value => value.Name, StringComparer.Ordinal))
         {

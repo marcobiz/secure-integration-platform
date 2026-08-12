@@ -61,7 +61,8 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
             AuthorizedSigningTemporalMode.IssuedAtExpiration,
             jtiRequired: true,
             AuthorizedSigningCertificateHeaderMode.Chain,
-            AuthorizedSigningIssuerExpectation.FixedPrefixAndCertificateSubjectCommonName("auth:"));
+            AuthorizedSigningIssuerExpectation.FixedPrefixAndCertificateSubjectCommonName("auth:"),
+            AuthorizedSigningCertificateKeyUsageMode.ContentCommitment);
         AuthorizedSigningSlotExpectation integrityExpectation = new(
             integrity,
             required: true,
@@ -74,7 +75,8 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
             AuthorizedSigningTemporalMode.IssuedAtExpiration,
             jtiRequired: true,
             AuthorizedSigningCertificateHeaderMode.Chain,
-            AuthorizedSigningIssuerExpectation.FixedPrefixAndCertificateSubjectCommonName("integrity:"));
+            AuthorizedSigningIssuerExpectation.FixedPrefixAndCertificateSubjectCommonName("integrity:"),
+            AuthorizedSigningCertificateKeyUsageMode.ContentCommitment);
         return new(
             GatewayAuthenticationKind.MutualTls,
             restrictedTransportRequired: true,

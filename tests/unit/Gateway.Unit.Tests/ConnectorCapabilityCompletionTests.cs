@@ -20,6 +20,7 @@ public sealed class ConnectorCapabilityCompletionTests
         Assert.Empty(dependencies.SecretBindingIds);
         Assert.Equal("D0FF51B186AB8DB600DE14492ACE326F13A6BF4C13218215B95A2401D2401D7A", validated.ChecksumSha256);
         Assert.DoesNotContain("signingSlots", validated.CanonicalJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("certificateKeyUsage", validated.CanonicalJson, StringComparison.Ordinal);
         Assert.Contains("\"authorizedCapabilities\"", validated.CanonicalJson, StringComparison.Ordinal);
         Assert.Contains("\"extensionConfiguration\"", validated.CanonicalJson, StringComparison.Ordinal);
     }
@@ -36,12 +37,18 @@ public sealed class ConnectorCapabilityCompletionTests
         SigningSlots(changed)[1]!["signing"]!["issuer"] = "changed-secondary-issuer";
         using JsonDocument changedDocument = JsonDocument.Parse(changed.ToJsonString());
         ValidatedConnectorDefinition changedValidated = validator.ValidateRequired(changedDocument.RootElement);
+        JsonObject changedUsage = SigningSlotsNode();
+        SigningSlots(changedUsage)[0]!["signing"]!["certificateKeyUsage"] = "contentCommitment";
+        using JsonDocument changedUsageDocument = JsonDocument.Parse(changedUsage.ToJsonString());
+        ValidatedConnectorDefinition changedUsageValidated = validator.ValidateRequired(changedUsageDocument.RootElement);
 
         Assert.Equal(4, AuthorizedSigningSlots.MaximumSlots);
         Assert.Equal(["mtls-certificate", "signing-certificate"], dependencies.CertificateBindingIds);
         Assert.Contains("\"slot\":\"primary\"", validated.CanonicalJson, StringComparison.Ordinal);
         Assert.Contains("\"slot\":\"secondary\"", validated.CanonicalJson, StringComparison.Ordinal);
         Assert.NotEqual(validated.ChecksumSha256, changedValidated.ChecksumSha256);
+        Assert.Contains("\"certificateKeyUsage\":\"contentCommitment\"", changedUsageValidated.CanonicalJson, StringComparison.Ordinal);
+        Assert.NotEqual(validated.ChecksumSha256, changedUsageValidated.ChecksumSha256);
     }
 
     [Fact]
@@ -67,6 +74,7 @@ public sealed class ConnectorCapabilityCompletionTests
             "BGW-CONNECTOR-SIGNING-HEADER-FORBIDDEN");
         AssertInvalid(value => Capabilities(value)["signing"] = SigningSlots(value)[0]!["signing"]!.DeepClone());
         AssertInvalid(value => SigningSlots(value)[0]!["signing"]!.AsObject().Remove("keyBinding"));
+        AssertInvalid(value => SigningSlots(value)[0]!["signing"]!["certificateKeyUsage"] = "digitalSignatureOrContentCommitment");
         AssertInvalid(value => SigningSlots(value)[0]!["signing"]!["keyBinding"] = "not-a-certificate",
             "BGW-CONNECTOR-CAPABILITY-SIGNING-BINDING-INVALID");
         AssertInvalid(value => SigningSlots(value)[0]!["signing"]!["algorithm"] = "RS512");

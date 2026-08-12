@@ -401,6 +401,7 @@
         },
         "tokenLifetimeSeconds": { "type": "integer", "minimum": 1, "maximum": 3600 },
         "clockSkewSeconds": { "type": "integer", "minimum": 0, "maximum": 300 },
+        "certificateKeyUsage": { "enum": ["digitalSignature", "contentCommitment"] },
         "certificateHeader": { "enum": ["none", "leaf", "chain"] },
         "temporalClaims": { "enum": ["iat-exp", "iat-nbf-exp"] },
         "minimumRsaKeySize": { "type": "integer", "minimum": 2048, "maximum": 16384 }

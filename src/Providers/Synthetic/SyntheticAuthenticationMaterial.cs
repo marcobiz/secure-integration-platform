@@ -53,7 +53,14 @@ public sealed class SyntheticAuthenticationMaterial : IDisposable
     public X509Certificate2 WrongPurposeCertificate { get; }
 
     /// <summary>Generates all private material at runtime and never writes it to disk.</summary>
-    public static SyntheticAuthenticationMaterial Create(DateTimeOffset now)
+    public static SyntheticAuthenticationMaterial Create(DateTimeOffset now) =>
+        Create(now, X509KeyUsageFlags.DigitalSignature);
+
+    /// <summary>Generates synthetic signing certificates with contentCommitment Key Usage.</summary>
+    public static SyntheticAuthenticationMaterial CreateContentCommitmentSigning(DateTimeOffset now) =>
+        Create(now, X509KeyUsageFlags.NonRepudiation);
+
+    private static SyntheticAuthenticationMaterial Create(DateTimeOffset now, X509KeyUsageFlags signingKeyUsage)
     {
         using RSA rootKey = RSA.Create(2048);
         CertificateRequest rootRequest = new("CN=BrokerGateway M6 Synthetic Root", rootKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
@@ -91,7 +98,7 @@ public sealed class SyntheticAuthenticationMaterial : IDisposable
             using RSA key = RSA.Create(2048);
             CertificateRequest request = new(subject, key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
             request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
-            request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
+            request.CertificateExtensions.Add(new X509KeyUsageExtension(signingKeyUsage, true));
             request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
             using X509Certificate2 publicCertificate = request.Create(root, notBefore ?? now.AddDays(-1), notAfter ?? now.AddDays(90), RandomNumberGenerator.GetBytes(16));
             return publicCertificate.CopyWithPrivateKey(key);

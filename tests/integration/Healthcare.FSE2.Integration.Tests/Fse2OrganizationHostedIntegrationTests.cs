@@ -68,17 +68,17 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     }
 
     [Fact]
-    public async Task FSE2_SEC_Published_A_to_B_during_second_slot_policy_preflight_denies_before_strategy_signing_and_network()
+    public async Task FSE2_SEC_Published_A_to_B_after_policy_preflight_before_first_signing_has_zero_signing_and_network()
     {
         TaskCompletionSource secondSlotEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         TaskCompletionSource releaseSecondSlot = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
         InMemoryProvider inner = Provider(material);
         BlockingPublicMaterialProvider provider = new(inner, async cancellationToken =>
         {
             secondSlotEntered.TrySetResult();
             await releaseSecondSlot.Task.WaitAsync(cancellationToken);
-        }, blockOnPublicMaterialCall: 2);
+        }, blockOnPublicMaterialCall: 4);
         await using SyntheticFse2OrganizationServer server = await SyntheticFse2OrganizationServer.StartAsync(
             material.ServerCertificate,
             material.ClientCertificateRevision1,
@@ -169,7 +169,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     [Fact]
     public async Task FSE2_IT_all_11_operations_use_Published_path_templates_and_exact_body_modes()
     {
-        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
         TrackingCapabilityProvider provider = new(Provider(material));
         await using SyntheticFse2OperationMatrixServer server = await SyntheticFse2OperationMatrixServer.StartAsync(
             material.ServerCertificate,
@@ -270,7 +270,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     [Fact]
     public async Task FSE2_SEC_dynamic_path_missing_extra_encoded_and_noncanonical_values_deny_before_signing_and_network()
     {
-        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
         TrackingCapabilityProvider provider = new(Provider(material));
         await using SyntheticFse2OperationMatrixServer server = await SyntheticFse2OperationMatrixServer.StartAsync(
             material.ServerCertificate,
@@ -343,7 +343,15 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         bool requirePostgres,
         bool includeNegatives)
     {
-        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        X509KeyUsageFlags signingKeyUsage = Assert.Single(
+            material.SigningKeyRevision1.Extensions.OfType<X509KeyUsageExtension>()).KeyUsages;
+        X509KeyUsageFlags mutualTlsKeyUsage = Assert.Single(
+            material.ClientCertificateRevision1.Extensions.OfType<X509KeyUsageExtension>()).KeyUsages;
+        Assert.True((signingKeyUsage & X509KeyUsageFlags.NonRepudiation) != 0);
+        Assert.False((signingKeyUsage & X509KeyUsageFlags.DigitalSignature) != 0);
+        Assert.True((mutualTlsKeyUsage & X509KeyUsageFlags.DigitalSignature) != 0);
+        Assert.False((mutualTlsKeyUsage & X509KeyUsageFlags.NonRepudiation) != 0);
         TrackingCapabilityProvider provider = new(Provider(material));
         await using SyntheticFse2OrganizationServer server = await SyntheticFse2OrganizationServer.StartAsync(
             material.ServerCertificate,
@@ -365,12 +373,22 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Guid applicationId = await fixture.CreateApplicationAsync("fse2-application");
         string signingSpki = SpkiSha256(material.SigningKeyRevision1);
         string clientSpki = SpkiSha256(material.ClientCertificateRevision1);
+        string publishedDefinition = Definition(connectorId, "1.0.0", signingSpki, clientSpki, "1.0.0");
+        using (JsonDocument definitionDocument = JsonDocument.Parse(publishedDefinition))
+        {
+            JsonElement slots = definitionDocument.RootElement.GetProperty("operations")[0]
+                .GetProperty("authorizedCapabilities").GetProperty("signingSlots");
+            Assert.Equal(2, slots.GetArrayLength());
+            Assert.All(slots.EnumerateArray(), slot => Assert.Equal(
+                "contentCommitment",
+                slot.GetProperty("signing").GetProperty("certificateKeyUsage").GetString()));
+        }
         HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
             connectorId,
             "1.0.0",
             environmentId,
             server.Endpoint,
-            Definition(connectorId, "1.0.0", signingSpki, clientSpki, "1.0.0"),
+            publishedDefinition,
             provider,
             "sign-r1",
             "mtls-r1",
@@ -427,6 +445,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             definition => definition.Replace("\"tokenLifetimeSeconds\":300", "\"tokenLifetimeSeconds\":301", StringComparison.Ordinal),
             definition => definition.Replace("\"temporalClaims\":\"iat-exp\"", "\"temporalClaims\":\"iat-nbf-exp\"", StringComparison.Ordinal),
             definition => definition.Replace("\"certificateHeader\":\"chain\"", "\"certificateHeader\":\"leaf\"", StringComparison.Ordinal),
+            definition => definition.Replace("\"certificateKeyUsage\":\"contentCommitment\"", "\"certificateKeyUsage\":\"digitalSignature\"", StringComparison.Ordinal),
             definition => definition.Replace("\"headerName\":\"FSE-JWT-Signature\"", "\"headerName\":\"X-Wrong-Signature\"", StringComparison.Ordinal),
             definition => RemoveIntegritySigningSlot(definition),
             definition => AddExtraSigningSlot(definition),
@@ -664,12 +683,12 @@ public sealed class Fse2OrganizationHostedIntegrationTests
               "signingSlots":[
                 {
                   "slot":"authorization","required":true,
-                  "signing":{"profileId":"fse2-authorization","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"{{{AuthorizationIssuer}}}","audience":"{{{Audience}}}","subject":"fixed","fixedSubject":"{{{Subject}}}","allowedClaims":[],"tokenLifetimeSeconds":{{{TokenLifetimeSeconds}}},"clockSkewSeconds":30,"certificateHeader":"chain","temporalClaims":"iat-exp","minimumRsaKeySize":2048},
+                  "signing":{"profileId":"fse2-authorization","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"{{{AuthorizationIssuer}}}","audience":"{{{Audience}}}","subject":"fixed","fixedSubject":"{{{Subject}}}","allowedClaims":[],"tokenLifetimeSeconds":{{{TokenLifetimeSeconds}}},"clockSkewSeconds":30,"certificateKeyUsage":"contentCommitment","certificateHeader":"chain","temporalClaims":"iat-exp","minimumRsaKeySize":2048},
                   "projection":{"kind":"authorizationBearer"}
                 },
                 {
                   "slot":"integrity","required":true,
-                  "signing":{"profileId":"fse2-integrity","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"{{{IntegrityIssuer}}}","audience":"{{{Audience}}}","subject":"fixed","fixedSubject":"{{{Subject}}}","allowedClaims":["subject_role","purpose_of_use","subject_organization","subject_organization_id","locality","person_id","patient_consent","resource_hl7_type","action_id","attachment_hash","subject_application_id","subject_application_vendor","subject_application_version"],"tokenLifetimeSeconds":{{{TokenLifetimeSeconds}}},"clockSkewSeconds":30,"certificateHeader":"chain","temporalClaims":"iat-exp","minimumRsaKeySize":2048},
+                  "signing":{"profileId":"fse2-integrity","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"{{{IntegrityIssuer}}}","audience":"{{{Audience}}}","subject":"fixed","fixedSubject":"{{{Subject}}}","allowedClaims":["subject_role","purpose_of_use","subject_organization","subject_organization_id","locality","person_id","patient_consent","resource_hl7_type","action_id","attachment_hash","subject_application_id","subject_application_vendor","subject_application_version"],"tokenLifetimeSeconds":{{{TokenLifetimeSeconds}}},"clockSkewSeconds":30,"certificateKeyUsage":"contentCommitment","certificateHeader":"chain","temporalClaims":"iat-exp","minimumRsaKeySize":2048},
                   "projection":{"kind":"signedTokenHeader","headerName":"FSE-JWT-Signature"}
                 }
               ],

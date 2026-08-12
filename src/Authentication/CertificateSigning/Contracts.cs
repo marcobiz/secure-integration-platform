@@ -289,6 +289,15 @@ public enum JwtTemporalClaimMode
     IssuedAtExpiration
 }
 
+/// <summary>Exact certificate Key Usage required by one server-owned JWT signing policy.</summary>
+public enum JwtSigningCertificateKeyUsageMode
+{
+    /// <summary>Historical behavior: when Key Usage is present, require digitalSignature.</summary>
+    DigitalSignature,
+    /// <summary>Require a present Key Usage extension containing contentCommitment/nonRepudiation.</summary>
+    ContentCommitment
+}
+
 /// <summary>Immutable server-owned RS256 policy snapshot for an exact Published operation.</summary>
 public sealed class ServerOwnedRs256PolicySnapshot
 {
@@ -314,6 +323,7 @@ public sealed class ServerOwnedRs256PolicySnapshot
         int minimumRsaKeySize,
         JwtCertificateHeaderMode certificateHeaderMode,
         JwtTemporalClaimMode temporalClaimMode,
+        JwtSigningCertificateKeyUsageMode certificateKeyUsageMode,
         IReadOnlyList<JwtTrustedClaimBinding>? trustedClaims,
         JwtTrustedValueSource? trustedSubjectSource)
     {
@@ -338,6 +348,7 @@ public sealed class ServerOwnedRs256PolicySnapshot
         MinimumRsaKeySize = minimumRsaKeySize;
         CertificateHeaderMode = certificateHeaderMode;
         TemporalClaimMode = temporalClaimMode;
+        CertificateKeyUsageMode = certificateKeyUsageMode;
         TrustedClaims = new ReadOnlyCollection<JwtTrustedClaimBinding>(trustedClaims?.ToArray() ?? []);
         TrustedSubjectSource = trustedSubjectSource;
         PolicyChecksumSha256 = AuthenticationPolicyDigest.Rs256(this);
@@ -371,7 +382,41 @@ public sealed class ServerOwnedRs256PolicySnapshot
             policyId, policyRevision, connectorVersionId, connectorId, operationId, environmentId, endpoint,
             issuer, audience, subjectPolicy, fixedSubject, allowedClaims, lifetime, allowedClockSkew,
             logicalKeyBindingId, resourceVersion, catalogRevision, catalogChecksumSha256, minimumRsaKeySize,
-            certificateHeaderMode, temporalClaimMode, trustedClaims, trustedSubjectSource);
+            certificateHeaderMode, temporalClaimMode, JwtSigningCertificateKeyUsageMode.DigitalSignature,
+            trustedClaims, trustedSubjectSource);
+
+    /// <summary>
+    /// Creates a policy snapshot with one explicit bounded signing-certificate Key Usage requirement.
+    /// </summary>
+    public static ServerOwnedRs256PolicySnapshot Create(
+        string policyId,
+        long policyRevision,
+        Guid connectorVersionId,
+        string connectorId,
+        string operationId,
+        Guid environmentId,
+        Uri endpoint,
+        string issuer,
+        string audience,
+        JwtSubjectPolicy subjectPolicy,
+        string? fixedSubject,
+        IReadOnlySet<string> allowedClaims,
+        TimeSpan lifetime,
+        TimeSpan allowedClockSkew,
+        string logicalKeyBindingId,
+        string resourceVersion,
+        long catalogRevision,
+        string catalogChecksumSha256,
+        int minimumRsaKeySize,
+        JwtSigningCertificateKeyUsageMode certificateKeyUsageMode,
+        JwtCertificateHeaderMode certificateHeaderMode = JwtCertificateHeaderMode.None,
+        JwtTemporalClaimMode temporalClaimMode = JwtTemporalClaimMode.IssuedAtNotBeforeExpiration,
+        IReadOnlyList<JwtTrustedClaimBinding>? trustedClaims = null,
+        JwtTrustedValueSource? trustedSubjectSource = null) => new(
+            policyId, policyRevision, connectorVersionId, connectorId, operationId, environmentId, endpoint,
+            issuer, audience, subjectPolicy, fixedSubject, allowedClaims, lifetime, allowedClockSkew,
+            logicalKeyBindingId, resourceVersion, catalogRevision, catalogChecksumSha256, minimumRsaKeySize,
+            certificateHeaderMode, temporalClaimMode, certificateKeyUsageMode, trustedClaims, trustedSubjectSource);
 
     /// <summary>Logical approved policy identifier.</summary>
     public string PolicyId { get; }
@@ -417,6 +462,8 @@ public sealed class ServerOwnedRs256PolicySnapshot
     public JwtCertificateHeaderMode CertificateHeaderMode { get; }
     /// <summary>Approved exact temporal claim set.</summary>
     public JwtTemporalClaimMode TemporalClaimMode { get; }
+    /// <summary>Approved bounded certificate Key Usage requirement.</summary>
+    public JwtSigningCertificateKeyUsageMode CertificateKeyUsageMode { get; }
     /// <summary>Policy-bound trusted dynamic claims, separate from caller business claims.</summary>
     public IReadOnlyList<JwtTrustedClaimBinding> TrustedClaims { get; }
     /// <summary>Typed trusted runtime source selected by policy when it owns the reserved subject.</summary>

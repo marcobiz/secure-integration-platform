@@ -45,7 +45,9 @@ public sealed class Rs256JwtSigner(
         if (keyOperations is null) throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-CAPABILITY-UNAVAILABLE");
 
         BoundAuthenticationResource resource = await ResolveBindingAsync(context, policy, cancellationToken).ConfigureAwait(false);
-        if (policy.CertificateHeaderMode != JwtCertificateHeaderMode.None && certificatePublicMaterial is null)
+        bool certificateValidationRequired = policy.CertificateHeaderMode != JwtCertificateHeaderMode.None ||
+            policy.CertificateKeyUsageMode == JwtSigningCertificateKeyUsageMode.ContentCommitment;
+        if (certificateValidationRequired && certificatePublicMaterial is null)
             throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-CERTIFICATE-CAPABILITY-UNAVAILABLE");
         IReadOnlyList<ResolvedTrustedRuntimeValue> trustedRuntimeValues =
             await ResolveTrustedRuntimeValuesAsync(context, policy, resource, cancellationToken).ConfigureAwait(false);
@@ -65,7 +67,7 @@ public sealed class Rs256JwtSigner(
         catch (AuthenticationPrimitiveException) { throw; }
         catch (Exception) { throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-KEY-DENIED"); }
         IReadOnlyList<byte[]> certificateHeaderValues = [];
-        if (policy.CertificateHeaderMode != JwtCertificateHeaderMode.None)
+        if (certificateValidationRequired)
         {
             ProviderCertificatePublicMaterial material;
             try
@@ -374,10 +376,25 @@ public sealed class Rs256JwtSigner(
                 notBefore > now.Add(policy.AllowedClockSkew) || notAfter <= now.Add(policy.Lifetime))
                 throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-CERTIFICATE-DENIED");
 
-            if (leaf.Extensions.OfType<X509KeyUsageExtension>().SingleOrDefault() is X509KeyUsageExtension keyUsage &&
-                (keyUsage.KeyUsages & X509KeyUsageFlags.DigitalSignature) == 0)
-                throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-CERTIFICATE-DENIED");
+            X509KeyUsageExtension? keyUsage = leaf.Extensions.OfType<X509KeyUsageExtension>().SingleOrDefault();
+            switch (policy.CertificateKeyUsageMode)
+            {
+                case JwtSigningCertificateKeyUsageMode.DigitalSignature:
+                    if (keyUsage is not null &&
+                        (keyUsage.KeyUsages & X509KeyUsageFlags.DigitalSignature) == 0)
+                        throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-CERTIFICATE-DENIED");
+                    break;
+                case JwtSigningCertificateKeyUsageMode.ContentCommitment:
+                    if (keyUsage is null ||
+                        (keyUsage.KeyUsages & X509KeyUsageFlags.NonRepudiation) == 0)
+                        throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-CERTIFICATE-DENIED");
+                    break;
+                default:
+                    throw new AuthenticationPrimitiveException("BGW-AUTH-SIGNING-CERTIFICATE-DENIED");
+            }
 
+            if (policy.CertificateHeaderMode == JwtCertificateHeaderMode.None)
+                return new(subjectPublicKeyInfo, []);
             if (policy.CertificateHeaderMode == JwtCertificateHeaderMode.Leaf)
                 return new(subjectPublicKeyInfo, [leafDer]);
             if (policy.CertificateHeaderMode != JwtCertificateHeaderMode.Chain || material.CertificateChainDer.Count == 0)

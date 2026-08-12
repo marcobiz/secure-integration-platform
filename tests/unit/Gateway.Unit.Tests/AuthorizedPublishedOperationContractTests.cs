@@ -145,7 +145,23 @@ public sealed class AuthorizedPublishedOperationContractTests
 
         Assert.Single(expectations.SigningSlots);
         Assert.Single(expectations.SigningIdentityDistinctFromMutualTlsSlots);
+        Assert.Equal(AuthorizedSigningCertificateKeyUsageMode.DigitalSignature, slot.CertificateKeyUsageMode);
         Assert.DoesNotContain("synthetic-issuer", slot.ToString(), StringComparison.Ordinal);
+        AuthorizedSigningSlotExpectation contentCommitment = new(
+            primary,
+            required: true,
+            AuthorizedSigningAlgorithm.Rs256,
+            AuthorizedSigningTokenProjectionExpectation.AuthorizationBearer(),
+            "synthetic-upstream",
+            "synthetic-fixed-subject",
+            ["transaction-id"],
+            60,
+            AuthorizedSigningTemporalMode.IssuedAtExpiration,
+            jtiRequired: true,
+            AuthorizedSigningCertificateHeaderMode.Chain,
+            AuthorizedSigningIssuerExpectation.Exact("synthetic-issuer"),
+            AuthorizedSigningCertificateKeyUsageMode.ContentCommitment);
+        Assert.Equal(AuthorizedSigningCertificateKeyUsageMode.ContentCommitment, contentCommitment.CertificateKeyUsageMode);
         Assert.Throws<ArgumentException>(() => new AuthorizedSigningSlotExpectation(
             primary,
             true,
@@ -159,5 +175,19 @@ public sealed class AuthorizedPublishedOperationContractTests
             true,
             AuthorizedSigningCertificateHeaderMode.Chain,
             AuthorizedSigningIssuerExpectation.Exact("synthetic-issuer")));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new AuthorizedSigningSlotExpectation(
+            primary,
+            true,
+            AuthorizedSigningAlgorithm.Rs256,
+            AuthorizedSigningTokenProjectionExpectation.AuthorizationBearer(),
+            "synthetic-upstream",
+            "synthetic-fixed-subject",
+            [],
+            60,
+            AuthorizedSigningTemporalMode.IssuedAtExpiration,
+            true,
+            AuthorizedSigningCertificateHeaderMode.Chain,
+            AuthorizedSigningIssuerExpectation.Exact("synthetic-issuer"),
+            (AuthorizedSigningCertificateKeyUsageMode)99));
     }
 }

@@ -65,6 +65,7 @@ internal static class BindingPolicy
             (policy.TrustedSubjectSource.HasValue && !IsTrustedRuntimeSource(policy.TrustedSubjectSource.Value)) ||
             policy.CertificateHeaderMode is not (JwtCertificateHeaderMode.None or JwtCertificateHeaderMode.Leaf or JwtCertificateHeaderMode.Chain) ||
             policy.TemporalClaimMode is not (JwtTemporalClaimMode.IssuedAtNotBeforeExpiration or JwtTemporalClaimMode.IssuedAtExpiration) ||
+            policy.CertificateKeyUsageMode is not (JwtSigningCertificateKeyUsageMode.DigitalSignature or JwtSigningCertificateKeyUsageMode.ContentCommitment) ||
             !ValidTrustedClaims(policy) ||
             policy.FixedSubject?.Length > 512 || string.IsNullOrWhiteSpace(policy.ResourceVersion) || policy.ResourceVersion.Length > 128 ||
             policy.CatalogRevision <= 0 || !IsSha256(policy.CatalogChecksumSha256))
