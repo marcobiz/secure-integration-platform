@@ -10,3 +10,7 @@
 # Exact historical false positive: `clientKey` is an RSA-typed synthetic TLS fixture
 # parameter and contains no credential value.
 fc367a9c0011b334effacc7d5221a0a4af559a5b:tests/integration/Gateway.Integration.Tests/AdminApiSecurityTests.cs:generic-api-key:779
+
+# Exact historical false positive: the value is a synthetic mutation case name,
+# not a credential. The test data label was renamed in the following commit.
+2fb355967d87cb825e6aaeddcbf2a9236b83289c:packs/deployment/local-pkcs12/tests/Providers.LocalPkcs12.Tests/LocalPkcs12ProviderTests.cs:generic-api-key:136

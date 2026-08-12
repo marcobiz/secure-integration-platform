@@ -128,20 +128,21 @@ public sealed class LocalPkcs12ProviderTests
     [InlineData("sign", "leaf-substituted")]
     [InlineData("sign", "pkcs12-substituted")]
     [InlineData("sign", "pkcs12-reencoded")]
-    [InlineData("auth", "chain-deleted")]
-    [InlineData("auth", "chain-substituted")]
-    [InlineData("auth", "chain-reordered")]
-    [InlineData("auth", "root-substituted")]
-    [InlineData("auth", "leaf-substituted")]
-    [InlineData("auth", "pkcs12-substituted")]
-    [InlineData("auth", "pkcs12-reencoded")]
+    [InlineData("client", "chain-deleted")]
+    [InlineData("client", "chain-substituted")]
+    [InlineData("client", "chain-reordered")]
+    [InlineData("client", "root-substituted")]
+    [InlineData("client", "leaf-substituted")]
+    [InlineData("client", "pkcs12-substituted")]
+    [InlineData("client", "pkcs12-reencoded")]
     public async Task LOCAL_P12_private_use_revalidates_exact_chain_leaf_and_pkcs12_after_preflight(
         string role,
         string mutation)
     {
         using Fixture fixture = Fixture.Create();
         ProviderServices services = fixture.CreateServices();
-        fixture.ApplyPrivateUseMutation(role, mutation);
+        string materialRole = role == "client" ? "auth" : role;
+        fixture.ApplyPrivateUseMutation(materialRole, mutation);
 
         ProviderAccessException denied = role == "sign"
             ? await Assert.ThrowsAsync<ProviderAccessException>(() => services.SigningKeys!.SignDigestAsync(
