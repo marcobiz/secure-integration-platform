@@ -25,6 +25,7 @@ $repositoryExpectedReferencesByPath = [Collections.Generic.Dictionary[string, ob
 $repositoryExpectedReferencesByPath.Add('src/Gateway/Gateway.Api/Dockerfile', [string[]]@($sdkNonAlpine, $aspnetNonAlpine))
 $repositoryExpectedReferencesByPath.Add('src/Gateway/Gateway.Migrations/Dockerfile', [string[]]@($sdkNonAlpine, $runtimeNonAlpine))
 $repositoryExpectedReferencesByPath.Add('packs/deployment/azure/Dockerfile', [string[]]@($sdkNonAlpine, $aspnetNonAlpine))
+$repositoryExpectedReferencesByPath.Add('packs/deployment/local-pkcs12/Dockerfile', [string[]]@($sdkNonAlpine, $aspnetNonAlpine))
 $repositoryExpectedReferencesByPath.Add('tools/m3/VendorMock/Dockerfile', [string[]]@($sdkAlpine, $aspnetAlpine))
 $repositoryExpectedReferencesByPath.Add('tools/m3/SyntheticVault/Dockerfile', [string[]]@($sdkAlpine, $aspnetAlpine))
 $repositoryExpectedReferencesByPath.Add('tools/m3/Provisioner/Dockerfile', [string[]]@($sdkAlpine, $runtimeAlpine))
@@ -77,7 +78,7 @@ function Get-ValidationProfile {
     $expectedReferencesByPath = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
 
     foreach ($entry in $repositoryExpectedReferencesByPath.GetEnumerator()) {
-        if (-not $isCoreExport -or $entry.Key -ne 'packs/deployment/azure/Dockerfile') {
+        if (-not $isCoreExport -or -not $entry.Key.StartsWith('packs/deployment/', [StringComparison]::Ordinal)) {
             $expectedReferencesByPath.Add($entry.Key, [string[]]@($entry.Value))
         }
     }
@@ -87,8 +88,8 @@ function Get-ValidationProfile {
         IsCoreExport = $isCoreExport
         CoreExportManifestPath = $coreExportManifestPath
         ExpectedReferencesByPath = $expectedReferencesByPath
-        ExpectedDockerfileCount = $(if ($isCoreExport) { 5 } else { 6 })
-        ExpectedDotNetFromCount = $(if ($isCoreExport) { 10 } else { 12 })
+        ExpectedDockerfileCount = $(if ($isCoreExport) { 5 } else { 7 })
+        ExpectedDotNetFromCount = $(if ($isCoreExport) { 10 } else { 14 })
     }
 }
 
@@ -362,7 +363,9 @@ function Assert-ValidationCase {
 
     $codes = @($Result.Findings | ForEach-Object { $_.Code })
     if ($ShouldPass) {
-        if ($codes.Count -ne 0 -or $Result.TrackedDockerfileCount -ne 6 -or $Result.DotNetFromCount -ne 12) {
+        if ($codes.Count -ne 0 -or
+            $Result.TrackedDockerfileCount -ne $Result.Profile.ExpectedDockerfileCount -or
+            $Result.DotNetFromCount -ne $Result.Profile.ExpectedDotNetFromCount) {
             throw ('END_TO_END_CONTROL_FAILED:{0}' -f $Name)
         }
     }

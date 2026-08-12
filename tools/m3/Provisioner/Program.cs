@@ -26,7 +26,7 @@ SystemGatewayClock clock = new();
 GatewayProvisioningService provisioning = new(registry, clock, new EnrollmentSecurityOptions { ActivationHmacKey = activationKey });
 Guid tenantId = Guid.NewGuid();
 Guid applicationId = Guid.NewGuid();
-Guid environmentId = Guid.NewGuid();
+Guid environmentId = OptionalGuid("M3_PRIMARY_ENVIRONMENT_ID") ?? Guid.NewGuid();
 Guid installationId = Guid.NewGuid();
 ProvisionedActivation activation = await provisioning.CreateInstallationAsync(
     new TenantRecord(tenantId, "m3-tenant", "M3 Synthetic Tenant", TenantStatus.Active, clock.UtcNow),
@@ -199,6 +199,15 @@ static string? Optional(string name)
     string? value = Environment.GetEnvironmentVariable(name, EnvironmentVariableTarget.Process);
     if (value is not null && (string.IsNullOrWhiteSpace(value) || value.Any(character => character is '\r' or '\n'))) throw new InvalidOperationException($"{name} is invalid.");
     return value;
+}
+
+static Guid? OptionalGuid(string name)
+{
+    string? value = Optional(name);
+    if (value is null) return null;
+    if (!Guid.TryParseExact(value, "D", out Guid parsed) || parsed == Guid.Empty)
+        throw new InvalidOperationException($"{name} must be a non-empty canonical GUID.");
+    return parsed;
 }
 
 static async Task EnsureRuntimeRoleAsync(string connectionString, string password)

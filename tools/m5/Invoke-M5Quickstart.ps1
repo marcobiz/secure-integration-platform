@@ -2,7 +2,9 @@
 param(
     [ValidateSet('Validate', 'Start', 'Workflow', 'Stop')]
     [string] $Phase = 'Start',
-    [switch] $SkipBuild
+    [switch] $SkipBuild,
+    [string] $AdditionalComposeFile,
+    [string] $DotNetPath
 )
 
 Set-StrictMode -Version Latest
@@ -14,8 +16,11 @@ $envFile = Join-Path $rawRoot 'm3a.env'
 $baseCompose = Join-Path $root 'deploy\m3\docker-compose.m3a.yml'
 $overlayCompose = Join-Path $root 'deploy\m5\docker-compose.m5.yml'
 $project = 'secure-integration-m5-quickstart'
-$dotnet = Join-Path $root '.dotnet\dotnet.exe'
-if (-not (Test-Path -LiteralPath $dotnet)) { $dotnet = 'dotnet' }
+$dotnet = if ([string]::IsNullOrWhiteSpace($DotNetPath)) { Join-Path $root '.dotnet\dotnet.exe' } else { [IO.Path]::GetFullPath($DotNetPath) }
+if (-not (Test-Path -LiteralPath $dotnet -PathType Leaf)) {
+    if (-not [string]::IsNullOrWhiteSpace($DotNetPath)) { throw 'M5_QUICKSTART_DOTNET_INVALID' }
+    $dotnet = 'dotnet'
+}
 
 function Invoke-Checked {
     param([Parameter(Mandatory)] [string] $File, [Parameter(Mandatory)] [string[]] $Arguments)
@@ -24,8 +29,19 @@ function Invoke-Checked {
 }
 
 function ComposeArguments {
-    param([string[]] $Tail)
-    return @('compose', '--project-name', $project, '--env-file', $envFile, '--file', $baseCompose, '--file', $overlayCompose) + $Tail
+    param([string[]] $Tail, [switch] $IncludeAdditional)
+    $arguments = @('compose', '--project-name', $project, '--env-file', $envFile, '--file', $baseCompose, '--file', $overlayCompose)
+    if ($IncludeAdditional -and -not [string]::IsNullOrWhiteSpace($AdditionalComposeFile)) { $arguments += @('--file', $AdditionalComposeFile) }
+    return $arguments + $Tail
+}
+
+if (-not [string]::IsNullOrWhiteSpace($AdditionalComposeFile)) {
+    $additionalFullPath = [IO.Path]::GetFullPath($AdditionalComposeFile)
+    $allowedAdditionalCompose = [IO.Path]::GetFullPath((Join-Path $root 'deploy\fse2\docker-compose.fse2-local.yml'))
+    if ($additionalFullPath -ne $allowedAdditionalCompose -or -not (Test-Path -LiteralPath $additionalFullPath -PathType Leaf)) {
+        throw 'M5_QUICKSTART_ADDITIONAL_COMPOSE_DENIED'
+    }
+    $AdditionalComposeFile = $additionalFullPath
 }
 
 if ($Phase -eq 'Workflow') {
@@ -105,6 +121,26 @@ if (-not $enrollment.passed) { throw 'M5_QUICKSTART_ENROLLMENT_FAILED' }
 $provisioning = Get-Content -LiteralPath (Join-Path $rawRoot 'provisioning.json') -Raw | ConvertFrom-Json
 $status = (& docker @((ComposeArguments @('exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', 'broker_gateway_m3', '-Atc', "SELECT status FROM gateway.installation WHERE id='$($provisioning.securityInstallationId)';"))))
 if ($LASTEXITCODE -ne 0 -or $status.Trim() -ne 'active') { throw 'M5_QUICKSTART_INSTALLATION_NOT_ACTIVE' }
+
+# An optional deployment overlay is applied only after the canonical Synthetic-provider
+# enrollment and sample invocation have passed. This preserves the default quickstart gate while
+# allowing a provider-specific Gateway image to reuse the qualified database and environment.
+if (-not [string]::IsNullOrWhiteSpace($AdditionalComposeFile)) {
+    $providerUp = @('up', '--detach', '--no-deps', '--force-recreate', 'gateway')
+    if (-not $SkipBuild) { $providerUp = @('up', '--build', '--pull', 'always', '--detach', '--no-deps', '--force-recreate', 'gateway') }
+    Invoke-Checked 'docker' (ComposeArguments -Tail $providerUp -IncludeAdditional)
+    $providerDeadline = [DateTimeOffset]::UtcNow.AddMinutes(3)
+    $providerReady = $false
+    do {
+        $providerContainer = (& docker @((ComposeArguments -Tail @('ps', '--quiet', 'gateway') -IncludeAdditional)))
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($providerContainer)) {
+            $providerHealth = (& docker inspect $providerContainer.Trim() --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}')
+            if ($LASTEXITCODE -eq 0 -and $providerHealth.Trim() -eq 'healthy') { $providerReady = $true; break }
+        }
+        Start-Sleep -Seconds 2
+    } while ([DateTimeOffset]::UtcNow -lt $providerDeadline)
+    if (-not $providerReady) { throw 'M5_QUICKSTART_ADDITIONAL_PROVIDER_NOT_READY' }
+}
 
 $html = Join-Path $artifactRoot 'admin-index.html'
 # Schannel otherwise attempts Internet revocation checks for the intentionally offline,

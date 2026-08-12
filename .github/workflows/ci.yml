@@ -37,6 +37,23 @@ jobs:
       - name: Test
         shell: pwsh
         run: ./eng/test.ps1
+      - name: Build and test optional local PKCS12 provider pack
+        shell: pwsh
+        run: |
+          dotnet restore BrokerGateway.LocalPkcs12.slnx --locked-mode
+          dotnet build BrokerGateway.LocalPkcs12.slnx --configuration Release --no-restore
+          dotnet test BrokerGateway.LocalPkcs12.slnx --configuration Release --no-build --no-restore
+      - name: Parse FSE2 local-provider tooling with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $scripts = Get-ChildItem tools/fse2 -Include *.ps1,*.psm1 -Recurse
+          foreach ($script in $scripts) {
+            $tokens = $null
+            $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -ne 0) { throw "$($script.Name): $($errors[0].Message)" }
+          }
+          ./tools/fse2/Test-Fse2LocalPkcs12Material.ps1
       - name: Parse M3 split-host runners with Windows PowerShell 5.1
         shell: powershell
         run: |
@@ -208,6 +225,25 @@ jobs:
       - name: Validate immutable .NET container base images
         shell: pwsh
         run: ./eng/validate-container-base-images.ps1
+      - name: Validate opt-in FSE2 local-provider Compose overlay
+        shell: bash
+        run: >-
+          docker compose
+          --file deploy/m3/docker-compose.m3a.yml
+          --file deploy/m5/docker-compose.m5.yml
+          --file deploy/fse2/docker-compose.fse2-local.yml
+          config --no-interpolate --quiet
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+      - name: Test local PKCS12 provider on Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore BrokerGateway.LocalPkcs12.slnx --locked-mode
+          dotnet test BrokerGateway.LocalPkcs12.slnx --configuration Release --no-restore
       - name: Build Gateway container
         id: image
         shell: bash
@@ -236,11 +272,24 @@ jobs:
           [[ "$azure_image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           test "$azure_image_revision" = "$CANDIDATE_COMMIT_SHA"
           printf 'AZURE_IMAGE_DIGEST=%s\nAZURE_IMAGE_REVISION=%s\n' "$azure_image_digest" "$azure_image_revision" | tee azure-image-digest.txt
+      - name: Build and attest local PKCS12 deployment container at exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT_SHA"
+          set -x
+          docker build --pull --no-cache -f packs/deployment/local-pkcs12/Dockerfile --label "org.opencontainers.image.revision=$CANDIDATE_COMMIT_SHA" -t broker-gateway-local-pkcs12:m2 .
+          set +x
+          local_image_digest="$(docker image inspect broker-gateway-local-pkcs12:m2 --format '{{.Id}}')"
+          local_image_revision="$(docker image inspect broker-gateway-local-pkcs12:m2 | jq -r '.[0].Config.Labels["org.opencontainers.image.revision"]')"
+          [[ "$local_image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$local_image_revision" = "$CANDIDATE_COMMIT_SHA"
+          printf 'LOCAL_PKCS12_IMAGE_DIGEST=%s\nLOCAL_PKCS12_IMAGE_REVISION=%s\n' "$local_image_digest" "$local_image_revision" | tee local-pkcs12-image-digest.txt
       - name: Verify executable, non-root, read-only, health, readiness and clean shutdown
         shell: bash
         run: |
           set -euo pipefail
-          cleanup() { docker rm -f broker-gateway-m2 gateway-failclosed >/dev/null 2>&1 || true; }
+          cleanup() { docker rm -f broker-gateway-m2 broker-gateway-local-pkcs12 gateway-failclosed >/dev/null 2>&1 || true; }
           trap cleanup EXIT
           configured_user="$(docker image inspect broker-gateway:m2 --format '{{.Config.User}}')"
           test -n "$configured_user"
@@ -258,6 +307,25 @@ jobs:
             sleep 1
           done
           test "$ready" = "true"
+          local_configured_user="$(docker image inspect broker-gateway-local-pkcs12:m2 --format '{{.Config.User}}')"
+          test -n "$local_configured_user"
+          test "$local_configured_user" != "0"
+          docker run -d --name broker-gateway-local-pkcs12 --read-only --tmpfs /tmp:size=64m,mode=1777 -p 18081:8080 -e ASPNETCORE_ENVIRONMENT=Development broker-gateway-local-pkcs12:m2
+          test "$(docker inspect broker-gateway-local-pkcs12 --format '{{.HostConfig.ReadonlyRootfs}}')" = "true"
+          test "$(docker exec broker-gateway-local-pkcs12 id -u)" != "0"
+          docker exec broker-gateway-local-pkcs12 test -r /app/packs/local-pkcs12/SecureIntegration.Providers.LocalPkcs12.dll
+          docker exec broker-gateway-local-pkcs12 test -r /app/packs/healthcare-fse2/SecureIntegration.ConnectorPacks.Healthcare.FSE2.dll
+          local_ready=false
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:18081/health/live >/dev/null && curl --fail --silent http://127.0.0.1:18081/health/ready >/dev/null; then
+              local_ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$local_ready" = "true"
+          docker stop --time 15 broker-gateway-local-pkcs12
+          test "$(docker inspect broker-gateway-local-pkcs12 --format '{{.State.ExitCode}}')" = "0"
           docker stop --time 15 broker-gateway-m2
           test "$(docker inspect broker-gateway-m2 --format '{{.State.ExitCode}}')" = "0"
           if docker run --name gateway-failclosed -e ASPNETCORE_ENVIRONMENT=Production broker-gateway:m2; then
@@ -273,6 +341,14 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
           ignore-unfixed: true
+      - name: Scan local PKCS12 image for embedded secrets
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: broker-gateway-local-pkcs12:m2
+          scanners: secret
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
       - name: Generate image SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -280,6 +356,13 @@ jobs:
           format: spdx-json
           output-file: gateway-image.spdx.json
           artifact-name: gateway-image-sbom-${{ env.CANDIDATE_COMMIT_SHA }}.spdx.json
+      - name: Generate local PKCS12 image SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: broker-gateway-local-pkcs12:m2
+          format: spdx-json
+          output-file: local-pkcs12-image.spdx.json
+          artifact-name: local-pkcs12-image-sbom-${{ env.CANDIDATE_COMMIT_SHA }}.spdx.json
       - name: Upload image digest evidence
         uses: actions/upload-artifact@v6
         with:
@@ -287,6 +370,7 @@ jobs:
           path: |
             gateway-image-digests.txt
             azure-image-digest.txt
+            local-pkcs12-image-digest.txt
           if-no-files-found: error
 
   m3-deterministic-container-slice:
