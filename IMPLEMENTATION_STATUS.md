@@ -29,7 +29,7 @@ Aggiornato: 2026-08-12
 | M6 — Certificate, Signing and outbound mTLS primitives | Wave 2 remediation dei quattro finding implementata; product-head CI PASS | PR #11; 49 test AP-05/AP-06 PASS locali; workflow `31201004049` e `31201004276` verdi su `1ae76f6` |
 | Wave 1 - Generic JWT/X.509 extensions | Remediation mirata local gate PASS; CI exact-head e rereview pending | baseline `6e1a7c626e0e24d0a385c611fc03faef51598889`; 304 ordinary, 71 PostgreSQL relevant, scan/SBOM/vulnerability/Core export PASS |
 | Healthcare Wave 1 — Regional ePrescription | Foundation compilata; profili regionali non pubblicabili | capability opaca Core post-auth con stato/grant verificati indipendentemente dalle credenziali, adapter al vero store Published, schema estensioni e safe-code allowlist server-owned, isolamento cross-profile; 14 test pack + 4 architecture PASS locali; Lombardia ed Emilia-Romagna `BLOCKED_BY_SPEC` |
-| Healthcare Wave 1 — FSE2 National Connector | Eccezione Core `contentCommitment` qualificata localmente; exact-head CI e review Core security mirata pending | Tipo provider-neutral bounded con default storico `DigitalSignature`; entrambi gli slot FSE2 esigono `ContentCommitment`, stessa identità sintetica S1 e distinta A1 mTLS. CertificateSigning 100/100, FSE2 unit 43/43, hosted 5/5, PostgreSQL 18 canonico 1/1 zero skip, architecture 40/40 e build Release zero warning/errori. Compatibilità software sintetica soltanto; import operativo e live FSE2 non eseguiti. |
+| Healthcare Wave 1 — FSE2 National Connector | Eccezione Core `contentCommitment` qualificata; candidate CI 21/21 PASS, review Core security mirata pending | Tipo provider-neutral bounded con default storico `DigitalSignature`; entrambi gli slot FSE2 esigono `ContentCommitment`, stessa identità sintetica S1 e distinta A1 mTLS. Candidate `02c59240`: General `31600436413` 6/6 e M5/Admin `31600436429` 15/15; CertificateSigning 100/100, FSE2 unit 43/43, hosted 5/5, PostgreSQL 18 canonico 1/1 zero skip, architecture 40/40 e build Release zero warning/errori. Compatibilità software sintetica soltanto; import operativo e live FSE2 non eseguiti. |
 | M3B e milestone/connector production successivi | Non iniziati | nessun cloud reale, connector sanitario production o adapter commerciale |
 | Harness matrice live M0/M1 | Implementato ed eseguito su VM | matrice A-F PASS, reboot reale, bundle con manifest e SHA-256 verificati |
 
@@ -364,8 +364,10 @@ M3B, connector sanitari reali, provider cloud aggiuntivi e adapter COM/C/Java no
   stale con firma, FSE2 network e generic transport a zero;
 - checkpoint locale corrente: CertificateSigning 100/100, FSE2 unit 43/43, hosted non-PostgreSQL
   5/5, PostgreSQL 18 canonico 1/1 con migration fresh/no-op, architecture 40/40 e build Release
-  zero warning/errori. La suite ordinaria completa ha zero failure; CI exact-head e review Core
-  security mirata restano gate di handoff;
+  zero warning/errori. La suite ordinaria completa ha zero failure. Il candidate `02c59240` ha
+  General `31600436413` 6/6 e M5/Admin `31600436429` 15/15 PASS; ogni successivo head solo
+  documentale è nuovamente soggetto ai PR check. La review Core security mirata è richiesta in
+  PR #32 e resta il gate umano di handoff;
 - il test usa solo certificati sintetici runtime: la correlazione/trust offline resta evidenza
   redatta esterna già verificata e non riaperta; importazione operativa e qualifica live FSE2 non
   sono state eseguite. Il profilo Human Actor resta `DEFERRED` e non si dichiara accreditamento;

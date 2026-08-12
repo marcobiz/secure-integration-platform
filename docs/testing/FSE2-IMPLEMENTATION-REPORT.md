@@ -155,6 +155,19 @@ Documentation, conservative secret scan, Gitleaks, vulnerability inventory, SBOM
 final clean-tree checks and exact-head CI are recorded after the focused remediation commits;
 pre-commit artefacts do not qualify the final head.
 
+Candidate `02c59240e226da484c48cd5c322f67d2574cc115` passed the exact-head local release
+controls: Gitleaks 8.28.0 scanned 328 commits with no leaks; the complete container SBOM manifest
+names that exact SHA and indexes 165 container packages; and the verified Core export contains 430
+allowlisted files with no Healthcare or ConnectorPacks path. PR #32 then passed exact-candidate
+General run
+[`31600436413`](https://github.com/marcobiz/secure-integration-platform/actions/runs/31600436413)
+6/6 and M5/Admin run
+[`31600436429`](https://github.com/marcobiz/secure-integration-platform/actions/runs/31600436429)
+15/15. General includes the canonical PostgreSQL 18 FSE2 FQN with zero skip. This concluding report
+update is documentation-only; PR checks must and do re-evaluate every subsequent head before
+handoff. An independent Core certificate-signing security review, limited to the new Key Usage
+criterion and explicitly excluding a general product/vertical review, is requested in the PR body.
+
 ## Historical local qualification before the temporal remediation
 
 The following results belong to predecessor candidate `45548c13df5d46cdb5f9cba1d101ee08619ef15b`.
@@ -210,7 +223,7 @@ official FSE endpoint call or accreditation.
 
 ## Readiness boundary
 
-- `ORGANIZATION_PROFILE = SYNTHETIC_SOFTWARE_COMPATIBILITY_PASS_EXACT_HEAD_CI_PENDING`;
+- `ORGANIZATION_PROFILE = SYNTHETIC_SOFTWARE_COMPATIBILITY_PASS_REVIEW_PENDING`;
 - `HUMAN_ACTOR_PROFILE = DEFERRED`;
 - `NEW_CORE_PRIMITIVE_REQUIRED = YES`;
 - `OFFLINE_CERTIFICATE_CORRELATION_AND_TRUST = PREVIOUSLY_VERIFIED_OUTSIDE_REPOSITORY_NOT_REEXECUTED`;
