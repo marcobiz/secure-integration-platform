@@ -227,12 +227,25 @@ jobs:
         run: ./eng/validate-container-base-images.ps1
       - name: Validate opt-in FSE2 local-provider Compose overlay
         shell: bash
-        run: >-
-          docker compose
-          --file deploy/m3/docker-compose.m3a.yml
-          --file deploy/m5/docker-compose.m5.yml
-          --file deploy/fse2/docker-compose.fse2-local.yml
-          config --no-interpolate --quiet
+        run: |
+          set -euo pipefail
+          export M3_POSTGRES_ADMIN_PASSWORD=synthetic-compose M3_POSTGRES_RUNTIME_PASSWORD=synthetic-compose
+          export M3_ACTIVATION_HMAC_BASE64=synthetic M3_VENDOR_CLIENT_PFX_BASE64=synthetic
+          export M3_WRONG_VENDOR_CLIENT_PFX_BASE64=synthetic M3_CERTIFICATE_PASSWORD=synthetic-compose
+          export M3_SYNTHETIC_VAULT_TOKEN=synthetic M3_VENDOR_API_KEY=synthetic
+          export M3_VENDOR_CLIENT_THUMBPRINT=synthetic M3_VENDOR_CONTROL_TOKEN=synthetic
+          export M5_POSTGRES_ADMIN_API_PASSWORD=synthetic-compose
+          export M3_RAW_EVIDENCE_DIRECTORY=/tmp/fse2-compose-evidence
+          export M3_CERTIFICATE_DIRECTORY=/tmp/fse2-compose-certificates
+          export FSE2_PROVIDER_MANIFEST_PATH=/tmp/fse2-provider/manifest.json
+          export FSE2_PROVIDER_MATERIAL_DIRECTORY=/tmp/fse2-provider/material
+          export FSE2_TEST_ENVIRONMENT_ID=11111111-1111-1111-1111-111111111111
+          export FSE2_AUTH_CERT_VERSION=1 FSE2_SIGN_CERT_VERSION=1
+          docker compose \
+            --file deploy/m3/docker-compose.m3a.yml \
+            --file deploy/m5/docker-compose.m5.yml \
+            --file deploy/fse2/docker-compose.fse2-local.yml \
+            config --quiet
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json

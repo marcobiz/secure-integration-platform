@@ -203,8 +203,10 @@ static string? Optional(string name)
 
 static Guid? OptionalGuid(string name)
 {
-    string? value = Optional(name);
-    if (value is null) return null;
+    string? value = Environment.GetEnvironmentVariable(name, EnvironmentVariableTarget.Process);
+    if (value is null || value.Length == 0) return null;
+    if (string.IsNullOrWhiteSpace(value) || value.Any(character => character is '\r' or '\n'))
+        throw new InvalidOperationException($"{name} is invalid.");
     if (!Guid.TryParseExact(value, "D", out Guid parsed) || parsed == Guid.Empty)
         throw new InvalidOperationException($"{name} must be a non-empty canonical GUID.");
     return parsed;

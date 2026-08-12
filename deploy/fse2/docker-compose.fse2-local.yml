@@ -39,5 +39,11 @@ services:
       Gateway__ExecutionModules__0__AssemblyFullName: SecureIntegration.ConnectorPacks.Healthcare.FSE2, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null
       Gateway__ExecutionModules__0__ModuleType: SecureIntegration.ConnectorPacks.Healthcare.FSE2.Fse2OrganizationExecutionModule
     volumes:
-      - ${FSE2_PROVIDER_MANIFEST_PATH:?required}:/run/fse2-provider/manifest.json:ro
-      - ${FSE2_PROVIDER_MATERIAL_DIRECTORY:?required}:/run/fse2-provider/material:ro
+      - type: bind
+        source: ${FSE2_PROVIDER_MANIFEST_PATH:?required}
+        target: /run/fse2-provider/manifest.json
+        read_only: true
+      - type: bind
+        source: ${FSE2_PROVIDER_MATERIAL_DIRECTORY:?required}
+        target: /run/fse2-provider/material
+        read_only: true
