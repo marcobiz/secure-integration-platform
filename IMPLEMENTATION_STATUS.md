@@ -108,8 +108,9 @@ Esito conclusivo: **GO per M2**. La lineage live è stata integrata linearmente:
   .NET. Il parser fail-closed vieta `--platform`, interpolazione e ARG nei `FROM` .NET,
   richiede famiglia/tag/digest e mapping ordinato delle 12 occorrenze, e confronta i tag
   SDK con `global.json`. I test end-to-end usano repository Git sintetici e coprono
-  inventario, bypass platform/mobile, file mancante, tag mobile, digest incrociato,
-  mismatch SDK e positivo canonico;
+  inventario, bypass platform/mobile, marker Core export ostile, file mancante, tag mobile,
+  digest incrociato, mismatch SDK e positivo canonico. In presenza di metadata `.git` il
+  profilo repository resta autoritativo e il manifest Core export non può ridurlo;
 - il build canonico invoca il validator. General CI e le superfici container M5/Admin
   lo espongono come step nominato prima dei build; i build usano pull esplicito. General
   `gateway-container` costruisce inoltre il Dockerfile Azure con `--pull --no-cache` e

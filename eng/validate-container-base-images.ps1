@@ -70,7 +70,10 @@ function Get-ValidationProfile {
     param([Parameter(Mandatory = $true)][string]$RepositoryRoot)
 
     $coreExportManifestPath = Join-Path $RepositoryRoot 'OPEN_SOURCE_EXPORT_MANIFEST.json'
-    $isCoreExport = Test-Path -LiteralPath $coreExportManifestPath -PathType Leaf
+    $gitMetadataPath = Join-Path $RepositoryRoot '.git'
+    $isGitWorktreeRoot = Test-Path -LiteralPath $gitMetadataPath
+    $isCoreExport = (-not $isGitWorktreeRoot) -and
+        (Test-Path -LiteralPath $coreExportManifestPath -PathType Leaf)
     $expectedReferencesByPath = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
 
     foreach ($entry in $repositoryExpectedReferencesByPath.GetEnumerator()) {
@@ -394,6 +397,30 @@ function Invoke-EndToEndSelfTests {
         if ($LASTEXITCODE -ne 0) { throw 'SYNTHETIC_GIT_ADD_FAILED' }
         Assert-ValidationCase -Name 'EXTRA_DOCKERFILE_NEGATIVE' -Result (Invoke-RepositoryValidation -RepositoryRoot $platformMobile) -ShouldPass $false -ExpectedCodes @('TRACKED_DOCKERFILE_SET_MISMATCH', 'DOTNET_FROM_PLATFORM_FORBIDDEN', 'DOTNET_BASE_TAG_WITHOUT_DIGEST')
         Write-Output 'PLATFORM_MOBILE_BYPASS_NEGATIVE_PASS'
+
+        $coreExportMarkerBypass = New-SyntheticRepository -Parent $selfTestRoot -Name 'core-export-marker-bypass'
+        $extraPath = Join-Path $coreExportMarkerBypass 'synthetic\Dockerfile'
+        [IO.Directory]::CreateDirectory((Split-Path -Parent $extraPath)) | Out-Null
+        [IO.File]::WriteAllText($extraPath, 'FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/sdk:10.0')
+        $manifestPath = Join-Path $coreExportMarkerBypass 'OPEN_SOURCE_EXPORT_MANIFEST.json'
+        $manifest = [ordered]@{
+            schemaVersion = 1
+            files = @(
+                @{ path = 'src/Gateway/Gateway.Api/Dockerfile' }
+                @{ path = 'src/Gateway/Gateway.Migrations/Dockerfile' }
+                @{ path = 'tools/m3/VendorMock/Dockerfile' }
+                @{ path = 'tools/m3/SyntheticVault/Dockerfile' }
+                @{ path = 'tools/m3/Provisioner/Dockerfile' }
+            )
+        } | ConvertTo-Json -Depth 3
+        [IO.File]::WriteAllText($manifestPath, $manifest)
+        & git -C $coreExportMarkerBypass add -- OPEN_SOURCE_EXPORT_MANIFEST.json synthetic/Dockerfile 2>$null
+        if ($LASTEXITCODE -ne 0) { throw 'SYNTHETIC_GIT_ADD_FAILED' }
+        $coreExportMarkerResult = Invoke-RepositoryValidation -RepositoryRoot $coreExportMarkerBypass
+        if ($coreExportMarkerResult.Profile.Name -ne 'repository') {
+            throw 'END_TO_END_CONTROL_FAILED:CORE_EXPORT_MARKER_SELECTED_REDUCED_PROFILE'
+        }
+        Assert-ValidationCase -Name 'CORE_EXPORT_MARKER_BYPASS_NEGATIVE' -Result $coreExportMarkerResult -ShouldPass $false -ExpectedCodes @('TRACKED_DOCKERFILE_SET_MISMATCH', 'DOTNET_FROM_PLATFORM_FORBIDDEN', 'DOTNET_BASE_TAG_WITHOUT_DIGEST')
 
         $extraNonDotNet = New-SyntheticRepository -Parent $selfTestRoot -Name 'extra-non-dotnet'
         $extraPath = Join-Path $extraNonDotNet 'synthetic\Dockerfile'

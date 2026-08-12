@@ -77,6 +77,10 @@ un `FROM` .NET. Il parser accetta soltanto `FROM [--platform=<literal>] <referen
 [AS <stage>]`; per i `FROM` .NET `--platform` è vietato e qualsiasi sintassi non parsata,
 ARG o interpolazione fallisce. Restano obbligatori il mapping ordinato delle 12 occorrenze,
 l'allowlist tag/digest e l'allineamento SDK con `global.json`.
+La presenza di `OPEN_SOURCE_EXPORT_MANIFEST.json` non può ridurre questo inventario in un
+worktree Git: il profilo repository resta autoritativo quando la root contiene metadata
+`.git`. Il profilo Core export a cinque Dockerfile è selezionabile soltanto nell'export
+generato senza metadata Git e con il relativo manifest.
 
 `eng/build.ps1` esegue sempre il validator e la CI lo espone prima di ogni build container
 interessato. Il job General `gateway-container` costruisce obbligatoriamente anche
