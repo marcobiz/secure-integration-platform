@@ -213,6 +213,19 @@ jobs:
           test "$(docker image inspect broker-gateway:m2 | jq -r '.[0].Config.Labels["org.opencontainers.image.revision"]')" = "$CANDIDATE_COMMIT_SHA"
           printf 'gateway_image=%s\nmigration_image=%s\ncommit=%s\n' "$image_digest" "$migration_digest" "$CANDIDATE_COMMIT_SHA" | tee gateway-image-digests.txt
           echo "digest=$image_digest" >> "$GITHUB_OUTPUT"
+      - name: Build and attest Azure deployment container at exact head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_COMMIT_SHA"
+          set -x
+          docker build --pull --no-cache -f packs/deployment/azure/Dockerfile --label "org.opencontainers.image.revision=$CANDIDATE_COMMIT_SHA" -t broker-gateway-azure:m2 .
+          set +x
+          azure_image_digest="$(docker image inspect broker-gateway-azure:m2 --format '{{.Id}}')"
+          azure_image_revision="$(docker image inspect broker-gateway-azure:m2 | jq -r '.[0].Config.Labels["org.opencontainers.image.revision"]')"
+          [[ "$azure_image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$azure_image_revision" = "$CANDIDATE_COMMIT_SHA"
+          printf 'AZURE_IMAGE_DIGEST=%s\nAZURE_IMAGE_REVISION=%s\n' "$azure_image_digest" "$azure_image_revision" | tee azure-image-digest.txt
       - name: Verify executable, non-root, read-only, health, readiness and clean shutdown
         shell: bash
         run: |
@@ -261,7 +274,9 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: gateway-image-digest-${{ env.CANDIDATE_COMMIT_SHA }}
-          path: gateway-image-digests.txt
+          path: |
+            gateway-image-digests.txt
+            azure-image-digest.txt
           if-no-files-found: error
 
   m3-deterministic-container-slice:
