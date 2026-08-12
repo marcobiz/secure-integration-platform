@@ -288,11 +288,33 @@ function Remove-Fse2OwnedDirectory {
             if ($LASTEXITCODE -ne 0) { throw ($DirectorySnapshot.ErrorCodePrefix + '_CLEANUP_ACL_FAILED') }
         }
     } else {
-        & chmod -R u+rwX -- $DirectorySnapshot.FullPath
-        if ($LASTEXITCODE -ne 0) { throw ($DirectorySnapshot.ErrorCodePrefix + '_CLEANUP_ACL_FAILED') }
+        $operatorUid = (& id -u | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $operatorUid -notmatch '^\d+$') {
+            throw ($DirectorySnapshot.ErrorCodePrefix + '_CLEANUP_ACL_FAILED')
+        }
+        $directories = @((Get-Item -LiteralPath $DirectorySnapshot.FullPath -Force)) +
+            @(Get-ChildItem -LiteralPath $DirectorySnapshot.FullPath -Recurse -Force -Directory)
+        foreach ($directory in $directories) {
+            $ownerUid = (& stat -Lc '%u' -- $directory.FullName 2>$null | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0 -or $ownerUid -notmatch '^\d+$') {
+                throw ($DirectorySnapshot.ErrorCodePrefix + '_CLEANUP_ACL_FAILED')
+            }
+            if ($ownerUid -ceq $operatorUid) {
+                & chmod u+rwx -- $directory.FullName
+                if ($LASTEXITCODE -ne 0) { throw ($DirectorySnapshot.ErrorCodePrefix + '_CLEANUP_ACL_FAILED') }
+            }
+        }
     }
     Assert-Fse2PathSnapshot -Snapshot $DirectorySnapshot | Out-Null
-    Remove-Item -LiteralPath $DirectorySnapshot.FullPath -Recurse -Force
+    if ($script:IsWindows) {
+        Remove-Item -LiteralPath $DirectorySnapshot.FullPath -Recurse -Force
+    } else {
+        if (-not (Test-Path -LiteralPath '/bin/rm' -PathType Leaf)) {
+            throw ($DirectorySnapshot.ErrorCodePrefix + '_CLEANUP_COMMAND_MISSING')
+        }
+        & /bin/rm -rf -- $DirectorySnapshot.FullPath
+        if ($LASTEXITCODE -ne 0) { throw ($DirectorySnapshot.ErrorCodePrefix + '_CLEANUP_FAILED') }
+    }
     if (Test-Path -LiteralPath $DirectorySnapshot.FullPath) { throw ($DirectorySnapshot.ErrorCodePrefix + '_CLEANUP_FAILED') }
 }
 
