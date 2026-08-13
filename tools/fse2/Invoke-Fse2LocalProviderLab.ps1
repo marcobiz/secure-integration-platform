@@ -31,9 +31,55 @@ function Invoke-Checked {
     if ($LASTEXITCODE -ne 0) { throw "FSE2_LOCAL_PROVIDER_COMMAND_FAILED:$File" }
 }
 
+function Get-M5QuickstartArtifactFileSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string] $ArtifactRoot,
+        [Parameter(Mandatory = $true)][string] $Path,
+        [Parameter(Mandatory = $true)][long] $MaximumBytes
+    )
+    $comparison = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $separators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $canonicalRoot = [IO.Path]::GetFullPath($ArtifactRoot).TrimEnd($separators)
+    $canonicalPath = [IO.Path]::GetFullPath($Path).TrimEnd($separators)
+    if (-not $canonicalPath.StartsWith(($canonicalRoot + [IO.Path]::DirectorySeparatorChar), $comparison)) {
+        throw 'FSE2_LOCAL_PROVIDER_M5_ARTIFACT_FILE_OUTSIDE_ROOT'
+    }
+    $pathRoot = [IO.Path]::GetPathRoot($canonicalPath)
+    $cursor = $pathRoot
+    foreach ($segment in @($canonicalPath.Substring($pathRoot.Length) -split '[\\/]' | Where-Object { $_.Length -gt 0 })) {
+        $cursor = Join-Path $cursor $segment
+        if (-not (Test-Path -LiteralPath $cursor)) { throw 'FSE2_LOCAL_PROVIDER_M5_ARTIFACT_FILE_MISSING' }
+        $item = Get-Item -LiteralPath $cursor -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'FSE2_LOCAL_PROVIDER_M5_ARTIFACT_REPARSE_DENIED'
+        }
+    }
+    $file = Get-Item -LiteralPath $canonicalPath -Force
+    if ($file.PSIsContainer -or $file.Length -lt 1 -or $file.Length -gt $MaximumBytes) {
+        throw 'FSE2_LOCAL_PROVIDER_M5_ARTIFACT_FILE_INVALID'
+    }
+    return [pscustomobject]@{
+        FullPath = $canonicalPath
+        Length = [long]$file.Length
+        Sha256 = (Get-FileHash -LiteralPath $canonicalPath -Algorithm SHA256).Hash
+        ArtifactRoot = $canonicalRoot
+        MaximumBytes = $MaximumBytes
+    }
+}
+
+function Assert-M5QuickstartArtifactFileSnapshot {
+    param([Parameter(Mandatory = $true)] $Snapshot)
+    $current = Get-M5QuickstartArtifactFileSnapshot -ArtifactRoot $Snapshot.ArtifactRoot -Path $Snapshot.FullPath -MaximumBytes $Snapshot.MaximumBytes
+    if ($current.FullPath -cne $Snapshot.FullPath -or $current.Length -ne $Snapshot.Length -or $current.Sha256 -cne $Snapshot.Sha256) {
+        throw 'FSE2_LOCAL_PROVIDER_M5_ARTIFACT_FILE_CHANGED'
+    }
+}
+
 if ($Phase -eq 'Stop') {
-    Invoke-Checked $powershell @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $quickstart,
+    $stopArguments = @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $quickstart,
         '-Phase', 'Stop', '-AdditionalComposeFile', $compose)
+    if (-not [string]::IsNullOrWhiteSpace($QuickstartArtifactRoot)) { $stopArguments += @('-ArtifactRoot', $QuickstartArtifactRoot) }
+    Invoke-Checked $powershell $stopArguments
     $project = 'secure-integration-m5-quickstart'
     $remainingContainers = @(& docker ps -aq --filter ('label=com.docker.compose.project=' + $project))
     $remainingNetworks = @(& docker network ls -q --filter ('label=com.docker.compose.project=' + $project))
@@ -58,8 +104,7 @@ $materialSnapshot = Get-Fse2PathSnapshot -Path $MaterialDirectory -Kind Director
 $manifestPath = $manifestSnapshot.FullPath
 $materialRoot = $materialSnapshot.FullPath
 $quickstartArtifactPlan = if ($Phase -eq 'Start') {
-    Get-Fse2PathSnapshot -Path $QuickstartArtifactRoot -Kind OutputDirectory -RepositoryRoot $root `
-        -ErrorCodePrefix 'FSE2_LOCAL_PROVIDER_ARTIFACT_ROOT'
+    [pscustomobject]@{ FullPath = [IO.Path]::GetFullPath($QuickstartArtifactRoot) }
 } else { $null }
 $dotnet = if ([string]::IsNullOrWhiteSpace($DotNetPath)) { Join-Path $root '.dotnet\dotnet.exe' } else { [IO.Path]::GetFullPath($DotNetPath) }
 if (-not (Test-Path -LiteralPath $dotnet -PathType Leaf)) {
@@ -135,7 +180,6 @@ try {
         '-Phase', $Phase, '-AdditionalComposeFile', $compose)
     if ($dotnet -ne 'dotnet') { $quickstartArguments += @('-DotNetPath', $dotnet) }
     if ($null -ne $quickstartArtifactPlan) {
-        Assert-Fse2PathSnapshot -Snapshot $quickstartArtifactPlan | Out-Null
         $quickstartArguments += @('-ArtifactRoot', $quickstartArtifactPlan.FullPath)
     }
     if ($SkipBuild) { $quickstartArguments += '-SkipBuild' }
@@ -161,22 +205,20 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'FSE2_LOCAL_PROVIDER_PACK_UNREADABLE' }
         & docker exec $containerId test -r /app/packs/healthcare-fse2/SecureIntegration.ConnectorPacks.Healthcare.FSE2.dll *> $null
         if ($LASTEXITCODE -ne 0) { throw 'FSE2_LOCAL_PROVIDER_VERTICAL_PACK_UNREADABLE' }
-        $quickstartArtifactSnapshot = Get-Fse2PathSnapshot -Path $quickstartArtifactPlan.FullPath -Kind Directory `
-            -RepositoryRoot $root -ErrorCodePrefix 'FSE2_LOCAL_PROVIDER_ARTIFACT_ROOT'
-        $gatewayCaSnapshot = Get-Fse2PathSnapshot -Path (Join-Path $quickstartArtifactSnapshot.FullPath 'raw\certificates\ca.crt') `
-            -Kind File -RepositoryRoot $root -ErrorCodePrefix 'FSE2_LOCAL_PROVIDER_GATEWAY_CA' -MaximumBytes 1048576
+        $gatewayCaSnapshot = Get-M5QuickstartArtifactFileSnapshot -ArtifactRoot $quickstartArtifactPlan.FullPath `
+            -Path (Join-Path $quickstartArtifactPlan.FullPath 'raw\certificates\ca.crt') -MaximumBytes 1048576
         $curl = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'curl.exe' } else { 'curl' }
         $curlBase = @('--fail', '--silent', '--show-error', '--max-time', '15')
         if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $curlBase += '--ssl-no-revoke' }
         $curlBase += @('--cacert', $gatewayCaSnapshot.FullPath)
-        Assert-Fse2PathSnapshot -Snapshot $gatewayCaSnapshot | Out-Null
+        Assert-M5QuickstartArtifactFileSnapshot -Snapshot $gatewayCaSnapshot
         & $curl @curlBase 'https://localhost:18443/health/live' *> $null
         if ($LASTEXITCODE -ne 0) { throw 'FSE2_LOCAL_PROVIDER_LIVE_FAILED' }
 
         $readyDeadline = [DateTimeOffset]::UtcNow.AddMinutes(1)
         $providerReady = $false
         do {
-            Assert-Fse2PathSnapshot -Snapshot $gatewayCaSnapshot | Out-Null
+            Assert-M5QuickstartArtifactFileSnapshot -Snapshot $gatewayCaSnapshot
             & $curl @curlBase 'https://localhost:18443/health/ready' *> $null
             if ($LASTEXITCODE -eq 0) { $providerReady = $true; break }
             Start-Sleep -Seconds 2

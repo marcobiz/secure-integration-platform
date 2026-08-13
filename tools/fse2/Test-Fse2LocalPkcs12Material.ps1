@@ -16,7 +16,8 @@ $providerProbe = Join-Path $PSScriptRoot 'ProviderProbe\ProviderProbe.csproj'
 $runId = [Guid]::NewGuid().ToString('N')
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('fse2-local-pkcs12-self-test-' + $runId)
 $output = Join-Path $testRoot 'output'
-$m5ArtifactRoot = Join-Path $testRoot 'm5-quickstart'
+$m5ArtifactTestBase = [IO.Path]::GetFullPath((Join-Path $root '.artifacts\m5\tests'))
+$m5ArtifactRoot = Join-Path $m5ArtifactTestBase ('fse2-' + $runId)
 if ($OpenSsl -eq 'openssl' -and -not (Get-Command -Name $OpenSsl -ErrorAction SilentlyContinue)) {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'FSE2_LOCAL_SELF_TEST_OPENSSL_NOT_FOUND' }
     $gitOpenSsl = @(
@@ -180,6 +181,95 @@ function Assert-ImporterDenied {
     if (Test-Path -LiteralPath $negative.OutputDirectory) { throw 'FSE2_LOCAL_SELF_TEST_NEGATIVE_OUTPUT_CREATED' }
 }
 
+function Assert-M5QuickstartTestRootPlan {
+    param([Parameter(Mandatory = $true)][string] $Path)
+    if ($runId -cnotmatch '^[a-f0-9]{32}$') { throw 'FSE2_LOCAL_SELF_TEST_M5_RUN_ID_INVALID' }
+    $comparison = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $separators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $base = $m5ArtifactTestBase.TrimEnd($separators)
+    $basePrefix = $base + [IO.Path]::DirectorySeparatorChar
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd($separators)
+    if (-not $full.StartsWith($basePrefix, $comparison) -or
+        -not ([IO.Path]::GetDirectoryName($full)).Equals($base, $comparison) -or
+        -not ([IO.Path]::GetFileName($full)).Equals(('fse2-' + $runId), [StringComparison]::Ordinal)) {
+        throw 'FSE2_LOCAL_SELF_TEST_M5_ARTIFACT_ROOT_OUTSIDE_ALLOWED_BASE'
+    }
+    $pathRoot = [IO.Path]::GetPathRoot($full)
+    $cursor = $pathRoot
+    foreach ($segment in @($full.Substring($pathRoot.Length) -split '[\\/]' | Where-Object { $_.Length -gt 0 })) {
+        $cursor = Join-Path $cursor $segment
+        if (-not (Test-Path -LiteralPath $cursor)) { break }
+        $item = Get-Item -LiteralPath $cursor -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'FSE2_LOCAL_SELF_TEST_M5_ARTIFACT_REPARSE_DENIED'
+        }
+    }
+    if (Test-Path -LiteralPath $full) { throw 'FSE2_LOCAL_SELF_TEST_M5_ARTIFACT_ROOT_NOT_CLEAN' }
+    return $full
+}
+
+function Get-M5QuickstartArtifactFileSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][string] $Path,
+        [Parameter(Mandatory = $true)][long] $MaximumBytes
+    )
+    $comparison = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $separators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $canonicalRoot = [IO.Path]::GetFullPath($m5ArtifactRoot).TrimEnd($separators)
+    $canonicalPath = [IO.Path]::GetFullPath($Path).TrimEnd($separators)
+    if (-not $canonicalPath.StartsWith(($canonicalRoot + [IO.Path]::DirectorySeparatorChar), $comparison)) {
+        throw 'FSE2_LOCAL_SELF_TEST_M5_ARTIFACT_FILE_OUTSIDE_ROOT'
+    }
+    $pathRoot = [IO.Path]::GetPathRoot($canonicalPath)
+    $cursor = $pathRoot
+    foreach ($segment in @($canonicalPath.Substring($pathRoot.Length) -split '[\\/]' | Where-Object { $_.Length -gt 0 })) {
+        $cursor = Join-Path $cursor $segment
+        if (-not (Test-Path -LiteralPath $cursor)) { throw 'FSE2_LOCAL_SELF_TEST_M5_ARTIFACT_FILE_MISSING' }
+        $item = Get-Item -LiteralPath $cursor -Force
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw 'FSE2_LOCAL_SELF_TEST_M5_ARTIFACT_REPARSE_DENIED'
+        }
+    }
+    $file = Get-Item -LiteralPath $canonicalPath -Force
+    if ($file.PSIsContainer -or $file.Length -lt 1 -or $file.Length -gt $MaximumBytes) {
+        throw 'FSE2_LOCAL_SELF_TEST_M5_ARTIFACT_FILE_INVALID'
+    }
+    return [pscustomobject]@{
+        FullPath = $canonicalPath
+        Length = [long]$file.Length
+        Sha256 = (Get-FileHash -LiteralPath $canonicalPath -Algorithm SHA256).Hash
+        MaximumBytes = $MaximumBytes
+    }
+}
+
+function Assert-M5QuickstartArtifactFileSnapshot {
+    param([Parameter(Mandatory = $true)] $Snapshot)
+    $current = Get-M5QuickstartArtifactFileSnapshot -Path $Snapshot.FullPath -MaximumBytes $Snapshot.MaximumBytes
+    if ($current.FullPath -cne $Snapshot.FullPath -or $current.Length -ne $Snapshot.Length -or $current.Sha256 -cne $Snapshot.Sha256) {
+        throw 'FSE2_LOCAL_SELF_TEST_M5_ARTIFACT_FILE_CHANGED'
+    }
+}
+
+function Remove-M5QuickstartArtifactFile {
+    param([Parameter(Mandatory = $true)][string] $Path, [Parameter(Mandatory = $true)][long] $MaximumBytes)
+    $snapshot = Get-M5QuickstartArtifactFileSnapshot -Path $Path -MaximumBytes $MaximumBytes
+    Assert-M5QuickstartArtifactFileSnapshot -Snapshot $snapshot
+    Remove-Item -LiteralPath $snapshot.FullPath -Force
+    if (Test-Path -LiteralPath $snapshot.FullPath) { throw 'FSE2_LOCAL_SELF_TEST_M5_ARTIFACT_FILE_CLEANUP_FAILED' }
+}
+
+$m5ArtifactRoot = Assert-M5QuickstartTestRootPlan -Path $m5ArtifactRoot
+$uniquenessProbe = Join-Path $m5ArtifactTestBase ('fse2-' + [Guid]::NewGuid().ToString('N'))
+if ($m5ArtifactRoot.Equals([IO.Path]::GetFullPath($uniquenessProbe), [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'FSE2_LOCAL_SELF_TEST_M5_ARTIFACT_ROOT_NOT_UNIQUE'
+}
+$separationComparison = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+$separationSuffix = [IO.Path]::DirectorySeparatorChar
+$testRootCanonical = [IO.Path]::GetFullPath($testRoot).TrimEnd('\', '/')
+if ($testRootCanonical.StartsWith(($m5ArtifactTestBase.TrimEnd('\', '/') + $separationSuffix), $separationComparison) -or
+    $m5ArtifactRoot.StartsWith(($testRootCanonical + $separationSuffix), $separationComparison)) {
+    throw 'FSE2_LOCAL_SELF_TEST_PROVIDER_MATERIAL_NOT_SEPARATE'
+}
 $testRootPlan = Get-Fse2PathSnapshot -Path $testRoot -Kind OutputDirectory -RepositoryRoot $root -ErrorCodePrefix 'FSE2_LOCAL_SELF_TEST_ROOT'
 Assert-Fse2PathSnapshot -Snapshot $testRootPlan | Out-Null
 New-Item -ItemType Directory -Path $testRoot | Out-Null
@@ -420,17 +510,17 @@ try {
             [IO.File]::WriteAllText($tamperedRoot, [IO.File]::ReadAllText((Join-Path $output 'material\auth-leaf.pem')), [Text.UTF8Encoding]::new($false))
             Invoke-Checked $dotnet @('run', '--project', $providerProbe, '--configuration', 'Release', '--',
                 (Join-Path $output 'manifest.json'), (Join-Path $output 'material'), '--expect-not-ready')
-            $gatewayCaSnapshot = Get-Fse2PathSnapshot -Path (Join-Path $m5ArtifactRoot 'raw\certificates\ca.crt') `
-                -Kind File -RepositoryRoot $root -ErrorCodePrefix 'FSE2_LOCAL_SELF_TEST_GATEWAY_CA' -MaximumBytes 1048576
+            $gatewayCaSnapshot = Get-M5QuickstartArtifactFileSnapshot `
+                -Path (Join-Path $m5ArtifactRoot 'raw\certificates\ca.crt') -MaximumBytes 1048576
             $curl = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'curl.exe' } else { 'curl' }
             $curlStatusArguments = @('--silent', '--show-error', '--max-time', '15')
             if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $curlStatusArguments += '--ssl-no-revoke' }
             $nullOutput = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'NUL' } else { '/dev/null' }
             $curlStatusArguments += @('--cacert', $gatewayCaSnapshot.FullPath, '--output', $nullOutput, '--write-out', '%{http_code}')
-            Assert-Fse2PathSnapshot -Snapshot $gatewayCaSnapshot | Out-Null
+            Assert-M5QuickstartArtifactFileSnapshot -Snapshot $gatewayCaSnapshot
             $liveStatus = (& $curl @curlStatusArguments 'https://localhost:18443/health/live' | Out-String).Trim()
             if ($LASTEXITCODE -ne 0 -or $liveStatus -cne '200') { throw 'FSE2_LOCAL_SELF_TEST_TAMPER_LIVE_FAILED' }
-            Assert-Fse2PathSnapshot -Snapshot $gatewayCaSnapshot | Out-Null
+            Assert-M5QuickstartArtifactFileSnapshot -Snapshot $gatewayCaSnapshot
             $readyStatus = (& $curl @curlStatusArguments 'https://localhost:18443/health/ready' | Out-String).Trim()
             if ($LASTEXITCODE -ne 0 -or $readyStatus -cne '503') { throw 'FSE2_LOCAL_SELF_TEST_TAMPER_READINESS_INVALID' }
             Write-Host 'FSE2_LOCAL_TAMPER_READINESS_PASS; LIVE=200; READY=503; SIGNATURES=0; CERTIFICATES=0'
@@ -444,14 +534,13 @@ try {
                 -ErrorCodePrefix 'FSE2_LOCAL_SELF_TEST_STOP_PKCS12'
             $quickstartEnv = Join-Path $m5ArtifactRoot 'raw\m3a.env'
             if (Test-Path -LiteralPath $quickstartEnv) {
-                Remove-SyntheticStopInput -Path $quickstartEnv -AllowedRoot $testRoot `
-                    -ErrorCodePrefix 'FSE2_LOCAL_SELF_TEST_STOP_ENV'
+                Remove-M5QuickstartArtifactFile -Path $quickstartEnv -MaximumBytes 1048576
             }
             Write-Host 'FSE2_LOCAL_FOREIGN_UID_STOP_INPUT_CLEANUP_PASS'
             Write-Host 'FSE2_LOCAL_STOP_NEGATIVE_INPUTS=MANIFEST_DELETED,PKCS12_DELETED,ENV_DELETED,PROVIDER_UNHEALTHY'
         }
         finally {
-            & (Join-Path $PSScriptRoot 'Invoke-Fse2LocalProviderLab.ps1') -Phase Stop
+            & (Join-Path $PSScriptRoot 'Invoke-Fse2LocalProviderLab.ps1') -Phase Stop -QuickstartArtifactRoot $m5ArtifactRoot
             if ($LASTEXITCODE -ne 0) { throw 'FSE2_LOCAL_SELF_TEST_STOP_FAILED' }
             if ($foreignCreated) {
                 & docker network inspect $foreignNetwork *> $null
@@ -468,7 +557,7 @@ try {
                 Invoke-Checked 'docker' @('volume', 'create', '--label',
                     'com.docker.compose.project=secure-integration-m5-quickstart', $partialVolume)
                 $partialVolumeCreated = $true
-                & (Join-Path $PSScriptRoot 'Invoke-Fse2LocalProviderLab.ps1') -Phase Stop
+                & (Join-Path $PSScriptRoot 'Invoke-Fse2LocalProviderLab.ps1') -Phase Stop -QuickstartArtifactRoot $m5ArtifactRoot
                 if ($LASTEXITCODE -ne 0) { throw 'FSE2_LOCAL_SELF_TEST_PARTIAL_START_STOP_FAILED' }
                 $partialNetworkCreated = $false
                 $partialVolumeCreated = $false
@@ -482,6 +571,7 @@ try {
         }
     }
 
+    Write-Host 'FSE2_LOCAL_M5_ARTIFACT_ROOT_POLICY_PASS; ROOT=.artifacts/m5/tests/fse2-<run-id>; UNIQUE=1; REPARSE=0; PROVIDER_MATERIAL_SEPARATE=1'
     Write-Host 'FSE2_LOCAL_PKCS12_SELF_TEST_PASS; POSITIVE=3; NEGATIVE=15; LIVE_FSE2_CALLS=0'
 }
 finally {
@@ -491,4 +581,5 @@ finally {
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Fse2OwnedDirectory -DirectorySnapshot $testRootSnapshot -MarkerSnapshot $testRootMarker -RunId $runId
     }
+    if (Test-Path -LiteralPath $m5ArtifactRoot) { throw 'FSE2_LOCAL_SELF_TEST_M5_ARTIFACT_CLEANUP_FAILED' }
 }
