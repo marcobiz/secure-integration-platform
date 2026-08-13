@@ -10,4 +10,9 @@
     <ProjectReference Include="../../../src/Gateway/Gateway.Domain/Gateway.Domain.csproj" />
     <ProjectReference Include="../../../src/Gateway/Gateway.Infrastructure/Gateway.Infrastructure.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="../../../docs/connectors/examples/sample-secure-service.connector.json"
+             Link="sample-secure-service.connector.json"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -14,6 +14,44 @@ namespace SecureIntegration.Gateway.Unit.Tests;
 public sealed class ConnectorConfigurationTests
 {
     [Fact]
+    public void AlphaGoldenPath_Provisioner_publishes_and_uses_exact_canonical_sample_connector()
+    {
+        ConnectorDefinitionValidator validator = new();
+        using JsonDocument sample = Sample();
+        ValidatedConnectorDefinition canonical = validator.ValidateRequired(sample.RootElement);
+        JsonElement bindings = sample.RootElement.GetProperty("bindings");
+        Assert.Equal(["sample-vendor-endpoint"], bindings.GetProperty("endpoints").EnumerateArray().Select(value => value.GetProperty("name").GetString()));
+        Assert.Equal(
+            ["sample-vendor-api-key", "sample-vendor-client-certificate"],
+            bindings.GetProperty("secrets").EnumerateArray().Select(value => value.GetProperty("name").GetString()));
+        JsonElement operation = Assert.Single(sample.RootElement.GetProperty("operations").EnumerateArray());
+        Assert.Equal("submit", operation.GetProperty("operationId").GetString());
+        Assert.Equal("sample-vendor-endpoint", operation.GetProperty("endpointBinding").GetString());
+        Assert.Equal("sample-vendor-api-key", operation.GetProperty("authentication").GetProperty("secretBinding").GetString());
+        Assert.Equal("sample-vendor-client-certificate", operation.GetProperty("authentication").GetProperty("certificateBinding").GetString());
+
+        using JsonDocument mutated = JsonDocument.Parse(sample.RootElement.GetRawText().Replace(
+            "sample-vendor-endpoint", "mutated-vendor-endpoint", StringComparison.Ordinal));
+        ValidatedConnectorDefinition changed = validator.ValidateRequired(mutated.RootElement);
+        Assert.NotEqual(canonical.ChecksumSha256, changed.ChecksumSha256);
+        GatewayException mismatch = Assert.Throws<GatewayException>(() => validator.ValidateRequired(mutated.RootElement, canonical.ChecksumSha256));
+        Assert.Equal("BGW-CONNECTOR-CHECKSUM", mismatch.Code);
+
+        string repository = FindRepositoryRoot();
+        string provisioner = File.ReadAllText(Path.Combine(repository, "tools", "m3", "Provisioner", "Program.cs"));
+        string project = File.ReadAllText(Path.Combine(repository, "tools", "m3", "Provisioner", "Provisioner.csproj"));
+        string dockerfile = File.ReadAllText(Path.Combine(repository, "tools", "m3", "Provisioner", "Dockerfile"));
+        Assert.Contains("Path.Combine(AppContext.BaseDirectory, \"sample-secure-service.connector.json\")", provisioner, StringComparison.Ordinal);
+        Assert.Contains("PublishConnectorAsync(sampleConnectorDocument.RootElement", provisioner, StringComparison.Ordinal);
+        Assert.Contains("GetPublishedSnapshotAsync(connectorId, selectedEnvironment, null", provisioner, StringComparison.Ordinal);
+        Assert.Contains("ConnectorVersionState.Published", provisioner, StringComparison.Ordinal);
+        Assert.DoesNotContain("connectorId = \"sample-secure-service\"", provisioner, StringComparison.Ordinal);
+        Assert.DoesNotContain("displayName = \"Sample Secure Service\"", provisioner, StringComparison.Ordinal);
+        Assert.Equal(1, project.Split("docs/connectors/examples/sample-secure-service.connector.json", StringSplitOptions.None).Length - 1);
+        Assert.Contains("COPY docs/connectors/examples/sample-secure-service.connector.json docs/connectors/examples/sample-secure-service.connector.json", dockerfile, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void M4_CT_Sample_conforms_to_Draft_2020_12_and_is_canonical()
     {
         ConnectorDefinitionValidator validator = new();
@@ -729,6 +767,17 @@ public sealed class ConnectorConfigurationTests
     }
 
     private static JsonDocument Sample() => JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Samples", "sample-secure-service.connector.json")));
+
+    private static string FindRepositoryRoot()
+    {
+        DirectoryInfo? current = new(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "BrokerGateway.slnx"))) return current.FullName;
+            current = current.Parent;
+        }
+        throw new InvalidOperationException("TEST_REPOSITORY_ROOT_NOT_FOUND");
+    }
 
     private static JsonDocument CrossOperationSample() => JsonDocument.Parse("""
         {

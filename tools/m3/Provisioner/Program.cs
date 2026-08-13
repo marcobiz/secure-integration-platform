@@ -91,8 +91,11 @@ AdminPrincipalRecord provisionerApprover = await adminSecurity.EnsurePrincipalAs
     new("https://provisioner.synthetic.invalid", "m3-approver", "M3 synthetic approver", null),
     CancellationToken.None).ConfigureAwait(false);
 ConnectorDefinitionValidator connectorValidator = new();
-await PublishConnectorAsync("m3-vendor", "3.0.0-m3", securityOperations: true).ConfigureAwait(false);
-await PublishConnectorAsync("sample-secure-service", "1.0.0", securityOperations: false).ConfigureAwait(false);
+await PublishConnectorAsync(M3VendorDefinition(), securityOperations: true).ConfigureAwait(false);
+string sampleConnectorPath = Path.Combine(AppContext.BaseDirectory, "sample-secure-service.connector.json");
+using JsonDocument sampleConnectorDocument = JsonDocument.Parse(await File.ReadAllBytesAsync(sampleConnectorPath).ConfigureAwait(false));
+VerifyCanonicalSampleDefinition(sampleConnectorDocument.RootElement);
+PublishedConnectorMetadata sampleConnector = await PublishConnectorAsync(sampleConnectorDocument.RootElement, securityOperations: false).ConfigureAwait(false);
 
 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
 byte[] document = JsonSerializer.SerializeToUtf8Bytes(new
@@ -113,55 +116,38 @@ byte[] document = JsonSerializer.SerializeToUtf8Bytes(new
     securityTenantId,
     securityActivationCodeId = securityActivation.ActivationCodeId,
     securityActivationCode = securityActivation.ActivationCode,
-    securityExpiresAtUtc = securityActivation.ExpiresAt
+    securityExpiresAtUtc = securityActivation.ExpiresAt,
+    sampleConnector
 }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
 await File.WriteAllBytesAsync(outputPath, document).ConfigureAwait(false);
 Console.WriteLine(JsonSerializer.Serialize(new { status = "provisioned", installationId, activationCodeId = activation.ActivationCodeId }));
 return 0;
 
-async Task PublishConnectorAsync(string connectorId, string version, bool securityOperations)
+async Task<PublishedConnectorMetadata> PublishConnectorAsync(JsonElement definition, bool securityOperations)
 {
-    object[] operations = securityOperations
-        ?
-        [
-            Operation("submit", "vendor", "/vendor/orders", "apiKeyAndMtls", "vendor-client-certificate"),
-            Operation("loopback", "loopback", "/vendor/orders", "none", null),
-            Operation("private", "private", "/vendor/orders", "none", null),
-            Operation("metadata", "metadata", "/latest/meta-data/", "none", null),
-            Operation("redirect", "vendor", "/vendor/redirect", "apiKeyAndMtls", "vendor-client-certificate"),
-            Operation("wrong-certificate", "vendor", "/vendor/orders", "apiKeyAndMtls", "vendor-wrong-client-certificate")
-        ]
-        : [Operation("submit", "vendor", "/vendor/orders", "apiKeyAndMtls", "vendor-client-certificate")];
-    JsonElement definition = JsonSerializer.SerializeToElement(new
-    {
-        schemaVersion = "1.0",
-        connectorId,
-        version,
-        displayName = securityOperations ? "M3 Synthetic Vendor" : "Sample Secure Service",
-        bindings = new
-        {
-            endpoints = new[] { new { name = "vendor" }, new { name = "loopback" }, new { name = "private" }, new { name = "metadata" } },
-            secrets = new[] { new { name = "vendor-api-key", kind = "opaque" }, new { name = "vendor-client-certificate", kind = "clientCertificate" }, new { name = "vendor-wrong-client-certificate", kind = "clientCertificate" } }
-        },
-        operations
-    });
     ValidatedConnectorDefinition validated = connectorValidator.ValidateRequired(definition);
+    string connectorId = definition.GetProperty("connectorId").GetString() ?? throw new InvalidOperationException("M3_CONNECTOR_ID_INVALID");
+    string version = definition.GetProperty("version").GetString() ?? throw new InvalidOperationException("M3_CONNECTOR_VERSION_INVALID");
     string editor = provisionerEditor.Id.ToString("D");
     ConnectorVersionRecord draft = await connectorStore.CreateDraftAsync(new(Guid.NewGuid(), Guid.Empty, connectorId, version, "1.0", ConnectorVersionState.Draft, validated.CanonicalJson, Convert.FromHexString(validated.ChecksumSha256), editor, clock.UtcNow, 1), CancellationToken.None).ConfigureAwait(false);
     ConnectorVersionRecord validatedRecord = await connectorStore.MarkValidatedAsync(draft.Id, draft.RowVersion, clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
-    Dictionary<string, Uri> endpoints = new(StringComparer.Ordinal)
-    {
-        ["vendor"] = new("https://vendor.m3.test:8443/"),
-        ["loopback"] = new("https://127.0.0.1/"),
-        ["private"] = new("https://172.29.44.7/"),
-        ["metadata"] = new("https://169.254.169.254/")
-    };
+    Dictionary<string, Uri> endpoints = securityOperations
+        ? new(StringComparer.Ordinal)
+        {
+            ["vendor"] = new("https://vendor.m3.test:8443/"),
+            ["loopback"] = new("https://127.0.0.1/"),
+            ["private"] = new("https://172.29.44.7/"),
+            ["metadata"] = new("https://169.254.169.254/")
+        }
+        : new(StringComparer.Ordinal) { ["sample-vendor-endpoint"] = new("https://vendor.m3.test:8443/") };
     Guid selectedEnvironment = securityOperations ? securityEnvironmentId : environmentId;
     string catalogPrefix = securityOperations ? "security-" : string.Empty;
     ProviderResourceCatalogRecord secretResource = await RegisterResourceAsync(selectedEnvironment, connectorId, catalogPrefix + "vendor-api-key", ProviderResourceType.Secret, "synthetic-vault://vault.m3.test/vendor-api-key", null, null).ConfigureAwait(false);
     ProviderResourceCatalogRecord certificateResource = await RegisterResourceAsync(selectedEnvironment, connectorId, catalogPrefix + "vendor-client-certificate", ProviderResourceType.ClientCertificate, "synthetic-vault://vault.m3.test/vendor-client-certificate", vendorCertificate, 1).ConfigureAwait(false);
-    Dictionary<string, ProviderResourceBinding> secrets = new(StringComparer.Ordinal) { ["vendor-api-key"] = Binding(secretResource) };
-    Dictionary<string, ProviderResourceBinding> certificates = new(StringComparer.Ordinal) { ["vendor-client-certificate"] = Binding(certificateResource) };
+    string secretBinding = securityOperations ? "vendor-api-key" : "sample-vendor-api-key";
+    string certificateBinding = securityOperations ? "vendor-client-certificate" : "sample-vendor-client-certificate";
+    Dictionary<string, ProviderResourceBinding> secrets = new(StringComparer.Ordinal) { [secretBinding] = Binding(secretResource) };
+    Dictionary<string, ProviderResourceBinding> certificates = new(StringComparer.Ordinal) { [certificateBinding] = Binding(certificateResource) };
     if (securityOperations)
     {
         ProviderResourceCatalogRecord wrongCertificate = await RegisterResourceAsync(selectedEnvironment, connectorId, catalogPrefix + "vendor-wrong-client-certificate", ProviderResourceType.ClientCertificate, "synthetic-vault://vault.m3.test/vendor-wrong-client-certificate", wrongVendorCertificate, 1).ConfigureAwait(false);
@@ -173,16 +159,74 @@ async Task PublishConnectorAsync(string connectorId, string version, bool securi
     {
         ProviderResourceCatalogRecord securitySecret = await RegisterResourceAsync(securityEnvironmentId, connectorId, "security-sample-vendor-api-key", ProviderResourceType.Secret, "synthetic-vault://vault.m3.test/vendor-api-key", null, null).ConfigureAwait(false);
         ProviderResourceCatalogRecord securityCertificate = await RegisterResourceAsync(securityEnvironmentId, connectorId, "security-sample-vendor-client-certificate", ProviderResourceType.ClientCertificate, "synthetic-vault://vault.m3.test/vendor-client-certificate", vendorCertificate, 1).ConfigureAwait(false);
-        Dictionary<string, ProviderResourceBinding> securitySecrets = new(StringComparer.Ordinal) { ["vendor-api-key"] = Binding(securitySecret) };
-        Dictionary<string, ProviderResourceBinding> securityCertificates = new(StringComparer.Ordinal) { ["vendor-client-certificate"] = Binding(securityCertificate) };
+        Dictionary<string, ProviderResourceBinding> securitySecrets = new(StringComparer.Ordinal) { ["sample-vendor-api-key"] = Binding(securitySecret) };
+        Dictionary<string, ProviderResourceBinding> securityCertificates = new(StringComparer.Ordinal) { ["sample-vendor-client-certificate"] = Binding(securityCertificate) };
         string securityChecksum = ConnectorBindingDigests.Revision(draft.Id, securityEnvironmentId, endpoints, securitySecrets, securityCertificates);
         _ = await connectorStore.PutBindingsAsync(new(Guid.NewGuid(), draft.ConnectorId, draft.Id, securityEnvironmentId, endpoints, securitySecrets, securityCertificates, 0, securityChecksum, ConnectorBindingState.Draft, clock.UtcNow, editor), null, Guid.NewGuid(), CancellationToken.None).ConfigureAwait(false);
     }
     byte[] bindingDigest = await connectorStore.GetBindingBundleDigestAsync(draft.Id, CancellationToken.None).ConfigureAwait(false);
     ConnectorApprovalRecord approvalRequest = await adminSecurity.RequestApprovalAsync(draft, bindingDigest, provisionerEditor.Id, Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
     _ = await adminSecurity.ApproveAsync(approvalRequest.Id, draft.Id, draft.ChecksumSha256, bindingDigest, draft.CreatedBy, provisionerApprover.Id, null, Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
-    _ = await connectorStore.PublishApprovedAsync(draft.Id, bindingDigest, validatedRecord.RowVersion, 0, provisionerApprover.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
+    ConnectorVersionRecord published = await connectorStore.PublishApprovedAsync(draft.Id, bindingDigest, validatedRecord.RowVersion, 0, provisionerApprover.Id.ToString("D"), Guid.NewGuid(), clock.UtcNow, CancellationToken.None).ConfigureAwait(false);
+    ConnectorVersionRecord stored = await connectorStore.GetVersionAsync(connectorId, version, CancellationToken.None).ConfigureAwait(false)
+        ?? throw new InvalidOperationException("M3_CONNECTOR_PUBLISHED_MISSING");
+    ValidatedConnectorDefinition storedValidated = connectorValidator.ParseStored(stored.CanonicalJson, stored.ChecksumSha256);
+    PublishedConnectorSnapshot snapshot = await connectorStore.GetPublishedSnapshotAsync(connectorId, selectedEnvironment, null, CancellationToken.None).ConfigureAwait(false)
+        ?? throw new InvalidOperationException("M3_CONNECTOR_PUBLISHED_SNAPSHOT_MISSING");
+    string[] expectedEndpoints = securityOperations ? ["vendor", "loopback", "private", "metadata"] : ["sample-vendor-endpoint"];
+    string[] expectedSecrets = securityOperations ? ["vendor-api-key"] : ["sample-vendor-api-key"];
+    string[] expectedCertificates = securityOperations ? ["vendor-client-certificate", "vendor-wrong-client-certificate"] : ["sample-vendor-client-certificate"];
+    if (published.State != ConnectorVersionState.Published || stored.State != ConnectorVersionState.Published || snapshot.Version.State != ConnectorVersionState.Published ||
+        !string.Equals(storedValidated.ChecksumSha256, validated.ChecksumSha256, StringComparison.Ordinal) ||
+        !stored.ChecksumSha256.AsSpan().SequenceEqual(Convert.FromHexString(validated.ChecksumSha256)) ||
+        !snapshot.Version.ChecksumSha256.AsSpan().SequenceEqual(stored.ChecksumSha256) ||
+        !ExactKeys(snapshot.Bindings.Endpoints, expectedEndpoints) ||
+        !ExactKeys(snapshot.Bindings.SecretResources, expectedSecrets) ||
+        !ExactKeys(snapshot.Bindings.CertificateResources, expectedCertificates))
+        throw new InvalidOperationException("M3_CONNECTOR_PUBLISHED_DRIFT");
+    return new(connectorId, version, validated.ChecksumSha256, "Published", expectedEndpoints, expectedSecrets, expectedCertificates);
 }
+
+static bool ExactKeys<T>(IReadOnlyDictionary<string, T> values, string[] expected) =>
+    values.Count == expected.Length && expected.All(values.ContainsKey);
+
+static void VerifyCanonicalSampleDefinition(JsonElement definition)
+{
+    if (!string.Equals(definition.GetProperty("connectorId").GetString(), "sample-secure-service", StringComparison.Ordinal) ||
+        !string.Equals(definition.GetProperty("version").GetString(), "1.0.0", StringComparison.Ordinal))
+        throw new InvalidOperationException("M3_CANONICAL_SAMPLE_IDENTITY_INVALID");
+    JsonElement bindings = definition.GetProperty("bindings");
+    string[] endpoints = bindings.GetProperty("endpoints").EnumerateArray().Select(value => value.GetProperty("name").GetString() ?? string.Empty).ToArray();
+    JsonElement[] secrets = bindings.GetProperty("secrets").EnumerateArray().ToArray();
+    string[] secretNames = secrets.Where(value => string.Equals(value.GetProperty("kind").GetString(), "opaque", StringComparison.Ordinal)).Select(value => value.GetProperty("name").GetString() ?? string.Empty).ToArray();
+    string[] certificateNames = secrets.Where(value => string.Equals(value.GetProperty("kind").GetString(), "clientCertificate", StringComparison.Ordinal)).Select(value => value.GetProperty("name").GetString() ?? string.Empty).ToArray();
+    if (!endpoints.SequenceEqual(["sample-vendor-endpoint"], StringComparer.Ordinal) ||
+        !secretNames.SequenceEqual(["sample-vendor-api-key"], StringComparer.Ordinal) ||
+        !certificateNames.SequenceEqual(["sample-vendor-client-certificate"], StringComparer.Ordinal))
+        throw new InvalidOperationException("M3_CANONICAL_SAMPLE_BINDINGS_INVALID");
+}
+
+static JsonElement M3VendorDefinition() => JsonSerializer.SerializeToElement(new
+{
+    schemaVersion = "1.0",
+    connectorId = "m3-vendor",
+    version = "3.0.0-m3",
+    displayName = "M3 Synthetic Vendor",
+    bindings = new
+    {
+        endpoints = new[] { new { name = "vendor" }, new { name = "loopback" }, new { name = "private" }, new { name = "metadata" } },
+        secrets = new[] { new { name = "vendor-api-key", kind = "opaque" }, new { name = "vendor-client-certificate", kind = "clientCertificate" }, new { name = "vendor-wrong-client-certificate", kind = "clientCertificate" } }
+    },
+    operations = new[]
+    {
+        Operation("submit", "vendor", "/vendor/orders", "apiKeyAndMtls", "vendor-client-certificate"),
+        Operation("loopback", "loopback", "/vendor/orders", "none", null),
+        Operation("private", "private", "/vendor/orders", "none", null),
+        Operation("metadata", "metadata", "/latest/meta-data/", "none", null),
+        Operation("redirect", "vendor", "/vendor/redirect", "apiKeyAndMtls", "vendor-client-certificate"),
+        Operation("wrong-certificate", "vendor", "/vendor/orders", "apiKeyAndMtls", "vendor-wrong-client-certificate")
+    }
+});
 
 async Task<ProviderResourceCatalogRecord> RegisterResourceAsync(Guid environment, string connector, string resourceId, ProviderResourceType type, string providerReference, X509Certificate2? certificate, long? metadataRevision)
 {
@@ -268,3 +312,12 @@ static async Task EnsureAdminRoleAsync(string connectionString, string password)
     await using NpgsqlCommand command = new(sql, connection);
     await command.ExecuteNonQueryAsync().ConfigureAwait(false);
 }
+
+file sealed record PublishedConnectorMetadata(
+    string ConnectorId,
+    string Version,
+    string ChecksumSha256,
+    string State,
+    string[] EndpointBindings,
+    string[] SecretBindings,
+    string[] CertificateBindings);
