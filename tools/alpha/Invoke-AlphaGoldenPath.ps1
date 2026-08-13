@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Validate', 'Run', 'Stop', 'FailureOutputProbe')]
+    [ValidateSet('Validate', 'Run', 'Stop', 'FailureOutputProbe', 'FailureTimeoutProbe', 'FailureOutputLimitProbe')]
     [string] $Phase = 'Run',
     [switch] $SkipBuild,
     [string] $DotNetPath
@@ -46,12 +46,227 @@ function ConvertTo-NativeArgument {
     return $builder.ToString()
 }
 
+function Initialize-BoundedProcessCapture {
+    if ('AlphaGoldenPath.BoundedProcessCapture' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Reflection;
+using System.Text;
+using System.Threading;
+
+namespace AlphaGoldenPath
+{
+    public sealed class BoundedProcessResult
+    {
+        public int ExitCode { get; set; }
+        public string StdOut { get; set; }
+        public string StdErr { get; set; }
+        public bool TimedOut { get; set; }
+        public bool OutputLimitExceeded { get; set; }
+        public bool TerminationFailed { get; set; }
+        public bool CaptureFailed { get; set; }
+    }
+
+    internal sealed class CaptureState : IDisposable
+    {
+        internal readonly object Sync = new object();
+        internal readonly MemoryStream StdOut = new MemoryStream();
+        internal readonly MemoryStream StdErr = new MemoryStream();
+        internal readonly ManualResetEvent OutputLimit = new ManualResetEvent(false);
+        internal readonly int Limit;
+        internal int Combined;
+        internal volatile bool StopRequested;
+        internal volatile bool OutputLimitExceeded;
+        internal volatile bool CaptureFailed;
+
+        internal CaptureState(int limit) { Limit = limit; }
+
+        public void Dispose()
+        {
+            StdOut.Dispose();
+            StdErr.Dispose();
+            OutputLimit.Dispose();
+        }
+    }
+
+    public static class BoundedProcessCapture
+    {
+        private static void Pump(Stream source, MemoryStream destination, CaptureState state)
+        {
+            byte[] buffer = new byte[4096];
+            try
+            {
+                while (!state.StopRequested)
+                {
+                    int read = source.Read(buffer, 0, buffer.Length);
+                    if (read == 0) { return; }
+                    lock (state.Sync)
+                    {
+                        int remaining = state.Limit - state.Combined;
+                        if (remaining <= 0)
+                        {
+                            state.OutputLimitExceeded = true;
+                            state.StopRequested = true;
+                            state.OutputLimit.Set();
+                            return;
+                        }
+                        int accepted = Math.Min(read, remaining);
+                        destination.Write(buffer, 0, accepted);
+                        state.Combined += accepted;
+                        if (accepted < read)
+                        {
+                            state.OutputLimitExceeded = true;
+                            state.StopRequested = true;
+                            state.OutputLimit.Set();
+                            return;
+                        }
+                    }
+                }
+            }
+            catch (IOException)
+            {
+                if (!state.StopRequested) { state.CaptureFailed = true; }
+            }
+            catch (ObjectDisposedException)
+            {
+                if (!state.StopRequested) { state.CaptureFailed = true; }
+            }
+            catch
+            {
+                state.CaptureFailed = true;
+            }
+            finally
+            {
+                Array.Clear(buffer, 0, buffer.Length);
+            }
+        }
+
+        private static bool JoinBounded(Thread first, Thread second, int timeoutMilliseconds)
+        {
+            Stopwatch timer = Stopwatch.StartNew();
+            if (!first.Join(timeoutMilliseconds)) { return false; }
+            int remaining = Math.Max(0, timeoutMilliseconds - (int)timer.ElapsedMilliseconds);
+            return second.Join(remaining);
+        }
+
+        private static bool TerminateBounded(Process process, int timeoutMilliseconds)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    MethodInfo killTree = typeof(Process).GetMethod("Kill", new Type[] { typeof(bool) });
+                    if (killTree == null) { process.Kill(); }
+                    else { killTree.Invoke(process, new object[] { true }); }
+                }
+            }
+            catch
+            {
+                try { if (!process.HasExited) { return false; } }
+                catch { return false; }
+            }
+            try { return process.HasExited || process.WaitForExit(timeoutMilliseconds); }
+            catch { return false; }
+        }
+
+        public static BoundedProcessResult Capture(Process process, int timeoutMilliseconds, int outputLimitBytes, int terminationTimeoutMilliseconds)
+        {
+            if (timeoutMilliseconds <= 0 || outputLimitBytes <= 0 || terminationTimeoutMilliseconds <= 0)
+            {
+                throw new ArgumentOutOfRangeException();
+            }
+
+            Encoding stdoutEncoding = process.StandardOutput.CurrentEncoding;
+            Encoding stderrEncoding = process.StandardError.CurrentEncoding;
+            using (CaptureState state = new CaptureState(outputLimitBytes))
+            using (ManualResetEvent processExited = new ManualResetEvent(false))
+            {
+                process.EnableRaisingEvents = true;
+                process.Exited += delegate { try { processExited.Set(); } catch (ObjectDisposedException) { } };
+                Thread stdoutThread = new Thread(new ThreadStart(delegate { Pump(process.StandardOutput.BaseStream, state.StdOut, state); }));
+                Thread stderrThread = new Thread(new ThreadStart(delegate { Pump(process.StandardError.BaseStream, state.StdErr, state); }));
+                stdoutThread.IsBackground = true;
+                stderrThread.IsBackground = true;
+                stdoutThread.Start();
+                stderrThread.Start();
+                try { if (process.HasExited) { processExited.Set(); } } catch { }
+
+                int signal = WaitHandle.WaitAny(new WaitHandle[] { processExited, state.OutputLimit }, timeoutMilliseconds);
+                bool timedOut = signal == WaitHandle.WaitTimeout;
+                bool outputLimitExceeded = signal == 1 || state.OutputLimitExceeded;
+                bool terminationFailed = false;
+                if (timedOut || outputLimitExceeded)
+                {
+                    state.StopRequested = true;
+                    terminationFailed = !TerminateBounded(process, terminationTimeoutMilliseconds);
+                }
+
+                if (!JoinBounded(stdoutThread, stderrThread, terminationTimeoutMilliseconds))
+                {
+                    state.StopRequested = true;
+                    terminationFailed = true;
+                }
+                outputLimitExceeded = outputLimitExceeded || state.OutputLimitExceeded;
+
+                byte[] stdoutBytes;
+                byte[] stderrBytes;
+                lock (state.Sync)
+                {
+                    stdoutBytes = state.StdOut.ToArray();
+                    stderrBytes = state.StdErr.ToArray();
+                }
+                try
+                {
+                    int exitCode = -1;
+                    try { if (process.HasExited) { exitCode = process.ExitCode; } } catch { }
+                    return new BoundedProcessResult
+                    {
+                        ExitCode = exitCode,
+                        StdOut = stdoutEncoding.GetString(stdoutBytes),
+                        StdErr = stderrEncoding.GetString(stderrBytes),
+                        TimedOut = timedOut,
+                        OutputLimitExceeded = outputLimitExceeded,
+                        TerminationFailed = terminationFailed,
+                        CaptureFailed = state.CaptureFailed
+                    };
+                }
+                finally
+                {
+                    Array.Clear(stdoutBytes, 0, stdoutBytes.Length);
+                    Array.Clear(stderrBytes, 0, stderrBytes.Length);
+                }
+            }
+        }
+    }
+}
+'@
+}
+
+function Get-ChildPolicy {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Docker', 'DotNet', 'Curl', 'Quickstart', 'FailureProbe', 'TimeoutProbe', 'OutputLimitProbe')]
+        [string] $Component
+    )
+    switch ($Component) {
+        'Docker' { return [pscustomobject]@{ TimeoutMilliseconds = 300000; OutputLimitBytes = 1048576; TerminationTimeoutMilliseconds = 5000 } }
+        'DotNet' { return [pscustomobject]@{ TimeoutMilliseconds = 600000; OutputLimitBytes = 1048576; TerminationTimeoutMilliseconds = 5000 } }
+        'Curl' { return [pscustomobject]@{ TimeoutMilliseconds = 30000; OutputLimitBytes = 262144; TerminationTimeoutMilliseconds = 5000 } }
+        'Quickstart' { return [pscustomobject]@{ TimeoutMilliseconds = 1200000; OutputLimitBytes = 262144; TerminationTimeoutMilliseconds = 5000 } }
+        'FailureProbe' { return [pscustomobject]@{ TimeoutMilliseconds = 30000; OutputLimitBytes = 65536; TerminationTimeoutMilliseconds = 2000 } }
+        'TimeoutProbe' { return [pscustomobject]@{ TimeoutMilliseconds = 750; OutputLimitBytes = 65536; TerminationTimeoutMilliseconds = 2000 } }
+        'OutputLimitProbe' { return [pscustomobject]@{ TimeoutMilliseconds = 30000; OutputLimitBytes = 4096; TerminationTimeoutMilliseconds = 2000 } }
+    }
+}
+
 function Invoke-SanitizedChild {
     param(
         [Parameter(Mandatory = $true)][string] $File,
         [Parameter(Mandatory = $true)][string[]] $Arguments,
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Docker', 'DotNet', 'Curl', 'Quickstart', 'FailureProbe')]
+        [ValidateSet('Docker', 'DotNet', 'Curl', 'Quickstart', 'FailureProbe', 'TimeoutProbe', 'OutputLimitProbe')]
         [string] $Component,
         [switch] $AllowFailure
     )
@@ -73,16 +288,20 @@ function Invoke-SanitizedChild {
     try {
         try { if (-not $process.Start()) { throw 'start' } }
         catch { throw "ALPHA_GOLDEN_PATH_CHILD_START_FAILED;COMPONENT=$Component" }
-        $standardOutput = $process.StandardOutput.ReadToEndAsync()
-        $standardError = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
-        $stdout = $standardOutput.GetAwaiter().GetResult()
-        $stderr = $standardError.GetAwaiter().GetResult()
-        $exitCode = $process.ExitCode
-        $result = [pscustomobject]@{ ExitCode = $exitCode; StdOut = $stdout; StdErr = $stderr }
-        if ($exitCode -ne 0 -and -not $AllowFailure) {
-            $childCode = if ($stderr -cmatch '(?m)^(M5_QUICKSTART_[A-Z0-9_]+)\r?$') { ';CHILD_CODE=' + $Matches[1] } else { '' }
-            throw "ALPHA_GOLDEN_PATH_CHILD_EXIT_NONZERO;COMPONENT=$Component;EXIT_CODE=$exitCode$childCode"
+        $policy = Get-ChildPolicy -Component $Component
+        $capture = [AlphaGoldenPath.BoundedProcessCapture]::Capture(
+            $process,
+            [int]$policy.TimeoutMilliseconds,
+            [int]$policy.OutputLimitBytes,
+            [int]$policy.TerminationTimeoutMilliseconds)
+        if ($capture.TerminationFailed) { throw "ALPHA_GOLDEN_PATH_CHILD_TERMINATION_FAILED;COMPONENT=$Component" }
+        if ($capture.TimedOut) { throw "ALPHA_GOLDEN_PATH_CHILD_TIMEOUT;COMPONENT=$Component" }
+        if ($capture.OutputLimitExceeded) { throw "ALPHA_GOLDEN_PATH_CHILD_OUTPUT_LIMIT_EXCEEDED;COMPONENT=$Component" }
+        if ($capture.CaptureFailed) { throw "ALPHA_GOLDEN_PATH_CHILD_CAPTURE_FAILED;COMPONENT=$Component" }
+        $result = [pscustomobject]@{ ExitCode = $capture.ExitCode; StdOut = $capture.StdOut; StdErr = $capture.StdErr }
+        if ($capture.ExitCode -ne 0 -and -not $AllowFailure) {
+            $childCode = if ($capture.StdErr -cmatch '(?m)^(M5_QUICKSTART_[A-Z0-9_]+)\r?$') { ';CHILD_CODE=' + $Matches[1] } else { '' }
+            throw "ALPHA_GOLDEN_PATH_CHILD_EXIT_NONZERO;COMPONENT=$Component;EXIT_CODE=$($capture.ExitCode)$childCode"
         }
         return $result
     }
@@ -256,13 +475,14 @@ function Assert-RedactedText {
 function Get-StableAlphaFailure {
     param([Parameter(Mandatory = $true)] $Failure)
     $message = [string]$Failure.Exception.Message
-    if ($message -cmatch '^ALPHA_GOLDEN_PATH_[A-Z0-9_]+(?:;COMPONENT=(?:Docker|DotNet|Curl|Quickstart|FailureProbe)(?:;EXIT_CODE=[0-9]{1,5})?(?:;CHILD_CODE=M5_QUICKSTART_[A-Z0-9_]+)?)?$') {
+    if ($message -cmatch '^ALPHA_GOLDEN_PATH_[A-Z0-9_]+(?:;COMPONENT=(?:Docker|DotNet|Curl|Quickstart|FailureProbe|TimeoutProbe|OutputLimitProbe)(?:;EXIT_CODE=[0-9]{1,5})?(?:;CHILD_CODE=M5_QUICKSTART_[A-Z0-9_]+)?)?$') {
         return $message
     }
     return 'ALPHA_GOLDEN_PATH_FAILED'
 }
 
 try {
+    Initialize-BoundedProcessCapture
     if ($Phase -eq 'Validate') {
         [void](Invoke-Checked -File 'docker' -Arguments @('version') -Component Docker)
         [void](Invoke-Checked -File 'docker' -Arguments @('compose', 'version') -Component Docker)
@@ -301,21 +521,38 @@ try {
     foreach ($name in $environmentNames) { $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 
     try {
-        if ($Phase -eq 'FailureOutputProbe') {
+        if ($Phase -in @('FailureOutputProbe', 'FailureTimeoutProbe', 'FailureOutputLimitProbe')) {
             New-Item -ItemType Directory -Path (Join-Path $artifactRoot 'raw') -Force | Out-Null
             [IO.File]::WriteAllText((Join-Path $artifactRoot '.m5-quickstart-owner'), 'secure-integration-m5-quickstart-artifacts-v1', [Text.UTF8Encoding]::new($false))
             $probeSuffix = [Guid]::NewGuid().ToString('N')
             [void](Invoke-Checked -File 'docker' -Arguments @('network', 'create', '--label', ('com.docker.compose.project=' + $project), ('alpha-golden-path-failure-probe-network-' + $probeSuffix)) -Component Docker)
             [void](Invoke-Checked -File 'docker' -Arguments @('volume', 'create', '--label', ('com.docker.compose.project=' + $project), ('alpha-golden-path-failure-probe-volume-' + $probeSuffix)) -Component Docker)
-            $probe = @'
+            if ($Phase -eq 'FailureOutputProbe') {
+                $probe = @'
 [Console]::Out.WriteLine("System.InvalidOperationException: alpha-probe-payload-canary-2f4d68f3")
 [Console]::Error.WriteLine("   at Synthetic.Probe.Run() in C:\alpha\probe\Sensitive.cs:line 42")
 [Console]::Error.WriteLine("Authorization: Bearer alpha-probe-token-canary-b619f4e8")
 [Console]::Error.WriteLine("Host=localhost;Database=probe;Password=alpha-probe-password-canary-c2971a05")
 exit 37
 '@
-            [void](Invoke-SanitizedChild -File $powerShellHost -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', $probe) -Component FailureProbe)
-            throw 'ALPHA_GOLDEN_PATH_FAILURE_PROBE_DID_NOT_FAIL'
+                [void](Invoke-SanitizedChild -File $powerShellHost -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', $probe) -Component FailureProbe)
+                throw 'ALPHA_GOLDEN_PATH_FAILURE_PROBE_DID_NOT_FAIL'
+            }
+            if ($Phase -eq 'FailureTimeoutProbe') {
+                $probe = @'
+[Console]::Out.WriteLine("alpha-timeout-probe-canary-a12f8029")
+while ($true) { Start-Sleep -Seconds 30 }
+'@
+                [void](Invoke-SanitizedChild -File $powerShellHost -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', $probe) -Component TimeoutProbe)
+                throw 'ALPHA_GOLDEN_PATH_TIMEOUT_PROBE_DID_NOT_FAIL'
+            }
+            $probe = @'
+[Console]::Out.Write("alpha-output-limit-probe-canary-33c1b471")
+$chunk = "x" * 1024
+while ($true) { [Console]::Out.Write($chunk) }
+'@
+            [void](Invoke-SanitizedChild -File $powerShellHost -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', $probe) -Component OutputLimitProbe)
+            throw 'ALPHA_GOLDEN_PATH_OUTPUT_LIMIT_PROBE_DID_NOT_FAIL'
         }
 
         [void](Invoke-Quickstart -RequestedPhase Start)

@@ -1,7 +1,11 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('AlphaGoldenPath_failed_child_output_is_redacted_and_cleanup_still_runs')]
-    [string] $TestName = 'AlphaGoldenPath_failed_child_output_is_redacted_and_cleanup_still_runs'
+    [ValidateSet(
+        'All',
+        'AlphaGoldenPath_failed_child_output_is_redacted_and_cleanup_still_runs',
+        'AlphaGoldenPath_child_timeout_is_bounded_and_cleanup_runs',
+        'AlphaGoldenPath_child_output_limit_is_bounded_and_redacted')]
+    [string] $TestName = 'All'
 )
 
 Set-StrictMode -Version Latest
@@ -23,36 +27,94 @@ function Assert-True {
 function ConvertTo-NativeArgument {
     param([AllowEmptyString()][string] $Value)
     if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
-    return '"' + $Value.Replace('\', '\\').Replace('"', '\"') + '"'
+    $builder = New-Object Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq '\') { $backslashes++; continue }
+        if ($character -eq '"') {
+            [void]$builder.Append(('\' * (($backslashes * 2) + 1)))
+            [void]$builder.Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) { [void]$builder.Append(('\' * $backslashes)); $backslashes = 0 }
+        [void]$builder.Append($character)
+    }
+    if ($backslashes -gt 0) { [void]$builder.Append(('\' * ($backslashes * 2))) }
+    [void]$builder.Append('"')
+    return $builder.ToString()
 }
 
 function Invoke-Captured {
     param([Parameter(Mandatory = $true)][string] $File, [Parameter(Mandatory = $true)][string[]] $Arguments)
+    $captureId = [Guid]::NewGuid().ToString('N')
+    $captureRoot = Join-Path ([IO.Path]::GetTempPath()) ('broker-gateway-alpha-capture-' + $captureId)
+    New-Item -ItemType Directory -Path $captureRoot | Out-Null
+    $stdoutPath = Join-Path $captureRoot 'stdout.txt'
+    $stderrPath = Join-Path $captureRoot 'stderr.txt'
+    $invocationJson = @{ File = $File; Arguments = @($Arguments) } | ConvertTo-Json -Compress
+    $invocationBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($invocationJson))
+    $wrapper = @'
+$invocationJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:ALPHA_TEST_INVOCATION))
+$invocation = $invocationJson | ConvertFrom-Json
+$target = [string]$invocation.File
+$targetArguments = @($invocation.Arguments | ForEach-Object { [string]$_ })
+$child = Start-Process -FilePath $target -ArgumentList $targetArguments -NoNewWindow -Wait -PassThru -RedirectStandardOutput $env:ALPHA_TEST_STDOUT -RedirectStandardError $env:ALPHA_TEST_STDERR
+exit $child.ExitCode
+'@
     $start = New-Object Diagnostics.ProcessStartInfo
-    $start.FileName = $File
+    $start.FileName = $powerShellHost
     $start.WorkingDirectory = $root
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
+    $wrapperArguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', $wrapper)
     if ($null -ne $start.PSObject.Properties['ArgumentList']) {
-        foreach ($argument in $Arguments) { [void]$start.ArgumentList.Add($argument) }
+        foreach ($argument in $wrapperArguments) { [void]$start.ArgumentList.Add($argument) }
     }
-    else { $start.Arguments = (($Arguments | ForEach-Object { ConvertTo-NativeArgument ([string]$_) }) -join ' ') }
+    else { $start.Arguments = (($wrapperArguments | ForEach-Object { ConvertTo-NativeArgument ([string]$_) }) -join ' ') }
+    $start.EnvironmentVariables['ALPHA_TEST_INVOCATION'] = $invocationBase64
+    $start.EnvironmentVariables['ALPHA_TEST_STDOUT'] = $stdoutPath
+    $start.EnvironmentVariables['ALPHA_TEST_STDERR'] = $stderrPath
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $start
+    $captureLimit = 65536
     try {
         if (-not $process.Start()) { throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_CHILD_START_FAILED' }
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
+        $deadline = [DateTimeOffset]::UtcNow.AddSeconds(60)
+        while (-not $process.WaitForExit(100)) {
+            $stdoutLength = if (Test-Path -LiteralPath $stdoutPath -PathType Leaf) { (Get-Item -LiteralPath $stdoutPath).Length } else { 0L }
+            $stderrLength = if (Test-Path -LiteralPath $stderrPath -PathType Leaf) { (Get-Item -LiteralPath $stderrPath).Length } else { 0L }
+            if (($stdoutLength + $stderrLength) -gt $captureLimit) {
+                try { $process.Kill() } catch { }
+                [void]$process.WaitForExit(5000)
+                throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_OUTPUT_LIMIT'
+            }
+            if ([DateTimeOffset]::UtcNow -ge $deadline) {
+                try { $process.Kill() } catch { }
+                [void]$process.WaitForExit(5000)
+                throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_CHILD_TIMEOUT'
+            }
+        }
+        $stdoutLength = if (Test-Path -LiteralPath $stdoutPath -PathType Leaf) { (Get-Item -LiteralPath $stdoutPath).Length } else { 0L }
+        $stderrLength = if (Test-Path -LiteralPath $stderrPath -PathType Leaf) { (Get-Item -LiteralPath $stderrPath).Length } else { 0L }
+        if (($stdoutLength + $stderrLength) -gt $captureLimit) { throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_OUTPUT_LIMIT' }
         return [pscustomobject]@{
             ExitCode = $process.ExitCode
-            StdOut = $stdoutTask.GetAwaiter().GetResult()
-            StdErr = $stderrTask.GetAwaiter().GetResult()
+            StdOut = $(if ($stdoutLength -gt 0) { [IO.File]::ReadAllText($stdoutPath) } else { '' })
+            StdErr = $(if ($stderrLength -gt 0) { [IO.File]::ReadAllText($stderrPath) } else { '' })
         }
     }
-    finally { $process.Dispose() }
+    finally {
+        $process.Dispose()
+        $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+        $canonicalCaptureRoot = [IO.Path]::GetFullPath($captureRoot)
+        if (-not $canonicalCaptureRoot.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+            -not ([IO.Path]::GetFileName($canonicalCaptureRoot)).StartsWith('broker-gateway-alpha-capture-', [StringComparison]::Ordinal)) {
+            throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_CAPTURE_CLEANUP_DENIED'
+        }
+        if (Test-Path -LiteralPath $canonicalCaptureRoot) { Remove-Item -LiteralPath $canonicalCaptureRoot -Recurse -Force }
+    }
 }
 
 function Get-ProjectResourceCount {
@@ -68,29 +130,94 @@ function Get-ProjectResourceCount {
     return $total
 }
 
-try {
+function Assert-ProbeFailure {
+    param(
+        [Parameter(Mandatory = $true)][string] $Phase,
+        [Parameter(Mandatory = $true)][string] $ExpectedError,
+        [Parameter(Mandatory = $true)][string[]] $Forbidden,
+        [int] $MaximumElapsedSeconds = 30
+    )
     Assert-True ((Get-ProjectResourceCount) -eq 0)
     Assert-True (-not (Test-Path -LiteralPath $artifactRoot))
-    $result = Invoke-Captured -File $powerShellHost -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $runner, '-Phase', 'FailureOutputProbe')
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $result = Invoke-Captured -File $powerShellHost -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $runner, '-Phase', $Phase)
+    $timer.Stop()
     $combined = $result.StdOut + $result.StdErr
     Assert-True ($result.ExitCode -ne 0)
     Assert-True ($result.StdOut.Trim().Length -eq 0)
-    Assert-True ($result.StdErr.Trim() -ceq 'ALPHA_GOLDEN_PATH_CHILD_EXIT_NONZERO;COMPONENT=FailureProbe;EXIT_CODE=37')
-    foreach ($forbidden in @(
-        'alpha-probe-payload-canary-2f4d68f3',
-        'alpha-probe-token-canary-b619f4e8',
-        'alpha-probe-password-canary-c2971a05',
-        'Sensitive.cs',
-        'Authorization:',
-        'Password=',
-        'System.InvalidOperationException',
-        $root)) {
+    Assert-True ($result.StdErr.Trim() -ceq $ExpectedError)
+    Assert-True ($timer.Elapsed.TotalSeconds -lt $MaximumElapsedSeconds)
+    foreach ($forbidden in @($Forbidden + @('Authorization:', 'Password=', 'System.InvalidOperationException', $root))) {
         Assert-True ($combined.IndexOf($forbidden, [StringComparison]::OrdinalIgnoreCase) -lt 0)
     }
     Assert-True ($combined.IndexOf('ALPHA_GOLDEN_PATH_PASS', [StringComparison]::Ordinal) -lt 0)
     Assert-True ((Get-ProjectResourceCount) -eq 0)
     Assert-True (-not (Test-Path -LiteralPath $artifactRoot))
-    Write-Host "$TestName PASS"
+}
+
+function Test-FailedChildOutput {
+    Assert-ProbeFailure `
+        -Phase 'FailureOutputProbe' `
+        -ExpectedError 'ALPHA_GOLDEN_PATH_CHILD_EXIT_NONZERO;COMPONENT=FailureProbe;EXIT_CODE=37' `
+        -Forbidden @(
+            'alpha-probe-payload-canary-2f4d68f3',
+            'alpha-probe-token-canary-b619f4e8',
+            'alpha-probe-password-canary-c2971a05',
+            'Sensitive.cs')
+}
+
+function Test-ChildTimeout {
+    $start = New-Object Diagnostics.ProcessStartInfo
+    $start.FileName = $powerShellHost
+    $start.Arguments = '-NoLogo -NoProfile -NonInteractive -Command "Start-Sleep -Seconds 60"'
+    $start.WorkingDirectory = $root
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $unrelatedProcess = New-Object Diagnostics.Process
+    $unrelatedProcess.StartInfo = $start
+    try {
+        Assert-True ($unrelatedProcess.Start())
+        Assert-ProbeFailure `
+            -Phase 'FailureTimeoutProbe' `
+            -ExpectedError 'ALPHA_GOLDEN_PATH_CHILD_TIMEOUT;COMPONENT=TimeoutProbe' `
+            -Forbidden @('alpha-timeout-probe-canary-a12f8029')
+        Assert-True (-not $unrelatedProcess.HasExited)
+    }
+    finally {
+        try {
+            if (-not $unrelatedProcess.HasExited) {
+                $unrelatedProcess.Kill()
+                [void]$unrelatedProcess.WaitForExit(5000)
+            }
+        }
+        catch { }
+        $unrelatedProcess.Dispose()
+    }
+}
+
+function Test-ChildOutputLimit {
+    Assert-ProbeFailure `
+        -Phase 'FailureOutputLimitProbe' `
+        -ExpectedError 'ALPHA_GOLDEN_PATH_CHILD_OUTPUT_LIMIT_EXCEEDED;COMPONENT=OutputLimitProbe' `
+        -Forbidden @('alpha-output-limit-probe-canary-33c1b471')
+}
+
+try {
+    $tests = if ($TestName -eq 'All') {
+        @(
+            'AlphaGoldenPath_failed_child_output_is_redacted_and_cleanup_still_runs',
+            'AlphaGoldenPath_child_timeout_is_bounded_and_cleanup_runs',
+            'AlphaGoldenPath_child_output_limit_is_bounded_and_redacted')
+    }
+    else { @($TestName) }
+    foreach ($test in $tests) {
+        switch ($test) {
+            'AlphaGoldenPath_failed_child_output_is_redacted_and_cleanup_still_runs' { Test-FailedChildOutput }
+            'AlphaGoldenPath_child_timeout_is_bounded_and_cleanup_runs' { Test-ChildTimeout }
+            'AlphaGoldenPath_child_output_limit_is_bounded_and_redacted' { Test-ChildOutputLimit }
+        }
+        Write-Host "$test PASS"
+    }
 }
 catch {
     [Console]::Error.WriteLine('ALPHA_GOLDEN_PATH_FAILURE_TEST_FAILED')
