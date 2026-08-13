@@ -154,6 +154,7 @@ try {
         }
         Write-Host "$test PASS"
     }
+    exit 0
 }
 catch {
     [Console]::Error.WriteLine('M5_QUICKSTART_SAFETY_TEST_FAILED')
