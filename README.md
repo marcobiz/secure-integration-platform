@@ -20,13 +20,16 @@ OfficialTest and production completion are not claimed.
 With Docker Linux containers, .NET SDK, Node 22 and PowerShell:
 
 ```powershell
-./tools/m5/Invoke-M5Quickstart.ps1 -Phase Validate
-./tools/m5/Invoke-M5Quickstart.ps1 -Phase Workflow
-# UI: https://localhost:18443/admin/
-./tools/m5/Invoke-M5Quickstart.ps1 -Phase Stop
+./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Validate
+./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Run
 ```
 
-This starts PostgreSQL 18, a non-root Gateway with Admin UI, Synthetic Provider and HTTPS/mTLS mock. DevelopmentAuth exposes only fixed local synthetic identities. See [the M5 runbook](docs/operations/M5-ADMIN-QUICKSTART.md).
+This builds and runs PostgreSQL 18, a non-root Gateway with Admin UI, Synthetic Provider
+and HTTPS/mTLS mock. It enrolls the public Direct .NET sample, invokes the exact Published
+`sample-secure-service/submit` operation, verifies one outbound request, sanitized response,
+metadata-only audit and redacted logs, then removes all per-run resources and synthetic
+material. See [the alpha golden-path runbook](docs/operations/ALPHA-GOLDEN-PATH.md). The
+interactive Admin workflow remains documented in [the M5 runbook](docs/operations/M5-ADMIN-QUICKSTART.md).
 
 ## Components
 

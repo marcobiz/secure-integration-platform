@@ -26,3 +26,6 @@ Cleanup:
 ```
 
 Verify no container or volume remains for Compose project `secure-integration-m5-quickstart`. Raw fixture files under `.artifacts` are ignored and must not be published.
+`Stop` also removes the marker-owned per-run quickstart directory, including activation
+material, synthetic private keys and PFX files. It refuses to recursively remove an
+unmarked artifact directory.

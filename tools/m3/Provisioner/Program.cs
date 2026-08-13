@@ -37,6 +37,35 @@ ProvisionedActivation activation = await provisioning.CreateInstallationAsync(
     CancellationToken.None).ConfigureAwait(false);
 await registry.AddGrantAsync(new InstallationGrantRecord(Guid.NewGuid(), installationId, tenantId, "m3-vendor", "submit", true, clock.UtcNow), CancellationToken.None).ConfigureAwait(false);
 await registry.AddGrantAsync(new InstallationGrantRecord(Guid.NewGuid(), installationId, tenantId, "sample-secure-service", "submit", true, clock.UtcNow), CancellationToken.None).ConfigureAwait(false);
+Guid directInstallationId = Guid.NewGuid();
+GatewayAuditEvent directInstallationAudit = new(
+    Guid.NewGuid(),
+    clock.UtcNow,
+    tenantId,
+    "administrator",
+    "m3-provisioner",
+    "installation.create",
+    "installation",
+    directInstallationId.ToString("D"),
+    Guid.NewGuid(),
+    "success",
+    "BGW-INSTALLATION-CREATED",
+    new Dictionary<string, string> { ["installationKind"] = InstallationKind.Direct.ToString() });
+ProvisionedActivation directActivation = await provisioning.CreateAdminInstallationAsync(
+    new InstallationRecord(
+        directInstallationId,
+        tenantId,
+        applicationId,
+        environmentId,
+        InstallationStatus.Pending,
+        null,
+        clock.UtcNow,
+        InstallationKind: InstallationKind.Direct,
+        UpdatedAt: clock.UtcNow),
+    "m3-provisioner",
+    directInstallationAudit,
+    CancellationToken.None).ConfigureAwait(false);
+await registry.AddGrantAsync(new InstallationGrantRecord(Guid.NewGuid(), directInstallationId, tenantId, "sample-secure-service", "submit", true, clock.UtcNow), CancellationToken.None).ConfigureAwait(false);
 Guid securityInstallationId = Guid.NewGuid();
 Guid securityTenantId = Guid.NewGuid();
 Guid securityApplicationId = Guid.NewGuid();
@@ -76,6 +105,10 @@ byte[] document = JsonSerializer.SerializeToUtf8Bytes(new
     activationCodeId = activation.ActivationCodeId,
     activationCode = activation.ActivationCode,
     expiresAtUtc = activation.ExpiresAt,
+    directInstallationId,
+    directActivationCodeId = directActivation.ActivationCodeId,
+    directActivationCode = directActivation.ActivationCode,
+    directExpiresAtUtc = directActivation.ExpiresAt,
     securityInstallationId,
     securityTenantId,
     securityActivationCodeId = securityActivation.ActivationCodeId,

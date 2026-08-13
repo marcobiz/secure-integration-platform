@@ -21,6 +21,7 @@ string expectedThumbprint = NormalizeThumbprint(Required("M3_VENDOR_CLIENT_THUMB
 string controlToken = Required("M3_VENDOR_CONTROL_TOKEN", 32);
 long accepted = 0;
 long denied = 0;
+AcceptedRequestMetadata? lastAccepted = null;
 
 app.MapGet("/health/ready", () => Results.Ok(new { status = "healthy" }));
 app.MapPost("/vendor/orders", async (HttpContext context, CancellationToken cancellationToken) =>
@@ -36,6 +37,15 @@ app.MapPost("/vendor/orders", async (HttpContext context, CancellationToken canc
     if (context.Request.ContentLength > 1024 * 1024) return Results.StatusCode(413);
     using MemoryStream sink = new();
     await context.Request.Body.CopyToAsync(sink, cancellationToken).ConfigureAwait(false);
+    byte[] requestBytes = sink.ToArray();
+    Interlocked.Exchange(ref lastAccepted, new AcceptedRequestMetadata(
+        context.Request.Method,
+        context.Request.Path.Value ?? string.Empty,
+        context.Request.ContentType ?? string.Empty,
+        requestBytes.Length,
+        Convert.ToHexString(SHA256.HashData(requestBytes)),
+        Convert.ToHexString(SHA256.HashData(certificate!.RawData))));
+    CryptographicOperations.ZeroMemory(requestBytes);
     Interlocked.Increment(ref accepted);
     return Results.Ok(new { accepted = true, requestBytes = sink.Length, vendorReference = "synthetic-order" });
 });
@@ -43,7 +53,7 @@ app.MapPost("/vendor/redirect", () => Results.Redirect("https://metadata.invalid
 app.MapGet("/m3/stats", (HttpContext context) =>
 {
     if (!FixedEquals(context.Request.Headers["X-M3-Control-Token"].ToString(), controlToken)) return Results.Unauthorized();
-    return Results.Ok(new { accepted = Interlocked.Read(ref accepted), denied = Interlocked.Read(ref denied) });
+    return Results.Ok(new { accepted = Interlocked.Read(ref accepted), denied = Interlocked.Read(ref denied), lastAccepted = Volatile.Read(ref lastAccepted) });
 });
 app.Run();
 
@@ -64,3 +74,11 @@ static bool FixedEquals(string left, string right)
 
 /// <summary>Entry point marker.</summary>
 public partial class Program;
+
+internal sealed record AcceptedRequestMetadata(
+    string Method,
+    string Path,
+    string ContentType,
+    long BodyBytes,
+    string BodySha256,
+    string ClientCertificateSha256);

@@ -31,7 +31,7 @@ livelli distinti.
 | PostgreSQL 18, ruoli e FORCE RLS | `IT_DAT_PostgreSQL18_migration_and_RLS_isolate_tenants_when_configured`, `M5_IT_DAT_Tenant_mutations_are_FORCE_RLS_correct_atomic_and_concurrent_when_configured`, `M5_IT_DAT_PostgreSQL18_runtime_locator_is_exactly_granted_and_not_enumerable_when_configured` | `AUTOMATED` — PASS con gate PostgreSQL 18 eseguito |
 | Audit metadata-only/runtime INSERT-only | `UT_SEC_Audit_is_metadata_only_and_excludes_payload_and_credentials`, `IT_DAT_Migration_forces_RLS_and_contains_no_secret_value_columns`, `M5_IT_DAT_Fault_injection_rolls_back_admin_state_and_audit_when_configured` | `AUTOMATED` — PASS |
 | Audit DB append-only contro admin | Migration `0001_gateway_m2.sql` concede `SELECT, INSERT, UPDATE ON ALL TABLES` a `gateway_admin`; non esiste un negative privilege test che neghi UPDATE audit | `BLOCKED`/`DEFERRED` — nessun fix prodotto in DOC-02 |
-| Quickstart no-cloud | `Invoke-M4Quickstart.ps1`, `Invoke-M5Quickstart.ps1`, `FULLSTACK-01`, container/secret/SBOM gate | `AUTOMATED` live lab sintetico — PASS; non cloud/production |
+| Quickstart no-cloud | `Invoke-M4Quickstart.ps1`, `Invoke-M5Quickstart.ps1`, `Invoke-AlphaGoldenPath.ps1`, `FULLSTACK-01`, container/secret/SBOM gate | `AUTOMATED` live lab sintetico — PASS; alpha Direct prova un solo outbound e cleanup a zero; non cloud/production |
 | Azure M3B/cloud production | `m3-azure-smoke.yml`, `deploy/azure-bicep/m3-dev.bicep` | `EXTERNAL`/`UNVERIFIED` — nessun live PASS attestato |
 | Local PKCS#12 import/custody | `Test-Fse2LocalPkcs12Material.ps1` usa fixture per-run; importer default read-only | Lab sintetico `AUTOMATED`; import ufficiale `MANUAL`/`UNVERIFIED` |
 | FSE2 OfficialTest | Gate FSE2-T01..T06 in DOC-01; nessuna call live nella baseline | `EXTERNAL`/`BLOCKED`; primo outcome futuro `validate-cda` |
@@ -160,6 +160,7 @@ documentazione FSE2 dettagliata in DOC-04.
 | Migration fresh/upgrade/no-op/RLS | migration runner fresh+no-op; M5 data upgrade backfill `broker:NULL:1.0.0`; `IT_DAT_PostgreSQL18_migration_and_RLS_isolate_tenants_when_configured`; static least-privilege assertions | PASS PostgreSQL 18 |
 | Admin API/UI public metadata only | `M5_IT_Installation_activation_is_returned_once_and_never_listed` con Broker/Direct; `M55-UI-MOCK Direct installation selection is authoritative and public metadata only` | PASS local |
 | OpenAPI e runtime wire contract | `M5_UT_Runtime_wire_contract_exports_all_stable_admin_audit_values`; `npm run check:api`; `npm run check:runtime` | PASS local; final gate pending |
+| Core alpha golden path Direct | `Invoke-AlphaGoldenPath.ps1`: sample .NET pubblico -> Gateway -> Published `sample-secure-service/submit` -> Synthetic Provider -> mock HTTPS/mTLS; SHA-256 di body/certificato e contatore outbound; audit correlato metadata-only; canary/log scan; teardown marker-owned | `AUTOMATED` — PASS sintetico locale con `POSITIVE_OUTBOUND_COUNT=1`, container/rete/volume/materiale a zero; nessuna qualifica cloud o servizio esterno |
 | M6 auth contract freeze | `docs/architecture/connector-runtime-auth-contract.md`; architecture tests | Documented; independent review pending |
 
 ## M6 HTTP/OAuth outbound primitives

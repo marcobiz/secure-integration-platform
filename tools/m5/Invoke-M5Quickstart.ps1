@@ -15,6 +15,8 @@ $artifactRoot = if ([string]::IsNullOrWhiteSpace($ArtifactRoot)) {
     Join-Path $root '.artifacts\m5\quickstart'
 } else { [IO.Path]::GetFullPath($ArtifactRoot) }
 $rawRoot = Join-Path $artifactRoot 'raw'
+$artifactMarker = Join-Path $artifactRoot '.m5-quickstart-owner'
+$artifactMarkerValue = 'secure-integration-m5-quickstart-artifacts-v1'
 $envFile = Join-Path $rawRoot 'm3a.env'
 $baseCompose = Join-Path $root 'deploy\m3\docker-compose.m3a.yml'
 $overlayCompose = Join-Path $root 'deploy\m5\docker-compose.m5.yml'
@@ -83,6 +85,32 @@ function Remove-ExactProjectResources {
     }
 }
 
+function Initialize-OwnedArtifactRoot {
+    if (Test-Path -LiteralPath $artifactRoot) {
+        if (-not (Test-Path -LiteralPath $artifactMarker -PathType Leaf) -or
+            (Get-Content -LiteralPath $artifactMarker -Raw) -cne $artifactMarkerValue) {
+            throw 'M5_QUICKSTART_ARTIFACT_ROOT_NOT_OWNED'
+        }
+        throw 'M5_QUICKSTART_ARTIFACT_ROOT_NOT_CLEAN'
+    }
+    New-Item -ItemType Directory -Path $artifactRoot | Out-Null
+    [IO.File]::WriteAllText($artifactMarker, $artifactMarkerValue, [Text.UTF8Encoding]::new($false))
+}
+
+function Remove-OwnedArtifactRoot {
+    if (-not (Test-Path -LiteralPath $artifactRoot)) { return }
+    $resolvedRoot = (Resolve-Path -LiteralPath $artifactRoot -ErrorAction Stop).Path
+    if ($resolvedRoot -ne [IO.Path]::GetFullPath($artifactRoot) -or $resolvedRoot -eq $root) {
+        throw 'M5_QUICKSTART_ARTIFACT_ROOT_INVALID'
+    }
+    if (-not (Test-Path -LiteralPath $artifactMarker -PathType Leaf) -or
+        (Get-Content -LiteralPath $artifactMarker -Raw) -cne $artifactMarkerValue) {
+        throw 'M5_QUICKSTART_ARTIFACT_ROOT_NOT_OWNED'
+    }
+    Remove-Item -LiteralPath $resolvedRoot -Recurse -Force
+    if (Test-Path -LiteralPath $resolvedRoot) { throw 'M5_QUICKSTART_ARTIFACT_CLEANUP_FAILED' }
+}
+
 if (-not [string]::IsNullOrWhiteSpace($AdditionalComposeFile)) {
     $additionalFullPath = [IO.Path]::GetFullPath($AdditionalComposeFile)
     $allowedAdditionalCompose = [IO.Path]::GetFullPath((Join-Path $root 'deploy\fse2\docker-compose.fse2-local.yml'))
@@ -116,11 +144,13 @@ if ($Phase -eq 'Validate') {
 
 if ($Phase -eq 'Stop') {
     Remove-ExactProjectResources
+    Remove-OwnedArtifactRoot
     Write-Host 'M5_QUICKSTART_STOP_PASS'
     exit 0
 }
 
-New-Item -ItemType Directory -Path $rawRoot -Force | Out-Null
+Initialize-OwnedArtifactRoot
+New-Item -ItemType Directory -Path $rawRoot | Out-Null
 Invoke-Checked $dotnet @('run', '--project', (Join-Path $root 'tools\m3\FixtureGenerator\FixtureGenerator.csproj'), '--configuration', 'Release', '--', $rawRoot)
 $adminPasswordBytes = New-Object byte[] 32
 $random = [Security.Cryptography.RandomNumberGenerator]::Create()

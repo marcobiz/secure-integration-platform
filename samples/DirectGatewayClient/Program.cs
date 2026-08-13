@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net.Http.Json;
+using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -11,6 +12,7 @@ string activationCode = Required("DIRECT_GATEWAY_ACTIVATION_CODE");
 string connectorId = Required("DIRECT_GATEWAY_CONNECTOR_ID");
 string operationId = Required("DIRECT_GATEWAY_OPERATION_ID");
 string clientVersion = Environment.GetEnvironmentVariable("DIRECT_GATEWAY_CLIENT_VERSION") ?? "1.0.0";
+string? gatewayCaFile = Environment.GetEnvironmentVariable("DIRECT_GATEWAY_CA_FILE");
 
 using ECDsa key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
 CertificateRequest certificateRequest = new("CN=Secure Integration Direct Client Sample", key, HashAlgorithmName.SHA256);
@@ -19,10 +21,25 @@ certificateRequest.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUs
 OidCollection usages = new();
 usages.Add(new Oid("1.3.6.1.5.5.7.3.2"));
 certificateRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(usages, true));
-using X509Certificate2 certificate = certificateRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(30));
+using X509Certificate2 generatedCertificate = certificateRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(30));
+using X509Certificate2 certificate = PrepareClientCertificate(generatedCertificate);
 
-using HttpClientHandler handler = new();
+using X509Certificate2? gatewayRoot = string.IsNullOrWhiteSpace(gatewayCaFile) ? null : X509CertificateLoader.LoadCertificateFromFile(gatewayCaFile);
+using HttpClientHandler handler = new() { AllowAutoRedirect = false, UseCookies = false, UseProxy = false };
 handler.ClientCertificates.Add(certificate);
+if (gatewayRoot is not null)
+{
+    handler.ServerCertificateCustomValidationCallback = (_, serverCertificate, _, errors) =>
+    {
+        if (serverCertificate is null || (errors & (SslPolicyErrors.RemoteCertificateNameMismatch | SslPolicyErrors.RemoteCertificateNotAvailable)) != 0) return false;
+        using X509Chain chain = new();
+        chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        chain.ChainPolicy.CustomTrustStore.Add(gatewayRoot);
+        chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+        chain.ChainPolicy.VerificationFlags = X509VerificationFlags.NoFlag;
+        return chain.Build(serverCertificate);
+    };
+}
 using HttpClient client = new(handler) { BaseAddress = new Uri(gateway, UriKind.Absolute), Timeout = TimeSpan.FromSeconds(30) };
 
 byte[] spki = key.ExportSubjectPublicKeyInfo();
@@ -34,7 +51,9 @@ _ = await PostAsync<ActivationRequest, EnrollmentResult>(client, "/v1/enrollment
 CryptographicOperations.ZeroMemory(challengeBytes);
 
 string target = $"/v1/connectors/{Uri.EscapeDataString(connectorId)}/operations/{Uri.EscapeDataString(operationId)}:invoke";
-Guid correlationId = Guid.NewGuid();
+Guid correlationId = Environment.GetEnvironmentVariable("DIRECT_GATEWAY_CORRELATION_ID") is { Length: > 0 } configuredCorrelation
+    ? Guid.Parse(configuredCorrelation)
+    : Guid.NewGuid();
 byte[] payload = JsonSerializer.SerializeToUtf8Bytes(new { message = "direct-gateway-sample" });
 byte[] requestBody = JsonSerializer.SerializeToUtf8Bytes(new
 {
@@ -70,6 +89,13 @@ static async Task<TResponse> PostAsync<TRequest, TResponse>(HttpClient client, s
 static string Required(string name) => Environment.GetEnvironmentVariable(name) is { Length: > 0 } value ? value : throw new InvalidOperationException($"Required environment variable {name} is missing.");
 static string Encode(byte[] value) => Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 static byte[] Decode(string value) => Convert.FromBase64String(value.Replace('-', '+').Replace('_', '/').PadRight((value.Length + 3) / 4 * 4, '='));
+static X509Certificate2 PrepareClientCertificate(X509Certificate2 certificate)
+{
+    byte[] pfx = certificate.Export(X509ContentType.Pkcs12);
+    X509KeyStorageFlags flags = OperatingSystem.IsWindows() ? X509KeyStorageFlags.UserKeySet : X509KeyStorageFlags.EphemeralKeySet;
+    try { return X509CertificateLoader.LoadPkcs12(pfx, null, flags); }
+    finally { CryptographicOperations.ZeroMemory(pfx); }
+}
 
 internal sealed record ChallengeRequest(Guid ActivationCodeId, string PublicKeySpki);
 internal sealed record ChallengeResponse(Guid ChallengeId, string Challenge, DateTimeOffset ExpiresAt);
