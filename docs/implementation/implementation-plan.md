@@ -1,192 +1,152 @@
-# Piano di implementazione
-
-## Strategia
-
-Implementare vertical slice piccoli mantenendo il repository compilabile. Ogni milestone produce artefatti installabili/testabili; i servizi esterni sono mock finché non sono disponibili accessi autorizzati.
-
-Un containment track esterno parte in parallelo: rotazione dei segreti noti, TLS validation, log redaction, ACL, chiusura porte e rimozione HTTP/FTP. Non dipende dal completamento della piattaforma.
-
-## M0 — Repository e fondamenta
-
-**Obiettivo:** monorepo riproducibile e security gates attivi.
-
-**Task:** inizializzare Git/solution; central package management; analyzers; build/test scripts; GitHub Actions; secret/dependency/container scanning; SBOM; ADR/doc checks; Docker/MSI skeleton.
-
-**Dipendenze:** nessuna.
-
-**Test:** clean clone build, unit placeholder, schema parse, secret scan, SBOM generation.
-
-**Completamento:** build locale=CI, toolchain pinned, nessun secret, release manifest sintetico.
-
-**Rischi:** licensing tool e runner Windows.
-
-**Artefatti:** repository, pipeline, conventions, unsigned skeleton packages.
-
-## M1 — Local Broker minimo
-
-**Obiettivo:** boundary locale reale su Windows.
-
-**Task:** service/virtual account; ProgramData/ACL; Named Pipe/framing; caller identity; Application manifest; DPAPI; AES-GCM; Put/DeleteLocalSecret; Protect/UnprotectData; ComputeHmac; status; SDK .NET.
-
-**Dipendenze:** M0, IPC contract v1.
-
-**Test:** service account, pipe ACL, same-user unauthorized process, offline storage copy, corruption, key version, concurrency/cancellation.
-
-**Completamento:** processo autorizzato usa le operation; processo non autorizzato è negato; nessun plaintext a riposo.
-
-**Rischi:** DPAPI CurrentUser/profile e process identification su versioni Windows.
-
-**Artefatti:** Broker service, SDK, simulator, Windows integration suite.
-
-## M2 — Gateway minimo
-
-**Stato:** **Done il 2026-08-04**. Gate CI indipendente `30896803567` PASS per build/test,
-PostgreSQL 18, container hardening, secret scan e SBOM; review conclusiva in
-`docs/reviews/M2-GATE-REVIEW.md`. M3 non è stata avviata durante la chiusura.
-
-**Obiettivo:** identità Installation e invocazione centrale sicura.
-
-**Task:** Gateway host; PostgreSQL/migrations/RLS; Tenant/Application/Installation; activation/challenge/PoP; mTLS/signature/replay; revocation; Azure Key Vault; Basic/API key/mTLS; restricted egress; Docker.
-
-**Dipendenze:** M0 e identity portion M1.
-
-**Test:** enrollment, clone/replay, cross-Tenant, revoked credential, Vault unavailable, SSRF/TLS/limits.
-
-**Completamento:** ogni request deriva Tenant dal certificato e non accetta URL/secret client-controlled.
-
-**Rischi:** certificate forwarding App Service e Vault latency.
-
-**Artefatti:** container, DB schema, OpenAPI implementation e Bicep skeleton.
-
-## M3 — Primo vertical slice
-
-**Stato:** M3A product gate PASS sul tag `m3a-product-gate-pass-20260805`. M3B è rinviata
-alla qualificazione dell'Azure Deployment Pack e non blocca il Core o M4.
-
-**Obiettivo:** prova end-to-end senza GetSecret.
-
-**Scenario:** legacy simulator → Broker → Gateway → Vault synthetic provider/test Vault → mock REST; API key vendor e mTLS applicati centralmente; body JSON pre-costruito.
-
-**Dipendenze:** M1-M2.
-
-**Test:** success, invalid grant, secret absent, TLS failure, timeout, replay, log redaction.
-
-**Completamento:** Vendor Secret non compare su client/DB/log e il client non cambia endpoint.
-
-**Artefatti:** runnable demo tecnica, E2E report e sample Secure Layer.
-
-## M4 — Connector configuration
-
-**Obiettivo:** configuration plane versionato.
-
-**Stato:** implementato sul branch `m4/connector-configuration`; gate in corso.
-
-**Task:** JSON Schema/semantic/security validation; canonical JSON; lifecycle; binding logici; grants; publication revision; cache TTL/invalidation/fail-closed; import/export; rollback; CLI e contract suite.
-
-**Dipendenze:** M2 e M3A. M3B non bloccante.
-
-**Test:** schema/security, immutabilità Published, optimistic concurrency, rollback atomico, stale cache negata, PostgreSQL 18 e sample E2E.
-
-**Completamento:** runtime usa soltanto versioni Published; rollback senza restart.
-
-**Artefatti:** validator, CLI/Admin API, schema/sample, migration additiva, quick start senza Azure e documentazione SDK.
-
-## M5 — Admin UI
-
-**Stato 2026-08-07:** Done sulla baseline `8774c252b233456173c3ab31346fb21390fb8d7d`, tag `m5-admin-ui-baseline-20260807`.
-
-**Obiettivo:** amministrazione sicura senza accesso ai valori Vault.
-
-**Task:** OIDC standard server-side; RBAC provider-neutral; Tenant/Application/Installation; enrollment/revocation; editor JSON; validation; four-eyes; publish/rollback; binding metadata; audit; health; separazione fisica Core/provider pack.
-
-**Dipendenze:** M4.
-
-**Test:** Playwright RBAC/four-eyes/immutabilità, CSRF, secret absence nel browser; PostgreSQL 18 per trigger/privilegi/atomicità; full-stack import-to-runtime sulla stessa versione pubblicata.
-
-**Completamento:** tutte le operazioni amministrative hanno policy e audit.
-
-**Artefatti:** Admin Web same-origin, Admin API v1, provider abstractions, export OSS verificabile e runbook amministrativo.
-
-## M5.5 — Direct Gateway Access
-
-**Stato 2026-08-07:** implementazione locale sul branch `m55/direct-gateway-access`; candidate prodotto `1b3a3b38fa7d01c8c5f96af0324d040e412ac0be`; CI e review indipendente pending.
-
-**Obiettivo:** consentire a Broker e applicazioni M2M dirette di convergere nello stesso principal e Connector Runtime, senza duplicare authorization, provider resolution, egress o audit.
-
-**Task:** audit coupling; `GatewayClientPrincipal`; `InstallationKind`; enrollment Direct su mTLS/PoP/BGW1; migration 0011; Admin API/UI minima; sample .NET; freeze del contratto inbound/outbound per M6.
-
-**Dipendenze:** baseline M5 congelata.
-
-**Test:** Broker/Direct comparativo sullo stesso Tenant/Application/operation; negativi firma, mTLS, timestamp, replay, revoca, grant e request manipulation; PostgreSQL 18 fresh/upgrade/no-op/RLS; OpenAPI/runtime contract; frontend e regressioni M1-M5.
-
-**Completamento:** entrambi i caller usano lo stesso runtime e il Direct client non riceve vendor secret o locator server-side. M6 non è iniziata.
-
-**Artefatti:** ADR-0020, documenti di architettura, migration additiva e `samples/DirectGatewayClient`.
-
-## M6 — Adapter legacy
-
-**Obiettivo:** interoperabilità non-.NET.
-
-**Task:** C++ client/framing; C ABI; COM Automation; CLI stdin; x86/x64; sample VB6/Delphi/C; packaging.
-
-**Dipendenze:** IPC v1 congelato e M1 stabile.
-
-**Test:** buffer, Unicode/binary, timeout, cancellation, thread safety, install/upgrade.
-
-**Completamento:** sample x86/x64 invocano lo stesso Broker senza secret negli adapter.
-
-**Artefatti:** DLL/COM/CLI, header/type library e samples.
-
-## M7 — Authentication modules
-
-**Obiettivo:** coprire i protocolli ricorrenti.
-
-**Task:** OAuth client credentials; authorization code; PKCE; session refs; JWT RS256; local certificate; SOAP/XML; HMAC policies; token rotation/refresh.
-
-**Dipendenze:** M3-M4.
-
-**Test:** E2E dedicato per ogni modulo, claim/algorithm confusion, token redaction, XML attacks.
-
-**Completamento:** auth params e key sono fissati dal Connector, non dal client.
-
-**Artefatti:** built-in adapters e test pack.
-
-## M8 — Healthcare Connector Pack e pilot
-
-**Obiettivo:** dimostrare Secure Layer e Managed Connector sanitari.
-
-**Task:** Secure Layer sintetico vendor mTLS; Managed SOAP Basic+session; provenance; Connector Pack signing; selezione seam prodotto pilota; migrazione/rotation/egress removal.
-
-**Dipendenze:** M5-M7; input esterni solo per la parte reale.
-
-**Test:** characterization, E2E, regression, security e rollback.
-
-**Completamento:** nel pilot reale AC-029/030 e acceptance pack firmato.
-
-**Artefatti:** Healthcare Pack, Integration Seam Map e pilot report.
-
-## M9 — Hardening enterprise
-
-**Obiettivo:** release installabile e operabile enterprise.
-
-**Task:** signing production; secure updater/anti-rollback; MSI hardening; container signing; HA/DR; backup restore; rotation/recovery; penetration test; operational/security documentation.
-
-**Dipendenze:** tutte le milestone precedenti.
-
-**Test:** installer matrix, signature/tamper, restore/failover, recovery ceremony, load/resilience e pentest remediation.
-
-**Completamento:** tutti gli AC globali, SBOM/release manifest, runbook e residual risk acceptance.
-
-**Artefatti:** release pack completo.
-
-## Sequenza critica
+# Piano di implementazione corrente
+
+Aggiornato: 2026-08-13
+Baseline CURRENT: `eec2fa5556eccc7e8e3b47fc7d7b127bcac1ed9e`
+
+Questa è la roadmap attiva. Lo stato sintetico è in
+[`IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md), i gate in
+[`0.1.0-alpha-scope.md`](0.1.0-alpha-scope.md) e le slice ordinate nel
+[`backlog`](backlog.md). La cronologia dettagliata resta nei tag e nei report esistenti.
+
+## Principi di pianificazione
+
+- una capability è CURRENT solo se integrata in `main`; una release o qualifica esterna
+  richiede inoltre il proprio gate exact-head;
+- synthetic, live lab, official-test e production sono stati distinti;
+- i pack opzionali dipendono dai contratti Core; il Core non dipende da cloud o
+  verticali;
+- nessuna capability generica entra nella fase senza un blocker riproducibile del golden
+  path Core o del gate FSE2;
+- una dichiarazione del maintainer non diventa evidence repository;
+- le baseline attestate non vengono riscritte;
+- esistono due sole track attive: Core alpha e FSE2 Organization OfficialTest.
+
+## Baseline CURRENT
+
+| Area | Stato | Limite corrente |
+|---|---|---|
+| M0-M2 | Done | Fondamenta, Broker e Gateway integrati; i gate live storici non sono un installer release. |
+| M3A | PASS live lab | M3B Azure resta non qualificato. |
+| M4/M5/M5.5 | Done | Connector lifecycle, Admin e Direct Gateway integrati; Direct sample key storage resta non-production. |
+| Authentication foundation / Wave 1 | Integrata | Primitive provider-neutral e moduli esterni non qualificano automaticamente un servizio esterno. |
+| FSE2 Organization | Synthetic-qualified | 11 operation, dual JWT, S1 `contentCommitment`, A1 mTLS distinta e PostgreSQL canonico; nessuna call live. |
+| Local PKCS12 / FSE2 vertical image | Integrati da PR #33, synthetic lab qualified | Provider opzionale `SecretValues=false`, importer offline, overlay e vertical image; custody e OfficialTest aperti. |
+| Productization alpha | Non pronta | Governance, versione, artefatti, clean-clone e prova esterna aperti. |
+| Legacy/enterprise | Deferred | MSI, native/COM, cloud live, HA/DR e production non sono track attive. |
+
+PR #33 è merged tramite fast-forward sull'exact main. General 6/6, M5/Admin 15/15,
+PostgreSQL FSE2 1/1 zero skip, provider 30/30, architecture 42/42, provider-active
+synthetic lab e security micro-review sono PASS/GO nel perimetro attestato. Questi gate
+non includono materiale reale, import operativo o chiamate FSE2.
+
+## Track A — Core `0.1.0-alpha`
+
+### Outcome
+
+Una developer alpha non-production e provider-neutral con un solo golden path:
 
 ```text
-M0 → IPC v1 → M1 → M2 → M3 → M4
-                       ├→ M5
-                       ├→ M6
-                       └→ M7
-                    M5+M6+M7 → M8 → M9
+Direct .NET
+→ Gateway
+→ Connector REST Published
+→ Synthetic Provider
+→ mock HTTPS/mTLS
+→ risposta sanificata e audit metadata-only
 ```
 
-M5, M6 e parte di M7 possono procedere in parallelo dopo la stabilizzazione dei rispettivi contratti.
+### Sequenza
+
+1. **Truth e confini documentali** — DOC-01 governance/scope/backlog; DOC-02
+   architecture/security/deployment; DOC-03 OpenAPI/API/generated types; DOC-04 FSE2
+   exact-main.
+2. **Version freeze** — una sorgente `0.1.0-alpha` per assembly, package, Admin, immagini
+   e manifest.
+3. **Consumption** — un solo sample REST, clean clone/quickstart e integrazione Direct
+   descritta come evaluation.
+4. **External proof** — un secondo utilizzatore completa il golden path usando soltanto
+   la documentazione pubblica.
+5. **Artifact readiness** — archive/checksum/SBOM/vulnerability inventory, Core export e
+   digest normalizzato riproducibile distinto dal manifest run-specific.
+6. **Human governance** — licenza, security contact e DCO/CLA decisi.
+7. **Release candidate** — release notes/known limits e gate ALPHA-01..08 sull'exact HEAD.
+8. **Tag** — `v0.1.0-alpha` è l'ultimo step; nessun merge automatico.
+
+### Vincoli
+
+- FSE2 e pack vendor-specific non entrano nel golden path Core;
+- MSI, COM/C ABI, Azure live, HA/DR e API compatibility stabile restano esclusi;
+- il raw SHA del Core export è evidence della singola run. `ALPHA-ART` aggiunge un digest
+  normalizzato dell'inventario perché `generatedAtUtc` rende il raw manifest run-specific;
+- nessuna pubblicazione precede le decisioni umane ALPHA-LIC e ALPHA-SEC.
+
+## Track B — FSE2 Organization OfficialTest
+
+### Outcome
+
+Il primo outcome è `validate-cda` nell'ambiente ufficiale di test, con dataset sintetico
+autorizzato, exact configuration ed evidence redatta. Attachment hash, create/replace e
+status seguono; non sono prerequisiti di `validate-cda` senza nuova evidenza ufficiale.
+
+### CURRENT integrato
+
+- pack Local PKCS12 opzionale, senza generic secret retrieval e con
+  `SecretValues=false`/deny-only slot;
+- importer offline e path/CSR/ACL/custody guard sintetiche;
+- vertical image che include `Healthcare.FSE2`, mentre l'immagine Gateway Core
+  predefinita continua a escluderlo;
+- overlay Compose e provider-active synthetic lab;
+- S1 `contentCommitment`, A1 mTLS distinta, CI e review sul perimetro sintetico.
+
+### TARGET ancora aperto
+
+- accesso/import operativo e verifica della custody reale;
+- distinzione verificata tra accesso test e software accreditation;
+- eventuale `ActivationHmacSecretReference` composta come capability server-owned
+  separata, mai come generic secret retrieval del pack certificati;
+- warning mapping bounded per `validate-cda`;
+- exact OfficialTest image/configuration e driver operativo redatto;
+- qualunque chiamata FSE2, `validate-cda`, create/replace o status live.
+
+### Sequenza
+
+1. intake esterno: distinguere accesso test e accreditamento software;
+2. import/custody preflight fuori Git;
+3. composition delle capability server-owned richieste;
+4. public metadata, chain, signing S1 e mTLS A1 preflight senza rete FSE2;
+5. warning mapping bounded necessario a `validate-cda`;
+6. vertical image e configurazione exact OfficialTest;
+7. E2E sintetico dalla medesima immagine/configurazione;
+8. `validate-cda` OfficialTest con dataset sintetico autorizzato;
+9. `attachment_hash` sugli exact file bytes;
+10. create/replace autorizzati;
+11. status bounded/redatto;
+12. workflow successivi soltanto se previsti dal piano.
+
+### Gate e claim
+
+FSE2-T01..T04 e T06 abilitano soltanto la claim `validate-cda` official-test sull'exact
+configurazione attestata. FSE2-T05 abilita soltanto i successivi workflow effettivamente
+eseguiti. I test sintetici delle 11 operation non diventano una claim 11/11 live. Nessun
+gate di questa track implica production.
+
+## Relazione tra le track
+
+```text
+DOC-01
+  ├─→ Track A: DOC-02/03/04 → version/sample/clean clone → adopter → artifacts/governance → release
+  └─→ Track B: intake/custody/composition → offline preflight → exact synthetic E2E
+                                                → validate-cda → hash/create/status
+```
+
+Le due track possono avanzare separatamente. Un problema FSE2 non blocca il Core alpha,
+salvo che dimostri un difetto di sicurezza generale. Una nuova astrazione Core richiede
+un blocker e un test concreti.
+
+## HISTORICAL e lavoro deferred
+
+La roadmap originaria usava M0-M9. I nomi M6/M7 sono ambigui perché l'authentication
+foundation è stata anticipata rispetto agli adapter legacy. Tag e report storici restano
+immutabili, ma nuovo lavoro e nuovi status usano gli ID ALPHA/FSE2.
+
+Legacy beta, altri provider, altri verticali ed enterprise/production restano backlog
+deferred, non track attive. Non vengono stimati né avviati da questo piano.
