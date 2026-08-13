@@ -54,22 +54,28 @@ Direct .NET
 → risposta sanificata e audit metadata-only
 ```
 
-### Sequenza
+### Dipendenze e lavoro parallelo
 
-1. **Truth e confini documentali** — DOC-01 governance/scope/backlog; DOC-02
-   architecture/security/deployment; DOC-03 OpenAPI/API/generated types; DOC-04 FSE2
-   exact-main.
-2. **Version freeze** — una sorgente `0.1.0-alpha` per assembly, package, Admin, immagini
-   e manifest.
-3. **Consumption** — un solo sample REST, clean clone/quickstart e integrazione Direct
-   descritta come evaluation.
-4. **External proof** — un secondo utilizzatore completa il golden path usando soltanto
-   la documentazione pubblica.
-5. **Artifact readiness** — archive/checksum/SBOM/vulnerability inventory, Core export e
-   digest normalizzato riproducibile distinto dal manifest run-specific.
-6. **Human governance** — licenza, security contact e DCO/CLA decisi.
-7. **Release candidate** — release notes/known limits e gate ALPHA-01..08 sull'exact HEAD.
-8. **Tag** — `v0.1.0-alpha` è l'ultimo step; nessun merge automatico.
+DOC-01 è il solo prerequisito comune iniziale. Dopo DOC-01 procedono in parallelo:
+
+- **documentazione Core:** DOC-02 per architecture/security/deployment e DOC-03 per
+  OpenAPI/API/generated types;
+- **consumption Core:** ALPHA-REST, ALPHA-DIRECT e ALPHA-CLEAN;
+- **productization:** ALPHA-VER può iniziare senza attendere DOC-02/03; ALPHA-ART segue
+  ALPHA-VER;
+- **governance umana:** ALPHA-LIC e ALPHA-SEC restano blocker esterni paralleli;
+- **documentazione FSE2:** DOC-04 riallinea il pack opzionale allo stato integrato da
+  PR #33, senza eseguire o richiedere FSE2-T01..T06.
+
+ALPHA-ADOPT inizia quando il golden path è documentato e ripetibile: richiede
+ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN e la documentazione Core applicabile DOC-02/03.
+
+ALPHA-REL è l'ultimo step e richiede esplicitamente ALPHA-DOC-01, ALPHA-DOC-02,
+ALPHA-DOC-03, ALPHA-DOC-04, ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN, ALPHA-ADOPT,
+ALPHA-VER, ALPHA-ART, ALPHA-LIC e ALPHA-SEC, oltre ad ALPHA-01..08 verdi sull'exact
+release candidate. ALPHA-DOC-04 è una dipendenza di verità documentale soltanto: non
+richiede `validate-cda` live né FSE2-T01..T06. La qualifica FSE2 OfficialTest non blocca
+la release Core alpha.
 
 ### Vincoli
 
@@ -133,14 +139,21 @@ gate di questa track implica production.
 
 ```text
 DOC-01
-  ├─→ Track A: DOC-02/03/04 → version/sample/clean clone → adopter → artifacts/governance → release
-  └─→ Track B: intake/custody/composition → offline preflight → exact synthetic E2E
+  ├─→ DOC-02 + DOC-03 ───────────────────────────────┐
+  ├─→ ALPHA-REST + ALPHA-DIRECT + ALPHA-CLEAN ─→ ALPHA-ADOPT ─┤
+  ├─→ ALPHA-VER ─→ ALPHA-ART ────────────────────────┤
+  ├─→ ALPHA-LIC + ALPHA-SEC ─────────────────────────┤
+  └─→ DOC-04 (truth alignment only) ─────────────────┘
+                                                      └─→ ALPHA-REL + ALPHA-01..08
+
+Track B indipendente: intake/custody/composition → offline preflight → exact synthetic E2E
                                                 → validate-cda → hash/create/status
 ```
 
 Le due track possono avanzare separatamente. Un problema FSE2 non blocca il Core alpha,
 salvo che dimostri un difetto di sicurezza generale. Una nuova astrazione Core richiede
-un blocker e un test concreti.
+un blocker e un test concreti. DOC-04 non converte i gate FSE2 in gate Core: mantiene
+soltanto veritiera la documentazione del pack opzionale.
 
 ## HISTORICAL e lavoro deferred
 

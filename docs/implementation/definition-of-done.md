@@ -12,12 +12,22 @@ Una story è Done solo quando:
 - comportamento richiesto e negative case pertinenti sono implementati;
 - build e test nominativi della superficie modificata passano;
 - authorization, provider e Core/pack boundary restano fail-closed;
+- quando una modifica introduce o cambia una decisione architetturale durevole, l'ADR
+  pertinente viene aggiunto o aggiornato; non è richiesto un ADR per ogni modifica;
+- quando cambia la superficie di minaccia, un trust boundary, una capability sensibile o
+  una mitigazione security, il threat model viene aggiornato e i cambiamenti
+  security-sensitive conservano test positivi e negativi proporzionati;
 - migration, OpenAPI, generated client, schema ed esempi sono sincronizzati quando
   applicabili;
 - log, Problem Details, audit ed evidence sono verificati per assenza di secret, token,
   cookie, authorization header, payload sensibili e stack trace;
 - documentazione e traceability distinguono CURRENT, TARGET e HISTORICAL e non
   sovrastimano test live o conformance;
+- requisiti interessati, test nominativi ed evidence sono collegati nella requirements
+  traceability, distinguendo automated PASS, evidence esterna, verifica manuale,
+  deferred, blocked e non verificato;
+- l'assenza di test o evidence non viene convertita in PASS tramite documentazione o
+  conteggi aggregati;
 - secret/dependency/artifact check proporzionati passano;
 - fixture ed evidence raw restano sintetiche e fuori Git;
 - rischio residuo, lavoro deferred e compatibility impact sono espliciti;
@@ -25,6 +35,10 @@ Una story è Done solo quando:
   richiede.
 
 Una story integrata non è automaticamente un prodotto pubblicabile.
+ADR, threat model e traceability sono aggiornati quando applicabile; la decisione di non
+aggiornarli deve essere coerente con la superficie realmente modificata. Una modifica
+documentation-only che non cambia decisioni, minacce o capability non richiede per
+questo solo fatto una security review completa.
 
 ## Documentation DoD
 

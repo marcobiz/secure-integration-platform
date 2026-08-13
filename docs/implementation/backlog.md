@@ -14,21 +14,27 @@ in [`0.1.0-alpha-scope.md`](0.1.0-alpha-scope.md).
 | ALPHA-DOC-01 | Riconciliare governance, scope, backlog e DoD con PR #33 sull'exact main. | In progress | Exact main e dirty truth source preservato | ALPHA-05 | Architettura/security complete, API parity o FSE2 runbook. |
 | ALPHA-DOC-02 | Allineare architecture, security e deployment boundaries, inclusi claim PostgreSQL/audit e traceability pertinenti. | Todo | ALPHA-DOC-01 | ALPHA-04/05 | Modifiche di codice, threat remediation o qualifica production. |
 | ALPHA-DOC-03 | Rendere coerenti OpenAPI, API docs e generated types con le route effettive e i parity test. | Todo | ALPHA-DOC-01 | ALPHA-05 | API stabile o backward compatibility futura. |
-| ALPHA-DOC-04 | Allineare la documentazione FSE2 all'exact main e separare synthetic, OfficialTest e production. | Todo | ALPHA-DOC-01 | FSE2-T01..T06 / ALPHA-05 | Custody reale, import o call OfficialTest. |
+| ALPHA-DOC-04 | Allineare la documentazione FSE2 all'exact main e separare synthetic, OfficialTest e production. | Todo | ALPHA-DOC-01 e stato PR #33 integrato | ALPHA-05; nessun gate FSE2 | Custody reale, import, call OfficialTest o FSE2-T01..T06 PASS. |
 | ALPHA-VER | Derivare una sola versione `0.1.0-alpha` per assembly, package, Admin, immagini e manifest; nessun default `1.0.0`. | Todo | ALPHA-DOC-01 | ALPHA-06/08 | Pubblicazione o stabilità API. |
-| ALPHA-REST | Consolidare un solo `sample-secure-service` Published con Synthetic Provider, API key+mTLS, mock e tutorial coerente. | Todo | ALPHA-DOC-03 | ALPHA-02/03 | Supporto ad altri Connector o provider reali. |
-| ALPHA-CLEAN | Provare clean clone e quickstart unico con cleanup/canary su macchina non preparata. | Todo | ALPHA-DOC-02/03, ALPHA-REST | ALPHA-01/02 | Installer, Azure live o production operations. |
-| ALPHA-DIRECT | Documentare e provare Direct .NET come evaluation integration, con limite del key storage esplicito. | Todo | ALPHA-REST, ALPHA-CLEAN | ALPHA-03/08 | SDK production-grade o supporto native/COM. |
-| ALPHA-ADOPT | Far completare enrollment→publish→grant→invoke a un secondo utilizzatore usando soltanto documentazione pubblica. | Todo | ALPHA-CLEAN, ALPHA-DIRECT | ALPHA-03 | Market fit, support SLA o production adoption. |
-| ALPHA-ART | Produrre archive/checksum/SBOM/vulnerability inventory e aggiungere un normalized Core export inventory digest separato dal raw manifest run-specific. | Todo | ALPHA-VER, ALPHA-CLEAN | Riproducibilità binaria assoluta, firma release o production provenance. |
-| ALPHA-LIC | Ottenere decisione umana sulla licenza e aggiornare metadata di distribuzione autorizzati. | BLOCKED_EXTERNAL | Decisione legal/business | ALPHA-07 | Che oggi il progetto sia legalmente distribuibile come OSS. |
-| ALPHA-SEC | Decidere security contact privato e regola DCO/CLA, con contatti CoC autorizzati. | BLOCKED_EXTERNAL | Decisione maintainer/legal | ALPHA-07 | Certificazione o security support enterprise. |
-| ALPHA-REL | Preparare release notes/known limits, rieseguire ALPHA-01..08 sull'exact candidate e applicare il tag; è l'ultimo step. | Todo | Tutte le slice ALPHA precedenti | ALPHA-01..08 | Production readiness, FSE2 qualification o merge automatico. |
+| ALPHA-REST | Consolidare un solo `sample-secure-service` Published con Synthetic Provider, API key+mTLS, mock e tutorial coerente. | Todo | ALPHA-DOC-01 | ALPHA-02/03 | Supporto ad altri Connector o provider reali. |
+| ALPHA-CLEAN | Provare clean clone e quickstart unico con cleanup/canary su macchina non preparata. | Todo | ALPHA-DOC-01 | ALPHA-01/02 | Installer, Azure live o production operations. |
+| ALPHA-DIRECT | Documentare e provare Direct .NET come evaluation integration, con limite del key storage esplicito. | Todo | ALPHA-DOC-01 | ALPHA-03/08 | SDK production-grade o supporto native/COM. |
+| ALPHA-ADOPT | Far completare enrollment→publish→grant→invoke a un secondo utilizzatore usando soltanto documentazione pubblica. | Todo | ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN, ALPHA-DOC-02, ALPHA-DOC-03 | ALPHA-03 | Market fit, support SLA o production adoption. |
+| ALPHA-ART | Produrre archive/checksum/SBOM/vulnerability inventory e aggiungere un normalized Core export inventory digest separato dal raw manifest run-specific. | Todo | ALPHA-VER | ALPHA-06 | Riproducibilità binaria assoluta, firma release o production provenance. |
+| ALPHA-LIC | Ottenere decisione umana sulla licenza e aggiornare metadata di distribuzione autorizzati. | BLOCKED_EXTERNAL | ALPHA-DOC-01; decisione legal/business | ALPHA-07 | Che oggi il progetto sia legalmente distribuibile come OSS. |
+| ALPHA-SEC | Decidere security contact privato e regola DCO/CLA, con contatti CoC autorizzati. | BLOCKED_EXTERNAL | ALPHA-DOC-01; decisione maintainer/legal | ALPHA-07 | Certificazione o security support enterprise. |
+| ALPHA-REL | Preparare release notes/known limits, rieseguire ALPHA-01..08 sull'exact candidate e applicare il tag; è l'ultimo step. | Todo | ALPHA-DOC-01, ALPHA-DOC-02, ALPHA-DOC-03, ALPHA-DOC-04 (solo truth alignment), ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN, ALPHA-ADOPT, ALPHA-VER, ALPHA-ART, ALPHA-LIC, ALPHA-SEC | ALPHA-01..08 | Production readiness, FSE2 qualification o merge automatico. |
 
 `P3-CORE-EXPORT-DIGEST` è l'outcome interno di ALPHA-ART: il raw SHA del manifest
 attuale è evidence della run perché include `generatedAtUtc`; il digest normalizzato
 futuro deve coprire l'inventario in modo riproducibile. Il finding non è una failure di
 PR #33 né del Core export corrente.
+
+DOC-02/03, ALPHA-REST/DIRECT/CLEAN, ALPHA-VER, DOC-04 e i blocker umani possono
+procedere in parallelo dopo DOC-01. DOC-04 è richiesto da ALPHA-REL soltanto per
+descrivere veritieramente il pack opzionale: non richiede `validate-cda` live o
+FSE2-T01..T06. I gate FSE2 non sono dipendenze di ALPHA-REL e un blocker Track B non
+blocca la Core alpha, salvo che riveli un difetto generale di sicurezza del Core.
 
 ## P0 parallelo — FSE2 Organization OfficialTest
 
