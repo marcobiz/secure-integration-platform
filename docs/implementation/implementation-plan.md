@@ -139,12 +139,15 @@ gate di questa track implica production.
 
 ```text
 DOC-01
-  ├─→ DOC-02 + DOC-03 ───────────────────────────────┐
-  ├─→ ALPHA-REST + ALPHA-DIRECT + ALPHA-CLEAN ─→ ALPHA-ADOPT ─┤
-  ├─→ ALPHA-VER ─→ ALPHA-ART ────────────────────────┤
-  ├─→ ALPHA-LIC + ALPHA-SEC ─────────────────────────┤
-  └─→ DOC-04 (truth alignment only) ─────────────────┘
-                                                      └─→ ALPHA-REL + ALPHA-01..08
+  ├─→ ALPHA-DOC-02 ───────────────────────────────────┐
+  ├─→ ALPHA-DOC-03 ───────────────────────────────────┤
+  ├─→ ALPHA-REST ─────────────────────────────────────┤
+  ├─→ ALPHA-DIRECT ───────────────────────────────────┼─→ ALPHA-ADOPT ───────┐
+  ├─→ ALPHA-CLEAN ────────────────────────────────────┘                       │
+  ├─→ ALPHA-VER ─→ ALPHA-ART ────────────────────────────────────────────────┤
+  ├─→ ALPHA-LIC + ALPHA-SEC ─────────────────────────────────────────────────┤
+  └─→ ALPHA-DOC-04 (truth only; no validate-cda/FSE2 gates) ──────────────────┘
+                                                                                └─→ ALPHA-REL + ALPHA-01..08
 
 Track B indipendente: intake/custody/composition → offline preflight → exact synthetic E2E
                                                 → validate-cda → hash/create/status
