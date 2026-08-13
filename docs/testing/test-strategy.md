@@ -1,9 +1,9 @@
 # Test strategy
 
 Questa strategia distingue test automatizzati, gate environment-specific, qualifica
-esterna e lavoro differito. La matrice canonica requisito → test → evidence/state è
-[`requirements-traceability.md`](../traceability/requirements-traceability.md); un
-conteggio aggregato non costituisce da solo evidence.
+esterna e lavoro differito. Nel repository completo, la matrice canonica requisito → test
+→ evidence/state è mantenuta in `requirements-traceability.md`, che non fa parte
+dell'export Core; un conteggio aggregato non costituisce da solo evidence.
 
 ## Principi
 

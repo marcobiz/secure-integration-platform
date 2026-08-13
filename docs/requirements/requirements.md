@@ -1,9 +1,9 @@
 # Requisiti, non-goals e criteri di accettazione
 
 > **Classificazione:** questo è il catalogo normativo di target e acceptance criteria,
-> non una dashboard di implementazione. Lo stato corrente è in
-> [`IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md) e la copertura verificabile
-> è in [`requirements-traceability.md`](../traceability/requirements-traceability.md).
+> non una dashboard di implementazione. Nel repository completo, lo stato corrente e la
+> copertura verificabile sono mantenuti rispettivamente in `IMPLEMENTATION_STATUS.md` e
+> `requirements-traceability.md`; questi documenti non fanno parte dell'export Core.
 > Un requisito elencato qui può essere differito o fuori dallo scope dell'alpha.
 
 ## Obiettivo di prodotto

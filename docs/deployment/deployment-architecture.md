@@ -130,9 +130,9 @@ container push, Authenticode, CMS, Cosign o release SemVer.
 
 ## TARGET — Core `0.1.0-alpha`
 
-Artefatti e gate sono definiti in
-[`0.1.0-alpha-scope.md`](../implementation/0.1.0-alpha-scope.md). Il target è una developer
-alpha non-production con un solo golden path REST sintetico, checksum/SPDX/vulnerability
+Nel repository completo, artefatti e gate sono definiti in `0.1.0-alpha-scope.md`, un
+documento di governance non incluso nell'export Core. Il target è una developer alpha
+non-production con un solo golden path REST sintetico, checksum/SPDX/vulnerability
 inventory, source archive, clean-clone e istruzioni riproducibili.
 
 Licenza, security channel, versioning/tag, packaging e `ALPHA-ADOPT` restano gate aperti.

@@ -7,7 +7,8 @@ preciso:
 - **TARGET**: direzione approvata, senza claim di disponibilità o qualifica;
 - **HISTORICAL**: descrizione valida soltanto per la baseline esplicitamente indicata.
 
-La dashboard corrente resta [`IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md).
+Nel repository completo la dashboard corrente resta `IMPLEMENTATION_STATUS.md`, che non
+fa parte dell'export Core.
 Un test sintetico, un laboratorio live controllato, un ambiente OfficialTest e una
 qualifica production non sono evidenze intercambiabili.
 

@@ -1,8 +1,8 @@
 # Executive architecture
 
 Le etichette **CURRENT** e **TARGET** distinguono ciò che è presente da ciò che richiede
-ancora implementazione o qualifica. La dashboard autorevole è
-[`IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md).
+ancora implementazione o qualifica. Nel repository completo la dashboard autorevole è
+`IMPLEMENTATION_STATUS.md`, che non fa parte dell'export Core.
 
 ## CURRENT — problema e soluzione
 
