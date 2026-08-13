@@ -161,7 +161,9 @@ $environmentNames = @(
 foreach ($name in $environmentNames) { $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 
 try {
-    & $quickstart -Phase Start -SkipBuild:$SkipBuild -DotNetPath $dotnet
+    $quickstartParameters = @{ Phase = 'Start'; SkipBuild = $SkipBuild }
+    if ($dotnet -cne 'dotnet') { $quickstartParameters['DotNetPath'] = $dotnet }
+    & $quickstart @quickstartParameters
     if ($LASTEXITCODE -ne 0) { throw 'ALPHA_GOLDEN_PATH_START_FAILED' }
 
     $environment = Read-EnvironmentFile
