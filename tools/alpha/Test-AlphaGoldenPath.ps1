@@ -107,7 +107,8 @@ exit $child.ExitCode
     }
     finally {
         $process.Dispose()
-        $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+        $separators = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+        $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd($separators) + [IO.Path]::DirectorySeparatorChar
         $canonicalCaptureRoot = [IO.Path]::GetFullPath($captureRoot)
         if (-not $canonicalCaptureRoot.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -or
             -not ([IO.Path]::GetFileName($canonicalCaptureRoot)).StartsWith('broker-gateway-alpha-capture-', [StringComparison]::Ordinal)) {
