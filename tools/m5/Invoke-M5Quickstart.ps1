@@ -11,6 +11,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
+$authorizedArtifactBase = [IO.Path]::GetFullPath((Join-Path $root '.artifacts\m5'))
 $rawRoot = $null
 $artifactMarker = $null
 $artifactMarkerValue = 'secure-integration-m5-quickstart-artifacts-v1'
@@ -43,10 +44,10 @@ function Get-SafeArtifactRoot {
     }
     $comparison = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
     $separator = [IO.Path]::DirectorySeparatorChar
-    $fullWithSeparator = $full.TrimEnd([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)) + $separator
-    $rootWithSeparator = $root.TrimEnd([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)) + $separator
-    if ($full.Equals($root, $comparison) -or $rootWithSeparator.StartsWith($fullWithSeparator, $comparison)) {
-        throw 'M5_QUICKSTART_ARTIFACT_ROOT_INVALID'
+    $canonicalBase = $authorizedArtifactBase.TrimEnd([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar))
+    $basePrefix = $canonicalBase + $separator
+    if ($full.Equals($canonicalBase, $comparison) -or -not $full.StartsWith($basePrefix, $comparison)) {
+        throw 'M5_QUICKSTART_ARTIFACT_ROOT_OUTSIDE_ALLOWED_BASE'
     }
     return $full
 }
