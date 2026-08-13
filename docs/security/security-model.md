@@ -2,118 +2,174 @@
 
 ## Obiettivi di protezione
 
-1. Impedire l'estrazione e la distribuzione dei Vendor Secret.
-2. Limitare ogni compromissione locale a una singola Installation.
+1. Impedire estrazione e distribuzione di Vendor Secret.
+2. Limitare una compromissione locale alla singola Installation e alle capability
+   autorizzate.
 3. Impedire uso del Local Broker da Application non autorizzate.
 4. Impedire impersonazione cross-Tenant/cross-Installation.
 5. Impedire al client di trasformare il Gateway in proxy, signer o secret oracle.
-6. Proteggere confidenzialità e integrità di dati e chiavi locali contro copia offline.
-7. Fornire revoca, rotazione, audit e provenance degli artefatti.
+6. Proteggere dati/chiavi locali contro copia offline e processi non privilegiati.
+7. Fornire revoca, rotazione, audit metadata-only e provenance verificabile.
 
-## Classificazione e collocazione dei segreti
+## Authority e identità
 
-### Vendor Secret
+Broker e Direct client usano ClientAuth mTLS, BGW1, timestamp e nonce. Il Gateway
+risolve la credential nel registry e deriva Installation, Application, Tenant,
+Environment e caller kind dallo stato autenticato. Campi client con la stessa semantica
+non sono autorità.
 
-Sempre Gateway + Azure Key Vault. Il runtime ottiene il valore solo dopo autenticazione, grant e risoluzione della ConnectorVersion. Il valore non compare in response, exception, audit o cache persistente.
+Il grant Connector/operation è server-side e deny-by-default. La Published authority
+stabilisce execution strategy, endpoint, metodo/path/body mode, binding e profilo auth.
+Una reread può confermare la stessa authority A ma non adottare B durante l'invocazione.
 
-### Tenant Secret
+## Provider capability boundary
 
-- `broker`: quando la risorsa è locale, la chiave non è esportabile o esiste una VPN tenant.
-- `vault`: quando il Gateway può eseguire centralmente.
+I provider espongono capability separate:
 
-La posizione è parte della specifica Connector e non è controllata dal client.
+- `ISecretValueProvider` per uso server-side bounded;
+- `IClientCertificateProvider` per attachment mTLS one-shot;
+- metadata e materiale certificato pubblico;
+- `IKeyOperationProvider`/signing senza export della private key;
+- `IMacProvider`;
+- health e capability discovery.
 
-### Operator Secret
+Non esiste una generica `IKms`, né un `GetSecret` client/Broker/UI. Il runtime non
+restituisce PFX, private key, locator o authenticated request handle. Endpoint e locator
+sono risolti server-side dalla configurazione Published e dal catalogo provider.
+Capability assenti non sono inferite, combinate o emulate.
 
-PIN, OTP, credenziali personali e smart-card interaction restano locali e in memoria. Persistenza richiede requisito, threat analysis e consent espliciti.
+Il pack local PKCS#12 dichiara `SecretValues=false`. Il suo slot
+`ISecretValueProvider` è deny-only, non risolve path e non accede al filesystem. A1 e S1
+sono risorse distinte; certificate use, public material e signing restano capability
+separate. La repository qualifica il pack con solo materiale sintetico per-run. Il pack
+non sostituisce HSM/KMS, custody, rotation/revocation, import operativo o qualifica live.
 
-### Session Secret
-
-- Gateway: access/refresh token nel Vault; al client solo `sessionRef` opaco.
-- Broker: memoria con TTL o DPAPI se il protocollo richiede persistenza locale.
-- Legacy: compatibilità temporanea esplicita, auditata e con piano di dismissione.
-
-### Local Data Key
-
-Random 256 bit, per Installation e versione. Wrapping DPAPI CurrentUser; cifratura AES-256-GCM. Non restituita al legacy.
-
-## Local Broker controls
+## Local Broker
 
 - Virtual service account e service SID dedicati.
-- ACL restrittive su pipe, ProgramData e CNG keys.
-- Application manifest in area service-only.
-- Identità composita: Windows SID, registration, path, publisher e hash opzionale.
-- Frame e payload limits, timeout, cancellation, nonce e sequence.
-- Autorizzazione per singola operation e logical secret reference.
-- `GetSecret` assente; compatibility reveal separato e disabilitato.
-- Audit locale redatto e health diagnostics senza valori sensibili.
+- ACL restrittive su pipe, `ProgramData` e CNG key.
+- Identità Application composita: SID, registration, path, publisher/hash e process
+  handle/creation time.
+- Frame/payload limits, timeout, cancellation, nonce e sequence.
+- Autorizzazione per operation e Connector/operation.
+- Storage/delete di secret locali ammessi, protect/unprotect AES-GCM e HMAC bounded.
+- Nessuna operation IPC di lettura/reveal secret o firma generica.
+- Audit locale redatto e health senza valori sensibili.
 
-## Gateway controls
+La chiave Installation Broker è ECDSA P-256 CNG non esportabile e appartiene alla
+service identity. Repair/upgrade/recovery completi restano target installer, non claim
+dello script di laboratorio.
 
-- Certificato e SPKI per Installation, stato controllato a ogni richiesta con cache breve.
-- Firma ECDSA su timestamp, nonce, method/path e body hash.
-- Tenant/Application derivati dal registry.
-- Grants server-side e ConnectorVersion Published.
-- Secret binding logici risolti dal server.
-- Endpoint, method, path, header e content type configurati.
-- SSRF protection sull'IP effettivamente connesso, non solo sulla stringa URI.
-- Retry solo idempotente; redirect disabilitati.
-- Session secret nel Vault e payload non persistiti.
+## Gateway e Connector Runtime
 
-## Enrollment e credenziali Installation
+- Credential/status/revoca verificati fail-closed e nonce consumato atomicamente.
+- Tenant/Application/Installation derivati dal registry.
+- Grant e sola ConnectorVersion Published.
+- Checksum/four-eyes e binding digest verificati nella pubblicazione.
+- Stamp Published/binding/resource ricontrollato per invocazione; no stale-on-error.
+- Secret/certificate/key binding logici risolti server-side.
+- Provider e moduli opzionali dipendono dal Core provider-neutral, mai il contrario.
+- Il Gateway image predefinito usa il Synthetic Provider e non contiene pack verticali.
 
-- Activation code casuale ≥128 bit, TTL 15 minuti, monouso e massimo 5 tentativi.
-- Database: HMAC del codice; pepper nel Vault.
-- Challenge TTL 5 minuti e proof-of-possession.
-- ECDSA P-256 non esportabile in Windows CNG.
-- Certificate lifetime 90 giorni, renewal window 30 e overlap 7.
-- Revoca immediata e propagation cache ≤30 secondi.
-- Reinstallazione genera nuova chiave; clonazione non autorizza automaticamente un host.
+I moduli di execution ricevono una authority bounded e capability invocation-bound, non
+provider/store/service locator/endpoint/credential generici. Restano però codice
+full-trust in-process: il boundary limita la superficie supportata, non è una sandbox.
 
-## Egress e SSRF
+## Egress, TLS e SSRF
 
-- Solo HTTPS in produzione, salvo Connector locale esplicitamente approvato ed eseguito dal Broker.
-- Host e port definiti nella ConnectorVersion/Environment.
-- Path template con parametri percent-encoded e regex/length constraints.
-- Blocco IP literal, loopback, private, link-local, multicast e cloud metadata.
-- DNS risolto prima della connessione e ricontrollato a ogni nuova connessione.
-- Hostname/SNI originali preservati.
-- Nessun redirect; proxy solo environment-level.
-- Request/response/decompression limits.
-- Header sensibili costruiti dal runtime e non sovrascrivibili dal client.
+- HTTPS obbligatorio sui percorsi centrali supportati.
+- Scheme/host/port e path template provengono dalla Published authority.
+- DNS/IP validation blocca literal, loopback, private, link-local, multicast e metadata,
+  salvo allowance test exact-host/CIDR in ambienti dedicati.
+- Il socket usa gli indirizzi validati; il runtime ricontrolla authority e binding dopo
+  gli await pertinenti e prima del dispatch.
+- Redirect, proxy ambientale, cookie e header hop-by-hop sono negati.
+- Method, Content-Type, auth header, certificate, timeout e response bound sono
+  server-owned.
+- Retry solo per operation dichiarate idempotenti; nessun fallback stale.
 
-## XML e JSON
+Le CA sintetiche e i mock HTTPS/mTLS provano la pipeline locale. Non attestano trust,
+revocation, availability o conformance di un servizio esterno reale.
 
-- DTD ed external entities disabilitate.
-- Limiti di byte, profondità, nodi e attributi.
-- Schema validation quando disponibile.
-- XML-DSig con riferimento ID univoco e protezione signature wrapping.
-- Canonicalization definita dal modulo, mai client-selected.
-- JSON con depth/property/string limits e `additionalProperties: false` nei contratti.
+## Admin plane e browser
 
-## Logging, audit e privacy
+- OIDC Authorization Code server-side con PKCE, state e nonce.
+- Browser con cookie `__Host-`, HttpOnly, Secure, SameSite e sessione server-side.
+- CSRF su mutazioni, CSP/frame policy, niente CORS permissivo.
+- Principal stabile `(issuer, subject)` e ruoli server-side; email non è authority.
+- Tenant scope, RBAC, optimistic concurrency e four-eyes checksum-specific.
+- UI same-origin senza accesso a PostgreSQL, provider, Broker o filesystem.
+- Nessun secret value, private key, activation code riutilizzabile o provider locator
+  nel browser.
 
-Campi ammessi: correlation, trace, connector, operation, tenant, installation, result, duration, external status category e versioni.
+DevelopmentAuth è test-only, loopback e rifiutata in Production.
 
-Campi vietati: payload completi, Authorization/Cookie, token, password, PIN, key material, private certificate, OTP e PII non necessaria.
+## PostgreSQL, RLS e audit
 
-La redaction è strutturale e avviene prima della serializzazione. Regex/dictionary redaction è una difesa supplementare. Gli Operator identifier in audit sono opachi o pseudonimizzati.
+PostgreSQL conserva metadata, JSON canonico, checksum, public certificate material e
+locator server-side; non conserva secret value. Composite FK e FORCE RLS difendono lo
+scope tenant. Migration, runtime, admin, readonly e locator-owner sono identità distinte;
+le funzioni locator `SECURITY DEFINER` hanno owner NOLOGIN e predicati operation-scoped.
 
-## Supply chain
+Audit e invocation event sono metadata-only: nessun body, Authorization/Cookie, token,
+password, private key o response raw. Il codice e `gateway_runtime` emettono solo INSERT.
+La migration 0001 concede però a `gateway_admin` `UPDATE` sulle tabelle dello schema,
+incluse quelle audit. Di conseguenza:
 
-- Lock file e toolchain pinned.
-- Secret, dependency, SAST e container scanning.
-- SBOM SPDX e CycloneDX.
-- Binari/MSI Authenticode, package e plugin CMS-signed, container Cosign-signed.
-- Release manifest con SHA-256, versioni, provenance e compatibilità.
-- Plugin caricati solo dalla directory protetta all'avvio.
-- Nessun artifact di test, debug secret o dato reale nei release package.
+- metadata-only audit è **CURRENT** e testato;
+- runtime append-only è **CURRENT**;
+- append-only DB completo contro il ruolo admin è **DEFERRED**, non PASS;
+- DBA/owner/host privilegiati restano comunque nella TCB.
+
+Partizionamento, retention job, backup/PITR e restore non sono implementati/qualificati
+dalla sola presenza delle tabelle.
+
+## Parsing, bounds e redaction
+
+- DTD, external entity e resolver XML sono disabilitati.
+- Limiti per byte, depth, node, attribute e scalar input.
+- QName/cardinalità, namespace e Fault structure verificati nei moduli implementati.
+- JSON Schema 2020-12, additional-property denial nei contratti chiusi e checksum
+  canonico.
+- Exception provider/modulo sanitizzate in codici stabili; cancellation reale preservata.
+- Redaction strutturale prima della serializzazione, con canary/secret scan come difesa
+  aggiuntiva.
+
+Campi vietati in log/audit/evidence redatta includono payload, Authorization/Cookie,
+token, password/PIN/OTP, private key/PFX, activation code e PII non necessaria.
+
+## Supply chain corrente e target
+
+**CURRENT:** lock file/toolchain/base image pinned, validator fail-closed dei Dockerfile,
+secret/dependency/container checks, SBOM SPDX, Core export e architecture boundary tests.
+Il loader moduli verifica path locale exact, assembly identity/type/module ID e MVID sugli
+stessi byte; ACL/provenance restano responsabilità del deployment.
+
+**TARGET:** Authenticode/CMS/Cosign, publisher allowlist/hash manifest per moduli,
+release publishing, provenance firmata e CycloneDX. Non sono garanzie della baseline.
+
+Il manifest SHA grezzo dell'export contiene metadata run-specific e non è un digest
+deterministico cross-run. La normalizzazione è il lavoro futuro
+`P3-CORE-EXPORT-DIGEST` sotto `ALPHA-ART`.
+
+## Evidenza e claim boundary
+
+- test synthetic-qualified non significa OfficialTest;
+- live lab con processi/container reali e fixture sintetiche non significa chiamata FSE2
+  live;
+- OfficialTest non significa production/accreditamento;
+- certificati ricevuti e correlati non significano import operativo;
+- `validate-cda` è il primo outcome OfficialTest futuro; nessuna call live è attestata.
 
 ## Rischi dichiarati
 
-- Amministratore locale/SYSTEM può sostituire o ispezionare il Broker.
-- Plaintext necessario all'operazione esiste temporaneamente in RAM.
-- Un plugin in-process firmato ma malevolo ha piena capacità nel Gateway.
-- Compromissione Gateway/Vault richiede incident response e rotazione esterna.
-- La piattaforma limita le capability del legacy compromesso ma non ne garantisce l'integrità.
-
+- Local Administrator e SYSTEM possono sostituire binari, leggere memoria o abusare di
+  un processo autorizzato.
+- Plaintext e key handle necessari esistono temporaneamente nella TCB.
+- Un modulo in-process malevolo può causare compromissione/DoS nonostante il contratto
+  ristretto.
+- Compromissione Gateway/provider richiede incident response e rotazione esterna.
+- Il sample Direct non qualifica una custody key production.
+- Cache/sessioni process-local non abilitano scale-out o durability implicita.
+- La piattaforma limita le capability del legacy compromesso ma non ne garantisce
+  l'integrità.

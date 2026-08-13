@@ -8,7 +8,9 @@ The public-preview candidate comprises `src` (including Admin UI and provider ab
 
 Deployment packs may provide qualified cloud composition, managed identity integration, operational support and provider implementations. Connector packs may contain maintained vertical integrations. Legacy adapter packs may contain COM, C ABI, VB6/Delphi/COBOL/Java compatibility. These modules consume Core contracts; essential Core functionality is not artificially disabled when they are absent.
 
-The current Azure experiment remains under `packs/deployment/azure` and is excluded from the Core export. No AWS, HashiCorp, healthcare connector or commercial legacy adapter is implemented in M5.
+The Azure and local PKCS#12 implementations live under `packs/deployment` and are excluded from the Core solution/export. Healthcare implementations live under `src/ConnectorPacks/Healthcare` and are also excluded: their presence in the monorepo does not make them Core dependencies. No AWS, HashiCorp or commercial legacy adapter is implemented.
+
+The local PKCS#12 pack is an opt-in offline-laboratory provider. Its repository qualification uses only per-run synthetic material and does not establish production custody, operational import of official certificates or a live external-service call.
 
 ## Publication exclusions
 

@@ -1,6 +1,10 @@
 # Indice della documentazione
 
-Questa directory è la fonte di verità architetturale del prodotto. Le decisioni normative sono negli ADR; in caso di conflitto un ADR accettato prevale sui documenti descrittivi, mentre i requisiti di sicurezza restano invarianti salvo ADR esplicito che motivi il cambiamento.
+Questa directory raccoglie decisioni, contratti, stato, target ed evidence storica. Gli
+ADR accettati registrano decisioni durevoli; OpenAPI/schema/migration descrivono i
+contratti eseguibili; [`IMPLEMENTATION_STATUS.md`](../IMPLEMENTATION_STATUS.md) è la
+dashboard corrente. Un piano o report legato a una vecchia baseline non prevale sullo
+stato corrente.
 
 ## Ordine di lettura
 
@@ -36,7 +40,7 @@ Questa directory è la fonte di verità architetturale del prodotto. Le decision
 24. [Architettura implementata M2](architecture/m2-gateway-architecture.md)
 25. [Piano M2](implementation/M2-IMPLEMENTATION-PLAN.md), [runbook M2](operations/M2-GATEWAY-RUNBOOK.md), [report M2](testing/M2-IMPLEMENTATION-REPORT.md) e [Gate Review M2](reviews/M2-GATE-REVIEW.md)
 26. [Wave 1 typed composed SOAP authenticated dispatch](implementation/WAVE1-TYPED-COMPOSED-SOAP-DISPATCH.md)
-27. [FSE2 Wave 1 - freeze ufficiale e gate risolto](implementation/FSE2-WAVE1-SPEC-FREEZE.md), [profilo organizzativo](connectors/healthcare/fse2/README.md) e [report di implementazione](testing/FSE2-IMPLEMENTATION-REPORT.md)
+27. [FSE2 Wave 1 - source freeze](implementation/FSE2-WAVE1-SPEC-FREEZE.md), [profilo organizzativo](connectors/healthcare/fse2/README.md) e [report di implementazione](testing/FSE2-IMPLEMENTATION-REPORT.md); la copertura è sintetica e l'OfficialTest resta aperto
 28. [Wave 1 authorized typed composed-SOAP request composition](implementation/WAVE1-AUTHORIZED-TYPED-COMPOSED-SOAP-REQUEST.md)
 29. [FSE2 local PKCS#12 provider runbook](operations/FSE2-LOCAL-PROVIDER-RUNBOOK.md)
 
@@ -58,7 +62,7 @@ Questa directory è la fonte di verità architetturale del prodotto. Le decision
 | Gate Review prima di M2 | `reviews/` |
 | Harness live M0/M1 e runbook VM | `../tools/live-matrix/`, `operations/M0-M1-LIVE-MATRIX-RUNBOOK.md` |
 | Gateway minimo M2 | `architecture/m2-gateway-architecture.md`, `implementation/M2-IMPLEMENTATION-PLAN.md`, `operations/M2-GATEWAY-RUNBOOK.md`, `testing/M2-IMPLEMENTATION-REPORT.md`, `reviews/M2-GATE-REVIEW.md` |
-| FSE2 Wave 1 | `implementation/FSE2-WAVE1-SPEC-FREEZE.md`, `connectors/healthcare/fse2/README.md`, `testing/FSE2-IMPLEMENTATION-REPORT.md` (profilo iniziale organizzativo; profilo human actor differito; accreditamento non dichiarato) |
+| FSE2 Wave 1 | `implementation/FSE2-WAVE1-SPEC-FREEZE.md`, `connectors/healthcare/fse2/README.md`, `testing/FSE2-IMPLEMENTATION-REPORT.md` (profilo Organization coperto sinteticamente; Human Actor differito; nessuna call OfficialTest o qualifica production dichiarata) |
 | FSE2 local provider lab | `adr/0029-local-pkcs12-provider-for-offline-labs.md`, `operations/FSE2-LOCAL-PROVIDER-RUNBOOK.md`, `../packs/deployment/local-pkcs12/` (materiale operativo sempre esterno a Git; nessuna call live implicita) |
 
 ## Regole di manutenzione

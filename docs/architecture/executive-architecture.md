@@ -1,64 +1,104 @@
 # Executive architecture
 
-## Problema
+Le etichette **CURRENT** e **TARGET** distinguono ciò che è presente da ciò che richiede
+ancora implementazione o qualifica. La dashboard autorevole è
+[`IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md).
 
-I prodotti on-premise e legacy analizzati implementano flussi di integrazione funzionanti, ma spesso distribuiscono Vendor Secret, riusano chiavi fra installazioni, espongono servizi locali senza autorizzazione e affidano Tenant/Operator a parametri controllati dal client. Una riscrittura completa avrebbe costo e rischio regressivo elevati.
+## CURRENT — problema e soluzione
 
-## Soluzione
+La piattaforma rimuove credenziali distribuite e authority client-controlled dai flussi
+di integrazione on-premise senza richiedere una riscrittura completa. I due ingressi
+implementati convergono sullo stesso runtime:
 
-La Secure Integration Platform inserisce un confine di sicurezza nei punti in cui il legacy legge o usa un segreto:
-
-```text
-Legacy → SDK/COM/C ABI/CLI → Local Broker → Gateway → Vault/External Service
+```mermaid
+flowchart LR
+  Legacy[Legacy Application] -->|.NET Broker SDK| Broker[Local Broker]
+  Broker -->|mTLS + BGW1| Gateway[Gateway]
+  Direct[Direct .NET Evaluation Client] -->|mTLS + BGW1| Gateway
+  Admin[Administrator] -->|same-origin Admin Web/API| Gateway
+  Gateway --> Runtime[Published Connector Runtime]
+  Runtime --> Provider[Provider Capability Ports]
+  Runtime --> Egress[Restricted External Egress]
+  Gateway --> DB[(PostgreSQL 18)]
 ```
 
-- Il **Local Broker** protegge segreti, chiavi, certificati e operazioni che devono restare locali.
-- Il **Gateway** deriva l'identità dell'Installation, applica grants, usa Vendor Secret nel Vault e controlla l'egress.
-- Il **Connector Framework** descrive soltanto operazioni limitate e sicure; non è un workflow engine.
-- L'**Admin Plane** versiona, approva, pubblica e revoca configurazioni e Installation.
+- Il **Local Broker** autorizza l'applicazione Windows, protegge secret e data key
+  locali con DPAPI/CNG, offre operation bounded e invoca il Gateway. Non offre generic
+  secret retrieval.
+- Il **Gateway** deriva Installation, Application, Tenant ed Environment dal registry,
+  applica grant, risolve la sola versione Published e usa capability provider
+  server-side prima dell'egress ristretto.
+- Il **Connector Runtime** esegue operation bounded da configurazioni Published
+  immutabili; non è un workflow engine o proxy arbitrario.
+- L'**Admin Plane** usa UI/API same-origin, OIDC, sessione server-side, CSRF, RBAC,
+  concorrenza e four-eyes senza esporre secret value o private key.
+- I **deployment e vertical pack** dipendono dalle astrazioni Core. Il Synthetic
+  Provider è il percorso predefinito; Azure e local PKCS#12 sono pack opzionali.
 
-## Modalità operative
+## CURRENT — percorsi e capability
 
-### Secure Layer
+Il Secure Layer REST è il percorso generico dimostrato: il caller conserva il payload,
+mentre Gateway e configurazione Published possiedono endpoint, metodo, auth e limiti.
+Broker e Direct client attraversano gli stessi grant, binding, provider e controlli di
+egress.
 
-Il legacy mantiene UI, payload e flusso funzionale. Local Broker/Gateway eseguono solo cifratura, HMAC, firma, token exchange, mTLS e credential injection. È il percorso predefinito per la prima migrazione.
+Il Core integra inoltre foundation SOAP/session, OAuth, JWT/X.509, signing slot, mTLS e
+un seam per moduli di execution. Queste primitive non equivalgono a un Managed Connector
+generico distribuibile né alla qualifica di un servizio esterno. I moduli sono
+allowlisted dal deployment e full-trust in-process; non ricevono provider/store generici,
+endpoint caller-owned o private key tramite il contratto supportato.
 
-### Managed Connector
+## CURRENT — garanzie implementate
 
-Il legacy invia un'operazione e un payload più astratto. Il Connector gestisce protocollo, autenticazione, serializzazione e normalizzazione. Si adotta quando l'integrazione è condivisa, frequentemente variabile o economicamente riutilizzabile.
+- Nessun Vendor Secret è restituito al legacy, Broker, Direct client o browser.
+- Tenant/Application/Installation derivano dallo stato autenticato server-side.
+- Endpoint, path, metodo, header auth e resource binding provengono dalla Published
+  authority approvata, non dal payload runtime.
+- Provider capabilities sono separate; capability assenti non sono emulate.
+- Pubblicazione e rollback conservano checksum/provenance e non modificano in place una
+  versione già Published.
+- Replay protection, TLS, DNS/IP validation, redirect deny, response bounds, redaction e
+  audit metadata-only sono applicati server-side.
+- Il runtime ricontrolla lo stamp PostgreSQL a ogni invocazione e non usa stale-on-error.
+- Le operazioni puramente locali del Broker possono funzionare senza Gateway.
 
-## Garanzie
+Queste garanzie descrivono prodotto e test deterministici. Non implicano packaging
+pubblico, cloud, HA/DR, provider reale o servizio esterno qualificato.
 
-- Nessun Vendor Secret distribuito al legacy o al Local Broker.
-- Identità e revoca distinte per Installation.
-- Tenant derivato server-side.
-- Segreti locali isolati sotto service identity Windows e DPAPI CurrentUser.
-- Endpoint, metodi, header e secret binding risolti da configurazione pubblicata.
-- Audit redatto e correlation ID end-to-end.
-- Operazioni locali disponibili offline.
-- Rollback Connector atomico.
+## CURRENT — limiti e finding
 
-## Limiti espliciti
+- Local Administrator e SYSTEM possono compromettere servizio, filesystem o memoria e
+  restano minacce privilegiate residue.
+- Il Gateway/provider è nella TCB e osserva temporaneamente il materiale necessario.
+- Il Local PKCS#12 pack è qualificato solo con materiale sintetico per-run; non è HSM/KMS,
+  import operativo o custody production.
+- L'audit applicativo è metadata-only e il runtime può solo inserire eventi. Il ruolo
+  `gateway_admin` conserva però una grant UPDATE storica sulle tabelle audit: append-only
+  DB completo è deferred, non PASS.
+- Cache OAuth/session e workflow verticali correnti sono process-local, non distribuiti
+  o durevoli attraverso restart.
+- Il sample Direct mantiene la chiave client in memoria e non è una strategia di custody
+  production.
 
-- Un amministratore locale o SYSTEM può generalmente compromettere un Broker in esecuzione.
-- Malware capace di iniettarsi in un processo autorizzato può abusarne delle capability.
-- Un Gateway compromesso può usare le permission concesse alla propria Managed Identity.
-- Plugin in-process firmati restano full-trust.
-- SQL injection, backdoor, parsing insicuro, IAM server-side e dipendenze vulnerabili richiedono remediation separate.
+## Evidenza e claim
 
-## MVP
+- **Automated synthetic:** test unit/integration/hosted con fixture e servizi controllati.
+- **Live lab sintetico:** processi/container o Windows host reali con materiale sintetico.
+- **OfficialTest:** ambiente ufficiale esterno, con outcome e precondizioni attestati.
+- **Production:** operatività, custody, monitoring, recovery e accreditamento production.
 
-- Windows service, Named Pipe, autorizzazione Application, DPAPI/AES-GCM e SDK .NET.
-- Installation Registry, enrollment, mTLS, revoca e binding Tenant.
-- PostgreSQL, Azure Key Vault, egress ristretto e container Gateway.
-- Connector Secure Layer, JSON Schema, lifecycle e rollback.
-- Vertical slice sintetico legacy → Broker → Gateway → Vault → mock service.
+Un livello non promuove automaticamente al successivo. Certificati ricevuti e correlati
+non significano import operativo. Nessuna chiamata FSE2 live è parte della baseline;
+`validate-cda` resta il primo outcome OfficialTest futuro.
 
-## Release 1
+## TARGET — track attive
 
-- Admin UI Entra OIDC.
-- C ABI, COM e CLI x86/x64.
-- OAuth2, PKCE, JWT, HMAC, SOAP/XML e session handling.
-- Esempio Secure Layer e Managed Connector sanitari sintetici.
-- MSI, Bicep, SBOM, signing e operational pack.
+Il Core punta a una developer `0.1.0-alpha` non-production con un solo golden path REST
+sintetico. Packaging, licenza, security channel, clean-clone e `ALPHA-ADOPT` devono
+chiudersi prima di dichiarare completata l'adozione early-adopter.
 
+La track FSE2 Organization OfficialTest è separata: provider/custody, import, ambiente
+ufficiale, driver e evidence redatta hanno gate propri e non bloccano la release Core.
+
+MSI/native/COM, Azure qualification, artifact signing/provenance, HA/DR, backup/restore,
+load/soak, pentest e pilot production restano target ulteriori.

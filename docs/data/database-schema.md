@@ -1,16 +1,27 @@
-# Database schema
+# PostgreSQL schema as-built
 
-## Principi
+Baseline: migration runner e migration additive `0001`..`0014` su PostgreSQL 18.
+Le migration SQL sono la fonte eseguibile; questo documento non promuove modelli target
+a stato corrente.
 
-- PostgreSQL 18 è il source of truth operativo.
-- UUID generati dall'applicazione.
-- Timestamp `timestamptz` UTC.
-- Secret value vietati; `vault_ref` e metadata non sensibili soltanto.
-- JSONB canonico per ConnectorVersion; proiezioni relazionali per query/grants.
-- Multi-tenancy con composite foreign key, RLS e ruoli separati.
-- Audit append-only e partizionamento mensile.
+## Principi correnti
 
-## ER diagram
+- UUID applicativi e timestamp `timestamptz` UTC.
+- Nessun secret value nel database: soltanto metadata, certificato pubblico e logical/
+  opaque provider locator server-side.
+- Connector JSON canonico in `jsonb`, checksum SHA-256 e lifecycle Published immutabile.
+- Tenant identity derivata dall'autenticazione, composite FK e FORCE RLS sulle tabelle
+  tenant-scoped.
+- Identità migration, runtime, admin, readonly e locator-owner con responsabilità
+  distinte.
+- Migrazioni additive con nome e checksum registrati in `gateway.schema_migration`.
+
+Le tabelle audit/invocation sono ordinarie, non partizionate. Il codice e il ruolo
+`gateway_runtime` scrivono solo in append, ma `gateway_admin` eredita oggi `UPDATE` dalla
+grant ampia della migration 0001. L'append-only enforcement DB completo è un finding
+deferred: richiede migration additiva e test di privilege, non è PASS sulla baseline.
+
+## ER corrente
 
 ```mermaid
 erDiagram
@@ -21,277 +32,161 @@ erDiagram
   INSTALLATION ||--o{ ACTIVATION_CODE : activates
   INSTALLATION ||--o{ INSTALLATION_CONNECTOR_GRANT : receives
   CONNECTOR_DEFINITION ||--o{ CONNECTOR_VERSION : versions
-  CONNECTOR_VERSION ||--o{ CONNECTOR_OPERATION : projects
-  CONNECTOR_DEFINITION ||--o{ SECRET_BINDING : binds
-  CONNECTOR_DEFINITION ||--o{ DEPLOYMENT : deployed
-  CONNECTOR_VERSION ||--o{ DEPLOYMENT : targets
-  PLUGIN_DEFINITION ||--o{ CONNECTOR_VERSION : implements
-  INSTALLATION ||--o{ SESSION_REFERENCE : owns
-  INSTALLATION ||--o{ IDEMPOTENCY_RECORD : scopes
+  CONNECTOR_DEFINITION ||--o{ CONNECTOR_BINDING_BUNDLE_VERSION : binds
+  CONNECTOR_VERSION ||--o{ CONNECTOR_BINDING_BUNDLE_VERSION : configures
+  CONNECTOR_VERSION ||--o{ CONNECTOR_APPROVAL : approves
+  ADMIN_PRINCIPAL ||--o{ ADMIN_ROLE_ASSIGNMENT : receives
+  ADMIN_PRINCIPAL ||--o{ ADMIN_SESSION : owns
   INSTALLATION ||--o{ INVOCATION_EVENT : invokes
   TENANT ||--o{ AUDIT_EVENT : scopes
+  PROVIDER_RESOURCE_CATALOG_VERSION ||--o{ PROVIDER_RESOURCE_LOCATOR : resolves
 ```
 
-## Tabelle
+I locator di identità (`installation_locator`, `credential_locator`,
+`activation_locator`) e i provider locator sono separati dai cataloghi tenant-scoped.
 
-### `tenant`
+## Inventario delle tabelle
 
-- `id uuid PK`
-- `code varchar(64) NOT NULL UNIQUE`
-- `display_name varchar(256) NOT NULL`
-- `status varchar(32) CHECK active|suspended|retired`
-- `created_at`, `updated_at`
-- `row_version bigint`
+| Gruppo | Tabelle correnti |
+|---|---|
+| Migration | `schema_migration` |
+| Directory | `tenant`, `application`, `environment`, `installation`, `installation_credential`, `activation_code` |
+| Runtime | `connector_definition`, `installation_connector_grant`, `replay_nonce`, `audit_event`, `invocation_event` |
+| Identity locator | `installation_locator`, `credential_locator`, `activation_locator` |
+| Connector | `connector_version`, `connector_environment_binding`, `connector_binding_bundle_version` |
+| Admin | `admin_principal`, `admin_role_assignment`, `admin_bootstrap`, `connector_approval`, `admin_session` |
+| Provider | `provider_resource_catalog_version`, `provider_resource_locator` |
 
-### `application`
+## Directory ed enrollment
 
-- `id uuid PK`
-- `code varchar(100) UNIQUE`
-- `display_name`
-- `minimum_broker_version`, `maximum_broker_version`
-- `status`
-- `created_at`, `updated_at`, `row_version`
+### `tenant`, `application`, `environment`
 
-Application rappresenta un prodotto autorizzabile, non un processo specifico. Il manifest locale associa process identity e Application ID.
-
-### `environment`
-
-- `id uuid PK`
-- `code varchar(32) UNIQUE CHECK dev|test|preprod|prod o namespace approvato`
-- `display_name`
-- `production_controls boolean`
-- `endpoint_policy_json jsonb`
+Contengono identità, display/status, compatibility/version policy ed environment policy.
+`application` rappresenta un prodotto autorizzabile; la process identity locale è
+vincolata dal manifest Broker.
 
 ### `installation`
 
-- `id uuid PK`
-- `tenant_id uuid NOT NULL FK tenant`
-- `application_id uuid NOT NULL FK application`
-- `environment_id uuid NOT NULL FK environment`
-- `status CHECK pending|active|suspended|revoked|retired`
-- `broker_version`, `last_seen_at`, `created_at`, `revoked_at`, `revocation_reason`
-- `row_version`
-- unique `(id, tenant_id)` per composite FK downstream
-
-Tenant/Application/Environment diventano immutabili dopo activation. Un cambio produce una nuova Installation.
+Lega Tenant, Application ed Environment. Dalla migration 0011 contiene
+`installation_kind` (`broker`/`direct`), `client_version` e `updated_at`, oltre a stato,
+Broker version, last-seen, revoca e row version. Tenant/Application/Environment diventano
+immutabili dopo activation.
 
 ### `installation_credential`
 
-- `id uuid PK`
-- `installation_id uuid NOT NULL FK`
-- `certificate_sha256 bytea NOT NULL`
-- `spki_sha256 bytea NOT NULL`
-- `serial_number varchar(128)`
-- `not_before`, `not_after`
-- `status CHECK pending|active|overlap|revoked|expired`
-- `replaced_by_id uuid NULL FK self`
-- `created_at`, `revoked_at`
-- unique `spki_sha256`
-- partial unique su una credential `active` per Installation
+Contiene fingerprint, SPKI, DER pubblico, seriale, validità, stato e relazione di
+sostituzione. La chiave privata non è nel database. Un indice parziale consente una sola
+credential `active` per Installation.
 
 ### `activation_code`
 
-- `id uuid PK`
-- `installation_id uuid NOT NULL FK`
-- `code_hmac bytea NOT NULL UNIQUE`
-- `expires_at`, `used_at`, `created_at`
-- `attempt_count smallint CHECK 0..5`
-- `created_by varchar(256)`
+Conserva HMAC, expiry, uso e attempt count. Il codice in chiaro non è persistito. Le
+challenge brevi restano in uno store applicativo dedicato.
 
-Challenge di enrollment sono effimeri in memoria; se serve scalare prima dell'activation, la challenge può essere firmata e stateless o conservata in una tabella TTL senza secret.
+## Runtime e Connector lifecycle
 
-### `connector_definition` (M4 implementato)
+### `connector_definition` e `connector_version`
 
-- `id uuid PK`, `slug varchar(100) UNIQUE`, display metadata;
-- `active_version_id uuid NULL` punta alla Published corrente;
-- `publication_revision bigint` serializza publish concorrenti;
-- `row_version bigint`.
+`connector_definition` conserva slug, metadata, `active_version_id`,
+`publication_revision` e `row_version`. `connector_version` conserva JSON canonico,
+checksum, schema/version, lifecycle e attori/timestamp. Trigger impediscono la modifica
+del contenuto già Published; una sola versione è Published per Connector.
 
-### `connector_version` (M4 implementato)
+### `connector_environment_binding`
 
-- `id uuid PK`, `connector_id uuid FK`, `version`, `schema_version`;
-- `configuration_json jsonb` canonico e `checksum_sha256 bytea` di 32 byte;
-- `state CHECK draft|validated|published|superseded|retired`;
-- `created_by`, timestamp lifecycle e `row_version`;
-- unique `(connector_id, version)` e unique parziale su una sola Published per Connector.
+Tabella M4 legacy ancora presente nella lineage ma non letta dal runtime dopo la
+migration 0004. Non è una seconda source of truth corrente.
 
-Una versione già pubblicata è immutabile per JSON, checksum, version, schema e Connector tramite trigger; solo le transizioni lifecycle revisionate sono consentite.
+### `connector_binding_bundle_version`
 
-### `connector_environment_binding` (legacy M4)
-
-- PK `(connector_id, environment_id)`;
-- `endpoints_json` associa logical endpoint a URI HTTPS;
-- `secret_references_json` associa logical secret a provider reference opaca;
-- `revision`, `updated_at`, `updated_by`.
-
-Non contiene secret value. I binding non fanno parte del JSON canonico né dell'export Connector.
-
-`connector_environment_binding` resta nella lineage per compatibilita, ma dalla migration 0004 non viene piu letto dal runtime.
-
-### `connector_binding_bundle_version` (M5 remediation)
-
-- `id uuid PK`, `connector_id`, `connector_version_id` e `environment_id` fissano lo scope;
-- `revision` e monotona per ConnectorVersion/Environment e ogni modifica inserisce una nuova riga;
-- `endpoints_json`, `secret_references_json` e `certificate_references_json` contengono endpoint e soli riferimenti server-side, mai valori segreti;
-- `checksum_sha256` autentica la rappresentazione canonica della revisione;
-- `state CHECK draft|active|retired`, `created_at` e `created_by` rendono esplicito lifecycle e attore;
-- `connector_approval.binding_digest_sha256` lega l'approvazione al checksum Connector e a tutte le revisioni binding esatte.
-
-Il publish PostgreSQL blocca ConnectorVersion, revisioni binding e approval, ricomputa il digest, verifica four-eyes, attiva le revisioni, supersede la versione precedente e inserisce audit in un'unica transazione serializable. Il runtime seleziona solo righe `active` dell'esatta ConnectorVersion Published e verifica nuovamente il checksum.
-
-### `connector_operation`
-
-Proiezione futura, non implementata in M4 e non source of truth:
-
-- `connector_version_id uuid`
-- `operation_id varchar(100)`
-- `mode`, `execution_strategy`, `auth_kind`, `http_method`
-- `max_request_bytes`, `max_response_bytes`, `timeout_ms`, `idempotency_mode`
-- PK `(connector_version_id, operation_id)`
-
-Viene rigenerata nella stessa transazione che valida la ConnectorVersion.
-
-### `secret_binding`
-
-Modello futuro normalizzato. M4 usa `connector_environment_binding.secret_references_json`
-con soli riferimenti opachi; nessun valore segreto è memorizzato.
-
-- `id uuid PK`
-- `logical_name varchar(100)`
-- `connector_id uuid NOT NULL`
-- `operation_id varchar(100) NULL`
-- `environment_id uuid NOT NULL`
-- `tenant_id uuid NULL`
-- `secret_class CHECK vendor|tenant|session`
-- `location CHECK vault|broker`
-- `provider varchar(64)`
-- `vault_ref varchar(1024) NULL`
-- `version_policy CHECK latest|pinned`
-- `rotation_due_at`, `certificate_expires_at`
-- `status CHECK active|disabled|rotationRequired`
-- unique su scope logico `(logical_name, connector_id, operation_id, environment_id, tenant_id)` con normalizzazione NULL
-
-`vault_ref` non viene mai restituito al Broker/Admin UI ordinaria.
+Revisioni immutabili per ConnectorVersion/Environment con endpoint e soli riferimenti
+server-side a secret/certificati. Checksum e stato draft/active/retired sono legati al
+`binding_digest_sha256` dell'approvazione. Publish/four-eyes verifica e attiva revisioni
+exact nella transazione che pubblica la versione.
 
 ### `installation_connector_grant`
 
-- `id uuid PK`
-- `installation_id uuid NOT NULL`
-- `tenant_id uuid NOT NULL`
-- `connector_id uuid NOT NULL`
-- `operation_id varchar(100)`
-- `enabled boolean`
-- `constraints_json jsonb`
-- `valid_from`, `valid_until`
-- unique `(installation_id, connector_id, operation_id)`
-- composite FK `(installation_id, tenant_id)` → installation
+Grant deny-by-default per Installation/Tenant/Connector/operation, con validità e
+constraint JSON. La composite FK impedisce associazioni cross-Tenant incoerenti.
 
-### `deployment`
+### `replay_nonce`
 
-Modello futuro di promotion multi-environment. M4 usa `active_version_id` e
-`publication_revision` sul Connector; rollback riattiva una Superseded.
+Registra nonce bounded/TTL consumati dal runtime anti-replay.
 
-- `id uuid PK`
-- `environment_id uuid NOT NULL`
-- `connector_id uuid NOT NULL`
-- `connector_version_id uuid NOT NULL`
-- `revision bigint NOT NULL`
-- `status CHECK active|superseded`
-- `rollback_of_id uuid NULL`
-- `reason varchar(1000)`
-- `created_by`, `created_at`, `activated_at`
-- unique `(environment_id, connector_id, revision)`
-- partial unique su deployment `active` per Environment/Connector
+## Admin
 
-Publish/rollback acquisiscono advisory lock su Environment+Connector e committano versione/deployment/audit atomici.
+- `admin_principal`: chiave stabile issuer+subject e metadata visuali;
+- `admin_role_assignment`: ruolo globale o tenant-scoped, revocabile;
+- `admin_bootstrap`: stato del bootstrap Security Administrator;
+- `admin_session`: sessione server-side, digest cookie, scadenza e revoca;
+- `connector_approval`: request/decision four-eyes legata a version checksum e binding
+  digest.
 
-### `plugin_definition`
+## Provider catalog e locator
 
-- `id uuid PK`
-- `plugin_id`, `plugin_version`, `contract_version`
-- `package_sha256`, `publisher_thumbprint`, `manifest_json`
-- `status CHECK staged|approved|deployed|revoked`
-- unique `(plugin_id, plugin_version)`
+`provider_resource_catalog_version` contiene metadata pubblici/revisionati, scope
+Environment/Connector/operation, checksum e stato. `provider_resource_locator` associa
+la risorsa logica al locator fisico server-side; il client non lo seleziona e il normale
+runtime non può enumerarlo.
 
-Nessun package binario nel database; solo metadata del package installato dalla pipeline.
+Le funzioni `gateway.resolve_published_provider_locator(...)` sono
+`SECURITY DEFINER`, hanno `search_path` fisso e owner
+`gateway_locator_owner NOLOGIN/NOINHERIT`. Le migration 0009-0014 restringono il
+predicato a principal, grant, Published authority, binding/resource revision,
+capability, signing slot e input tipizzato pertinenti.
 
-### `session_reference`
+I locator possono rappresentare secret, certificati o chiavi server-side, ma non il
+valore. `SecretValues=false` del pack local PKCS#12 significa che nessuna funzione DB o
+fallback Gateway trasforma quel pack in generic secret provider.
 
-- `id uuid PK` usato internamente; riferimento esterno random opaco
-- `reference_hash bytea UNIQUE`
-- `installation_id`, `tenant_id`, `connector_id`, `operation_id`
-- `vault_ref varchar(1024)`
-- `expires_at`, `last_used_at`, `revoked_at`
-- `status CHECK active|expired|revoked`
+## Audit e invocation metadata
 
-Token/session value risiede nel Vault o nel Broker, mai in questa tabella.
+`audit_event` contiene attore, azione, target, outcome, reason, correlation e metadata
+redatti. `invocation_event` contiene Tenant/Installation/Connector/operation,
+correlation, outcome, durata, categoria esterna, error code e dimensione payload.
 
-### `idempotency_record`
+Non contengono body, Authorization/Cookie, secret, private key o response raw. Le primary
+key includono `(occurred_at, id)`, ma non esistono `PARTITION BY`, child partition o
+retention job nella baseline.
 
-- `installation_id`, `connector_id`, `operation_id`
-- `key_hash`, `request_hash`
-- `status CHECK inProgress|completed|failed`
-- `correlation_id uuid`
-- `created_at`, `expires_at`
-- PK sullo scope + `key_hash`
+## RLS e ruoli effettivi
 
-Non contiene response body.
+| Ruolo/identità | Uso corrente |
+|---|---|
+| owner che esegue le migration | DDL e bootstrap; le migration non creano un ruolo nominato `migration_owner`. |
+| `gateway_runtime` | Runtime/enrollment, replay, letture autorizzate e INSERT audit/invocation secondo grant/RLS. |
+| `gateway_admin` | Directory e amministrazione; la grant storica `SELECT, INSERT, UPDATE ON ALL TABLES` include oggi le tabelle audit. |
+| `gateway_readonly` | Subset di metadata sanificato. |
+| `gateway_locator_owner` | Owner NOLOGIN delle funzioni locator; CREATE sullo schema viene revocato dopo la definizione. |
 
-### `audit_event`
+RLS è `ENABLE` e `FORCE` sulle tabelle tenant-scoped. Le transazioni impostano il Tenant
+server-derived; le funzioni cross-scope hanno superficie stretta e grant espliciti. RLS
+non sostituisce la correzione della grant UPDATE amministrativa sull'audit.
 
-- `id uuid`, `occurred_at`, `tenant_id nullable`
-- `actor_type`, `actor_id`, `action`, `target_type`, `target_id`
-- `correlation_id`, `outcome`, `reason_code`
-- `metadata_redacted jsonb`
-- PK composta con `occurred_at` per partizionamento
+## Vincoli e indici rilevanti
 
-### `invocation_event`
+- uniqueness/status per Tenant/Application/Environment e Installation;
+- credential attiva unica e indici per Installation/status/expiry;
+- grant unico per Installation/Connector/operation;
+- una Published version per Connector e revisioni binding uniche;
+- principal issuer+subject e session digest unici;
+- catalog/locator revision e scope vincolati;
+- trigger di immutabilità per Published definition e active binding bundles.
 
-- `id`, `occurred_at`, `tenant_id`, `installation_id`
-- `connector_id`, `connector_version_id`, `operation_id`
-- `correlation_id`, `outcome`, `duration_ms`
-- `external_status_category`, `error_code`, `payload_bytes`
+## Modello target, non implementato
 
-Nessun body, header sensibile o Operator Secret.
+Le seguenti entità descritte in roadmap precedenti non esistono nelle migration
+`0001`..`0014`: `connector_operation`, `secret_binding`, `deployment`,
+`plugin_definition`, `session_reference`, `idempotency_record` e `health_status`.
 
-### `health_status`
+Sono inoltre target, non claim correnti:
 
-- `component_type`, `component_id`, `observed_at`
-- `status CHECK healthy|degraded|unhealthy|unknown`
-- `reason_code`, `metadata_redacted`
+- partizionamento e retention automatica di audit/invocation;
+- deployment revision multi-environment dedicato;
+- workflow/session durability PostgreSQL;
+- backup/PITR/restore e HA qualificati;
+- append-only DB completo per audit dopo revoca dei privilegi UPDATE/DELETE non necessari.
 
-## RLS e ruoli
-
-- `migration_owner`: DDL, non usato dal runtime.
-- `gateway_runtime`: invoke, enrollment e audit operativo.
-- `gateway_admin`: operazioni amministrative autorizzate.
-- `gateway_readonly`: health/reporting sanificato.
-
-RLS è `ENABLE` e `FORCE` sulle tabelle tenant-scoped. Ogni transazione imposta `SET LOCAL app.tenant_id = '<uuid>'` dopo autenticazione. Le operazioni cross-Tenant richiedono una funzione/ruolo amministrativo esplicito e auditato.
-
-## Indici
-
-- `(tenant_id, status)` e `(application_id, status)` su Installation.
-- `(installation_id, status, not_after)` su credential.
-- `(connector_id, state, version)` su ConnectorVersion.
-- GIN su `configuration_json` solo se un caso di query reale lo giustifica; non nell'MVP.
-- `(environment_id, connector_id) WHERE status='active'` su Deployment.
-- `(expires_at) WHERE status='active'` su session/idempotency.
-- `(correlation_id)` e BRIN `(occurred_at)` su audit/invocation.
-
-## Retention
-
-- Invocation event: 90 giorni.
-- Administrative audit: 365 giorni.
-- Health history: 30 giorni.
-- Idempotency: 24 ore.
-- Session metadata: scadenza + 30 giorni per audit, quindi cancellazione.
-- Partizioni scadute eliminate da job controllato e auditato.
-
-## Migrazioni
-
-- Tool separato eseguito dalla pipeline prima del rollout.
-- Expand/contract: aggiungere, dual-read/write se necessario, migrare, rimuovere in release successiva.
-- Nessun auto-migrate all'avvio dell'app.
-- Backup/PITR verificato prima di migration classificata high-risk.
-- Connector rollback non implica database rollback.
+Ogni adozione richiede migration additiva, fresh/upgrade/no-op, privilege/RLS test,
+documentazione e rollback application-compatible. Connector rollback non implica
+database downgrade.

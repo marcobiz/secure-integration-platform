@@ -1,7 +1,12 @@
-# Architettura implementata M2 — Gateway minimo
+# HISTORICAL — Architettura implementata M2 — Gateway minimo
 
 **Baseline di partenza:** `d1113d34a18e166c9eb0c14d8e11c3c1a1a20c12`
 **Perimetro:** M2; nessun adapter o vertical slice M3
+
+> Questo documento conserva l'architettura della baseline M2. Non descrive le
+> dipendenze correnti: da ADR-0019 il Core usa capability provider-neutral e i pack
+> Azure/local PKCS#12 dipendono dal Core, mai il contrario. Per la vista corrente vedere
+> [system architecture](system-architecture.md).
 
 ## Vista dei componenti
 
@@ -110,3 +115,7 @@ sono accettati soltanto per operation dichiarate idempotenti.
 
 Nessuna decisione ADR è stata deviata: l'operation catalog di startup è intenzionalmente
 un meccanismo M2 e non anticipa ConnectorVersion, publish o rollback M4.
+
+Le sezioni Azure/Key Vault sopra sono quindi evidence storica M2, non una claim di
+qualifica cloud corrente. La baseline attuale usa per default il Synthetic Provider e
+non include pack verticali nell'immagine Gateway Core.

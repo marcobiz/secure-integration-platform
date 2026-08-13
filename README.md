@@ -2,13 +2,17 @@
 
 Provider-neutral integration platform for on-premise and legacy software, with a Windows Local Broker, central Gateway, Connector Runtime and React administration console.
 
-The platform removes hard-coded secrets and distributed credentials while minimizing changes to existing products. Healthcare is a future vertical pack, not a dependency of the Core.
+The platform removes hard-coded secrets and distributed credentials while minimizing changes to existing products. Healthcare connectors are optional vertical packs, never dependencies of the Core.
 
 ![Sanitized Admin UI dashboard](docs/images/admin-dashboard.png)
 
 ## Status
 
-M0–M4 and the M3A product gate are complete. The M5 Admin UI MVP is undergoing review on its feature branch and is not yet a released baseline. M3B remains a separate Azure Deployment Pack qualification and is not required by the Core.
+M0-M5.5 and the provider-neutral authentication foundation are integrated. The active
+tracks are a narrow, non-production Core `0.1.0-alpha` and the separate FSE2 Organization
+OfficialTest track. M3B remains an unqualified Azure Deployment Pack gate and is not a
+Core dependency. See the [current dashboard](IMPLEMENTATION_STATUS.md); early-adopter,
+OfficialTest and production completion are not claimed.
 
 ## Local quick start, no cloud account
 
@@ -29,9 +33,9 @@ This starts PostgreSQL 18, a non-root Gateway with Admin UI, Synthetic Provider 
 - Gateway: Installation authentication, server-side tenant binding, grants, replay protection and restricted egress.
 - Connector Runtime/SDK: versioned JSON definitions, logical server-owned bindings and Published-only execution.
 - Admin UI/API: server-side OIDC, secure cookie, CSRF, RBAC, four-eyes, audit and health.
-- Provider abstractions and Synthetic Provider: a Core that builds and runs without cloud SDKs.
+- Provider abstractions and Synthetic Provider: a Core that builds and runs without cloud SDKs or vertical packs.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) and [OPEN_SOURCE_BOUNDARIES.md](OPEN_SOURCE_BOUNDARIES.md). Current non-goals include M3B cloud qualification, real healthcare connectors, commercial legacy adapters, marketplace, billing, HA/DR and M6+.
+See [ARCHITECTURE.md](ARCHITECTURE.md) and [OPEN_SOURCE_BOUNDARIES.md](OPEN_SOURCE_BOUNDARIES.md). Current non-goals include qualified cloud/production deployment, official-service healthcare qualification, commercial legacy adapters, marketplace, billing and HA/DR. Synthetic coverage, local laboratory execution and external qualification are distinct evidence levels.
 
 ## Build and test
 

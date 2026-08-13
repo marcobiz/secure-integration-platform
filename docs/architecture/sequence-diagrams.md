@@ -1,6 +1,9 @@
 # Diagrammi di sequenza
 
-## 1. Protezione di un segreto locale
+Le etichette distinguono sequenze **CURRENT**, foundation correnti non qualificate
+end-to-end e target. La numerazione è conservata per continuità storica.
+
+## 1. CURRENT — Protezione di un segreto locale
 
 ```mermaid
 sequenceDiagram
@@ -16,7 +19,7 @@ sequenceDiagram
   B-->>L: Opaque localSecretRef
 ```
 
-## 2. Cifratura di un dato locale
+## 2. CURRENT — Cifratura di un dato locale
 
 ```mermaid
 sequenceDiagram
@@ -31,7 +34,7 @@ sequenceDiagram
   B-->>L: Versioned authenticated envelope
 ```
 
-## 3. HMAC tramite Local Broker
+## 3. CURRENT — HMAC tramite Local Broker
 
 ```mermaid
 sequenceDiagram
@@ -45,26 +48,26 @@ sequenceDiagram
   B-->>L: Digest only
 ```
 
-## 4. Chiamata mTLS centralizzata
+## 4. CURRENT sintetico — Chiamata mTLS centralizzata
 
 ```mermaid
 sequenceDiagram
   participant L as Legacy
   participant B as Local Broker
   participant G as Gateway
-  participant V as Vault
+  participant V as Server-Side Provider
   participant E as External Service
   L->>B: InvokeGateway(connector, operation, body)
   B->>G: mTLS + timestamp + nonce + signed body hash
   G->>G: Resolve Installation, grant and published version
-  G->>V: Resolve vendor certificate
+  G->>V: Resolve purpose-bound client certificate
   G->>E: HTTPS mTLS to configured endpoint
   E-->>G: Response
   G-->>B: Validated response
   B-->>L: Response
 ```
 
-## 5. OAuth browser locale e token exchange centrale
+## 5. FOUNDATION CURRENT — OAuth authorization code e token exchange centrale
 
 ```mermaid
 sequenceDiagram
@@ -72,21 +75,25 @@ sequenceDiagram
   participant U as Browser
   participant B as Local Broker
   participant G as Gateway
-  participant V as Vault
+  participant V as Server-Side Provider
   participant I as Identity Provider
-  L->>U: Open authorization URL with state/PKCE
-  U-->>L: Authorization code
-  L->>B: Exchange(code, verifier, stateRef)
-  B->>G: Signed handoff
+  L->>B: Begin authorization for logical profile
+  B->>G: Signed handoff for authorized operation
+  G->>G: Generate state and S256 verifier; retain bounded one-time attempt
+  G-->>U: Approved authorization URL
+  U-->>G: Authorization callback with code and state
   G->>V: Resolve vendor client secret if required
   G->>I: Token exchange
   I-->>G: Access/refresh token
-  G->>V: Store persistent session secrets
+  G->>G: Keep bounded process-local token session
   G-->>B: Opaque sessionRef
   B-->>L: sessionRef
 ```
 
-## 6. Smart card locale
+La foundation è implementata e testata a livello modulo. Non costituisce una execution
+strategy OAuth host E2E o una qualifica di identity provider esterno.
+
+## 6. TARGET — Smart card locale
 
 ```mermaid
 sequenceDiagram
@@ -103,7 +110,7 @@ sequenceDiagram
   B-->>L: Signature and public certificate metadata
 ```
 
-## 7. Enrollment Installation
+## 7. CURRENT — Enrollment Installation
 
 ```mermaid
 sequenceDiagram
@@ -121,7 +128,7 @@ sequenceDiagram
   G-->>B: Enrollment policy and certificate metadata
 ```
 
-## 8. Revoca Installation
+## 8. CURRENT — Revoca Installation
 
 ```mermaid
 sequenceDiagram
@@ -136,7 +143,7 @@ sequenceDiagram
   G-->>B: 403 BGW-INSTALLATION-REVOKED
 ```
 
-## 9. Pubblicazione Connector
+## 9. CURRENT — Pubblicazione Connector
 
 ```mermaid
 sequenceDiagram
@@ -147,12 +154,15 @@ sequenceDiagram
   participant R as Runtime Cache
   E->>G: Save draft
   G->>G: JSON Schema and security validation
-  A->>G: Approve and publish
-  G->>D: Immutable version + deployment revision
-  G-->>R: Notify invalidation
+  E->>G: Request approval for exact version and binding digest
+  A->>G: Approve as distinct actor
+  A->>G: Publish with expected revisions
+  G->>D: Serializable transaction verifies approval, publishes and supersedes
+  G-->>R: Invalidate local cache
+  R->>D: Next invocation rechecks current Published stamp
 ```
 
-## 10. Rollback Connector
+## 10. CURRENT — Rollback Connector
 
 ```mermaid
 sequenceDiagram
@@ -160,32 +170,32 @@ sequenceDiagram
   participant G as Admin API
   participant D as Database
   participant R as Runtime Cache
-  A->>G: Rollback(target published version, reason)
-  G->>D: Create new deployment revision
-  G->>D: Append audit event
-  G-->>R: Invalidate active version
+  A->>G: Rollback(target Superseded version, reason, expected revision)
+  G->>D: Reactivate exact prior bytes and update active pointer/revision
+  G->>D: Append metadata-only audit event
+  G-->>R: Invalidate local cache; next invoke rechecks stamp
 ```
 
-## 11. Managed Connector
+## 11. CURRENT seam / TARGET packaged example — Connector execution module
 
 ```mermaid
 sequenceDiagram
   participant L as Legacy
-  participant B as Local Broker
-  participant G as Gateway
-  participant C as Managed Connector
+  participant G as Gateway Core
+  participant C as Installed Connector Module
   participant E as External Service
-  L->>B: Domain operation and payload
-  B->>G: Authorized invocation
-  G->>C: Validated execution context
-  C->>E: Protocol-specific request through restricted client
-  E-->>C: Protocol response
+  L->>G: Authorized operation and bounded payload
+  G->>G: Resolve principal, grant, Published authority and exact strategy
+  G->>C: Read-only business input and bounded capability bridge
+  C->>G: Request exact Published capability
+  G->>E: One restricted protocol-specific request
+  E-->>G: Bounded response
+  G-->>C: Bounded capability result
   C-->>G: Normalized result
-  G-->>B: Result
-  B-->>L: Result
+  G-->>L: Sanitized result
 ```
 
-## 12. Secure Layer pass-through
+## 12. CURRENT — Secure Layer pass-through
 
 ```mermaid
 sequenceDiagram
@@ -201,4 +211,3 @@ sequenceDiagram
   G-->>B: Validated pass-through response
   B-->>L: Response
 ```
-

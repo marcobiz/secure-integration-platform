@@ -1,6 +1,58 @@
 # Matrice di tracciabilità requisiti-test
 
-Questa matrice è la baseline. Durante l'implementazione gli ID di test logici vengono sostituiti/affiancati dai nomi reali delle suite e dai link ai report CI.
+Questa matrice distingue requisito, test nominativo, tipo di evidence e stato. Il riepilogo
+DOC-02 è riconciliato con exact-main
+`f2586b3e2f567f4054e36940416615261283c632`; le sezioni milestone successive conservano
+anche evidence storica legata ai candidate indicati.
+
+Stati usati:
+
+- `AUTOMATED`: suite ripetibile eseguita; il PASS vale per exact commit/run;
+- `EXTERNAL`: richiede un ambiente/servizio esterno e attestazione separata;
+- `MANUAL`: procedura operatore, non sostituita da un test automatico;
+- `DEFERRED`: lavoro pianificato non necessario per il claim corrente;
+- `BLOCKED`: una precondizione o finding noto impedisce il claim;
+- `UNVERIFIED`: componente/design presente senza evidence sufficiente.
+
+Un conteggio aggregato non sostituisce i test nominativi. Uno skip in un gate richiesto
+non è un PASS. Synthetic-qualified, live lab sintetico, OfficialTest e production sono
+livelli distinti.
+
+## Exact-main DOC-02 evidence map
+
+| Requisito/claim | Test o evidence nominativa | Tipo/stato exact-main |
+|---|---|---|
+| Core privo di dipendenze deployment/cloud | `ProviderBoundaryTests.Core_solution_excludes_deployment_packs_and_cloud_packages`, `ProviderBoundaryTests.Core_source_contains_no_provider_specific_Azure_types_or_generic_IKms` | `AUTOMATED` — PASS |
+| Pack verticali fuori dal Core/default Gateway | `HC_W1_ARCH_Core_does_not_reference_Healthcare_pack`, `HC_W1_ARCH_FSE2_domain_and_dual_JWT_concepts_are_absent_from_Core_source_and_export`, Core solution/export gate | `AUTOMATED` — PASS; vertical qualification separata |
+| Capability provider separate e local PKCS#12 senza generic secret retrieval | `ProviderBoundaryTests.Provider_contracts_are_capability_specific`, `ProviderBoundaryTests.Local_pkcs12_pack_remains_optional_provider_only_and_vertical_neutral`, `LOCAL_P12_generic_secret_retrieval_is_deny_only_without_filesystem_resolution` | `AUTOMATED`/synthetic — PASS; materiale reale non usato |
+| Tenant/Installation server-derived e runtime Broker/Direct comune | `M55_UT_Broker_and_Direct_principals_converge_on_the_same_runtime_pipeline`, `UT_GTW_Invoke_contract_has_no_client_controlled_endpoint_or_secret_reference`, `IT_DAT_PostgreSQL18_registry_enrollment_grant_replay_and_revocation_when_configured` | `AUTOMATED` — PASS |
+| Grant/Published authority e restricted egress | `UT_EGR_Ungranted_operation_is_denied_before_DNS_vault_or_transport`, `UT_EGR_Private_or_loopback_destination_is_rejected_before_transport`, `M5_UT_Runtime_cache_revalidates_catalog_revision_and_disable_on_every_invocation` | `AUTOMATED` — PASS sui percorsi sintetici; servizio esterno non qualificato |
+| OIDC/session/CSRF/RBAC/four-eyes | `M5_IT_Anonymous_is_denied_and_security_headers_are_present`, `M5_IT_Mutation_without_CSRF_is_denied`, `M5_UT_Editor_or_requester_cannot_approve_own_checksum`, `M5_IT_DAT_Approved_binding_digest_and_publication_are_atomic_under_concurrent_mutation_when_configured` | `AUTOMATED` — PASS; OIDC esterno `UNVERIFIED` |
+| PostgreSQL 18, ruoli e FORCE RLS | `IT_DAT_PostgreSQL18_migration_and_RLS_isolate_tenants_when_configured`, `M5_IT_DAT_Tenant_mutations_are_FORCE_RLS_correct_atomic_and_concurrent_when_configured`, `M5_IT_DAT_PostgreSQL18_runtime_locator_is_exactly_granted_and_not_enumerable_when_configured` | `AUTOMATED` — PASS con gate PostgreSQL 18 eseguito |
+| Audit metadata-only/runtime INSERT-only | `UT_SEC_Audit_is_metadata_only_and_excludes_payload_and_credentials`, `IT_DAT_Migration_forces_RLS_and_contains_no_secret_value_columns`, `M5_IT_DAT_Fault_injection_rolls_back_admin_state_and_audit_when_configured` | `AUTOMATED` — PASS |
+| Audit DB append-only contro admin | Migration `0001_gateway_m2.sql` concede `SELECT, INSERT, UPDATE ON ALL TABLES` a `gateway_admin`; non esiste un negative privilege test che neghi UPDATE audit | `BLOCKED`/`DEFERRED` — nessun fix prodotto in DOC-02 |
+| Quickstart no-cloud | `Invoke-M4Quickstart.ps1`, `Invoke-M5Quickstart.ps1`, `FULLSTACK-01`, container/secret/SBOM gate | `AUTOMATED` live lab sintetico — PASS; non cloud/production |
+| Azure M3B/cloud production | `m3-azure-smoke.yml`, `deploy/azure-bicep/m3-dev.bicep` | `EXTERNAL`/`UNVERIFIED` — nessun live PASS attestato |
+| Local PKCS#12 import/custody | `Test-Fse2LocalPkcs12Material.ps1` usa fixture per-run; importer default read-only | Lab sintetico `AUTOMATED`; import ufficiale `MANUAL`/`UNVERIFIED` |
+| FSE2 OfficialTest | Gate FSE2-T01..T06 in DOC-01; nessuna call live nella baseline | `EXTERNAL`/`BLOCKED`; primo outcome futuro `validate-cda` |
+| Early-adopter completion | Dipendenze `ALPHA-DOC-02/03`, `ALPHA-REST`, `ALPHA-DIRECT`, `ALPHA-CLEAN` → `ALPHA-ADOPT` | `BLOCKED` finché `ALPHA-ADOPT` non è chiuso |
+| Core export digest deterministico | `P3-CORE-EXPORT-DIGEST` sotto `ALPHA-ART`; il manifest raw contiene metadata run-specific | `DEFERRED`; non riapre PR #33 |
+
+### Riconciliazione PR #29-#34
+
+| PR integrata | Claim DOC-02 consentito | Evidence nominativa e limite |
+|---|---|---|
+| #29 typed composed request | Il Core compone un request SOAP tipizzato con input server-owned senza esporre provider/store/plaintext API. | `Wave1_SEC_external_bridge_typed_composed_SOAP_bound_to_A_denies_mutated_B_after_composition_before_dispatch`, `Wave1_E2E_PostgreSQL18_legacy_composed_profile_preserves_original_caller_envelope_without_republish_when_configured`; `AUTOMATED` PASS, nessuna qualifica vendor. |
+| #30 Published operation contract | Preflight semantico, path segment bounded e body mode restano authority Published/Core-owned. | `Wave1_SEC_external_strategy_requires_authoritative_Published_provider_and_dispatcher_before_scope_entry`, `Wave1_IT_PRODUCTION_HOST_PostgreSQL18_authorized_operation_projects_Published_paths_and_body_modes`; `AUTOMATED` PASS, nessun endpoint reale qualificato. |
+| #31 base image pins | Tutti i 14 `FROM` .NET nei 7 Dockerfile Git-tracked sono tag patch + manifest-list digest e inventario fail-closed. | `eng/validate-container-base-images.ps1 -SelfTest` e job container exact-revision; `AUTOMATED` PASS, non equivale a deployment cloud. |
+| #32 bounded Key Usage | `ContentCommitment` è una modalità esplicita separata; il default storico `DigitalSignature` non viene rilassato. | `M6_RS256_content_commitment_only_certificate_passes_only_with_explicit_content_commitment_policy`, `M6_RS256_digital_signature_only_certificate_is_denied_by_content_commitment_policy`, `M6_RS256_content_commitment_policy_denies_certificate_without_key_usage_extension`; `AUTOMATED` synthetic PASS, certificato/OfficialTest non qualificati. |
+| #33 local PKCS#12 lab | Pack opzionale, `SecretValues=false`, generic secret deny-only, materiale esterno/read-only e private-use revalidation. | `LOCAL_P12_generic_secret_retrieval_is_deny_only_without_filesystem_resolution`, `LOCAL_P12_private_use_revalidates_exact_chain_leaf_and_pkcs12_after_preflight`, `ProviderBoundaryTests.Local_pkcs12_pack_remains_optional_provider_only_and_vertical_neutral`; `AUTOMATED` synthetic PASS, import/live call non eseguiti. |
+| #34 DOC-01 | Governance Core/FSE2, dipendenze e P3 sono la source corrente; DOC-02 collega i claim senza riaprire i finding chiusi. | I cinque documenti DOC-01 restano invariati; exact-main/merge commit qualificato. |
+
+Le tabelle dettagliate sotto restano utili per i test nominativi. Qualsiasi stato
+“exact-head pending” associato a un vecchio candidate è storico e non prevale sul
+riepilogo exact-main sopra. API/OpenAPI/generated parity sarà riconciliata in DOC-03; la
+documentazione FSE2 dettagliata in DOC-04.
 
 ## Requisiti funzionali
 
@@ -31,13 +83,13 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 |---|---|
 | NFR-001 | `UT_SEC_Audit_is_metadata_only_and_excludes_payload_and_credentials`, `IT_GTW_Invalid_JSON_does_not_echo_canary_or_exception_details`, M6 unexpected metadata/sign/certificate exception canary tests, repository secret scan; M0/M1 Event Log 11-canary PASS-LIVE; M3-N15 canary scan container PASS |
 | NFR-002 | `UT_EGR_Ungranted_operation_is_denied_before_DNS_vault_or_transport`, `UT_EGR_Private_or_loopback_destination_is_rejected_before_transport`, cross-Tenant grant test |
-| NFR-003 | M2 transport TLS 1.2/1.3, hostname validation e DNS pinning; M3 synthetic CA/HTTPS/mTLS e certificato errato PASS in container; M6 purpose-bound mTLS server locale, hostname/cert rejection, expiry/purpose/rotation PASS; Key Vault/Managed Identity live PENDING |
+| NFR-003 | `AUTOMATED`: M2 transport TLS 1.2/1.3, hostname validation/DNS pinning, M3 synthetic CA/HTTPS/mTLS e M6 purpose-bound mTLS negatives; `EXTERNAL/UNVERIFIED`: provider/cloud live |
 | NFR-004 | IPC exact boundary/oversize pass; aggregate stream/backpressure aperti |
 | NFR-005 | M1 deadline/cancel/idempotent delete; M2 `UT_EGR_Transient_retry_occurs_only_for_idempotent_operation`; circuit breaker resta M7 |
 | NFR-006 | M2 correlation ID firmato/auditato e `traceparent` obbligatorio; propagazione Gateway→vendor PASS M3A container e Broker→Gateway PASS-LIVE run `m3a-live-20260805-094131` |
 | NFR-007 | `M4_CT_Sample_conforms_to_Draft_2020_12_and_is_canonical`, `M4_CT_Checksum_mismatch_is_rejected`, migration trigger + PG tamper test |
-| NFR-008 | clean build, SBOM, signature verification report |
-| NFR-009 | Windows and adapter compatibility matrix |
+| NFR-008 | `AUTOMATED`: clean build, base-image pin gate e SBOM SPDX; `DEFERRED`: artifact signing/provenance pubblicata |
+| NFR-009 | `DEFERRED`: Windows/native/COM adapter compatibility matrix; il client corrente è .NET |
 | NFR-010 | schema M2 contiene solo metadata redatti e nessun response body/secret value; test `IT_DAT_Migration_forces_RLS_and_contains_no_secret_value_columns` |
 
 ## Acceptance criteria
@@ -61,9 +113,9 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 | AC-015 | `M4_UT_Lifecycle_is_immutable_concurrent_and_rollback_reactivates_prior_publication`, PostgreSQL rollback test |
 | AC-016 | `M4_CT_Sample_conforms_to_Draft_2020_12_and_is_canonical`, invalid schema/version/binding/header/retry/checksum corpus |
 | AC-017 | `M4_UT_Runtime_denies_Draft_Validated_Retired_missing_and_missing_bindings`, stale cache and corrupted store tests |
-| AC-018 | PASS `gateway-container` run `30896803567`: build/esecuzione, non-root, read-only, live/ready, fail-closed, secret scan, SBOM e shutdown; nuova exact-head qualification richiede base image tag+digest, inventario Dockerfile esatto, parser fail-closed e build indipendente del Dockerfile Azure con pull/no-cache e revision verificata |
+| AC-018 | `AUTOMATED`: container build/esecuzione, non-root, read-only nei profili, live/ready, fail-closed, secret scan, SBOM e shutdown; ogni exact-head qualifica usa tag+digest, inventario/parser fail-closed e build indipendenti dei pack pertinenti |
 | AC-019 | ADR-0017 Accepted; MSI install/upgrade/repair/uninstall/reinstall matrix prevista in M9 |
-| AC-020 | `eng/build.ps1`, `global.json` SDK `10.0.302`, 12 base image tag+manifest-list digest e test Git sintetici end-to-end del validator fail-closed su inventario, parsing, platform, tag, digest e allineamento SDK |
+| AC-020 | `eng/build.ps1`, `global.json` SDK `10.0.302`, 14 `FROM` .NET nei 7 Dockerfile Git-tracked con tag+manifest-list digest e test end-to-end del validator fail-closed su inventario, parsing, platform, tag, digest e allineamento SDK |
 | AC-021 | primo slice storico; M3A container e Windows Service PASS con evidence redatta correlata; M3B PENDING |
 | AC-022 | SDK plus native/COM compatibility report |
 | AC-023 | E2E storico + M3 synthetic vendor API key/mTLS container PASS; smoke Azure PENDING |
@@ -81,19 +133,19 @@ Questa matrice è la baseline. Durante l'implementazione gli ID di test logici v
 |---|---|---|
 | OIDC/session/CSRF/logout | `M5_IT_Anonymous_is_denied_and_security_headers_are_present`, `M5_IT_Mutation_without_CSRF_is_denied`, `M5_IT_Logout_invalidates_cookie_session`, Production startup negative | PASS |
 | RBAC and tenant scope | `M5_UT_RBAC_honors_global_and_tenant_scoped_roles`, `M5_UT_Disabled_principal_is_rejected_before_role_resolution`, Viewer integration negative, E2E-24 privileged-action hiding | PASS |
-| Four-eyes/semantic approval | `M5_UT_Approval_review_is_semantic_canonical_and_contains_no_credential_value`, `M5_UT_Approval_digest_covers_every_catalog_and_certificate_revision_dimension`, PG18 transactional race, real Admin API→PostgreSQL approval/publication→provider→TLS/mTLS anti-exfiltration test with distinct attacker listener at zero requests, `UI-MOCK-29/33`, `FULLSTACK-01`; exact catalog/metadata/resource/certificate/binding revisions and digest equality | PASS local; exact-head CI pending |
-| Provider resource reference safety | Canonical `OperationBindingDependencies`; operation-specific runtime/cache context; structured `ProviderResourceReference`; `M5_UT_Runtime_resolves_only_bindings_required_by_invoked_operation`; `M5_IT_DAT_PostgreSQL18_runtime_locator_is_exactly_granted_and_not_enumerable_when_configured`; migration `0010` controlled function; direct/enumerated and A-to-B binding denial even with wildcard scope; wrong lifecycle/environment/revision denial | PASS 10/10 PG18; exact-head CI pending |
-| Published resource cache invalidation | Per-invocation publication/binding/resource stamps; `M5_UT_Runtime_cache_revalidates_catalog_revision_and_disable_on_every_invocation`; rotate/metadata/status failures deny without stale provider use | PASS local; exact-head CI pending |
+| Four-eyes/semantic approval | `M5_UT_Approval_review_is_semantic_canonical_and_contains_no_credential_value`, `M5_UT_Approval_digest_covers_every_catalog_and_certificate_revision_dimension`, PG18 transactional race, real Admin API→PostgreSQL approval/publication→provider→TLS/mTLS anti-exfiltration test with distinct attacker listener at zero requests, `UI-MOCK-29/33`, `FULLSTACK-01`; exact catalog/metadata/resource/certificate/binding revisions and digest equality | `AUTOMATED` — PASS |
+| Provider resource reference safety | Canonical `OperationBindingDependencies`; operation-specific runtime/cache context; structured `ProviderResourceReference`; `M5_UT_Runtime_resolves_only_bindings_required_by_invoked_operation`; `M5_IT_DAT_PostgreSQL18_runtime_locator_is_exactly_granted_and_not_enumerable_when_configured`; migration `0010` controlled function; direct/enumerated and A-to-B binding denial even with wildcard scope; wrong lifecycle/environment/revision denial | `AUTOMATED` — PASS PostgreSQL 18 |
+| Published resource cache invalidation | Per-invocation publication/binding/resource stamps; `M5_UT_Runtime_cache_revalidates_catalog_revision_and_disable_on_every_invocation`; rotate/metadata/status failures deny without stale provider use | `AUTOMATED` — PASS |
 | Installation/activation/revoke | Admin API integration plus E2E-12/13; activation absent from list | PASS |
 | Connector lifecycle/concurrency | M4 unit tests; PG18 `M5_IT_DAT_Approved_binding_digest_and_publication_are_atomic_under_concurrent_mutation_when_configured`; stale endpoint/secret/certificate/scope approval denial; FULLSTACK-01 import/approve/publish/retire | PASS local + CI |
 | Tenant FORCE RLS mutations | PG18 `M5_IT_DAT_Tenant_mutations_are_FORCE_RLS_correct_atomic_and_concurrent_when_configured`: create/update/disable, atomic audit rollback, wrong/absent/cross-tenant context denial, pooled-context isolation, non-superuser and FORCE RLS assertions | PASS 9/9 PG18 + CI |
-| Tenant/Application optimistic concurrency | `AdminConcurrencyTests`, Admin API ETag/428/400/409 tests, PostgreSQL barrier concurrency, `UI-MOCK-34/35/36`; Application compares display name, min/max Broker versions, status, action and both ETags for update/disable | PASS local; exact-head CI pending |
+| Tenant/Application optimistic concurrency | `AdminConcurrencyTests`, Admin API ETag/428/400/409 tests, PostgreSQL barrier concurrency, `UI-MOCK-34/35/36`; Application compares display name, min/max Broker versions, status, action and both ETags for update/disable | `AUTOMATED` — PASS |
 | Binding immutability and atomic audit | migration `0007`; PG18 direct tamper/non-superuser/fault-injection tests; middleware denial fail-closed integration | PASS local + CI |
 | Binding/grant/runtime invoke | exact Environment binding, grant, enrolled Installation BGW1+mTLS invoke, server-side API key/certificate, correlated audit and post-retire deny in `FULLSTACK-01` | PASS local + CI |
 | Pagination/selectors | unit and PG18 stable totals/order with 101 records; `UI-MOCK-31` selects records 51/101 by keyboard | PASS local + CI |
-| i18n/theme/a11y | Recursive backend emission inventory generates `runtime-wire-codes.json` and the typed frontend contract; exact backend/published/typed/IT/EN parity and known-code coverage; 28 Vitest; `UI-MOCK-16/17/18/20/22/25/28/30/31/32/33`; axe critical/serious = 0 | PASS local; exact-head CI pending |
+| i18n/theme/a11y | Recursive backend emission inventory generates `runtime-wire-codes.json` and the typed frontend contract; exact backend/published/typed/IT/EN parity and known-code coverage; named Vitest/UI-MOCK cases; axe critical/serious = 0 | `AUTOMATED` — PASS |
 | OpenAPI operational client | `AdminOpenApiParityTests`, generated `paths` client and `npm run check:api` | PASS local + CI |
-| Packaging/open-source boundary | production Gateway/full-stack, Core export build/test/license/secret gates; candidate export 295 files, manifest `59379E70...32AAE6C4` | PASS local + CI |
+| Packaging/open-source boundary | Gateway/full-stack and Core export build/test/license/secret gates; `ProviderBoundaryTests`, Core export validation and manifest hash verification | `AUTOMATED` — PASS; raw manifest SHA non deterministico cross-run, P3 deferred |
 | Secret scanner negative control | hidden/untracked synthetic `client_secret` fixture must fail; fixture removal followed by clean scan must pass | PASS local + CI |
 
 ## M5.5 Direct Gateway Access
@@ -320,7 +372,7 @@ was reused without a new subsystem.
 | Exact Published A before signing and after DNS | `Wave1_SEC_Published_A_to_B_during_policy_preflight_denies_before_signing_and_network`; dynamic-template `Wave1_SEC_Published_A_to_B_after_DNS_denies_before_restricted_transport` | PASS local; zero later signing/network effect |
 | Historical static path/body request/checksum and immutable Published compatibility | fixed `D0FF…D7A` checksum regression, legacy hosted Bearer/restricted body continuation, constructor reflection inventory; no storage/locator change | PASS local; no migration or republish required |
 | Production-host PostgreSQL 18 path | `Wave1_IT_PRODUCTION_HOST_PostgreSQL18_authorized_operation_projects_Published_paths_and_body_modes` | PASS in the dedicated PostgreSQL 18.4 gate; fresh apply/no-op and 198/198 Gateway integration tests with no skip |
-| TM-087/TM-088/TM-089/TM-090 | `SEC-W1-OP-001/002/003/004` mappings in the threat model | Targeted and full local product gates PASS, including Admin/full-stack, scans and complete SBOM; final documentation-head Core export/local rerun, exact-head CI and independent review remain gates |
+| TM-087/TM-088/TM-089/TM-090 | `SEC-W1-OP-001/002/003/004` mappings in the threat model | `AUTOMATED` — targeted, full repository, PostgreSQL 18, Admin/full-stack, scans/SBOM and exact-head PR #30 gates PASS; external-service qualification not claimed |
 
 ## Healthcare Wave 1 — Regional ePrescription foundation
 
@@ -357,7 +409,7 @@ available. Generic M6 auth tests are regression evidence only, not regional supp
 | S1 contentCommitment and A1 separation | Hosted synthetic S1 certificate contains only `NonRepudiation`; both Published slots explicitly require `contentCommitment`; A1 contains `DigitalSignature`, has a distinct SPKI and remains governed by the unchanged mTLS validator | PASS targeted local; official material not accessed or imported |
 | Local no-cloud provider boundary | `BrokerGateway.LocalPkcs12.slnx`; optional pack under `packs/deployment/local-pkcs12`; exact logical references, closed manifest without Secret, `SecretValues=false`/deny-only slot, no caller path/key selection, per-private-use exact manifest/P12/leaf/chain revalidation with pinned `CustomRootTrust`, ephemeral load and no private export; no new public Core API and default Gateway image remains pack-independent | PASS 30/30 synthetic provider tests; real material not accessed |
 | Offline import and custody gate | `New-Fse2LocalPkcs12Material.ps1` defaults read-only; common fail-closed path policy rejects repository/UNC/device/ADS/network/reparse ancestors and parent substitution; mandatory signed A1/S1 CSR plus exact key↔CSR↔certificate SPKI, distinct roles, out-of-band fingerprints and trust all pass before output; explicit runtime principal receives exact minimum ACL and cleanup is marker/identity-owned | PASS synthetic preflight/create and 15 importer/ACL negatives; operational import NOT PERFORMED |
-| Local Compose qualification | One canonical Compose validator is called locally and by General CI; opt-in overlay first completes canonical Synthetic quickstart, then recreates only Gateway with server-owned A1/S1 bindings. Active lab proves Linux provider non-root/read-only, TLS live/ready, one synthetic signature and client certificate, tamper live 200/ready 503 with zero private operations, stop without material/env and partial-start cleanup; foreign label preserved | PASS local; exact-head CI pending; zero project container/network/volume/temp; LIVE_FSE2_CALLS=0 |
+| Local Compose qualification | One canonical Compose validator is called locally and by General CI; opt-in overlay first completes canonical Synthetic quickstart, then recreates only Gateway with server-owned A1/S1 bindings. Active lab proves Linux provider non-root/read-only, TLS live/ready, one synthetic signature and client certificate, tamper live 200/ready 503 with zero private operations, stop without material/env and partial-start cleanup; foreign label preserved | `AUTOMATED` synthetic — PR #33 integrated PASS; cleanup zero; `LIVE_FSE2_CALLS=0`; OfficialTest/import non eseguiti |
 | Published-A final authority | Core capability dispatcher retains the initial opaque Published stamp for preflight, both signs, composed request and transport; `FSE2_SEC_Published_A_to_B_after_policy_preflight_before_first_signing_has_zero_signing_and_network` publishes B after successful preflight and before the first private-key effect, then asserts stale denial with signing/FSE2 network/generic transport zero; focused Core races retain preflight, post-composition/pre-transport, post-DNS, stale and expiry coverage | PASS targeted local and exact-candidate CI 21/21 |
 | Published dynamic path and body mode | All 11 definitions use whole-segment Core `pathTemplate` with catalog-owned canonical parameter names; caller supplies only opaque values. DELETE and both status GETs use NONE and wire asserts no `HttpContent`, zero body and absent Content-Type; payload operations use REQUIRED. Negatives cover missing/caller-named values, slash/backslash, percent, query/fragment, dot segments, non-NFC and oversize; generic Core tests retain missing/extra/duplicate and legacy-required compatibility | PASS local |
 | Payload/catalog/CX/XON/OID hardening | Defensive caller snapshot; deterministic final multipart bytes feed both digest and body transport; frozen/immutable catalog and canonical CX/XON/OID vectors; all-operation server recomputes required digests over network bytes | PASS local |
@@ -381,7 +433,7 @@ available. Generic M6 auth tests are regression evidence only, not regional supp
 | Immutable exact bytes and complete Published A freshness before network | `Wave1_SEC_external_bridge_typed_composed_SOAP_bound_to_A_denies_mutated_B_after_composition_before_dispatch` covers adapter, mapping, QName, binding, resource, action, endpoint and strategy; all keep business network at zero and never adopt B | PASS targeted local |
 | Historical composed-SOAP uses the original caller envelope without rewrite/republish | `Wave1_E2E_PostgreSQL18_legacy_composed_profile_preserves_original_caller_envelope_without_republish_when_configured`; architecture assertion `typedRequest?.Bytes ?? execution.Payload`; existing composed regression suites | PASS local including PostgreSQL 18.4 |
 | PostgreSQL 18 locator, fresh/second apply and least privilege | additive migration `0014_typed_composed_soap_request_inputs.sql`; static owner/revoke/grant/no-enumeration assertions; canonical full external no-IVT hosted E2E | PASS: 191/191 Gateway integration, zero skip, fresh/no-op migration and runtime least privilege |
-| TM-083/TM-084/TM-085/TM-086 | `SEC-W1-COMPOSE-001/002/003/004` mappings in the threat model | Targeted, full repository, PostgreSQL, Admin/full-stack, scans/SBOM/Gitleaks and Core export PASS; exact-head CI and independent review pending |
+| TM-083/TM-084/TM-085/TM-086 | `SEC-W1-COMPOSE-001/002/003/004` mappings in the threat model | `AUTOMATED` — targeted, full repository, PostgreSQL 18, Admin/full-stack, scans/SBOM/Core export and exact-head PR #29 gates PASS; service-specific qualification not claimed |
 
 ## Security threats
 

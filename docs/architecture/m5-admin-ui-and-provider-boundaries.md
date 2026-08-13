@@ -41,6 +41,11 @@ flowchart BT
 
 Il Core è l'insieme di Domain, Application, Infrastructure provider-neutral, API, Broker, SDK, contratti e provider sintetico. Il pack Azure è un consumer opzionale delle sole astrazioni.
 
+Questa direzione resta invariata dopo M5: il pack local PKCS#12 è un secondo consumer
+opzionale e il Gateway image predefinito non include né quel pack né moduli healthcare.
+Il pack locale dichiara `SecretValues=false`; il relativo generic secret provider è
+deny-only, mentre certificate, public material e signing restano capability distinte.
+
 ## Flusso di autenticazione Admin
 
 ```mermaid
@@ -129,3 +134,7 @@ Solo la porta HTTPS del Gateway è pubblicata. PostgreSQL, provider sintetico e 
 ## Confini open source
 
 L'export OSS usa una allowlist versionata, crea una directory temporanea, ricalcola un manifest SHA-256, esegue scansioni license/secret e compila/testa la soluzione Core esportata. Sono esclusi pack Azure, futuri pack sanitari, adapter commerciali, raw evidence e report interni. L'export non pubblica repository remoti.
+
+Il digest del manifest dipende anche dal contenuto/run dell'export e non è trattato come
+un valore deterministico cross-run. La normalizzazione futura resta lavoro di
+`ALPHA-ART` (`P3-CORE-EXPORT-DIGEST`), non una regressione del provider boundary.

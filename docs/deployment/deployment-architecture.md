@@ -1,204 +1,161 @@
 # Deployment e packaging
 
-## Local Broker
+Questo documento separa gli artefatti **CURRENT** dai target di release e produzione.
+La presenza di un ADR, Dockerfile o skeleton IaC non equivale a packaging pubblicato,
+qualifica cloud o readiness production.
 
-### Artefatti
+## CURRENT — Local Broker
 
-- Windows service x64.
-- MSI WiX Toolset 7 firmabile.
-- SDK .NET NuGet.
-- DLL C ABI e COM x86/x64.
-- CLI e diagnostics tool.
-- Application manifest e configuration template.
-- Migration/repair tool e documentazione unattended install.
+Sono presenti il Windows Service .NET, la configurazione, lo SDK .NET in sorgente e gli
+script PowerShell `deploy/windows/install-service.ps1` e `uninstall-service.ps1`.
 
-### Installazione
+Non sono presenti come artefatti distribuibili e qualificati:
 
-L'MSI:
+- MSI/WiX con install/repair/upgrade/rollback/uninstall matrix;
+- DLL C ABI, COM/type library o pacchetti x86/x64;
+- NuGet/CLI pubblicati e firmati;
+- updater, recovery o rollback package.
 
-1. verifica versione Windows e prerequisiti;
-2. installa binari in Program Files;
-3. crea virtual service account/service SID e local group client;
-4. crea ProgramData e ACL esplicite;
-5. registra il servizio con delayed automatic start e recovery policy;
-6. inizializza metadata senza creare segreti vendor;
-7. installa manifest Application solo se firmati/forniti dal package;
-8. esegue health check locale;
-9. effettua rollback completo in caso di errore.
+Gli script Windows sono strumenti di sviluppo/laboratorio e non chiudono AC-019.
 
-Upgrade conserva state, CNG key e DPAPI blob. Downgrade non compatibile è rifiutato; rollback usa il precedente MSI solo se la matrice storage/protocol lo consente.
+## CURRENT — container Core
 
-### File permission
+Il repository contiene immagini distinte per `Gateway.Api` e `Gateway.Migrations`. Il
+Gateway non esegue auto-migrate all'avvio. L'immagine Gateway usa una base ASP.NET Debian
+pinned per tag patch e manifest-list digest e gira come utente non-root. Non è chiseled e
+la base contiene una shell. Read-only filesystem e `tmpfs` sono imposti dai profili
+Compose/CI che li configurano, non dal Dockerfile isolato.
 
-- Program Files: read/execute utenti autorizzati, write TrustedInstaller/Administrators.
-- ProgramData config non sensibile: read service/admin.
-- State/keys/cache/audit: service, SYSTEM e Administrators; nessun client diretto.
-- Pipe: service + local client group, con autorizzazione applicativa ulteriore.
+`/health/live` verifica il processo. `/health/ready` verifica registry e provider health;
+non prova HA, backup, restore o conformance di un servizio esterno.
 
-## Gateway container
+### Base image .NET
 
-- Multi-stage build pinned sulla patch .NET approvata tramite tag esatto e digest
-  della manifest list; i tag mobili non sono ammessi.
-- Runtime image chiseled/minimal, non-root e read-only filesystem.
-- Solo directory temporanea dedicata scrivibile.
-- Nessun shell/tool di build nell'immagine runtime.
-- `/health/live` non controlla dipendenze.
-- `/health/ready` controlla DB, Vault metadata e cache config, senza invocare servizi esterni costosi.
-- Migrazioni database come tool/job distinto, non all'avvio.
+`global.json` seleziona SDK `10.0.302` con `rollForward: latestPatch`. Ogni
+`FROM mcr.microsoft.com/dotnet/...` usa un tag patch leggibile e il digest della manifest
+list. I tag mobili, `ARG`/interpolazione e `FROM --platform` .NET sono negati.
 
-### Provenance delle base image .NET
+`eng/validate-container-base-images.ps1` è il controllo fail-closed. Sulla baseline
+corrente l'inventario repository è di sette Dockerfile Git-tracked e quattordici
+occorrenze `FROM` .NET:
 
-`global.json` seleziona SDK `10.0.302` con `rollForward: latestPatch`. Un tag mobile
-come `sdk:10.0` può spostarsi a una feature band successiva e rendere il build
-deterministicamente non eseguibile anche quando commit e lock file non cambiano. Per
-questo ogni `FROM mcr.microsoft.com/dotnet/...` deve usare insieme un tag patch
-leggibile e il digest della manifest list nel formato
-`repository:exact-tag@sha256:manifest-list-digest`; il tag senza digest e il digest
-senza tag sono entrambi vietati.
+- `src/Gateway/Gateway.Api/Dockerfile`;
+- `src/Gateway/Gateway.Migrations/Dockerfile`;
+- `packs/deployment/azure/Dockerfile`;
+- `packs/deployment/local-pkcs12/Dockerfile`;
+- `tools/m3/VendorMock/Dockerfile`;
+- `tools/m3/SyntheticVault/Dockerfile`;
+- `tools/m3/Provisioner/Dockerfile`.
 
-Pin approvati:
+Il validator controlla inventario ordinale, parser, tag/digest, mapping e allineamento
+SDK. Un nuovo Dockerfile o una rotazione dei pin richiede modifica intenzionale del
+controllo, build con pull/no-cache, non-root/read-only gate, secret/vulnerability scan,
+SBOM e qualifica exact-head. Un profilo export senza metadata Git ha un inventario Core
+separato e non riduce il controllo del repository.
 
-| Famiglia | Riferimento |
-|---|---|
-| SDK non-Alpine | `mcr.microsoft.com/dotnet/sdk:10.0.302@sha256:72dd743782f2ae7e5476fd64f6a460045e3998dc862218b80e6944cba79a01b0` |
-| SDK Alpine | `mcr.microsoft.com/dotnet/sdk:10.0.302-alpine3.24@sha256:979da27fc87dc255f4675b7642556cdcba9307459f8891f85f3cc26edcd7e766` |
-| ASP.NET non-Alpine | `mcr.microsoft.com/dotnet/aspnet:10.0.11@sha256:207cc51496778557731c81ff670333d8ade4a4fec22768fd1be8e78474a84ecf` |
-| Runtime non-Alpine | `mcr.microsoft.com/dotnet/runtime:10.0.11@sha256:acad02eb5c4fbf57d15296f9c08d56cd4036e915bdae5b4dd48a06523d452617` |
-| ASP.NET Alpine | `mcr.microsoft.com/dotnet/aspnet:10.0.11-alpine3.24@sha256:c4b29bf368004ad9076c1ab9bc91fb373561e3905b4345637e14e8b8c57e3be8` |
-| Runtime Alpine | `mcr.microsoft.com/dotnet/runtime:10.0.11-alpine3.24@sha256:216f4e2027da6ae806e0bc4b448669ac0faa00125908e308f31dd70598e58136` |
+## CURRENT — quickstart locale senza cloud
 
-`eng/validate-container-base-images.ps1` è il controllo canonico fail-closed. L'inventario
-repository ammesso è esattamente: `src/Gateway/Gateway.Api/Dockerfile`,
-`src/Gateway/Gateway.Migrations/Dockerfile`, `packs/deployment/azure/Dockerfile`,
-`packs/deployment/local-pkcs12/Dockerfile`,
-`tools/m3/VendorMock/Dockerfile`, `tools/m3/SyntheticVault/Dockerfile` e
-`tools/m3/Provisioner/Dockerfile`. Il confronto dei path Git-tracked è normalizzato,
-ordinale ed esatto: un file mancante, aggiuntivo o ambiguo fallisce anche se non contiene
-un `FROM` .NET. Il parser accetta soltanto `FROM [--platform=<literal>] <reference>
-[AS <stage>]`; per i `FROM` .NET `--platform` è vietato e qualsiasi sintassi non parsata,
-ARG o interpolazione fallisce. Restano obbligatori il mapping ordinato delle 14 occorrenze,
-l'allowlist tag/digest e l'allineamento SDK con `global.json`.
-La presenza di `OPEN_SOURCE_EXPORT_MANIFEST.json` non può ridurre questo inventario in un
-worktree Git: il profilo repository resta autoritativo quando la root contiene metadata
-`.git`. Il profilo Core export a cinque Dockerfile è selezionabile soltanto nell'export
-generato senza metadata Git e con il relativo manifest.
+I quickstart M4/M5 compongono:
 
-`eng/build.ps1` esegue sempre il validator e la CI lo espone prima di ogni build container
-interessato. Il job General `gateway-container` costruisce obbligatoriamente anche
-`packs/deployment/azure/Dockerfile` con `--pull --no-cache`, applica la label
-`org.opencontainers.image.revision` dell'exact candidate SHA e verifica sia label sia
-image ID indipendentemente dalle immagini Gateway e Migrations.
+- PostgreSQL 18 e provisioner/migration runner;
+- Gateway non-root con Admin UI statica;
+- Synthetic Provider;
+- mock vendor HTTPS/mTLS;
+- fixture, CA e credenziali sintetiche per-run sotto `.artifacts` ignorata.
 
-### Aggiornamento intenzionale dei pin
+M4 usa la CLI per elencare e testare un Connector Published. M5 aggiunge
+DevelopmentAuth locale, enrollment reale challenge/PoP, ruoli distinti, four-eyes,
+binding/grant, runtime mTLS/BGW1, audit e post-retire denial. Solo la porta HTTPS Gateway
+è pubblicata su loopback; PostgreSQL, provider e mock restano nella rete Compose privata.
 
-1. Se cambia l'SDK, approvare prima la modifica separata di `global.json`; altrimenti
-   il tag SDK deve mantenere esattamente `10.0.302`, inclusa ogni variante distro.
-2. Interrogare MCR per il tag patch scelto e registrare il digest della manifest list,
-   non il digest platform-specific. Verificare almeno tutte le architetture già
-   supportate (`linux/amd64`, `linux/arm/v7`, `linux/arm64`).
-3. Eseguire l'immagine con pull forzato e verificare `dotnet --version` oppure
-   `dotnet --list-runtimes`. Aggiornare tag e digest insieme nei Dockerfile e
-   nell'allowlist del validator nello stesso commit reviewable.
-4. Eseguire `eng/validate-container-base-images.ps1 -SelfTest`, quindi costruire tutti
-   i sette Dockerfile con `--pull` e, per la qualificazione, senza affidarsi soltanto
-   alla cache locale.
-5. Rieseguire non-root/read-only, health/readiness, shutdown, TLS, secret scan,
-   vulnerability inventory, SBOM, cleanup e tutti i container/quick-start gate
-   General e M5/Admin sulla nuova exact head.
+Questi gate sono ambienti di build/test/evaluation. Non sono deployment cloud,
+OfficialTest o production. Il PostgreSQL del Compose usa SSL disabilitato all'interno
+della rete privata: non è evidenza di TLS database production.
 
-Un nuovo Dockerfile Git-tracked richiede una modifica intenzionale dell'inventario e del
-mapping nel validator, i relativi test end-to-end e la qualifica completa del nuovo build;
-non può essere introdotto come file non ancora coperto dal controllo.
+Runbook:
 
-Non si usa `--pull=false`, non si installa una seconda SDK nel build e non si effettua
-un rerun same-SHA per mascherare un drift già osservato. La failure main che motiva
-l'aggiornamento resta parte dell'evidenza di release.
+- [M4 local quickstart](../operations/M4-QUICKSTART.md);
+- [M5 Admin quickstart](../operations/M5-ADMIN-QUICKSTART.md).
 
-## Azure production profile
+## CURRENT, opt-in — pack local PKCS#12
 
-| Componente | Scelta |
-|---|---|
-| Compute | Linux Azure App Service for Containers, Premium plan per production. |
-| Registry | Azure Container Registry con immutable tags/repository policy. |
-| Vault | Azure Key Vault, RBAC e Managed Identity. |
-| Database | PostgreSQL Flexible Server 18, zone-redundant per profilo critical. |
-| Network | VNet integration, DB private access/firewall, Vault network policy. |
-| Observability | Application Insights + Log Analytics dopo redaction. |
-| IaC | Bicep modules e environment parameter files. |
-| Identity | User-assigned Managed Identity per Environment. |
+`packs/deployment/local-pkcs12` è un pack esterno alla solution/export Core. Dipende solo
+dalle astrazioni provider-neutral, dichiara `SecretValues=false` e fornisce un generic
+secret provider deny-only. Il Gateway non richiede secret retrieval quando la Published
+operation usa le capability certificate/signing dichiarate.
 
-App Service ha client certificate mode opzionale a livello TLS per permettere enrollment/Admin sullo stesso processo; le runtime route richiedono certificate authentication applicativa e request signature. Nel self-hosted si usano listener Kestrel distinti.
+L'overlay `deploy/fse2/docker-compose.fse2-local.yml` è opt-in e ricrea soltanto il
+Gateway dopo il quickstart sintetico canonico. Manifest e materiale sono montati
+read-only da path esterni a Git; il container resta non-root/read-only.
 
-### Environment isolation
+La qualifica repository usa esclusivamente fixture PKCS#12/CSR/certificati sintetiche
+per-run e prova validation, firma/certificato, readiness e tamper handling. Non importa
+materiale ufficiale, non stabilisce custody HSM/KMS, non pubblica un profilo e non esegue
+chiamate FSE2 live. Certificati ricevuti/correlati e import operativo restano eventi
+distinti.
 
-- Subscription o resource group separati per dev/test/preprod/prod.
-- Key Vault e Managed Identity distinti.
-- Nessuna promozione copiando secret value; si promuovono logical binding e si predispone il valore nel Vault target.
-- Database distinti; fixture sintetiche soltanto fuori produzione.
-- ConnectorVersion promossa mantenendo checksum e provenance.
+## CURRENT — pack Azure e Bicep
 
-### Private Endpoint e WAF
+`packs/deployment/azure` è opzionale ed escluso dal Core. Il pack dipende dalle stesse
+capability provider-neutral; il Core non contiene SDK o tipi Azure.
 
-- Private Endpoint per DB/Vault raccomandato nel profilo regulated/critical, non obbligatorio per lo sviluppo.
-- WAF/Front Door viene introdotto quando esiste un requisito DDoS, geo-routing o public Admin exposure; non sostituisce l'autenticazione del Gateway.
+`deploy/azure-bicep/main.bicep` è uno skeleton/contratto; `m3-dev.bicep` è un template
+smoke non-HA per il laboratorio M3B. M3B non ha una qualifica live attestata sulla
+baseline. La presenza del pack, del Dockerfile e del Bicep non dimostra App Service,
+Key Vault, Managed Identity, rete privata, PostgreSQL Flexible Server, observability o
+backup/restore operativi.
 
-## Self-hosted
+## CURRENT — loader di moduli
 
-Docker Compose di sviluppo/valutazione:
+Il loader richiede configurazione deployment con path DLL assoluto su drive locale,
+assembly full name, module type e module ID. Nega UNC/device/mapped path, traversal,
+reparse e duplicati; legge byte bounded una volta, controlla identity/MVID e carica lo
+stesso buffer.
 
-- Gateway;
-- PostgreSQL 18;
-- mock external service;
-- opzionale OpenTelemetry collector.
+Non verifica ancora manifest/hash atteso, CMS o publisher allowlist. ACL e provenance
+dei byte sono responsabilità del deployment. Un modulo caricato è full-trust in-process.
+Il Gateway Core predefinito non include moduli healthcare; una vertical image downstream
+non può invertire la dipendenza verso il Core.
 
-Per il laboratorio FSE2 senza cloud è disponibile l'overlay opt-in
-`deploy/fse2/docker-compose.fse2-local.yml`. Esso usa l'immagine
-`packs/deployment/local-pkcs12/Dockerfile`, monta manifest e materiale esterni a Git in read-only e
-carica il Connector pack FSE2. Non modifica l'immagine Gateway predefinita, non costituisce custody
-di produzione e non abilita call live in modo implicito; si applica il runbook
-`docs/operations/FSE2-LOCAL-PROVIDER-RUNBOOK.md`.
+## CURRENT — SBOM ed export
 
-Il provider produttivo iniziale resta Azure Key Vault. Su infrastruttura non Azure, la credenziale di accesso al Vault viene fornita tramite workload identity/federation o secret esterno al repository. Il LocalDevelopment provider rifiuta `Production`.
+`eng/generate-sbom.ps1` produce documenti SPDX e un aggregate manifest con SHA-256 ed
+exact commit. Il manifest grezzo include attributi run-specific: il suo SHA non è un
+digest deterministico cross-run. `P3-CORE-EXPORT-DIGEST` resta lavoro futuro di
+normalizzazione sotto `ALPHA-ART`.
 
-## Bicep modules
+L'export Core usa allowlist e gate boundary/license/secret/build/test. Non pubblica un
+repository o una release. Non esiste ancora pipeline di `dotnet pack`/NuGet push,
+container push, Authenticode, CMS, Cosign o release SemVer.
 
-```text
-/deploy/azure-bicep
-  main.bicep
-  modules/app-service.bicep
-  modules/container-registry.bicep
-  modules/key-vault.bicep
-  modules/postgresql.bicep
-  modules/observability.bicep
-  modules/network.bicep
-  environments/*.bicepparam
-```
+## TARGET — Core `0.1.0-alpha`
 
-What-if, lint e policy check precedono ogni apply. Output sensibili non vengono stampati dalla pipeline.
+Artefatti e gate sono definiti in
+[`0.1.0-alpha-scope.md`](../implementation/0.1.0-alpha-scope.md). Il target è una developer
+alpha non-production con un solo golden path REST sintetico, checksum/SPDX/vulnerability
+inventory, source archive, clean-clone e istruzioni riproducibili.
 
-## Release e signing
+Licenza, security channel, versioning/tag, packaging e `ALPHA-ADOPT` restano gate aperti.
+Non dichiarare early-adopter completion finché `ALPHA-ADOPT` non è chiuso. MSI/native/COM
+non sono parte del golden path supportato.
 
-- Build unsigned ripetibile disponibile senza credenziali esterne.
-- Pipeline production firma PE/MSI/NuGet con certificato custodito esternamente.
-- Container firmato Cosign con OIDC/keyless o chiave del cliente.
-- Plugin/Connector Pack con detached CMS signature.
-- SBOM SPDX JSON e CycloneDX JSON.
-- Release manifest: versione, commit, toolchain, artifact hash, signature, SBOM e compatibility.
+## TARGET — FSE2 OfficialTest
 
-## Rollout
+La track verticale richiede image/composizione FSE2, Published OfficialTest binding,
+provider/custody, import operativo, driver sicuro ed evidence redatta. Il primo outcome
+futuro è `validate-cda`. Una prova sintetica o il laboratorio local PKCS#12 non chiudono
+questi gate; OfficialTest non equivale a production.
 
-1. Migration expand compatibile.
-2. Deploy preprod e smoke/security tests.
-3. Production slot/canary con readiness.
-4. Switch controllato e monitoraggio error rate/latency.
-5. Rollback immagine se necessario; schema resta backward-compatible.
-6. Connector deployment e rollback sono indipendenti dall'immagine.
+## TARGET — production/enterprise
 
-## Backup e DR
+Prima di claim production servono almeno:
 
-- PostgreSQL PITR retention predefinita 35 giorni in produzione.
-- Backup/restore test periodico in Environment isolato.
-- Key Vault soft delete e purge protection in produzione.
-- Bicep e Connector definitions consentono ricostruzione del control plane.
-- Local Broker recovery segue ADR-0014.
-- RPO/RTO contrattuali vengono fissati prima del pilot; il profilo critical abilita HA zone-redundant e strategia cross-region.
+- installer/pacchetti firmati e compatibility matrix;
+- artifact signature/provenance e registry/release controls;
+- IaC qualificata per rete, provider, PostgreSQL, observability e isolation;
+- migration rollout, canary/rollback, backup/PITR e restore test;
+- RPO/RTO, load/soak, pentest, incident response, rotation e monitoring;
+- hardening DB audit append-only e least privilege dimostrato.
+
+Questi controlli richiedono un target reale e gate exact-head/ambiente. Non sono dedotti
+dai laboratori sintetici o dagli ADR.

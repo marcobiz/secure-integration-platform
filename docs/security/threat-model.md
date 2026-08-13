@@ -41,15 +41,15 @@
 | TM-008 | S/E | Client dichiara altro Tenant/Installation. | Identità derivata dal certificato; campi ignorati/rifiutati. | Mitigato. |
 | TM-009 | I/E | Query cross-Tenant per bug. | Composite FK, RLS, query filters, negative tests. | Mitigato con defense in depth. |
 | TM-010 | I | Furto database Gateway. | Nessun secret value, encryption at rest, DB roles. | Metadata/audit restano sensibili. |
-| TM-011 | I/E | Gateway compromesso usa Vault. | Managed Identity least privilege, secret scope, alert e rotation. | Parziale: TCB compromessa. |
-| TM-012 | I/E | Vault compromesso. | RBAC, versioning, network restriction, audit e revocation. | Rischio residuo esterno alla piattaforma. |
+| TM-011 | I/E | Gateway compromesso usa il provider configurato. | Capability separate, identity deployment least-privilege, resource scope/revision, redaction, alert e rotation operativa. | Parziale: Gateway/provider sono nella TCB. |
+| TM-012 | I/E | Provider esterno compromesso. | Provider RBAC/ACL, versioning, network restriction, audit e revocation secondo deployment. | Rischio residuo esterno alla piattaforma; il Core non dichiara una qualifica cloud implicita. |
 | TM-013 | E/I | SSRF verso rete privata/metadata. | Config server-side, DNS/IP validation, no redirect, restricted client. | Mitigato; eccezioni private richiedono review. |
 | TM-014 | T | Header/path injection. | Typed builder, encoding, allowlist e limits. | Mitigato. |
 | TM-015 | T/I | XXE, entity expansion o signature wrapping. | Parser sicuro, limits, schema, ID uniqueness e tests. | Mitigato per moduli implementati. |
-| TM-016 | E | Plugin malevolo. | Pipeline-only, CMS signature, publisher allowlist, review. | Parziale: plugin in-process è full-trust. |
+| TM-016 | E | Modulo/plugin malevolo. | As-built: allowlist deployment per path/assembly identity/MVID e responsabilità ACL; target release: manifest hash, CMS, publisher allowlist e review. | Parziale: firma/provenance non sono ancora implementate e ogni modulo in-process è full-trust. |
 | TM-017 | T/E | Update o MSI manomesso/rollback. | Signature, manifest, anti-rollback e secure updater. | MVP manuale; completo in hardening. |
 | TM-018 | I/R | Secret o PII nei log. | Structured redaction, prohibited-field tests e scanning. | Mitigato; nuove integrazioni richiedono test. |
-| TM-019 | E | Insider pubblica endpoint o binding malevolo. | RBAC, four-eyes, security validation e audit append-only. | Collusione privilegiata resta residua. |
+| TM-019 | E | Insider pubblica endpoint o binding malevolo. | RBAC, four-eyes, security validation e audit applicativo metadata-only. | Collusione privilegiata resta residua; `gateway_admin` conserva una grant UPDATE storica sulle tabelle audit. |
 | TM-020 | D | Flood IPC o Gateway. | Concurrency, size/time/rate limits e circuit breaker. | DDoS volumetrico richiede protezione infrastrutturale. |
 | TM-021 | R | Operator nega un'operazione. | Correlation e audit metadata. | Non equivale a firma legale dell'Operator. |
 | TM-022 | I | Backup rubato. | Stesse protezioni del dato, Vault escluso dal DB, backup encryption. | Metadata exposure residua. |
@@ -65,7 +65,7 @@
 | TM-032 | E/R | Bypass four-eyes o self-approval. | Approval separata checksum-specific; creator/editor/requester distinti; publish ricontrolla in application service. | Collusione fra due account privilegiati non è eliminata. |
 | TM-033 | E/I | Tenant scope bypass tramite query/body. | Scope verificato server-side su ogni risorsa; test cross-tenant; RLS defense in depth. | Nuove API richiedono la stessa review. |
 | TM-034 | I | Export/audit/UI espongono secret, cookie o activation code. | DTO allowlist, activation one-time/no-store, audit metadata-only, canary/secret scans. | Compromissione memoria del Gateway/browser resta fuori dalla garanzia. |
-| TM-035 | T/R | Audit alterato o operazione non auditata. | Audit append-only applicativo/DB e correlation ID per mutazioni. | DBA/host privilegiato è parte della TCB; firma notarile fuori scope. |
+| TM-035 | T/R | Audit alterato o operazione non auditata. | Il codice e `gateway_runtime` emettono solo INSERT metadata-only e usano correlation ID per le mutazioni. | `gateway_admin` eredita UPDATE dalla migration 0001: append-only DB completo è deferred. DBA/host privilegiato resta nella TCB; firma notarile fuori scope. |
 | TM-036 | T/D | Connector JSON malevolo o oversized. | Limiti body, JSON Schema 2020-12, canonicalization, no executable content, stable errors. | Parser/runtime dependencies devono restare aggiornati. |
 | TM-037 | E | Operator usa il test connector come proxy arbitrario. | API accetta solo connector/environment/operation id e risolve Published binding server-side. | Un binding amministrativo già compromesso resta utilizzabile. |
 | TM-038 | E | Autorizzazione stale dopo revoca ruolo. | Assignment riletto server-side per richiesta e sessione breve. | Finestra di cookie/OIDC provider e cache future da rivalutare. |
@@ -287,6 +287,13 @@ sintetiche, verifica CSR/triple-binding/ACL exact e negativi pre-output, prova i
 non-root/read-only, live/ready, firma/certificato, tamper 200/503 e stop/partial cleanup a zero. Il
 validator Compose è unico tra tool e General CI; l'immagine local-pkcs12 resta pull/no-cache,
 revision exact-head, scan e SBOM. Nessuna prova usa certificati/CSR/chiavi reali o invoca FSE2.
+
+## Confine dell'evidenza
+
+Le prove sintetiche, incluso il laboratorio local PKCS#12, qualificano soltanto la
+pipeline e il materiale per-run controllato. Non attestano import operativo, custody
+production o una chiamata FSE2 live. Un laboratorio live sintetico non è OfficialTest;
+OfficialTest non è production. `validate-cda` resta il primo outcome OfficialTest futuro.
 
 ## Criteri di revisione
 

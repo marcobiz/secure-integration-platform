@@ -1,5 +1,11 @@
 # Requisiti, non-goals e criteri di accettazione
 
+> **Classificazione:** questo è il catalogo normativo di target e acceptance criteria,
+> non una dashboard di implementazione. Lo stato corrente è in
+> [`IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md) e la copertura verificabile
+> è in [`requirements-traceability.md`](../traceability/requirements-traceability.md).
+> Un requisito elencato qui può essere differito o fuori dallo scope dell'alpha.
+
 ## Obiettivo di prodotto
 
 Rimuovere segreti hardcoded e credenziali distribuite dai software legacy con il minor numero possibile di modifiche al codice esistente, preservando i flussi già funzionanti e impedendo che il Gateway diventi un proxy arbitrario.
