@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Validate', 'Run', 'Stop')]
+    [ValidateSet('Validate', 'Run', 'Stop', 'FailureOutputProbe')]
     [string] $Phase = 'Run',
     [switch] $SkipBuild,
     [string] $DotNetPath
@@ -15,26 +15,106 @@ $rawRoot = Join-Path $artifactRoot 'raw'
 $envFile = Join-Path $rawRoot 'm3a.env'
 $baseCompose = Join-Path $root 'deploy\m3\docker-compose.m3a.yml'
 $overlayCompose = Join-Path $root 'deploy\m5\docker-compose.m5.yml'
+$canonicalConnector = Join-Path $root 'docs\connectors\examples\sample-secure-service.connector.json'
 $project = 'secure-integration-m5-quickstart'
 $dotnet = if ([string]::IsNullOrWhiteSpace($DotNetPath)) { Join-Path $root '.dotnet\dotnet.exe' } else { [IO.Path]::GetFullPath($DotNetPath) }
 if (-not (Test-Path -LiteralPath $dotnet -PathType Leaf)) { $dotnet = 'dotnet' }
+$powerShellHost = try { (Get-Process -Id $PID -ErrorAction Stop).Path } catch { $null }
+if ([string]::IsNullOrWhiteSpace($powerShellHost)) {
+    $powerShellHost = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'powershell.exe' } else { 'pwsh' }
+}
+
+function ConvertTo-NativeArgument {
+    param([AllowEmptyString()][string] $Value)
+    if ($Value.Length -gt 0 -and $Value -notmatch '[\s"]') { return $Value }
+    $builder = New-Object Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq '\') { $backslashes++; continue }
+        if ($character -eq '"') {
+            [void]$builder.Append(('\' * (($backslashes * 2) + 1)))
+            [void]$builder.Append('"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) { [void]$builder.Append(('\' * $backslashes)); $backslashes = 0 }
+        [void]$builder.Append($character)
+    }
+    if ($backslashes -gt 0) { [void]$builder.Append(('\' * ($backslashes * 2))) }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Invoke-SanitizedChild {
+    param(
+        [Parameter(Mandatory = $true)][string] $File,
+        [Parameter(Mandatory = $true)][string[]] $Arguments,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Docker', 'DotNet', 'Curl', 'Quickstart', 'FailureProbe')]
+        [string] $Component,
+        [switch] $AllowFailure
+    )
+    $start = New-Object Diagnostics.ProcessStartInfo
+    $start.FileName = $File
+    $start.WorkingDirectory = $root
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.RedirectStandardOutput = $true
+    $start.RedirectStandardError = $true
+    if ($null -ne $start.PSObject.Properties['ArgumentList']) {
+        foreach ($argument in $Arguments) { [void]$start.ArgumentList.Add($argument) }
+    }
+    else {
+        $start.Arguments = (($Arguments | ForEach-Object { ConvertTo-NativeArgument -Value ([string]$_) }) -join ' ')
+    }
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $start
+    try {
+        try { if (-not $process.Start()) { throw 'start' } }
+        catch { throw "ALPHA_GOLDEN_PATH_CHILD_START_FAILED;COMPONENT=$Component" }
+        $standardOutput = $process.StandardOutput.ReadToEndAsync()
+        $standardError = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $stdout = $standardOutput.GetAwaiter().GetResult()
+        $stderr = $standardError.GetAwaiter().GetResult()
+        $exitCode = $process.ExitCode
+        $result = [pscustomobject]@{ ExitCode = $exitCode; StdOut = $stdout; StdErr = $stderr }
+        if ($exitCode -ne 0 -and -not $AllowFailure) {
+            $childCode = if ($stderr -cmatch '(?m)^(M5_QUICKSTART_[A-Z0-9_]+)\r?$') { ';CHILD_CODE=' + $Matches[1] } else { '' }
+            throw "ALPHA_GOLDEN_PATH_CHILD_EXIT_NONZERO;COMPONENT=$Component;EXIT_CODE=$exitCode$childCode"
+        }
+        return $result
+    }
+    finally { $process.Dispose() }
+}
 
 function Invoke-Checked {
-    param([Parameter(Mandatory)] [string] $File, [Parameter(Mandatory)] [string[]] $Arguments)
-    & $File @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "ALPHA_GOLDEN_PATH_COMMAND_FAILED: $File" }
+    param(
+        [Parameter(Mandatory = $true)][string] $File,
+        [Parameter(Mandatory = $true)][string[]] $Arguments,
+        [Parameter(Mandatory = $true)][ValidateSet('Docker', 'DotNet', 'Curl', 'Quickstart')][string] $Component
+    )
+    return Invoke-SanitizedChild -File $File -Arguments $Arguments -Component $Component
+}
+
+function Invoke-Quickstart {
+    param([Parameter(Mandatory = $true)][ValidateSet('Start', 'Stop')][string] $RequestedPhase)
+    $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $quickstart, '-Phase', $RequestedPhase)
+    if ($RequestedPhase -eq 'Start' -and $SkipBuild) { $arguments += '-SkipBuild' }
+    if ($RequestedPhase -eq 'Start' -and $dotnet -cne 'dotnet') { $arguments += @('-DotNetPath', $dotnet) }
+    return Invoke-Checked -File $powerShellHost -Arguments $arguments -Component Quickstart
 }
 
 function Get-ExactProjectResources {
-    param([Parameter(Mandatory)][ValidateSet('container', 'network', 'volume')][string] $Kind)
+    param([Parameter(Mandatory = $true)][ValidateSet('container', 'network', 'volume')][string] $Kind)
     $arguments = switch ($Kind) {
         'container' { @('ps', '-aq', '--filter', ('label=com.docker.compose.project=' + $project)) }
         'network' { @('network', 'ls', '-q', '--filter', ('label=com.docker.compose.project=' + $project)) }
         'volume' { @('volume', 'ls', '-q', '--filter', ('label=com.docker.compose.project=' + $project)) }
     }
-    $values = @(& docker @arguments)
-    if ($LASTEXITCODE -ne 0) { throw 'ALPHA_GOLDEN_PATH_RESOURCE_ENUMERATION_FAILED' }
-    return @($values | ForEach-Object { ([string]$_).Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $result = Invoke-Checked -File 'docker' -Arguments $arguments -Component Docker
+    return @($result.StdOut -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })
 }
 
 function Assert-ZeroProjectResources {
@@ -56,31 +136,32 @@ function Read-EnvironmentFile {
 
 function Invoke-ControlJson {
     param(
-        [Parameter(Mandatory)][string] $HostName,
-        [Parameter(Mandatory)][int] $Port,
-        [Parameter(Mandatory)][string] $Path,
-        [Parameter(Mandatory)][string] $HeaderName,
-        [Parameter(Mandatory)][string] $HeaderValue,
-        [Parameter(Mandatory)][string] $OutputPath,
-        [Parameter(Mandatory)][string] $CaPath
+        [Parameter(Mandatory = $true)][string] $HostName,
+        [Parameter(Mandatory = $true)][int] $Port,
+        [Parameter(Mandatory = $true)][string] $Path,
+        [Parameter(Mandatory = $true)][string] $HeaderName,
+        [Parameter(Mandatory = $true)][string] $HeaderValue,
+        [Parameter(Mandatory = $true)][string] $OutputPath,
+        [Parameter(Mandatory = $true)][string] $CaPath
     )
     $curl = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'curl.exe' } else { 'curl' }
     $arguments = @('--fail', '--silent', '--show-error', '--max-time', '15')
     if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $arguments += '--ssl-no-revoke' }
     $arguments += @('--cacert', $CaPath, '--resolve', "${HostName}:${Port}:127.0.0.1", '--header', ($HeaderName + ': ' + $HeaderValue), '--output', $OutputPath, "https://${HostName}:${Port}${Path}")
-    Invoke-Checked $curl $arguments
+    [void](Invoke-Checked -File $curl -Arguments $arguments -Component Curl)
     return Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json
 }
 
 function Restart-GatewayAndWait {
-    $composeArguments = @('compose', '--project-name', $project, '--env-file', $envFile, '--file', $baseCompose, '--file', $overlayCompose)
-    Invoke-Checked 'docker' ($composeArguments + @('restart', 'gateway'))
+    $compose = @('compose', '--project-name', $project, '--env-file', $envFile, '--file', $baseCompose, '--file', $overlayCompose)
+    [void](Invoke-Checked -File 'docker' -Arguments ($compose + @('restart', 'gateway')) -Component Docker)
     $deadline = [DateTimeOffset]::UtcNow.AddMinutes(2)
     do {
-        $container = (& docker @($composeArguments + @('ps', '--quiet', 'gateway')))
-        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($container)) {
-            $health = (& docker inspect $container.Trim() --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}')
-            if ($LASTEXITCODE -eq 0 -and $health.Trim() -eq 'healthy') { return }
+        $containerResult = Invoke-SanitizedChild -File 'docker' -Arguments ($compose + @('ps', '--quiet', 'gateway')) -Component Docker -AllowFailure
+        $container = $containerResult.StdOut.Trim()
+        if ($containerResult.ExitCode -eq 0 -and $container.Length -gt 0) {
+            $healthResult = Invoke-SanitizedChild -File 'docker' -Arguments @('inspect', $container, '--format', '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}') -Component Docker -AllowFailure
+            if ($healthResult.ExitCode -eq 0 -and $healthResult.StdOut.Trim() -ceq 'healthy') { return }
         }
         Start-Sleep -Seconds 2
     } while ([DateTimeOffset]::UtcNow -lt $deadline)
@@ -88,14 +169,14 @@ function Restart-GatewayAndWait {
 }
 
 function Get-ReadCount {
-    param([Parameter(Mandatory)] $Stats, [Parameter(Mandatory)][string] $Name)
+    param([Parameter(Mandatory = $true)] $Stats, [Parameter(Mandatory = $true)][string] $Name)
     $property = $Stats.reads.PSObject.Properties[$Name]
     if ($null -eq $property) { return 0L }
     return [long]$property.Value
 }
 
 function Get-Sha256Hex {
-    param([Parameter(Mandatory)][byte[]] $Bytes)
+    param([Parameter(Mandatory = $true)][byte[]] $Bytes)
     $sha256 = [Security.Cryptography.SHA256]::Create()
     try {
         $digest = $sha256.ComputeHash($Bytes)
@@ -105,12 +186,61 @@ function Get-Sha256Hex {
     finally { $sha256.Dispose() }
 }
 
+function ConvertTo-CanonicalJson {
+    param([AllowNull()] $Value)
+    if ($null -eq $Value) { return 'null' }
+    if ($Value -is [string]) { return ConvertTo-Json -InputObject ([string]$Value) -Compress }
+    if ($Value -is [bool]) { return $(if ($Value) { 'true' } else { 'false' }) }
+    if ($Value -is [Collections.IDictionary]) {
+        $parts = foreach ($key in @($Value.Keys | Sort-Object { [string]$_ })) {
+            (ConvertTo-Json -InputObject ([string]$key) -Compress) + ':' + (ConvertTo-CanonicalJson -Value $Value[$key])
+        }
+        return '{' + ($parts -join ',') + '}'
+    }
+    if ($Value -is [Management.Automation.PSCustomObject]) {
+        $parts = foreach ($property in @($Value.PSObject.Properties | Sort-Object Name)) {
+            (ConvertTo-Json -InputObject $property.Name -Compress) + ':' + (ConvertTo-CanonicalJson -Value $property.Value)
+        }
+        return '{' + ($parts -join ',') + '}'
+    }
+    if ($Value -is [Collections.IEnumerable]) {
+        $items = foreach ($item in $Value) { ConvertTo-CanonicalJson -Value $item }
+        return '[' + ($items -join ',') + ']'
+    }
+    if ($Value -is [byte] -or $Value -is [sbyte] -or $Value -is [int16] -or $Value -is [uint16] -or
+        $Value -is [int32] -or $Value -is [uint32] -or $Value -is [int64] -or $Value -is [uint64]) {
+        return ([IFormattable]$Value).ToString($null, [Globalization.CultureInfo]::InvariantCulture)
+    }
+    throw 'ALPHA_GOLDEN_PATH_CANONICAL_JSON_UNSUPPORTED'
+}
+
+function Get-CanonicalConnectorMetadata {
+    $source = Get-Content -LiteralPath $canonicalConnector -Raw | ConvertFrom-Json
+    $canonicalJson = ConvertTo-CanonicalJson -Value $source
+    [byte[]]$bytes = [Text.Encoding]::UTF8.GetBytes($canonicalJson)
+    try { $checksum = Get-Sha256Hex -Bytes $bytes }
+    finally { [Array]::Clear($bytes, 0, $bytes.Length) }
+    $endpoints = @($source.bindings.endpoints | ForEach-Object { [string]$_.name })
+    $secrets = @($source.bindings.secrets | Where-Object { [string]$_.kind -ceq 'opaque' } | ForEach-Object { [string]$_.name })
+    $certificates = @($source.bindings.secrets | Where-Object { [string]$_.kind -ceq 'clientCertificate' } | ForEach-Object { [string]$_.name })
+    return [pscustomobject]@{ Json = $canonicalJson; Checksum = $checksum; Endpoints = $endpoints; Secrets = $secrets; Certificates = $certificates }
+}
+
+function Test-ExactStrings {
+    param([AllowNull()][object[]] $Actual, [Parameter(Mandatory = $true)][string[]] $Expected)
+    if (@($Actual).Count -ne $Expected.Count) { return $false }
+    for ($index = 0; $index -lt $Expected.Count; $index++) {
+        if ([string]$Actual[$index] -cne $Expected[$index]) { return $false }
+    }
+    return $true
+}
+
 function Assert-RedactedText {
-    param([Parameter(Mandatory)][string] $Text, [Parameter(Mandatory)][object[]] $Canaries)
+    param([Parameter(Mandatory = $true)][string] $Text, [Parameter(Mandatory = $true)][object[]] $Canaries)
     foreach ($canary in $Canaries) {
         $value = [string]$canary.Value
         if ($value.Length -ge 8 -and $Text.IndexOf($value, [StringComparison]::Ordinal) -ge 0) {
-            throw "ALPHA_GOLDEN_PATH_REDACTION_FAILED:$($canary.Name)"
+            throw 'ALPHA_GOLDEN_PATH_REDACTION_FAILED'
         }
     }
     foreach ($pattern in @(
@@ -123,145 +253,188 @@ function Assert-RedactedText {
     }
 }
 
-if ($Phase -eq 'Validate') {
-    Invoke-Checked 'docker' @('version')
-    Invoke-Checked 'docker' @('compose', 'version')
-    Invoke-Checked $dotnet @('--version')
-    Invoke-Checked $dotnet @('restore', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--locked-mode')
-    Invoke-Checked $dotnet @('build', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release', '--no-restore')
-    Write-Host 'ALPHA_GOLDEN_PATH_VALIDATE_PASS'
-    exit 0
+function Get-StableAlphaFailure {
+    param([Parameter(Mandatory = $true)] $Failure)
+    $message = [string]$Failure.Exception.Message
+    if ($message -cmatch '^ALPHA_GOLDEN_PATH_[A-Z0-9_]+(?:;COMPONENT=(?:Docker|DotNet|Curl|Quickstart|FailureProbe)(?:;EXIT_CODE=[0-9]{1,5})?(?:;CHILD_CODE=M5_QUICKSTART_[A-Z0-9_]+)?)?$') {
+        return $message
+    }
+    return 'ALPHA_GOLDEN_PATH_FAILED'
 }
-
-if ($Phase -eq 'Stop') {
-    & $quickstart -Phase Stop
-    if ($LASTEXITCODE -ne 0) { throw 'ALPHA_GOLDEN_PATH_STOP_FAILED' }
-    Assert-ZeroProjectResources
-    if (Test-Path -LiteralPath $artifactRoot) { throw 'ALPHA_GOLDEN_PATH_ARTIFACT_CLEANUP_FAILED' }
-    Write-Host 'ALPHA_GOLDEN_PATH_STOP_PASS; CONTAINERS=0; NETWORKS=0; VOLUMES=0; SYNTHETIC_MATERIAL=0'
-    exit 0
-}
-
-Assert-ZeroProjectResources
-if (Test-Path -LiteralPath $artifactRoot) { throw 'ALPHA_GOLDEN_PATH_ARTIFACT_ROOT_NOT_CLEAN' }
-$cleanupRequired = $true
-$failure = $null
-$previousEnvironment = @{}
-$environmentNames = @(
-    'DIRECT_GATEWAY_URL',
-    'DIRECT_GATEWAY_CA_FILE',
-    'DIRECT_GATEWAY_ACTIVATION_CODE_ID',
-    'DIRECT_GATEWAY_ACTIVATION_CODE',
-    'DIRECT_GATEWAY_CONNECTOR_ID',
-    'DIRECT_GATEWAY_OPERATION_ID',
-    'DIRECT_GATEWAY_CORRELATION_ID',
-    'DOTNET_NOLOGO',
-    'DOTNET_CLI_TELEMETRY_OPTOUT',
-    'DOTNET_SKIP_FIRST_TIME_EXPERIENCE')
-foreach ($name in $environmentNames) { $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 
 try {
-    $quickstartParameters = @{ Phase = 'Start'; SkipBuild = $SkipBuild }
-    if ($dotnet -cne 'dotnet') { $quickstartParameters['DotNetPath'] = $dotnet }
-    & $quickstart @quickstartParameters
-    if ($LASTEXITCODE -ne 0) { throw 'ALPHA_GOLDEN_PATH_START_FAILED' }
+    if ($Phase -eq 'Validate') {
+        [void](Invoke-Checked -File 'docker' -Arguments @('version') -Component Docker)
+        [void](Invoke-Checked -File 'docker' -Arguments @('compose', 'version') -Component Docker)
+        [void](Invoke-Checked -File $dotnet -Arguments @('--version') -Component DotNet)
+        [void](Invoke-Checked -File $dotnet -Arguments @('restore', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--locked-mode') -Component DotNet)
+        [void](Invoke-Checked -File $dotnet -Arguments @('build', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release', '--no-restore') -Component DotNet)
+        Write-Host 'ALPHA_GOLDEN_PATH_VALIDATE_PASS'
+        exit 0
+    }
 
-    $environment = Read-EnvironmentFile
-    $provisioning = Get-Content -LiteralPath (Join-Path $rawRoot 'provisioning.json') -Raw | ConvertFrom-Json
-    $fixture = Get-Content -LiteralPath (Join-Path $rawRoot 'fixture-public.json') -Raw | ConvertFrom-Json
-    foreach ($name in @('directInstallationId', 'directActivationCodeId', 'directActivationCode')) {
-        if ($null -eq $provisioning.PSObject.Properties[$name] -or [string]::IsNullOrWhiteSpace([string]$provisioning.$name)) {
-            throw "ALPHA_GOLDEN_PATH_DIRECT_FIXTURE_MISSING:$name"
+    if ($Phase -eq 'Stop') {
+        [void](Invoke-Quickstart -RequestedPhase Stop)
+        Assert-ZeroProjectResources
+        if (Test-Path -LiteralPath $artifactRoot) { throw 'ALPHA_GOLDEN_PATH_ARTIFACT_CLEANUP_FAILED' }
+        Write-Host 'ALPHA_GOLDEN_PATH_STOP_PASS; CONTAINERS=0; NETWORKS=0; VOLUMES=0; SYNTHETIC_MATERIAL=0'
+        exit 0
+    }
+
+    Assert-ZeroProjectResources
+    if (Test-Path -LiteralPath $artifactRoot) { throw 'ALPHA_GOLDEN_PATH_ARTIFACT_ROOT_NOT_CLEAN' }
+    $cleanupRequired = $true
+    $failure = $null
+    $cleanupFailure = $null
+    $previousEnvironment = @{}
+    $environmentNames = @(
+        'DIRECT_GATEWAY_URL',
+        'DIRECT_GATEWAY_CA_FILE',
+        'DIRECT_GATEWAY_ACTIVATION_CODE_ID',
+        'DIRECT_GATEWAY_ACTIVATION_CODE',
+        'DIRECT_GATEWAY_CONNECTOR_ID',
+        'DIRECT_GATEWAY_OPERATION_ID',
+        'DIRECT_GATEWAY_CORRELATION_ID',
+        'DOTNET_NOLOGO',
+        'DOTNET_CLI_TELEMETRY_OPTOUT',
+        'DOTNET_SKIP_FIRST_TIME_EXPERIENCE')
+    foreach ($name in $environmentNames) { $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+
+    try {
+        if ($Phase -eq 'FailureOutputProbe') {
+            New-Item -ItemType Directory -Path (Join-Path $artifactRoot 'raw') -Force | Out-Null
+            [IO.File]::WriteAllText((Join-Path $artifactRoot '.m5-quickstart-owner'), 'secure-integration-m5-quickstart-artifacts-v1', [Text.UTF8Encoding]::new($false))
+            $probeSuffix = [Guid]::NewGuid().ToString('N')
+            [void](Invoke-Checked -File 'docker' -Arguments @('network', 'create', '--label', ('com.docker.compose.project=' + $project), ('alpha-golden-path-failure-probe-network-' + $probeSuffix)) -Component Docker)
+            [void](Invoke-Checked -File 'docker' -Arguments @('volume', 'create', '--label', ('com.docker.compose.project=' + $project), ('alpha-golden-path-failure-probe-volume-' + $probeSuffix)) -Component Docker)
+            $probe = @'
+[Console]::Out.WriteLine("System.InvalidOperationException: alpha-probe-payload-canary-2f4d68f3")
+[Console]::Error.WriteLine("   at Synthetic.Probe.Run() in C:\alpha\probe\Sensitive.cs:line 42")
+[Console]::Error.WriteLine("Authorization: Bearer alpha-probe-token-canary-b619f4e8")
+[Console]::Error.WriteLine("Host=localhost;Database=probe;Password=alpha-probe-password-canary-c2971a05")
+exit 37
+'@
+            [void](Invoke-SanitizedChild -File $powerShellHost -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', $probe) -Component FailureProbe)
+            throw 'ALPHA_GOLDEN_PATH_FAILURE_PROBE_DID_NOT_FAIL'
+        }
+
+        [void](Invoke-Quickstart -RequestedPhase Start)
+        $environment = Read-EnvironmentFile
+        $provisioning = Get-Content -LiteralPath (Join-Path $rawRoot 'provisioning.json') -Raw | ConvertFrom-Json
+        $fixture = Get-Content -LiteralPath (Join-Path $rawRoot 'fixture-public.json') -Raw | ConvertFrom-Json
+        foreach ($name in @('directInstallationId', 'directActivationCodeId', 'directActivationCode', 'sampleConnector')) {
+            if ($null -eq $provisioning.PSObject.Properties[$name]) { throw 'ALPHA_GOLDEN_PATH_DIRECT_FIXTURE_MISSING' }
+        }
+
+        $postgresResult = Invoke-Checked -File 'docker' -Arguments @('ps', '-q', '--filter', ('label=com.docker.compose.project=' + $project), '--filter', 'label=com.docker.compose.service=postgres') -Component Docker
+        $postgres = @($postgresResult.StdOut -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })
+        if ($postgres.Count -ne 1) { throw 'ALPHA_GOLDEN_PATH_POSTGRES_NOT_FOUND' }
+        $canonical = Get-CanonicalConnectorMetadata
+        $environmentId = [Guid]::ParseExact([string]$provisioning.environmentId, 'D').ToString('D')
+        $connectorSql = "SELECT json_build_object('state',v.state,'checksum',encode(v.checksum_sha256,'hex'),'canonicalJson',v.configuration_json::text,'endpoints',ARRAY(SELECT key FROM jsonb_object_keys(b.endpoints_json) key ORDER BY key),'secrets',ARRAY(SELECT key FROM jsonb_object_keys(b.secret_references_json) key ORDER BY key),'certificates',ARRAY(SELECT key FROM jsonb_object_keys(b.certificate_references_json) key ORDER BY key))::text FROM gateway.connector_definition c JOIN gateway.connector_version v ON v.id=c.active_version_id JOIN gateway.connector_binding_bundle_version b ON b.connector_version_id=v.id AND b.environment_id='$environmentId'::uuid AND b.state='active' WHERE c.slug='sample-secure-service' AND v.version='1.0.0' AND v.state='published';"
+        $publishedResult = Invoke-Checked -File 'docker' -Arguments @('exec', [string]$postgres[0], 'psql', '-U', 'postgres', '-d', 'broker_gateway_m3', '-Atc', $connectorSql) -Component Docker
+        $publishedLines = @($publishedResult.StdOut -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })
+        if ($publishedLines.Count -ne 1) { throw 'ALPHA_GOLDEN_PATH_CANONICAL_CONNECTOR_MISSING' }
+        $published = $publishedLines[0] | ConvertFrom-Json
+        $publishedCanonicalJson = ConvertTo-CanonicalJson -Value ([string]$published.canonicalJson | ConvertFrom-Json)
+        $metadata = $provisioning.sampleConnector
+        if ([string]$published.state -cne 'published' -or [string]$metadata.state -cne 'Published' -or
+            ([string]$published.checksum).ToUpperInvariant() -cne $canonical.Checksum -or
+            [string]$metadata.checksumSha256 -cne $canonical.Checksum -or
+            $publishedCanonicalJson -cne $canonical.Json -or
+            -not (Test-ExactStrings -Actual @($published.endpoints) -Expected @($canonical.Endpoints)) -or
+            -not (Test-ExactStrings -Actual @($published.secrets) -Expected @($canonical.Secrets)) -or
+            -not (Test-ExactStrings -Actual @($published.certificates) -Expected @($canonical.Certificates)) -or
+            -not (Test-ExactStrings -Actual @($metadata.endpointBindings) -Expected @($canonical.Endpoints)) -or
+            -not (Test-ExactStrings -Actual @($metadata.secretBindings) -Expected @($canonical.Secrets)) -or
+            -not (Test-ExactStrings -Actual @($metadata.certificateBindings) -Expected @($canonical.Certificates))) {
+            throw 'ALPHA_GOLDEN_PATH_CANONICAL_CONNECTOR_DRIFT'
+        }
+
+        $controlRoot = Join-Path $artifactRoot 'control'
+        New-Item -ItemType Directory -Path $controlRoot | Out-Null
+        $caPath = Join-Path $rawRoot 'certificates\ca.crt'
+        $vendorBefore = Invoke-ControlJson -HostName 'vendor.m3.test' -Port 18445 -Path '/m3/stats' -HeaderName 'X-M3-Control-Token' -HeaderValue ([string]$environment.M3_VENDOR_CONTROL_TOKEN) -OutputPath (Join-Path $controlRoot 'vendor-before.json') -CaPath $caPath
+        $vaultBefore = Invoke-ControlJson -HostName 'vault.m3.test' -Port 18444 -Path '/m3/stats' -HeaderName 'X-M3-Vault-Token' -HeaderValue ([string]$environment.M3_SYNTHETIC_VAULT_TOKEN) -OutputPath (Join-Path $controlRoot 'vault-before.json') -CaPath $caPath
+        Restart-GatewayAndWait
+
+        $correlationId = [Guid]::NewGuid()
+        $env:DIRECT_GATEWAY_URL = 'https://localhost:18443'
+        $env:DIRECT_GATEWAY_CA_FILE = $caPath
+        $env:DIRECT_GATEWAY_ACTIVATION_CODE_ID = [string]$provisioning.directActivationCodeId
+        $env:DIRECT_GATEWAY_ACTIVATION_CODE = [string]$provisioning.directActivationCode
+        $env:DIRECT_GATEWAY_CONNECTOR_ID = 'sample-secure-service'
+        $env:DIRECT_GATEWAY_OPERATION_ID = 'submit'
+        $env:DIRECT_GATEWAY_CORRELATION_ID = $correlationId.ToString('D')
+        $env:DOTNET_NOLOGO = '1'
+        $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+        $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
+        $sample = Invoke-Checked -File $dotnet -Arguments @('run', '--project', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release') -Component DotNet
+        $sampleLines = @($sample.StdOut -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_.StartsWith('{', [StringComparison]::Ordinal) })
+        if ($sampleLines.Count -ne 1) { throw 'ALPHA_GOLDEN_PATH_DIRECT_SAMPLE_OUTPUT_INVALID' }
+        $sampleResult = $sampleLines[0] | ConvertFrom-Json
+        if ($sampleResult.accepted -ne $true -or [string]$sampleResult.vendorReference -cne 'synthetic-order') { throw 'ALPHA_GOLDEN_PATH_DIRECT_SAMPLE_RESPONSE_INVALID' }
+
+        $vendorAfter = Invoke-ControlJson -HostName 'vendor.m3.test' -Port 18445 -Path '/m3/stats' -HeaderName 'X-M3-Control-Token' -HeaderValue ([string]$environment.M3_VENDOR_CONTROL_TOKEN) -OutputPath (Join-Path $controlRoot 'vendor-after.json') -CaPath $caPath
+        $vaultAfter = Invoke-ControlJson -HostName 'vault.m3.test' -Port 18444 -Path '/m3/stats' -HeaderName 'X-M3-Vault-Token' -HeaderValue ([string]$environment.M3_SYNTHETIC_VAULT_TOKEN) -OutputPath (Join-Path $controlRoot 'vault-after.json') -CaPath $caPath
+        $outboundCount = [long]$vendorAfter.accepted - [long]$vendorBefore.accepted
+        if ($outboundCount -ne 1 -or $null -eq $vendorAfter.lastAccepted) { throw 'ALPHA_GOLDEN_PATH_OUTBOUND_COUNT_INVALID' }
+        [byte[]]$expectedBody = [Text.Encoding]::UTF8.GetBytes('{"message":"direct-gateway-sample"}')
+        try { $expectedBodySha256 = Get-Sha256Hex -Bytes $expectedBody }
+        finally { [Array]::Clear($expectedBody, 0, $expectedBody.Length) }
+        if ([string]$vendorAfter.lastAccepted.method -cne 'POST' -or
+            [string]$vendorAfter.lastAccepted.path -cne '/vendor/orders' -or
+            [string]$vendorAfter.lastAccepted.contentType -cne 'application/json' -or
+            [string]$vendorAfter.lastAccepted.bodySha256 -cne $expectedBodySha256 -or
+            [string]$vendorAfter.lastAccepted.clientCertificateSha256 -cne [string]$fixture.vendorClientCertificateSha256) {
+            throw 'ALPHA_GOLDEN_PATH_OUTBOUND_METADATA_INVALID'
+        }
+        $apiKeyReads = (Get-ReadCount -Stats $vaultAfter -Name 'vendor-api-key') - (Get-ReadCount -Stats $vaultBefore -Name 'vendor-api-key')
+        $certificateReads = (Get-ReadCount -Stats $vaultAfter -Name 'vendor-client-certificate') - (Get-ReadCount -Stats $vaultBefore -Name 'vendor-client-certificate')
+        if ($apiKeyReads -lt 1 -or $certificateReads -lt 1) { throw 'ALPHA_GOLDEN_PATH_SYNTHETIC_PROVIDER_NOT_USED' }
+
+        $sql = "SELECT json_build_object('action',action,'outcome',outcome,'reasonCode',reason_code,'metadata',metadata_redacted)::text FROM gateway.audit_event WHERE correlation_id='$($correlationId.ToString('D'))' AND action='operation.invoke' AND outcome='success';"
+        $auditResult = Invoke-Checked -File 'docker' -Arguments @('exec', [string]$postgres[0], 'psql', '-U', 'postgres', '-d', 'broker_gateway_m3', '-Atc', $sql) -Component Docker
+        $auditRows = @($auditResult.StdOut -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_.Length -gt 0 })
+        if ($auditRows.Count -ne 1) { throw 'ALPHA_GOLDEN_PATH_AUDIT_INVALID' }
+        $auditText = [string]$auditRows[0]
+        $audit = $auditText | ConvertFrom-Json
+        if ([string]$audit.action -cne 'operation.invoke' -or [string]$audit.outcome -cne 'success') { throw 'ALPHA_GOLDEN_PATH_AUDIT_INVALID' }
+
+        $canaries = @()
+        foreach ($name in @('M3_VENDOR_API_KEY','M3_SYNTHETIC_VAULT_TOKEN','M3_VENDOR_CONTROL_TOKEN','M3_POSTGRES_ADMIN_PASSWORD','M3_POSTGRES_RUNTIME_PASSWORD','M3_CERTIFICATE_PASSWORD','M3_ACTIVATION_HMAC_BASE64','M5_POSTGRES_ADMIN_API_PASSWORD')) {
+            if ($environment.ContainsKey($name)) { $canaries += [pscustomobject]@{ Name = $name; Value = [string]$environment[$name] } }
+        }
+        $canaries += [pscustomobject]@{ Name = 'DIRECT_ACTIVATION_CODE'; Value = [string]$provisioning.directActivationCode }
+        Assert-RedactedText -Text ($sample.StdOut + $sample.StdErr) -Canaries $canaries
+        Assert-RedactedText -Text $auditText -Canaries $canaries
+        $composeArguments = @('compose', '--project-name', $project, '--env-file', $envFile, '--file', $baseCompose, '--file', $overlayCompose, 'logs', '--no-color')
+        $logs = Invoke-Checked -File 'docker' -Arguments $composeArguments -Component Docker
+        Assert-RedactedText -Text ($logs.StdOut + $logs.StdErr) -Canaries $canaries
+
+        Write-Host "ALPHA_GOLDEN_PATH_CONNECTOR_PASS; SOURCE=docs/connectors/examples/sample-secure-service.connector.json; SHA256=$($canonical.Checksum); STATE=PUBLISHED; ENDPOINT=sample-vendor-endpoint; SECRET=sample-vendor-api-key; CERTIFICATE=sample-vendor-client-certificate"
+        Write-Host 'ALPHA_GOLDEN_PATH_DIRECT_PASS; CONNECTOR=sample-secure-service; OPERATION=submit; VERSION=1.0.0'
+        Write-Host "ALPHA_GOLDEN_PATH_OUTBOUND_PASS; POSITIVE_OUTBOUND_COUNT=$outboundCount; METHOD=POST; PATH=/vendor/orders; CONTENT_TYPE=application/json"
+        Write-Host "ALPHA_GOLDEN_PATH_PROVIDER_PASS; API_KEY_READS=$apiKeyReads; CERTIFICATE_READS=$certificateReads"
+        Write-Host 'ALPHA_GOLDEN_PATH_RESPONSE_PASS; SANITIZED=YES; AUDIT=METADATA_ONLY; LOGS=REDACTED'
+    }
+    catch { $failure = $_ }
+    finally {
+        foreach ($name in $environmentNames) { [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], 'Process') }
+        if ($cleanupRequired) {
+            try { [void](Invoke-Quickstart -RequestedPhase Stop) }
+            catch { $cleanupFailure = $_ }
         }
     }
 
-    $controlRoot = Join-Path $artifactRoot 'control'
-    New-Item -ItemType Directory -Path $controlRoot | Out-Null
-    $caPath = Join-Path $rawRoot 'certificates\ca.crt'
-    $vendorBefore = Invoke-ControlJson -HostName 'vendor.m3.test' -Port 18445 -Path '/m3/stats' -HeaderName 'X-M3-Control-Token' -HeaderValue ([string]$environment.M3_VENDOR_CONTROL_TOKEN) -OutputPath (Join-Path $controlRoot 'vendor-before.json') -CaPath $caPath
-    $vaultBefore = Invoke-ControlJson -HostName 'vault.m3.test' -Port 18444 -Path '/m3/stats' -HeaderName 'X-M3-Vault-Token' -HeaderValue ([string]$environment.M3_SYNTHETIC_VAULT_TOKEN) -OutputPath (Join-Path $controlRoot 'vault-before.json') -CaPath $caPath
-    Restart-GatewayAndWait
-
-    $correlationId = [Guid]::NewGuid()
-    $env:DIRECT_GATEWAY_URL = 'https://localhost:18443'
-    $env:DIRECT_GATEWAY_CA_FILE = $caPath
-    $env:DIRECT_GATEWAY_ACTIVATION_CODE_ID = [string]$provisioning.directActivationCodeId
-    $env:DIRECT_GATEWAY_ACTIVATION_CODE = [string]$provisioning.directActivationCode
-    $env:DIRECT_GATEWAY_CONNECTOR_ID = 'sample-secure-service'
-    $env:DIRECT_GATEWAY_OPERATION_ID = 'submit'
-    $env:DIRECT_GATEWAY_CORRELATION_ID = $correlationId.ToString('D')
-    $env:DOTNET_NOLOGO = '1'
-    $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
-    $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
-    $sampleOutput = @(& $dotnet run --project (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj') --configuration Release 2>&1)
-    if ($LASTEXITCODE -ne 0) { throw 'ALPHA_GOLDEN_PATH_DIRECT_SAMPLE_FAILED' }
-    $sampleLines = @($sampleOutput | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_.StartsWith('{', [StringComparison]::Ordinal) })
-    if ($sampleLines.Count -ne 1) { throw 'ALPHA_GOLDEN_PATH_DIRECT_SAMPLE_OUTPUT_INVALID' }
-    $sampleResult = $sampleLines[0] | ConvertFrom-Json
-    if ($sampleResult.accepted -ne $true -or [string]$sampleResult.vendorReference -cne 'synthetic-order') {
-        throw 'ALPHA_GOLDEN_PATH_DIRECT_SAMPLE_RESPONSE_INVALID'
-    }
-
-    $vendorAfter = Invoke-ControlJson -HostName 'vendor.m3.test' -Port 18445 -Path '/m3/stats' -HeaderName 'X-M3-Control-Token' -HeaderValue ([string]$environment.M3_VENDOR_CONTROL_TOKEN) -OutputPath (Join-Path $controlRoot 'vendor-after.json') -CaPath $caPath
-    $vaultAfter = Invoke-ControlJson -HostName 'vault.m3.test' -Port 18444 -Path '/m3/stats' -HeaderName 'X-M3-Vault-Token' -HeaderValue ([string]$environment.M3_SYNTHETIC_VAULT_TOKEN) -OutputPath (Join-Path $controlRoot 'vault-after.json') -CaPath $caPath
-    $outboundCount = [long]$vendorAfter.accepted - [long]$vendorBefore.accepted
-    if ($outboundCount -ne 1 -or $null -eq $vendorAfter.lastAccepted) { throw 'ALPHA_GOLDEN_PATH_OUTBOUND_COUNT_INVALID' }
-    [byte[]] $expectedBody = [Text.Encoding]::UTF8.GetBytes('{"message":"direct-gateway-sample"}')
-    try { $expectedBodySha256 = Get-Sha256Hex -Bytes $expectedBody }
-    finally { [Array]::Clear($expectedBody, 0, $expectedBody.Length) }
-    if ([string]$vendorAfter.lastAccepted.method -cne 'POST' -or
-        [string]$vendorAfter.lastAccepted.path -cne '/vendor/orders' -or
-        [string]$vendorAfter.lastAccepted.contentType -cne 'application/json' -or
-        [string]$vendorAfter.lastAccepted.bodySha256 -cne $expectedBodySha256 -or
-        [string]$vendorAfter.lastAccepted.clientCertificateSha256 -cne [string]$fixture.vendorClientCertificateSha256) {
-        throw 'ALPHA_GOLDEN_PATH_OUTBOUND_METADATA_INVALID'
-    }
-    $apiKeyReads = (Get-ReadCount -Stats $vaultAfter -Name 'vendor-api-key') - (Get-ReadCount -Stats $vaultBefore -Name 'vendor-api-key')
-    $certificateReads = (Get-ReadCount -Stats $vaultAfter -Name 'vendor-client-certificate') - (Get-ReadCount -Stats $vaultBefore -Name 'vendor-client-certificate')
-    if ($apiKeyReads -lt 1 -or $certificateReads -lt 1) { throw 'ALPHA_GOLDEN_PATH_SYNTHETIC_PROVIDER_NOT_USED' }
-
-    $postgres = @(& docker ps -q --filter ('label=com.docker.compose.project=' + $project) --filter 'label=com.docker.compose.service=postgres')
-    if ($LASTEXITCODE -ne 0 -or $postgres.Count -ne 1) { throw 'ALPHA_GOLDEN_PATH_POSTGRES_NOT_FOUND' }
-    $sql = "SELECT json_build_object('action',action,'outcome',outcome,'reasonCode',reason_code,'metadata',metadata_redacted)::text FROM gateway.audit_event WHERE correlation_id='$($correlationId.ToString('D'))' AND action='operation.invoke' AND outcome='success';"
-    $auditRows = @(& docker exec ([string]$postgres[0]) psql -U postgres -d broker_gateway_m3 -Atc $sql)
-    if ($LASTEXITCODE -ne 0 -or $auditRows.Count -ne 1) { throw 'ALPHA_GOLDEN_PATH_AUDIT_INVALID' }
-    $auditText = [string]$auditRows[0]
-    $audit = $auditText | ConvertFrom-Json
-    if ([string]$audit.action -cne 'operation.invoke' -or [string]$audit.outcome -cne 'success') { throw 'ALPHA_GOLDEN_PATH_AUDIT_INVALID' }
-
-    $canaries = @()
-    foreach ($name in @('M3_VENDOR_API_KEY','M3_SYNTHETIC_VAULT_TOKEN','M3_VENDOR_CONTROL_TOKEN','M3_POSTGRES_ADMIN_PASSWORD','M3_POSTGRES_RUNTIME_PASSWORD','M3_CERTIFICATE_PASSWORD','M3_ACTIVATION_HMAC_BASE64','M5_POSTGRES_ADMIN_API_PASSWORD')) {
-        if ($environment.ContainsKey($name)) { $canaries += [pscustomobject]@{ Name = $name; Value = [string]$environment[$name] } }
-    }
-    $canaries += [pscustomobject]@{ Name = 'DIRECT_ACTIVATION_CODE'; Value = [string]$provisioning.directActivationCode }
-    Assert-RedactedText -Text ($sampleOutput -join [Environment]::NewLine) -Canaries $canaries
-    Assert-RedactedText -Text $auditText -Canaries $canaries
-    $composeArguments = @('compose', '--project-name', $project, '--env-file', $envFile, '--file', $baseCompose, '--file', $overlayCompose, 'logs', '--no-color')
-    $containerLogs = (& docker @composeArguments 2>&1 | Out-String)
-    if ($LASTEXITCODE -ne 0) { throw 'ALPHA_GOLDEN_PATH_LOG_COLLECTION_FAILED' }
-    Assert-RedactedText -Text $containerLogs -Canaries $canaries
-
-    Write-Host 'ALPHA_GOLDEN_PATH_DIRECT_PASS; CONNECTOR=sample-secure-service; OPERATION=submit; VERSION=1.0.0'
-    Write-Host "ALPHA_GOLDEN_PATH_OUTBOUND_PASS; POSITIVE_OUTBOUND_COUNT=$outboundCount; METHOD=POST; PATH=/vendor/orders; CONTENT_TYPE=application/json"
-    Write-Host "ALPHA_GOLDEN_PATH_PROVIDER_PASS; API_KEY_READS=$apiKeyReads; CERTIFICATE_READS=$certificateReads"
-    Write-Host 'ALPHA_GOLDEN_PATH_RESPONSE_PASS; SANITIZED=YES; AUDIT=METADATA_ONLY; LOGS=REDACTED'
+    if ($null -ne $cleanupFailure) { throw 'ALPHA_GOLDEN_PATH_CLEANUP_FAILED' }
+    if ($null -ne $failure) { throw $failure }
+    Assert-ZeroProjectResources
+    if (Test-Path -LiteralPath $artifactRoot) { throw 'ALPHA_GOLDEN_PATH_ARTIFACT_CLEANUP_FAILED' }
+    Write-Host 'ALPHA_GOLDEN_PATH_CLEANUP_PASS; CONTAINERS=0; NETWORKS=0; VOLUMES=0; SYNTHETIC_MATERIAL=0'
+    Write-Host 'ALPHA_GOLDEN_PATH_PASS'
 }
-catch { $failure = $_ }
-finally {
-    foreach ($name in $environmentNames) { [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], 'Process') }
-    if ($cleanupRequired) {
-        try {
-            & $quickstart -Phase Stop
-            if ($LASTEXITCODE -ne 0) { throw 'ALPHA_GOLDEN_PATH_STOP_FAILED' }
-        }
-        catch {
-            if ($null -eq $failure) { $failure = $_ }
-        }
-    }
+catch {
+    [Console]::Error.WriteLine((Get-StableAlphaFailure -Failure $_))
+    exit 1
 }
-
-if ($null -ne $failure) { throw $failure }
-Assert-ZeroProjectResources
-if (Test-Path -LiteralPath $artifactRoot) { throw 'ALPHA_GOLDEN_PATH_ARTIFACT_CLEANUP_FAILED' }
-Write-Host 'ALPHA_GOLDEN_PATH_CLEANUP_PASS; CONTAINERS=0; NETWORKS=0; VOLUMES=0; SYNTHETIC_MATERIAL=0'
-Write-Host 'ALPHA_GOLDEN_PATH_PASS'
