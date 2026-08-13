@@ -773,7 +773,8 @@ public sealed class ConnectorConfigurationTests
         DirectoryInfo? current = new(AppContext.BaseDirectory);
         while (current is not null)
         {
-            if (File.Exists(Path.Combine(current.FullName, "BrokerGateway.slnx"))) return current.FullName;
+            if (File.Exists(Path.Combine(current.FullName, "BrokerGateway.slnx")) ||
+                File.Exists(Path.Combine(current.FullName, "BrokerGateway.Core.slnx"))) return current.FullName;
             current = current.Parent;
         }
         throw new InvalidOperationException("TEST_REPOSITORY_ROOT_NOT_FOUND");
