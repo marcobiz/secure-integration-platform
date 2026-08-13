@@ -38,6 +38,7 @@ docs/operations/M2-GATEWAY-RUNBOOK.md
 docs/operations/M3-E2E-RUNBOOK.md
 docs/operations/M4-QUICKSTART.md
 docs/operations/M5-ADMIN-QUICKSTART.md
+docs/operations/ALPHA-GOLDEN-PATH.md
 docs/operations/observability.md
 docs/requirements/
 docs/security/
@@ -91,6 +92,7 @@ tools/m3/Invoke-M3A.ps1
 tools/m3/split-host/
 tools/m4/
 tools/m5/
+tools/alpha/
 tools/m6/SyntheticOAuthServer/
 tools/m6/SyntheticSoapServer/
 tools/m6/SyntheticOpaqueSessionServer/
