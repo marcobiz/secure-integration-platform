@@ -67,6 +67,9 @@ jobs:
           ./eng/test-m3-split-firewall.ps1
           ./eng/test-m3-split-network.ps1
           ./eng/test-m3-operator-handoff.ps1
+      - name: Test M5 quickstart artifact safety with Windows PowerShell 5.1
+        shell: powershell
+        run: ./tools/m5/Test-M5QuickstartSafety.ps1 -TestName All
       - name: Validate documentation
         shell: pwsh
         run: ./eng/validate-docs.ps1

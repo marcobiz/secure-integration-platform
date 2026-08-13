@@ -11,26 +11,140 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
-$artifactRoot = if ([string]::IsNullOrWhiteSpace($ArtifactRoot)) {
-    Join-Path $root '.artifacts\m5\quickstart'
-} else { [IO.Path]::GetFullPath($ArtifactRoot) }
-$rawRoot = Join-Path $artifactRoot 'raw'
-$artifactMarker = Join-Path $artifactRoot '.m5-quickstart-owner'
+$rawRoot = $null
+$artifactMarker = $null
 $artifactMarkerValue = 'secure-integration-m5-quickstart-artifacts-v1'
-$envFile = Join-Path $rawRoot 'm3a.env'
+$envFile = $null
 $baseCompose = Join-Path $root 'deploy\m3\docker-compose.m3a.yml'
 $overlayCompose = Join-Path $root 'deploy\m5\docker-compose.m5.yml'
 $project = 'secure-integration-m5-quickstart'
-$dotnet = if ([string]::IsNullOrWhiteSpace($DotNetPath)) { Join-Path $root '.dotnet\dotnet.exe' } else { [IO.Path]::GetFullPath($DotNetPath) }
-if (-not (Test-Path -LiteralPath $dotnet -PathType Leaf)) {
-    if (-not [string]::IsNullOrWhiteSpace($DotNetPath)) { throw 'M5_QUICKSTART_DOTNET_INVALID' }
-    $dotnet = 'dotnet'
+$dotnet = $null
+
+function Get-SafeArtifactRoot {
+    $candidate = if ([string]::IsNullOrWhiteSpace($ArtifactRoot)) { Join-Path $root '.artifacts\m5\quickstart' } else { $ArtifactRoot }
+    if (-not [IO.Path]::IsPathRooted($candidate)) { throw 'M5_QUICKSTART_ARTIFACT_ROOT_INVALID' }
+    $segments = @($candidate -split '[\\/]')
+    if ($segments -contains '.' -or $segments -contains '..') { throw 'M5_QUICKSTART_ARTIFACT_ROOT_INVALID' }
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        if ($candidate.StartsWith('\\', [StringComparison]::Ordinal) -or
+            $candidate.StartsWith('//', [StringComparison]::Ordinal) -or
+            $candidate.StartsWith('\\?\', [StringComparison]::Ordinal) -or
+            $candidate.StartsWith('\\.\', [StringComparison]::Ordinal) -or
+            $candidate.IndexOf(':', 2) -ge 0) {
+            throw 'M5_QUICKSTART_ARTIFACT_ROOT_INVALID'
+        }
+    }
+    try { $full = [IO.Path]::GetFullPath($candidate) }
+    catch { throw 'M5_QUICKSTART_ARTIFACT_ROOT_INVALID' }
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        try { $drive = New-Object IO.DriveInfo([IO.Path]::GetPathRoot($full)) }
+        catch { throw 'M5_QUICKSTART_ARTIFACT_ROOT_INVALID' }
+        if ($drive.DriveType -eq [IO.DriveType]::Network) { throw 'M5_QUICKSTART_ARTIFACT_ROOT_INVALID' }
+    }
+    $comparison = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $separator = [IO.Path]::DirectorySeparatorChar
+    $fullWithSeparator = $full.TrimEnd([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)) + $separator
+    $rootWithSeparator = $root.TrimEnd([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)) + $separator
+    if ($full.Equals($root, $comparison) -or $rootWithSeparator.StartsWith($fullWithSeparator, $comparison)) {
+        throw 'M5_QUICKSTART_ARTIFACT_ROOT_INVALID'
+    }
+    return $full
+}
+
+function Get-ExistingItemWithoutTraversal {
+    param([Parameter(Mandatory = $true)][string] $LiteralPath)
+    try { return Get-Item -LiteralPath $LiteralPath -Force -ErrorAction Stop }
+    catch [System.Management.Automation.ItemNotFoundException] { return $null }
+    catch { throw 'M5_QUICKSTART_ARTIFACT_INSPECTION_FAILED' }
+}
+
+function Assert-NotReparsePoint {
+    param([Parameter(Mandatory = $true)] $Item)
+    if (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw 'M5_QUICKSTART_ARTIFACT_REPARSE_DENIED'
+    }
+}
+
+function Assert-ArtifactPathComponentsSafe {
+    $pathRoot = [IO.Path]::GetPathRoot($artifactRoot)
+    if ([string]::IsNullOrWhiteSpace($pathRoot)) { throw 'M5_QUICKSTART_ARTIFACT_ROOT_INVALID' }
+    $relative = $artifactRoot.Substring($pathRoot.Length)
+    $current = $pathRoot
+    foreach ($segment in @($relative -split '[\\/]' | Where-Object { $_.Length -gt 0 })) {
+        $current = Join-Path $current $segment
+        $item = Get-ExistingItemWithoutTraversal -LiteralPath $current
+        if ($null -eq $item) { break }
+        Assert-NotReparsePoint -Item $item
+    }
+}
+
+function Assert-ArtifactTreeSafe {
+    Assert-ArtifactPathComponentsSafe
+    $rootItem = Get-ExistingItemWithoutTraversal -LiteralPath $artifactRoot
+    if ($null -eq $rootItem) { return $false }
+    Assert-NotReparsePoint -Item $rootItem
+    if (-not $rootItem.PSIsContainer) { throw 'M5_QUICKSTART_ARTIFACT_ROOT_INVALID' }
+    $pending = New-Object 'System.Collections.Generic.Stack[string]'
+    $pending.Push($artifactRoot)
+    while ($pending.Count -gt 0) {
+        $directory = $pending.Pop()
+        $directoryItem = Get-ExistingItemWithoutTraversal -LiteralPath $directory
+        if ($null -eq $directoryItem) { throw 'M5_QUICKSTART_ARTIFACT_INSPECTION_FAILED' }
+        Assert-NotReparsePoint -Item $directoryItem
+        try { $children = @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop) }
+        catch { throw 'M5_QUICKSTART_ARTIFACT_INSPECTION_FAILED' }
+        foreach ($child in $children) {
+            Assert-NotReparsePoint -Item $child
+            if ($child.PSIsContainer) { $pending.Push($child.FullName) }
+        }
+    }
+    return $true
+}
+
+function Assert-OwnedArtifactRoot {
+    param([switch] $AllowAbsent)
+    $exists = Assert-ArtifactTreeSafe
+    if (-not $exists) {
+        if ($AllowAbsent) { return $false }
+        throw 'M5_QUICKSTART_ARTIFACT_ROOT_NOT_OWNED'
+    }
+    $markerItem = Get-ExistingItemWithoutTraversal -LiteralPath $artifactMarker
+    if ($null -eq $markerItem -or $markerItem.PSIsContainer) { throw 'M5_QUICKSTART_ARTIFACT_ROOT_NOT_OWNED' }
+    Assert-NotReparsePoint -Item $markerItem
+    try { $marker = Get-Content -LiteralPath $artifactMarker -Raw -ErrorAction Stop }
+    catch { throw 'M5_QUICKSTART_ARTIFACT_ROOT_NOT_OWNED' }
+    if ($marker -cne $artifactMarkerValue) { throw 'M5_QUICKSTART_ARTIFACT_ROOT_NOT_OWNED' }
+    return $true
+}
+
+function Write-StableQuickstartFailure {
+    param([Parameter(Mandatory = $true)] $Failure)
+    $message = [string]$Failure.Exception.Message
+    $code = if ($message -cmatch '^(M5_QUICKSTART_[A-Z0-9_]+)(?::.*)?$') { $Matches[1] } else { 'M5_QUICKSTART_FAILED' }
+    [Console]::Error.WriteLine($code)
 }
 
 function Invoke-Checked {
     param([Parameter(Mandatory)] [string] $File, [Parameter(Mandatory)] [string[]] $Arguments)
     & $File @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "M5_QUICKSTART_COMMAND_FAILED: $File" }
+    if ($LASTEXITCODE -ne 0) {
+        $component = switch -Regex ([IO.Path]::GetFileNameWithoutExtension($File)) {
+            '^docker$' {
+                if ($Arguments -contains 'config') { 'DOCKER_CONFIG' }
+                elseif ($Arguments -contains 'up') { 'DOCKER_UP' }
+                elseif ($Arguments -contains 'exec') { 'DOCKER_EXEC' }
+                else { 'DOCKER' }
+                break
+            }
+            '^dotnet$' { 'DOTNET'; break }
+            '^npm$' { 'NPM'; break }
+            '^node$' { 'NODE'; break }
+            '^curl$' { 'CURL'; break }
+            '^chmod$' { 'CHMOD'; break }
+            default { 'COMMAND' }
+        }
+        throw "M5_QUICKSTART_COMMAND_FAILED_$component"
+    }
 }
 
 function ComposeArguments {
@@ -86,30 +200,34 @@ function Remove-ExactProjectResources {
 }
 
 function Initialize-OwnedArtifactRoot {
-    if (Test-Path -LiteralPath $artifactRoot) {
-        if (-not (Test-Path -LiteralPath $artifactMarker -PathType Leaf) -or
-            (Get-Content -LiteralPath $artifactMarker -Raw) -cne $artifactMarkerValue) {
-            throw 'M5_QUICKSTART_ARTIFACT_ROOT_NOT_OWNED'
-        }
+    Assert-ArtifactPathComponentsSafe
+    if (Assert-ArtifactTreeSafe) {
+        [void](Assert-OwnedArtifactRoot)
         throw 'M5_QUICKSTART_ARTIFACT_ROOT_NOT_CLEAN'
     }
     New-Item -ItemType Directory -Path $artifactRoot | Out-Null
+    if (-not (Assert-ArtifactTreeSafe)) { throw 'M5_QUICKSTART_ARTIFACT_INSPECTION_FAILED' }
     [IO.File]::WriteAllText($artifactMarker, $artifactMarkerValue, [Text.UTF8Encoding]::new($false))
+    [void](Assert-OwnedArtifactRoot)
 }
 
 function Remove-OwnedArtifactRoot {
-    if (-not (Test-Path -LiteralPath $artifactRoot)) { return }
-    $resolvedRoot = (Resolve-Path -LiteralPath $artifactRoot -ErrorAction Stop).Path
-    if ($resolvedRoot -ne [IO.Path]::GetFullPath($artifactRoot) -or $resolvedRoot -eq $root) {
-        throw 'M5_QUICKSTART_ARTIFACT_ROOT_INVALID'
-    }
-    if (-not (Test-Path -LiteralPath $artifactMarker -PathType Leaf) -or
-        (Get-Content -LiteralPath $artifactMarker -Raw) -cne $artifactMarkerValue) {
-        throw 'M5_QUICKSTART_ARTIFACT_ROOT_NOT_OWNED'
-    }
-    Remove-Item -LiteralPath $resolvedRoot -Recurse -Force
-    if (Test-Path -LiteralPath $resolvedRoot) { throw 'M5_QUICKSTART_ARTIFACT_CLEANUP_FAILED' }
+    if (-not (Assert-OwnedArtifactRoot -AllowAbsent)) { return }
+    [void](Assert-OwnedArtifactRoot)
+    Remove-Item -LiteralPath $artifactRoot -Recurse -Force
+    if ($null -ne (Get-ExistingItemWithoutTraversal -LiteralPath $artifactRoot)) { throw 'M5_QUICKSTART_ARTIFACT_CLEANUP_FAILED' }
 }
+
+try {
+    $artifactRoot = Get-SafeArtifactRoot
+    $rawRoot = Join-Path $artifactRoot 'raw'
+    $artifactMarker = Join-Path $artifactRoot '.m5-quickstart-owner'
+    $envFile = Join-Path $rawRoot 'm3a.env'
+    $dotnet = if ([string]::IsNullOrWhiteSpace($DotNetPath)) { Join-Path $root '.dotnet\dotnet.exe' } else { [IO.Path]::GetFullPath($DotNetPath) }
+    if (-not (Test-Path -LiteralPath $dotnet -PathType Leaf)) {
+        if (-not [string]::IsNullOrWhiteSpace($DotNetPath)) { throw 'M5_QUICKSTART_DOTNET_INVALID' }
+        $dotnet = 'dotnet'
+    }
 
 if (-not [string]::IsNullOrWhiteSpace($AdditionalComposeFile)) {
     $additionalFullPath = [IO.Path]::GetFullPath($AdditionalComposeFile)
@@ -143,6 +261,7 @@ if ($Phase -eq 'Validate') {
 }
 
 if ($Phase -eq 'Stop') {
+    [void](Assert-OwnedArtifactRoot -AllowAbsent)
     Remove-ExactProjectResources
     Remove-OwnedArtifactRoot
     Write-Host 'M5_QUICKSTART_STOP_PASS'
@@ -234,3 +353,8 @@ Write-Host 'M5_QUICKSTART_START_PASS'
 Write-Host 'Synthetic enrollment: Active (challenge, proof-of-possession and activation completed).'
 Write-Host 'Admin UI: https://localhost:18443/admin/'
 Write-Host 'Stop with: powershell -NoProfile -File tools/m5/Invoke-M5Quickstart.ps1 -Phase Stop'
+}
+catch {
+    Write-StableQuickstartFailure -Failure $_
+    exit 1
+}
