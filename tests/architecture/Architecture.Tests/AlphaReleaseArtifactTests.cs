@@ -83,17 +83,60 @@ public sealed class AlphaReleaseArtifactTests
         Assert.Contains("eng/Build-AlphaReleaseArtifacts.ps1", allowlist, StringComparison.Ordinal);
         Assert.Contains("eng/Test-OpenSourceCoreInventory.ps1", allowlist, StringComparison.Ordinal);
         Assert.Contains("eng/CoreExportInventory.psm1", allowlist, StringComparison.Ordinal);
+        Assert.Contains("eng/AlphaReleaseContainerArchive.psm1", allowlist, StringComparison.Ordinal);
+        Assert.Contains("eng/Test-AlphaReleaseContainerBinding.ps1", allowlist, StringComparison.Ordinal);
+        Assert.Contains("eng/Write-AlphaReleaseEvidence.ps1", allowlist, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ALPHA_ART_validator_supports_an_empty_image_store_and_minimal_consumer()
+    public void ALPHA_ART_container_tar_identity_is_bound_to_loaded_image_and_sbom_subject()
     {
         string validator = File.ReadAllText(Path.Combine(Root, "eng", "Test-AlphaReleaseArtifacts.ps1"));
-        Assert.Contains("docker image ls --quiet --no-trunc", validator, StringComparison.Ordinal);
-        Assert.Contains("using System;", validator, StringComparison.Ordinal);
-        Assert.Contains("$ErrorActionPreference = 'Continue'", validator, StringComparison.Ordinal);
-        Assert.DoesNotContain("& docker image inspect $Reference *> $null\r\n    if ($LASTEXITCODE -eq 0)", validator, StringComparison.Ordinal);
-        Assert.DoesNotContain("& docker image inspect $Reference *> $null\n    if ($LASTEXITCODE -eq 0)", validator, StringComparison.Ordinal);
+        Assert.Contains("Get-AlphaReleaseContainerTarIdentity", validator, StringComparison.Ordinal);
+        Assert.Contains("ALPHA_ARTIFACT_TAR_IMAGE_ID_MISMATCH", validator, StringComparison.Ordinal);
+        Assert.Contains("ALPHA_ARTIFACT_TAR_SUBJECT_IDENTITY_MISMATCH", validator, StringComparison.Ordinal);
+        AssertPowerShellTestPass("eng/Test-AlphaReleaseContainerTarInspection.ps1", "Identity", "ALPHA_ART_CONTAINER_TAR_IDENTITY_PASS");
+    }
+
+    [Fact]
+    public void ALPHA_ART_rejects_preexisting_candidate_image_tags_without_mutation()
+    {
+        string validator = File.ReadAllText(Path.Combine(Root, "eng", "Test-AlphaReleaseArtifacts.ps1"));
+        string harness = File.ReadAllText(Path.Combine(Root, "eng", "Test-AlphaReleaseContainerBinding.ps1"));
+        Assert.Contains("ALPHA_ART_CANDIDATE_IMAGE_TAG_PREEXISTING", validator, StringComparison.Ordinal);
+        Assert.Contains("PreexistingGatewayTag", harness, StringComparison.Ordinal);
+        Assert.Contains("PreexistingMigrationsTag", harness, StringComparison.Ordinal);
+        Assert.Contains("BothPreexistingTags", harness, StringComparison.Ordinal);
+        Assert.Contains("ALPHA_ART_CONTAINER_PREEXISTING_TAG_NEGATIVES_PASS", harness, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ALPHA_ART_rejects_swapped_container_tar_bytes_with_preloaded_tags()
+    {
+        string harness = File.ReadAllText(Path.Combine(Root, "eng", "Test-AlphaReleaseContainerBinding.ps1"));
+        Assert.Contains("SwappedTarEmptyDaemon", harness, StringComparison.Ordinal);
+        Assert.Contains("SwappedTarPreloadedTags", harness, StringComparison.Ordinal);
+        Assert.Contains("ALPHA_ART_CONTAINER_SWAPPED_TAR_NEGATIVES_PASS", harness, StringComparison.Ordinal);
+        AssertPowerShellTestPass("eng/Test-AlphaReleaseContainerTarInspection.ps1", "SwappedAndWrongRepoTag", "ALPHA_ART_CONTAINER_TAR_SWAPPED_AND_REPOTAG_NEGATIVES_PASS");
+    }
+
+    [Fact]
+    public void ALPHA_ART_rejects_tar_config_and_sbom_subject_identity_mismatch()
+    {
+        string validator = File.ReadAllText(Path.Combine(Root, "eng", "Test-AlphaReleaseArtifacts.ps1"));
+        string harness = File.ReadAllText(Path.Combine(Root, "eng", "Test-AlphaReleaseContainerBinding.ps1"));
+        Assert.Contains("identity.imageId -cne [string]$association.imageId", validator, StringComparison.Ordinal);
+        Assert.Contains("RegeneratedManifestAndSbomForWrongTarRole", harness, StringComparison.Ordinal);
+        AssertPowerShellTestPass("eng/Test-AlphaReleaseContainerTarInspection.ps1", "ConfigDigestAndRole", "ALPHA_ART_CONTAINER_TAR_CONFIG_DIGEST_AND_ROLE_NEGATIVES_PASS");
+    }
+
+    [Fact]
+    public void ALPHA_ART_evidence_rejects_stale_or_cross_run_normalized_digest()
+    {
+        string writer = File.ReadAllText(Path.Combine(Root, "eng", "Write-AlphaReleaseEvidence.ps1"));
+        Assert.Contains("-ReleaseSetOnly", writer, StringComparison.Ordinal);
+        Assert.Contains("ALPHA_ART_EVIDENCE_NORMALIZED_DIGEST_MISMATCH", writer, StringComparison.Ordinal);
+        AssertPowerShellTestPass("eng/Test-AlphaReleaseEvidenceConsistency.ps1", "StaleOrCrossRun", "ALPHA_ART_EVIDENCE_STALE_OR_CROSS_RUN_NEGATIVES_PASS");
     }
 
     [Fact]

@@ -64,6 +64,32 @@ function Compress-DirectoryContents {
     Compress-Archive -Path ($children | Select-Object -ExpandProperty FullName) -DestinationPath $DestinationArchive -CompressionLevel Optimal
 }
 
+function Get-DockerImageIdByReference {
+    param([Parameter(Mandatory = $true)][string] $Reference)
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $ids = @(& docker image ls --quiet --no-trunc $Reference 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $exitCode = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $previousErrorActionPreference }
+    if ($exitCode -ne 0) { throw 'ALPHA_RELEASE_IMAGE_LOOKUP_FAILED' }
+    if ($ids.Count -gt 1) { throw 'ALPHA_RELEASE_IMAGE_LOOKUP_AMBIGUOUS' }
+    return $(if ($ids.Count -eq 1) { $ids[0] } else { '' })
+}
+
+function Remove-TaskOwnedImageReference {
+    param([Parameter(Mandatory = $true)][string] $Reference, [Parameter(Mandatory = $true)][string] $ExpectedImageId)
+    $currentImageId = Get-DockerImageIdByReference -Reference $Reference
+    if ([string]::IsNullOrWhiteSpace($currentImageId)) { return }
+    if ($currentImageId -cne $ExpectedImageId) { throw "ALPHA_RELEASE_IMAGE_CLEANUP_OWNERSHIP_FAILED: $Reference" }
+    & docker image rm $Reference *> $null
+    if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace((Get-DockerImageIdByReference -Reference $Reference))) {
+        throw "ALPHA_RELEASE_IMAGE_CLEANUP_FAILED: $Reference"
+    }
+}
+
+$ownedBuildReferences = @{}
 try {
     $sdkProject = Join-Path $root 'sdk\dotnet\Broker.Sdk\Broker.Sdk.csproj'
     Invoke-Checked -File $dotnet -Arguments @('restore', $sdkProject, '--locked-mode', '/p:AlphaReleasePack=true') -FailureCode 'ALPHA_RELEASE_SDK_RESTORE_FAILED'
@@ -100,14 +126,25 @@ try {
     $shortCommit = $sourceCommit.Substring(0, 12)
     $gatewayImage = "secure-integration-gateway:$productVersion-$shortCommit"
     $migrationsImage = "secure-integration-migrations:$productVersion-$shortCommit"
+    foreach ($reference in @($gatewayImage, $migrationsImage)) {
+        if (-not [string]::IsNullOrWhiteSpace((Get-DockerImageIdByReference -Reference $reference))) {
+            throw "ALPHA_RELEASE_CANDIDATE_IMAGE_TAG_PREEXISTING: $reference"
+        }
+    }
     $commonBuildArguments = @(
         'build', '--pull', '--no-cache', '--provenance=false',
         '--build-arg', "PRODUCT_VERSION=$productVersion",
         '--build-arg', "SOURCE_REVISION=$sourceCommit")
     Invoke-Checked -File 'docker' -Arguments ($commonBuildArguments + @(
         '--file', (Join-Path $root 'src\Gateway\Gateway.Api\Dockerfile'), '--tag', $gatewayImage, $root)) -FailureCode 'ALPHA_RELEASE_GATEWAY_IMAGE_BUILD_FAILED'
+    $gatewayBuiltImageId = Get-DockerImageIdByReference -Reference $gatewayImage
+    if ($gatewayBuiltImageId -cnotmatch '^sha256:[0-9a-f]{64}$') { throw 'ALPHA_RELEASE_GATEWAY_IMAGE_ID_INVALID' }
+    $ownedBuildReferences[$gatewayImage] = $gatewayBuiltImageId
     Invoke-Checked -File 'docker' -Arguments ($commonBuildArguments + @(
         '--file', (Join-Path $root 'src\Gateway\Gateway.Migrations\Dockerfile'), '--tag', $migrationsImage, $root)) -FailureCode 'ALPHA_RELEASE_MIGRATIONS_IMAGE_BUILD_FAILED'
+    $migrationsBuiltImageId = Get-DockerImageIdByReference -Reference $migrationsImage
+    if ($migrationsBuiltImageId -cnotmatch '^sha256:[0-9a-f]{64}$') { throw 'ALPHA_RELEASE_MIGRATIONS_IMAGE_ID_INVALID' }
+    $ownedBuildReferences[$migrationsImage] = $migrationsBuiltImageId
 
     $gatewayImageArchive = Join-Path $artifactsDirectory "gateway-image-$productVersion-$shortCommit.tar"
     $migrationsImageArchive = Join-Path $artifactsDirectory "migrations-image-$productVersion-$shortCommit.tar"
@@ -189,6 +226,8 @@ try {
     $checksumLines = foreach ($relative in $checksumRelativePaths) { "$(Get-FileHash -LiteralPath $checksumByRelativePath[$relative] -Algorithm SHA256 | Select-Object -ExpandProperty Hash)  $relative" }
     Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS') -Value $checksumLines -Encoding ASCII
 
+    Remove-TaskOwnedImageReference -Reference $gatewayImage -ExpectedImageId ([string]$gatewayInspect.Id)
+    Remove-TaskOwnedImageReference -Reference $migrationsImage -ExpectedImageId ([string]$migrationsInspect.Id)
     $validation = & (Join-Path $PSScriptRoot 'Test-AlphaReleaseArtifacts.ps1') -RunDirectory $output -ExpectedSourceCommit $sourceCommit -DotNetPath $dotnet | Out-String
     [IO.File]::WriteAllText((Join-Path $validationDirectory 'artifact-validation.json'), $validation.Trim(), [Text.UTF8Encoding]::new($false))
 
@@ -206,6 +245,9 @@ try {
     } | ConvertTo-Json -Depth 4
 }
 finally {
+    foreach ($reference in @($ownedBuildReferences.Keys)) {
+        Remove-TaskOwnedImageReference -Reference $reference -ExpectedImageId ([string]$ownedBuildReferences[$reference])
+    }
     if (Test-Path -LiteralPath $workDirectory) {
         $resolvedWork = [IO.Path]::GetFullPath($workDirectory)
         $outputPrefix = $output.TrimEnd([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)) + [IO.Path]::DirectorySeparatorChar

@@ -6,7 +6,8 @@ param(
     [string] $DotNetPath,
     [switch] $RunConsumerInstall,
     [switch] $RunContainerRuntime,
-    [switch] $ReleaseSetOnly
+    [switch] $ReleaseSetOnly,
+    [switch] $ContainerBindingOnly
 )
 
 Set-StrictMode -Version Latest
@@ -19,6 +20,7 @@ $testRoot = Join-Path $tempBase ('alpha-artifact-validation-' + [Guid]::NewGuid(
 if (-not $testRoot.StartsWith($tempBase + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'ALPHA_ARTIFACT_TEST_ROOT_INVALID' }
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+Import-Module (Join-Path $PSScriptRoot 'AlphaReleaseContainerArchive.psm1') -Force
 $repositoryDotNet = Join-Path $root '.dotnet\dotnet.exe'
 $dotnet = if (-not [string]::IsNullOrWhiteSpace($DotNetPath)) { [IO.Path]::GetFullPath($DotNetPath) }
     elseif (Test-Path -LiteralPath $repositoryDotNet -PathType Leaf) { $repositoryDotNet }
@@ -336,16 +338,96 @@ function Get-ReleaseInventory([string] $Directory) {
     return $sorted
 }
 
-function Ensure-ImageAvailable([string] $Reference, [string] $ArchivePath) {
-    $existingImageId = (& docker image ls --quiet --no-trunc $Reference | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_IMAGE_LOOKUP_FAILED' }
-    if (-not [string]::IsNullOrWhiteSpace($existingImageId)) { return }
-    & docker image load --input $ArchivePath *> $null
-    if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_IMAGE_LOAD_FAILED' }
-    & docker image inspect $Reference *> $null
-    if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_IMAGE_NOT_AVAILABLE' }
+function Get-DockerImageIdByReference {
+    param([Parameter(Mandatory = $true)][string] $Reference)
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $ids = @(& docker image ls --quiet --no-trunc $Reference 2>$null | ForEach-Object { ([string]$_).Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $exitCode = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $previousErrorActionPreference }
+    if ($exitCode -ne 0) { throw 'ALPHA_ARTIFACT_IMAGE_LOOKUP_FAILED' }
+    if ($ids.Count -gt 1) { throw 'ALPHA_ARTIFACT_IMAGE_LOOKUP_AMBIGUOUS' }
+    return $(if ($ids.Count -eq 1) { $ids[0] } else { '' })
 }
 
+function Assert-CandidateImageTagsAbsent {
+    param([Parameter(Mandatory = $true)][string[]] $References)
+    foreach ($reference in $References) {
+        if (-not [string]::IsNullOrWhiteSpace((Get-DockerImageIdByReference -Reference $reference))) {
+            throw "ALPHA_ART_CANDIDATE_IMAGE_TAG_PREEXISTING: $reference"
+        }
+    }
+}
+
+function Invoke-ContainerArtifactBindingValidation {
+    param(
+        [Parameter(Mandatory = $true)][string] $RunDirectory,
+        [Parameter(Mandatory = $true)] $Manifest,
+        [Parameter(Mandatory = $true)] $Profile,
+        [Parameter(Mandatory = $true)][string] $InspectionRoot,
+        [Parameter(Mandatory = $true)][hashtable] $OwnedReferences
+    )
+
+    $imagesByRole = @{}
+    foreach ($image in @($Manifest.images)) { $imagesByRole[[string]$image.role] = $image }
+    $associationsByRole = @{}
+    foreach ($association in @($Manifest.sbomSubjects)) { $associationsByRole[[string]$association.role] = $association }
+    $artifactRecordsByPath = @{}
+    foreach ($artifact in @($Manifest.artifacts)) { $artifactRecordsByPath[[string]$artifact.file] = $artifact }
+    $subjectsByRole = @{}
+    foreach ($subject in @($Profile.sbomSubjects)) { $subjectsByRole[[string]$subject.role] = $subject }
+    $roles = @('gateway', 'migrations')
+    $references = @($roles | ForEach-Object { [string]$subjectsByRole[$_].imageReference })
+
+    Assert-CandidateImageTagsAbsent -References $references
+    $identitiesByRole = @{}
+    foreach ($role in $roles) {
+        $subject = $subjectsByRole[$role]
+        $archivePath = Join-Path $RunDirectory ([string]$subject.artifactFile).Replace('/', [IO.Path]::DirectorySeparatorChar)
+        $identity = Get-AlphaReleaseContainerTarIdentity -ArchivePath $archivePath -Role $role `
+            -ExpectedReference ([string]$subject.imageReference) -ProductVersion ([string]$Manifest.version) `
+            -SourceCommit ([string]$Manifest.sourceRevision) -InspectionDirectory (Join-Path $InspectionRoot $role)
+        $image = $imagesByRole[$role]
+        $association = $associationsByRole[$role]
+        $artifact = $artifactRecordsByPath[[string]$subject.artifactFile]
+        if ($null -eq $image -or $null -eq $association -or $null -eq $artifact -or
+            [string]$identity.artifactSha256 -cne ([string]$artifact.sha256).ToUpperInvariant() -or
+            [string]$identity.repoTag -cne [string]$image.reference -or
+            [string]$identity.imageId -cne [string]$image.imageId -or
+            [string]$identity.repoTag -cne [string]$association.imageReference -or
+            [string]$identity.imageId -cne [string]$association.imageId -or
+            [string]$subject.artifactFile -cne [string]$association.artifactFile) {
+            throw "ALPHA_ARTIFACT_TAR_SUBJECT_IDENTITY_MISMATCH: $role"
+        }
+        $identitiesByRole[$role] = $identity
+    }
+
+    foreach ($role in $roles) {
+        $identity = $identitiesByRole[$role]
+        $oppositeRole = if ($role -ceq 'gateway') { 'migrations' } else { 'gateway' }
+        $oppositeReference = [string]$identitiesByRole[$oppositeRole].repoTag
+        $expectedBefore = Get-DockerImageIdByReference -Reference ([string]$identity.repoTag)
+        $oppositeBefore = Get-DockerImageIdByReference -Reference $oppositeReference
+        if (-not [string]::IsNullOrWhiteSpace($expectedBefore)) { throw "ALPHA_ART_CANDIDATE_IMAGE_TAG_PREEXISTING: $([string]$identity.repoTag)" }
+        if ($role -ceq 'gateway' -and -not [string]::IsNullOrWhiteSpace($oppositeBefore)) {
+            throw "ALPHA_ART_CANDIDATE_IMAGE_TAG_PREEXISTING: $oppositeReference"
+        }
+        $archivePath = Join-Path $RunDirectory ([string]$subjectsByRole[$role].artifactFile).Replace('/', [IO.Path]::DirectorySeparatorChar)
+        & docker image load --input $archivePath *> $null
+        if ($LASTEXITCODE -ne 0) { throw "ALPHA_ARTIFACT_IMAGE_LOAD_FAILED: $role" }
+        $loadedImageId = Get-DockerImageIdByReference -Reference ([string]$identity.repoTag)
+        if ($loadedImageId -ceq [string]$identity.imageId) { $OwnedReferences[[string]$identity.repoTag] = [string]$identity.imageId }
+        if ($loadedImageId -cne [string]$identity.imageId) { throw "ALPHA_ARTIFACT_TAR_IMAGE_ID_MISMATCH: $role" }
+        $oppositeAfter = Get-DockerImageIdByReference -Reference $oppositeReference
+        if ($oppositeAfter -cne $oppositeBefore) { throw "ALPHA_ARTIFACT_TAR_OPPOSITE_TAG_MUTATED: $role" }
+    }
+
+    return @($roles | ForEach-Object { $identitiesByRole[$_] })
+}
+
+$ownedImageReferences = @{}
 try {
     $manifest = Read-Manifest -Directory $run
     $productVersion = [string]$manifest.version
@@ -380,10 +462,12 @@ try {
             actualArtifactCount = $releaseSetValidation.actualArtifactCount
             expectedSbomSubjectCount = $releaseSetValidation.expectedSbomSubjectCount
             actualSbomSubjectCount = $releaseSetValidation.actualSbomSubjectCount
+            normalizedInventorySha256 = [string]$manifest.coreExport.normalizedInventorySha256
         } | ConvertTo-Json -Compress
         return
     }
 
+    if (-not $ContainerBindingOnly) {
     $artifactFiles = @(Get-ChildItem -LiteralPath (Join-Path $run 'artifacts') -File)
     foreach ($file in $artifactFiles) {
         if ($file.Name -match '(?i)(healthcare|fse2|azure|deployment|evidence|secret|\.env|\.p12|\.pfx|\.pem|\.key)') { throw 'ALPHA_ARTIFACT_FORBIDDEN_FILE_NAME' }
@@ -440,6 +524,7 @@ try {
     foreach ($textFile in Get-ChildItem -LiteralPath $adminExtract -Recurse -File | Where-Object { $_.Extension -in '.html', '.js', '.css', '.json', '.svg' }) {
         Assert-NoLocalPathOrSecretText -Text (Get-Content -LiteralPath $textFile.FullName -Raw)
     }
+    }
 
     $gatewayImage = @($manifest.images | Where-Object { [string]$_.role -ceq 'gateway' })
     $migrationsImage = @($manifest.images | Where-Object { [string]$_.role -ceq 'migrations' })
@@ -447,8 +532,8 @@ try {
     $gatewayTar = @(Get-ChildItem -LiteralPath (Join-Path $run 'artifacts') -File -Filter 'gateway-image-*.tar')
     $migrationsTar = @(Get-ChildItem -LiteralPath (Join-Path $run 'artifacts') -File -Filter 'migrations-image-*.tar')
     if ($gatewayTar.Count -ne 1 -or $migrationsTar.Count -ne 1) { throw 'ALPHA_ARTIFACT_IMAGE_ARCHIVE_INVENTORY_INVALID' }
-    Ensure-ImageAvailable -Reference ([string]$gatewayImage[0].reference) -ArchivePath $gatewayTar[0].FullName
-    Ensure-ImageAvailable -Reference ([string]$migrationsImage[0].reference) -ArchivePath $migrationsTar[0].FullName
+    $containerTarIdentities = Invoke-ContainerArtifactBindingValidation -RunDirectory $run -Manifest $manifest -Profile $profile `
+        -InspectionRoot (Join-Path $testRoot 'container-tar-inspection') -OwnedReferences $ownedImageReferences
     foreach ($image in @($gatewayImage[0], $migrationsImage[0])) {
         $inspect = @(& docker image inspect ([string]$image.reference) | ConvertFrom-Json)[0]
         $imageUser = [string]$inspect.Config.User
@@ -462,6 +547,22 @@ try {
     }
     $gatewayInspect = @(& docker image inspect ([string]$gatewayImage[0].reference) | ConvertFrom-Json)[0]
     if ($null -eq $gatewayInspect.Config.Healthcheck -or @($gatewayInspect.Config.Healthcheck.Test).Count -eq 0) { throw 'ALPHA_ARTIFACT_GATEWAY_HEALTHCHECK_MISSING' }
+
+    if ($ContainerBindingOnly) {
+        [pscustomobject]@{
+            status = 'PASS'
+            productVersion = $productVersion
+            sourceRevision = $sourceCommit
+            normalizedInventorySha256 = [string]$manifest.coreExport.normalizedInventorySha256
+            containerTarIdentity = 'PASS'
+            candidateTagPrecondition = 'PASS'
+            tarImageIdMatch = 'PASS'
+            releaseSubjectImageIdMatch = 'PASS'
+            sbomSubjectImageIdMatch = 'PASS'
+            identities = @($containerTarIdentities)
+        } | ConvertTo-Json -Depth 8 -Compress
+        return
+    }
 
     foreach ($file in Get-ChildItem -LiteralPath $run -Recurse -File | Where-Object { $_.Extension -in '.json', '.sha256', '.spdx', '.txt' -or $_.Name -eq 'SHA256SUMS' }) {
         Assert-NoLocalPathOrSecretText -Text (Get-Content -LiteralPath $file.FullName -Raw)
@@ -575,6 +676,15 @@ return 0;
     } | ConvertTo-Json -Compress
 }
 finally {
+    foreach ($reference in @($ownedImageReferences.Keys)) {
+        $currentImageId = Get-DockerImageIdByReference -Reference $reference
+        if ([string]::IsNullOrWhiteSpace($currentImageId)) { continue }
+        if ($currentImageId -cne [string]$ownedImageReferences[$reference]) { throw "ALPHA_ARTIFACT_IMAGE_CLEANUP_OWNERSHIP_FAILED: $reference" }
+        & docker image rm $reference *> $null
+        if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace((Get-DockerImageIdByReference -Reference $reference))) {
+            throw "ALPHA_ARTIFACT_IMAGE_CLEANUP_FAILED: $reference"
+        }
+    }
     if (Test-Path -LiteralPath $testRoot) {
         $resolved = [IO.Path]::GetFullPath($testRoot)
         if (-not $resolved.StartsWith($tempBase + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'ALPHA_ARTIFACT_TEST_CLEANUP_TARGET_INVALID' }
