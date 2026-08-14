@@ -1,7 +1,19 @@
 {
+  "schemaVersion": 1,
   "product": "SecureIntegrationPlatform",
   "version": "0.0.0-replaced-by-pipeline",
   "sourceRevision": "replaced-by-pipeline",
+  "releaseChannel": "private-preview",
+  "generatedAtUtc": "replaced-by-pipeline",
+  "claims": {
+    "publicReleaseGo": false,
+    "productionReady": false
+  },
+  "coreExport": {
+    "fileCount": 0,
+    "rawManifestSha256RunSpecific": "replaced-by-pipeline",
+    "normalizedInventorySha256": "replaced-by-pipeline"
+  },
   "toolchain": {
     "dotnetSdk": "10.0.302"
   },
@@ -9,4 +21,3 @@
   "sbom": [],
   "signatures": []
 }
-

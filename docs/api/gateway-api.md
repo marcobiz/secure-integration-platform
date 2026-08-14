@@ -2,6 +2,9 @@
 
 La specifica machine-readable è [gateway-openapi.yaml](gateway-openapi.yaml).
 
+OpenAPI `info.version` identifica il product/API candidate `0.1.0-alpha.1`. Non cambia
+il protocollo runtime `1.0` né il Connector canonico `sample-secure-service/1.0.0`.
+
 ## Runtime
 
 `POST /v1/connectors/{connectorId}/operations/{operationId}:invoke` mantiene il contratto M2/M3. Certificato Installation, firma ECDSA P-256, timestamp, nonce, content hash e `traceparent` sono obbligatori. Tenant ed Environment derivano dall'Installation autenticata; non sono autorevoli se presenti nel body.

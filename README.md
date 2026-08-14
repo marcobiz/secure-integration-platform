@@ -9,7 +9,7 @@ The platform removes hard-coded secrets and distributed credentials while minimi
 ## Status
 
 M0-M5.5 and the provider-neutral authentication foundation are integrated. The active
-tracks are a narrow, non-production Core `0.1.0-alpha` and the separate FSE2 Organization
+tracks are a narrow, non-production Core `0.1.0-alpha.1` technical candidate and the separate FSE2 Organization
 OfficialTest track. M3B remains an unqualified Azure Deployment Pack gate and is not a
 Core dependency. See `IMPLEMENTATION_STATUS.md` in the complete repository for the current
 dashboard; early-adopter,

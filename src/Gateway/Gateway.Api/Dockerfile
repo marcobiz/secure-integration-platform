@@ -14,9 +14,13 @@ COPY docs/connectors/examples/sample-secure-service.connector.json /src/docs/con
 RUN npm run build
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.11@sha256:207cc51496778557731c81ff670333d8ade4a4fec22768fd1be8e78474a84ecf AS runtime
+ARG PRODUCT_VERSION
+ARG SOURCE_REVISION
 WORKDIR /app
 COPY --from=build /app .
 COPY --from=admin-web /src/src/Admin/Admin.Web/dist ./wwwroot/admin
+LABEL org.opencontainers.image.version=$PRODUCT_VERSION \
+      org.opencontainers.image.revision=$SOURCE_REVISION
 USER $APP_UID
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080

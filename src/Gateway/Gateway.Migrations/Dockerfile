@@ -4,7 +4,11 @@ COPY . .
 RUN dotnet restore src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj --locked-mode && dotnet publish src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj -c Release --no-restore -o /app /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/runtime:10.0.11@sha256:acad02eb5c4fbf57d15296f9c08d56cd4036e915bdae5b4dd48a06523d452617 AS runtime
+ARG PRODUCT_VERSION
+ARG SOURCE_REVISION
 WORKDIR /app
 COPY --from=build /app .
+LABEL org.opencontainers.image.version=$PRODUCT_VERSION \
+      org.opencontainers.image.revision=$SOURCE_REVISION
 USER $APP_UID
 ENTRYPOINT ["dotnet", "SecureIntegration.Gateway.Migrations.dll", "apply"]

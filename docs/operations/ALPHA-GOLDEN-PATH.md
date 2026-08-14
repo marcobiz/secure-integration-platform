@@ -1,5 +1,8 @@
 # Core alpha golden path
 
+Product candidate: `0.1.0-alpha.1`. This product version is distinct from the unchanged
+BGW1/runtime protocol version `1.0` and the canonical Connector version `1.0.0`.
+
 This is the single supported early-adopter path for the non-production Core alpha:
 
 ```text

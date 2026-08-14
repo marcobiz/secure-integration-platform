@@ -1,14 +1,22 @@
 [CmdletBinding()]
 param(
-    [string] $Version = '0.1.0-dev',
+    [string] $Version,
     [string] $GatewayImage = 'secure-integration-m5-quickstart-gateway:latest',
+    [string] $MigrationsImage,
+    [string] $OutputDirectory,
     [switch] $SkipContainer
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$output = Join-Path $root '.artifacts\sbom'
+$versionProps = [xml](Get-Content -LiteralPath (Join-Path $root 'Directory.Build.props') -Raw)
+$canonicalVersionNode = $versionProps.SelectSingleNode('/Project/PropertyGroup/ProductVersion')
+$canonicalVersion = if ($null -eq $canonicalVersionNode) { '' } else { [string]$canonicalVersionNode.InnerText }
+if ([string]::IsNullOrWhiteSpace($canonicalVersion)) { throw 'SBOM_PRODUCT_VERSION_SOURCE_MISSING' }
+if ([string]::IsNullOrWhiteSpace($Version)) { $Version = $canonicalVersion }
+if ($Version -cne $canonicalVersion) { throw 'SBOM_PRODUCT_VERSION_MISMATCH' }
+$output = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) { Join-Path $root '.artifacts\sbom' } else { [IO.Path]::GetFullPath($OutputDirectory) }
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 Get-ChildItem -LiteralPath $output -File -Filter '*.spdx.json' -ErrorAction SilentlyContinue | Remove-Item -Force
 Remove-Item -LiteralPath (Join-Path $output 'aggregate-manifest.json') -Force -ErrorAction SilentlyContinue
@@ -79,15 +87,23 @@ if (-not $SkipContainer) {
         if ($LASTEXITCODE -ne 0) { throw 'SBOM_GATEWAY_IMAGE_BUILD_FAILED' }
     }
 
-    $containerSbom = Join-Path $output 'gateway-container.spdx.json'
-    if ($null -ne (Get-Command syft -ErrorAction SilentlyContinue)) {
-        & syft scan $GatewayImage --output "spdx-json=$containerSbom"
-        if ($LASTEXITCODE -ne 0) { throw 'SBOM_CONTAINER_SYFT_GENERATION_FAILED' }
-    } else {
-        & docker scout version *> $null
-        if ($LASTEXITCODE -ne 0) { throw 'SBOM_CONTAINER_TOOL_MISSING' }
-        & docker scout sbom --format spdx --output $containerSbom "local://$GatewayImage"
-        if ($LASTEXITCODE -ne 0) { throw 'SBOM_CONTAINER_SCOUT_GENERATION_FAILED' }
+    function New-ContainerSbom([string] $Image, [string] $FileName) {
+        $containerSbom = Join-Path $output $FileName
+        if ($null -ne (Get-Command syft -ErrorAction SilentlyContinue)) {
+            & syft scan $Image --output "spdx-json=$containerSbom"
+            if ($LASTEXITCODE -ne 0) { throw 'SBOM_CONTAINER_SYFT_GENERATION_FAILED' }
+        } else {
+            & docker scout version *> $null
+            if ($LASTEXITCODE -ne 0) { throw 'SBOM_CONTAINER_TOOL_MISSING' }
+            & docker scout sbom --format spdx --output $containerSbom "local://$Image"
+            if ($LASTEXITCODE -ne 0) { throw 'SBOM_CONTAINER_SCOUT_GENERATION_FAILED' }
+        }
+    }
+    New-ContainerSbom -Image $GatewayImage -FileName 'gateway-container.spdx.json'
+    if (-not [string]::IsNullOrWhiteSpace($MigrationsImage)) {
+        & docker image inspect $MigrationsImage *> $null
+        if ($LASTEXITCODE -ne 0) { throw 'SBOM_MIGRATIONS_IMAGE_MISSING' }
+        New-ContainerSbom -Image $MigrationsImage -FileName 'migrations-container.spdx.json'
     }
 }
 

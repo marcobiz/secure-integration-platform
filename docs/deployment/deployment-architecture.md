@@ -117,27 +117,30 @@ dei byte sono responsabilità del deployment. Un modulo caricato è full-trust i
 Il Gateway Core predefinito non include moduli healthcare; una vertical image downstream
 non può invertire la dipendenza verso il Core.
 
-## CURRENT — SBOM ed export
+## CURRENT — SBOM, export e candidate artifact writer
 
 `eng/generate-sbom.ps1` produce documenti SPDX e un aggregate manifest con SHA-256 ed
 exact commit. Il manifest grezzo include attributi run-specific: il suo SHA non è un
-digest deterministico cross-run. `P3-CORE-EXPORT-DIGEST` resta lavoro futuro di
-normalizzazione sotto `ALPHA-ART`.
+digest deterministico cross-run. Il candidate `0.1.0-alpha.1` aggiunge
+`normalizedInventorySha256`, calcolato su commit e inventario canonico senza timestamp,
+e lo verifica fail-closed in due produzioni indipendenti.
 
-L'export Core usa allowlist e gate boundary/license/secret/build/test. Non pubblica un
-repository o una release. Non esiste ancora pipeline di `dotnet pack`/NuGet push,
-container push, Authenticode, CMS, Cosign o release SemVer.
+L'export Core usa allowlist e gate boundary/license/secret/build/test. Il writer locale
+produce package SDK, image archive, Admin archive, Core source archive, SBOM, manifest e
+checksum senza eseguire push. Non esiste alcuna pipeline di NuGet/container push,
+Authenticode, CMS, Cosign o pubblicazione SemVer.
 
-## TARGET — Core `0.1.0-alpha`
+## TARGET — Core `0.1.0-alpha.1`
 
 Nel repository completo, artefatti e gate sono definiti in `0.1.0-alpha-scope.md`, un
 documento di governance non incluso nell'export Core. Il target è una developer alpha
 non-production con un solo golden path REST sintetico, checksum/SPDX/vulnerability
 inventory, source archive, clean-clone e istruzioni riproducibili.
 
-Licenza, security channel, versioning/tag, packaging e `ALPHA-ADOPT` restano gate aperti.
-Non dichiarare early-adopter completion finché `ALPHA-ADOPT` non è chiuso. MSI/native/COM
-non sono parte del golden path supportato.
+ALPHA-REST, ALPHA-DIRECT e ALPHA-CLEAN sono baseline chiuse; ALPHA-ADOPT è PASS come
+independent adopter simulation. ALPHA-VER, ALPHA-ART e P3-CORE-EXPORT-DIGEST sono chiusi
+dal candidate writer. Licenza, security channel, tag e pubblicazione restano aperti;
+MSI/native/COM non sono parte del golden path supportato.
 
 ## TARGET — FSE2 OfficialTest
 

@@ -5,12 +5,19 @@
     <RootNamespace>SecureIntegration.Broker.Sdk</RootNamespace>
     <IsPackable>true</IsPackable>
     <PackageId>SecureIntegration.Broker.Sdk</PackageId>
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludePrivateProjectReferenceAssemblies</TargetsForTfmSpecificBuildOutput>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../../../src/Shared/SecureIntegration.Contracts/SecureIntegration.Contracts.csproj" />
+    <ProjectReference Include="../../../src/Shared/SecureIntegration.Contracts/SecureIntegration.Contracts.csproj">
+      <PrivateAssets Condition="'$(AlphaReleasePack)' == 'true'">all</PrivateAssets>
+    </ProjectReference>
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
     <PackageReference Include="System.Text.Json" />
   </ItemGroup>
+  <Target Name="IncludePrivateProjectReferenceAssemblies" DependsOnTargets="BuildOnlySettings;ResolveReferences">
+    <ItemGroup>
+      <BuildOutputInPackage Include="@(ReferenceCopyLocalPaths-&gt;WithMetadataValue('ReferenceSourceTarget', 'ProjectReference'))" />
+    </ItemGroup>
+  </Target>
 </Project>
-

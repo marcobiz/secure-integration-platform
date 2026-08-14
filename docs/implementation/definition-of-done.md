@@ -78,7 +78,7 @@ La slice ALPHA-DOC-01 è Done soltanto se:
 Si applicano ALPHA-01..08 in
 [`0.1.0-alpha-scope.md`](0.1.0-alpha-scope.md). In sintesi:
 
-- versione comune `0.1.0-alpha`, tag exact commit e artifact/checksum/SPDX coerenti;
+- versione comune `0.1.0-alpha.1`, futuro tag exact commit e artifact/checksum/SPDX coerenti;
 - licenza OSS approvata e canale security/governance minimi operativi;
 - clean clone e quickstart ripetibili;
 - unico golden path supportato: Direct .NET → Gateway → REST Connector Published →

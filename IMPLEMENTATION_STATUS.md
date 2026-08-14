@@ -1,7 +1,7 @@
 # Implementation dashboard
 
-Aggiornato: 2026-08-13
-Baseline CURRENT: `main` / `origin/main` = `eec2fa5556eccc7e8e3b47fc7d7b127bcac1ed9e`
+Aggiornato: 2026-08-14
+Baseline CURRENT: `main` / `origin/main` = `f0dd79cc79f8ee48423a182fed5a212f12fc2acb`
 
 Questo file descrive lo stato integrato corrente. I dettagli storici restano nei tag,
 nei report di test e nelle review già versionate; non vengono ricopiati qui. I termini
@@ -21,12 +21,12 @@ ciò che è ancora da ottenere e l'evidenza immutabile di baseline precedenti.
 | Healthcare — FSE2 Organization | **Synthetic-qualified** | Profilo Organization e 11 operation implementati con dual JWT S1 `contentCommitment` e A1 mTLS distinta; nessuna chiamata FSE2 live. |
 | FSE2 Local PKCS12 e vertical image | **Integrati; synthetic lab qualified** | Provider opzionale, importer offline, overlay Compose e immagine verticale con `Healthcare.FSE2` integrati da PR #33. Il pack dichiara `SecretValues=false`; import/custody reali e OfficialTest restano aperti. |
 | Healthcare — ePrescription regionale | **Foundation soltanto** | Profili regionali `BLOCKED_BY_SPEC`; non pubblicabili. |
-| Productization `0.1.0-alpha` | **TARGET, non pubblicata** | Licenza, security contact/governance, versione comune, artefatti release, clean-clone e prova con secondo utilizzatore sono aperti. |
+| Productization `0.1.0-alpha.1` | **Technical RC candidate, non pubblicata** | REST/Direct/clean baseline chiuse e adopter simulation PASS; questa slice chiude versione, artifact writer e digest normalizzato. Licenza/security governance, tag e pubblicazione restano aperti. |
 | Produzione enterprise | **Non qualificata** | Azure live, MSI, adapter native/COM, HA/DR, restore/load/soak, pentest, firma artefatti e pilot restano fuori dal CURRENT. |
 
 ## Due sole track attive
 
-### Track A — Core `0.1.0-alpha`
+### Track A — Core `0.1.0-alpha.1`
 
 TARGET: una developer alpha non-production, provider-neutral, con un solo percorso
 supportato e ripetibile:
@@ -51,9 +51,16 @@ autorizzato e evidence redatta. Solo dopo si affrontano `attachment_hash` sugli 
 file bytes, create/replace, status e gli ulteriori workflow autorizzati. Questa track usa
 un pack verticale opzionale e non amplia le dipendenze del Core.
 
-## PR #33 riconciliata su exact main
+## Exact-main precheck del technical candidate
 
-PR #33 è stata integrata tramite fast-forward; il suo head coincide con l'exact main
+L'exact main autorizzato è `f0dd79cc79f8ee48423a182fed5a212f12fc2acb`.
+General CI è **6/6 PASS** e M5/Admin CI è **15/15 PASS** sulla baseline. Il candidate
+non crea tag, release GitHub o pubblicazioni registry e mantiene
+`PUBLIC_RELEASE_GO = NO` / `PRODUCTION_READY = NO`.
+
+## PR #33 — evidence storica preservata
+
+PR #33 è stata integrata tramite fast-forward; il suo head storico coincideva con
 `eec2fa5556eccc7e8e3b47fc7d7b127bcac1ed9e`.
 
 | Controllo exact-main | Esito |
@@ -76,7 +83,7 @@ configurazione OfficialTest, chiamate FSE2, `validate-cda` live, accreditamento 
 create/status live o qualifica production. Nessun materiale reale è stato consultato o
 importato durante PR #33 e nessuna chiamata live è stata eseguita.
 
-## Core export exact-main
+## Core export storico e candidate normalizzato
 
 - inventario: **431 file**;
 - allowlist/hash/byte entries: **431/431**;
@@ -86,10 +93,11 @@ importato durante PR #33 e nessuna chiamata live è stata eseguita.
   `CC622E4F8FCACE420232C99B4F474429E22C2259DD1B2829B6C55BBD265D6234`.
 
 Il raw SHA è evidence della singola run e non è un expected cross-run, perché il manifest
-include `generatedAtUtc`. `ALPHA-ART` deve aggiungere un digest normalizzato e
-riproducibile dell'inventario export, distinto dal manifest evidence run-specific. Questo
-finding `P3-CORE-EXPORT-DIGEST` è lavoro futuro e non una failure di PR #33 o dell'export
-Core corrente.
+include `generatedAtUtc`. Il candidate `0.1.0-alpha.1` aggiunge
+`normalizedInventorySha256`, distinto dal manifest run-specific e calcolato su exact
+commit, file count, path ordinal normalizzati, byte count e SHA-256 per file.
+`P3-CORE-EXPORT-DIGEST` è chiuso dalla slice candidate senza reinterpretare i raw SHA
+storici.
 
 ## Tassonomia delle evidenze
 
@@ -107,12 +115,11 @@ dei gate di release.
 
 ## Priorità operative
 
-1. Chiudere DOC-01 senza riaprire architettura, API o runbook FSE2.
-2. Completare DOC-02/03/04 e congelare il golden path Core alpha.
-3. Rendere ripetibili clean clone, sample REST e integrazione Direct .NET.
-4. Completare intake/custody/composition FSE2 e il preflight offline prima della rete.
-5. Eseguire `validate-cda` OfficialTest; create/status vengono soltanto dopo.
-6. Taggare o pubblicare `0.1.0-alpha` solo dopo ALPHA-01..08.
+1. Qualificare e revisionare ALPHA-VER, ALPHA-ART e P3 sull'exact candidate.
+2. Risolvere soltanto con decisione umana ALPHA-LIC e ALPHA-SEC.
+3. Mantenere DOC-04 e la track FSE2 separate dal technical RC Core.
+4. Creare il futuro tag `v0.1.0-alpha.1` o pubblicare soltanto con nuova autorizzazione
+   dopo tutti i gate ALPHA-01..08.
 
 Il backlog operativo e la stop list sono in
 [`docs/implementation/backlog.md`](docs/implementation/backlog.md).

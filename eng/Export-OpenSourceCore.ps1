@@ -8,6 +8,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $allowlistPath = Join-Path $PSScriptRoot 'open-source-core.allowlist'
+Import-Module (Join-Path $PSScriptRoot 'CoreExportInventory.psm1') -Force
 $dotnet = Join-Path $root '.dotnet\dotnet.exe'
 if (-not (Test-Path -LiteralPath $dotnet)) { $dotnet = 'dotnet' }
 
@@ -56,27 +57,38 @@ foreach ($relativeRaw in $tracked) {
 
 if ($exported.Count -lt 20) { throw 'OSS_EXPORT_ALLOWLIST_TOO_NARROW' }
 
-$manifestEntries = foreach ($relative in ($exported | Sort-Object)) {
+[string[]]$sortedExported = @($exported)
+[Array]::Sort($sortedExported, [StringComparer]::Ordinal)
+$manifestEntries = foreach ($relative in $sortedExported) {
     $path = Join-Path $destination $relative
     if (-not [IO.File]::Exists($path)) { throw "OSS_EXPORT_COPIED_FILE_MISSING: $relative" }
     [ordered]@{ path = $relative; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash; bytes = [IO.FileInfo]::new($path).Length }
 }
+$sourceCommit = (& git -C $root rev-parse HEAD).Trim()
+$identity = New-CoreInventoryIdentity -SourceCommit $sourceCommit -Files @($manifestEntries)
 $manifest = [ordered]@{
     schemaVersion = 1
-    sourceCommit = (& git -C $root rev-parse HEAD).Trim()
+    sourceCommit = $sourceCommit
     generatedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
     fileCount = $manifestEntries.Count
+    normalizedInventorySha256 = $identity.normalizedInventorySha256
     files = @($manifestEntries)
 }
 $manifestPath = Join-Path $destination 'OPEN_SOURCE_EXPORT_MANIFEST.json'
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 $manifestHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $manifestPath).Hash
 Set-Content -LiteralPath ($manifestPath + '.sha256') -Value "$manifestHash  OPEN_SOURCE_EXPORT_MANIFEST.json" -Encoding ASCII
+$inventoryPath = Join-Path $destination 'OPEN_SOURCE_EXPORT_INVENTORY.normalized.json'
+Write-CoreInventoryUtf8NoBom -LiteralPath $inventoryPath -Value $identity.canonicalJson
+Set-Content -LiteralPath ($inventoryPath + '.sha256') -Value "$($identity.normalizedInventorySha256)  OPEN_SOURCE_EXPORT_INVENTORY.normalized.json" -Encoding ASCII
+
+$powerShellExecutable = (Get-Process -Id $PID).Path
+$powerShellArguments = @('-NoLogo', '-NoProfile')
+if ($PSVersionTable.PSEdition -eq 'Desktop') { $powerShellArguments += @('-ExecutionPolicy', 'Bypass') }
+& $powerShellExecutable @powerShellArguments -File (Join-Path (Join-Path $destination 'eng') 'Test-OpenSourceCoreInventory.ps1') -ExportDirectory $destination -ExpectedSourceCommit $sourceCommit
+if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_NORMALIZED_INVENTORY_FAILED' }
 
 if (-not $SkipVerification) {
-    $powerShellExecutable = (Get-Process -Id $PID).Path
-    $powerShellArguments = @('-NoLogo', '-NoProfile')
-    if ($PSVersionTable.PSEdition -eq 'Desktop') { $powerShellArguments += @('-ExecutionPolicy', 'Bypass') }
     $powerShellArguments += @('-File', (Join-Path (Join-Path $destination 'eng') 'scan-secrets.ps1'))
     & $powerShellExecutable @powerShellArguments
     if ($LASTEXITCODE -ne 0) { throw 'OSS_EXPORT_SECRET_SCAN_FAILED' }
@@ -165,4 +177,5 @@ if (-not $SkipVerification) {
     sourceCommit = $manifest.sourceCommit
     fileCount = $manifest.fileCount
     manifestSha256 = $manifestHash
+    normalizedInventorySha256 = $identity.normalizedInventorySha256
 } | ConvertTo-Json -Depth 3

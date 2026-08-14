@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Secure Integration Platform Gateway API
-  version: 1.3.0-m55
+  version: 0.1.0-alpha.1
   description: Provider-neutral runtime and same-origin OIDC Admin API.
 servers:
   - url: https://gateway.example.invalid

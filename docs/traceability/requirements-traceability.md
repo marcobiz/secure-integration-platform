@@ -2,7 +2,7 @@
 
 Questa matrice distingue requisito, test nominativo, tipo di evidence e stato. Il riepilogo
 DOC-02 è riconciliato con exact-main
-`f2586b3e2f567f4054e36940416615261283c632`; le sezioni milestone successive conservano
+`f0dd79cc79f8ee48423a182fed5a212f12fc2acb`; le sezioni milestone successive conservano
 anche evidence storica legata ai candidate indicati.
 
 Stati usati:
@@ -35,8 +35,9 @@ livelli distinti.
 | Azure M3B/cloud production | `m3-azure-smoke.yml`, `deploy/azure-bicep/m3-dev.bicep` | `EXTERNAL`/`UNVERIFIED` — nessun live PASS attestato |
 | Local PKCS#12 import/custody | `Test-Fse2LocalPkcs12Material.ps1` usa fixture per-run; importer default read-only | Lab sintetico `AUTOMATED`; import ufficiale `MANUAL`/`UNVERIFIED` |
 | FSE2 OfficialTest | Gate FSE2-T01..T06 in DOC-01; nessuna call live nella baseline | `EXTERNAL`/`BLOCKED`; primo outcome futuro `validate-cda` |
-| Early-adopter completion | Dipendenze `ALPHA-DOC-02/03`, `ALPHA-REST`, `ALPHA-DIRECT`, `ALPHA-CLEAN` → `ALPHA-ADOPT` | `BLOCKED` finché `ALPHA-ADOPT` non è chiuso |
-| Core export digest deterministico | `P3-CORE-EXPORT-DIGEST` sotto `ALPHA-ART`; il manifest raw contiene metadata run-specific | `DEFERRED`; non riapre PR #33 |
+| Early-adopter completion | Dipendenze `ALPHA-DOC-02/03`, `ALPHA-REST`, `ALPHA-DIRECT`, `ALPHA-CLEAN` → `ALPHA-ADOPT` | `PASS` — independent adopter simulation autorizzata; non prova production adoption |
+| Product/release version | `AlphaReleaseArtifactTests.ALPHA_VER_all_product_surfaces_report_0_1_0_alpha_1`, package consumer e label OCI | `AUTOMATED` — candidate `0.1.0-alpha.1`; protocollo `1.0` e Connector `1.0.0` invariati |
+| Core export digest deterministico | `Test-CoreExportInventoryDeterminism.ps1`, `Test-OpenSourceCoreInventory.ps1`, doppia produzione artifact | `AUTOMATED` — P3 closed sul candidate; raw manifest SHA ancora run-specific |
 
 ### Riconciliazione PR #29-#34
 
