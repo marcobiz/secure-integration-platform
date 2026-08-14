@@ -19,6 +19,7 @@ public sealed class AlphaReleaseArtifactTests
         Assert.Equal("$(ProductVersion)", props.Descendants("PackageVersion").Single().Value);
         Assert.Equal("$(ProductVersion)", props.Descendants("InformationalVersion").Single().Value);
         Assert.Equal("false", props.Descendants("IncludeSourceRevisionInInformationalVersion").Single().Value);
+        Assert.Equal("'$(_ProductVersionExcluded)' != 'True'", props.Descendants("Version").Single().Parent?.Attribute("Condition")?.Value);
 
         using JsonDocument package = JsonDocument.Parse(File.ReadAllText(Path.Combine(Root, "src", "Admin", "Admin.Web", "package.json")));
         using JsonDocument lockFile = JsonDocument.Parse(File.ReadAllText(Path.Combine(Root, "src", "Admin", "Admin.Web", "package-lock.json")));
@@ -37,6 +38,18 @@ public sealed class AlphaReleaseArtifactTests
         Assert.True(Regex.Count(contracts, "ProtocolVersion \\{ get; set; \\} = \\\"1\\.0\\\";", RegexOptions.CultureInvariant) >= 2);
         using JsonDocument connector = JsonDocument.Parse(File.ReadAllText(Path.Combine(Root, "docs", "connectors", "examples", "sample-secure-service.connector.json")));
         Assert.Equal("1.0.0", connector.RootElement.GetProperty("version").GetString());
+    }
+
+    [Fact]
+    public void ALPHA_VER_optional_pack_assembly_versions_are_not_rewritten_by_the_Core_product_version()
+    {
+        XDocument props = XDocument.Load(Path.Combine(Root, "Directory.Build.props"));
+        string exclusion = props.Descendants("_ProductVersionExcluded").Single().Value;
+        Assert.Contains("packs", exclusion, StringComparison.Ordinal);
+        Assert.Contains("src/ConnectorPacks", exclusion, StringComparison.Ordinal);
+
+        string overlay = File.ReadAllText(Path.Combine(Root, "deploy", "fse2", "docker-compose.fse2-local.yml"));
+        Assert.Contains("SecureIntegration.ConnectorPacks.Healthcare.FSE2, Version=1.0.0.0", overlay, StringComparison.Ordinal);
     }
 
     [Fact]
