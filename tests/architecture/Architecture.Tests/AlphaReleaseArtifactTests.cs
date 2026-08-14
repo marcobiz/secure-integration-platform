@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
@@ -93,6 +94,78 @@ public sealed class AlphaReleaseArtifactTests
         Assert.Contains("$ErrorActionPreference = 'Continue'", validator, StringComparison.Ordinal);
         Assert.DoesNotContain("& docker image inspect $Reference *> $null\r\n    if ($LASTEXITCODE -eq 0)", validator, StringComparison.Ordinal);
         Assert.DoesNotContain("& docker image inspect $Reference *> $null\n    if ($LASTEXITCODE -eq 0)", validator, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ALPHA_ART_release_set_requires_exact_artifact_manifest_checksum_bijection()
+    {
+        AssertPowerShellTestPass("eng/Test-AlphaReleaseSetBijection.ps1", "ArtifactBijection", "ALPHA_ART_RELEASE_SET_EXACT_BIJECTION_PASS");
+    }
+
+    [Fact]
+    public void ALPHA_ART_release_set_rejects_missing_and_unexpected_artifacts()
+    {
+        AssertPowerShellTestPass("eng/Test-AlphaReleaseSetBijection.ps1", "ArtifactMissingUnexpected", "ALPHA_ART_RELEASE_SET_MISSING_UNEXPECTED_NEGATIVES_PASS");
+    }
+
+    [Fact]
+    public void ALPHA_ART_release_set_requires_exact_sbom_subject_bijection()
+    {
+        AssertPowerShellTestPass("eng/Test-AlphaReleaseSetBijection.ps1", "SbomBijection", "ALPHA_ART_RELEASE_SET_EXACT_SBOM_SUBJECT_BIJECTION_PASS");
+    }
+
+    [Fact]
+    public void ALPHA_ART_release_set_rejects_wrong_or_extra_sbom_association()
+    {
+        AssertPowerShellTestPass("eng/Test-AlphaReleaseSetBijection.ps1", "SbomWrongExtra", "ALPHA_ART_RELEASE_SET_WRONG_EXTRA_SBOM_NEGATIVES_PASS");
+    }
+
+    [Fact]
+    public void CORE_INVENTORY_rejects_drive_qualified_paths_cross_host()
+    {
+        AssertPowerShellTestPass("eng/Test-CoreExportInventoryDeterminism.ps1", "DriveQualifiedPaths", "CORE_INVENTORY_DRIVE_QUALIFIED_PATH_NEGATIVE_PASS");
+    }
+
+    [Fact]
+    public void CORE_INVENTORY_rejects_ads_style_path_identities()
+    {
+        AssertPowerShellTestPass("eng/Test-CoreExportInventoryDeterminism.ps1", "AdsPaths", "CORE_INVENTORY_ADS_PATH_NEGATIVE_PASS");
+    }
+
+    private static void AssertPowerShellTestPass(string relativeScript, string testName, string expectedMarker)
+    {
+        string host = OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh";
+        ProcessStartInfo startInfo = new()
+        {
+            FileName = host,
+            WorkingDirectory = Root,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("-NoLogo");
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(Root, relativeScript.Replace('/', Path.DirectorySeparatorChar)));
+        startInfo.ArgumentList.Add("-TestName");
+        startInfo.ArgumentList.Add(testName);
+
+        using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException("PowerShell test process did not start.");
+        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+        bool exited = process.WaitForExit(120_000);
+        if (!exited)
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+        }
+        string stdout = stdoutTask.GetAwaiter().GetResult();
+        string stderr = stderrTask.GetAwaiter().GetResult();
+        Assert.True(exited, $"PowerShell test timed out: {relativeScript} {testName}");
+        Assert.True(process.ExitCode == 0, $"PowerShell test failed: {relativeScript} {testName}; stderr={stderr}");
+        Assert.Contains(expectedMarker, stdout, StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()

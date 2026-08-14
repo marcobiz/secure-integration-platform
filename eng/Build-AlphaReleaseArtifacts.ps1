@@ -150,6 +150,14 @@ try {
     $sbomByName = @{}
     foreach ($file in $sbomFiles) { $sbomByName[$file.Name] = $file }
     $sbomEntries = foreach ($name in $sbomNames) { Get-FileRecord -File $sbomByName[$name] -BaseDirectory $output -Kind 'spdx-or-aggregate' }
+    $gatewayArtifactFile = 'artifacts/' + [IO.Path]::GetFileName($gatewayImageArchive)
+    $migrationsArtifactFile = 'artifacts/' + [IO.Path]::GetFileName($migrationsImageArchive)
+    $imageEntries = @(
+        [ordered]@{ role = 'gateway'; reference = $gatewayImage; imageId = [string]$gatewayInspect.Id; versionLabel = $productVersion; revisionLabel = $sourceCommit },
+        [ordered]@{ role = 'migrations'; reference = $migrationsImage; imageId = [string]$migrationsInspect.Id; versionLabel = $productVersion; revisionLabel = $sourceCommit })
+    $sbomSubjectEntries = @(
+        [ordered]@{ role = 'gateway'; sbomFile = 'sbom/gateway-container.spdx.json'; artifactFile = $gatewayArtifactFile; imageReference = $gatewayImage; imageId = [string]$gatewayInspect.Id },
+        [ordered]@{ role = 'migrations'; sbomFile = 'sbom/migrations-container.spdx.json'; artifactFile = $migrationsArtifactFile; imageReference = $migrationsImage; imageId = [string]$migrationsInspect.Id })
 
     $manifest = [ordered]@{
         schemaVersion = 1
@@ -161,11 +169,10 @@ try {
         claims = [ordered]@{ publicReleaseGo = $false; productionReady = $false }
         versionIdentity = [ordered]@{ productVersion = $productVersion; protocolVersion = '1.0'; canonicalConnectorVersion = '1.0.0'; imageRevision = $sourceCommit; openApiVersion = $productVersion }
         coreExport = [ordered]@{ fileCount = $coreFileCount; rawManifestSha256RunSpecific = $coreRawManifestSha256; normalizedInventorySha256 = $coreNormalizedInventorySha256 }
-        images = @(
-            [ordered]@{ role = 'gateway'; reference = $gatewayImage; imageId = [string]$gatewayInspect.Id; versionLabel = $productVersion; revisionLabel = $sourceCommit },
-            [ordered]@{ role = 'migrations'; reference = $migrationsImage; imageId = [string]$migrationsInspect.Id; versionLabel = $productVersion; revisionLabel = $sourceCommit })
+        images = $imageEntries
         artifacts = @($artifactEntries)
         sbom = @($sbomEntries)
+        sbomSubjects = $sbomSubjectEntries
         signatures = @()
         knownFollowUps = @('NONDETERMINISTIC_UI_MOCK_20_AXE_SNAPSHOT')
     }
@@ -174,12 +181,7 @@ try {
     $manifestSha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash
     Set-Content -LiteralPath (Join-Path $output 'manifest.json.sha256') -Value "$manifestSha256  manifest.json" -Encoding ASCII
 
-    $checksumFiles = @(
-        @(Get-ChildItem -LiteralPath $artifactsDirectory -File),
-        @(Get-ChildItem -LiteralPath $sbomDirectory -File),
-        (Get-Item -LiteralPath $manifestPath),
-        (Get-Item -LiteralPath (Join-Path $output 'manifest.json.sha256')))
-    $checksumFiles = @($checksumFiles | ForEach-Object { $_ })
+    $checksumFiles = @(Get-ChildItem -LiteralPath $artifactsDirectory -File)
     [string[]]$checksumRelativePaths = @($checksumFiles | ForEach-Object { $_.FullName.Substring($output.Length + 1).Replace('\', '/') })
     [Array]::Sort($checksumRelativePaths, [StringComparer]::Ordinal)
     $checksumByRelativePath = @{}

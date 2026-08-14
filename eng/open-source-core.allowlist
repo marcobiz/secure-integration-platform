@@ -53,6 +53,7 @@ eng/open-source-core.allowlist
 eng/scan-secrets.ps1
 eng/test.ps1
 eng/Test-AlphaReleaseArtifacts.ps1
+eng/Test-AlphaReleaseSetBijection.ps1
 eng/Test-CoreExportInventoryDeterminism.ps1
 eng/Test-OpenSourceCoreInventory.ps1
 eng/test-m3-operator-handoff.ps1

@@ -37,9 +37,10 @@ function Get-CoreInventorySha256 {
 function Test-CoreInventoryPath {
     param([Parameter(Mandatory = $true)][string] $Path)
 
-    if ([string]::IsNullOrWhiteSpace($Path) -or $Path.Contains('\') -or
+    if ([string]::IsNullOrWhiteSpace($Path) -or $Path.Contains('\') -or $Path.Contains(':') -or
         $Path.StartsWith('/', [StringComparison]::Ordinal) -or
         $Path.Contains('//')) { return $false }
+    foreach ($character in $Path.ToCharArray()) { if ([char]::IsControl($character)) { return $false } }
     foreach ($segment in $Path.Split('/')) {
         if ($segment.Length -eq 0 -or $segment -eq '.' -or $segment -eq '..') { return $false }
     }

@@ -5,7 +5,8 @@ param(
     [string] $ExpectedSourceCommit,
     [string] $DotNetPath,
     [switch] $RunConsumerInstall,
-    [switch] $RunContainerRuntime
+    [switch] $RunContainerRuntime,
+    [switch] $ReleaseSetOnly
 )
 
 Set-StrictMode -Version Latest
@@ -35,9 +36,253 @@ function Get-ZipEntries([string] $ArchivePath) {
 }
 
 function Test-ArchiveEntryPath([string] $Path) {
-    if ([string]::IsNullOrWhiteSpace($Path) -or $Path.StartsWith('/', [StringComparison]::Ordinal) -or $Path.Contains('\') -or $Path.Contains('//')) { return $false }
+    if ([string]::IsNullOrWhiteSpace($Path) -or $Path.StartsWith('/', [StringComparison]::Ordinal) -or
+        $Path.Contains('\') -or $Path.Contains(':') -or $Path.Contains('//')) { return $false }
+    foreach ($character in $Path.ToCharArray()) { if ([char]::IsControl($character)) { return $false } }
     foreach ($segment in $Path.Split('/')) { if ($segment.Length -eq 0 -or $segment -eq '.' -or $segment -eq '..') { return $false } }
     return $true
+}
+
+function Get-ObjectArrayProperty {
+    param([Parameter(Mandatory = $true)] $Object, [Parameter(Mandatory = $true)][string] $Name)
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) { return @() }
+    return @($property.Value)
+}
+
+function Get-RequiredPropertyValue {
+    param(
+        [Parameter(Mandatory = $true)] $Object,
+        [Parameter(Mandatory = $true)][string] $Name,
+        [Parameter(Mandatory = $true)][string] $FailureCode
+    )
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) { throw $FailureCode }
+    return $property.Value
+}
+
+function Get-AlphaReleaseProfile {
+    param(
+        [Parameter(Mandatory = $true)][string] $ProductVersion,
+        [Parameter(Mandatory = $true)][string] $SourceCommit
+    )
+    if ($ProductVersion -cne '0.1.0-alpha.1') { throw 'ALPHA_ARTIFACT_PRODUCT_VERSION_MISMATCH' }
+    if ($SourceCommit -cnotmatch '^[0-9a-f]{40}$') { throw 'ALPHA_ARTIFACT_SOURCE_REVISION_INVALID' }
+    $shortCommit = $SourceCommit.Substring(0, 12)
+    $gatewayArtifact = "artifacts/gateway-image-$ProductVersion-$shortCommit.tar"
+    $migrationsArtifact = "artifacts/migrations-image-$ProductVersion-$shortCommit.tar"
+    $gatewayReference = "secure-integration-gateway:$ProductVersion-$shortCommit"
+    $migrationsReference = "secure-integration-migrations:$ProductVersion-$shortCommit"
+    return [pscustomobject]@{
+        artifacts = @(
+            [pscustomobject]@{ path = "artifacts/SecureIntegration.Broker.Sdk.$ProductVersion.nupkg"; kind = 'nuget' },
+            [pscustomobject]@{ path = "artifacts/admin-web-$ProductVersion.zip"; kind = 'admin-static-archive' },
+            [pscustomobject]@{ path = $gatewayArtifact; kind = 'oci-image-archive' },
+            [pscustomobject]@{ path = $migrationsArtifact; kind = 'oci-image-archive' },
+            [pscustomobject]@{ path = "artifacts/secure-integration-core-$ProductVersion-source.zip"; kind = 'core-source-archive' })
+        sbomFiles = @(
+            'sbom/admin-frontend.spdx.json',
+            'sbom/aggregate-manifest.json',
+            'sbom/auth-certificate-signing.spdx.json',
+            'sbom/broker.spdx.json',
+            'sbom/connector-cli.spdx.json',
+            'sbom/gateway-container.spdx.json',
+            'sbom/gateway.spdx.json',
+            'sbom/migrations-container.spdx.json',
+            'sbom/sdk-dotnet.spdx.json')
+        sbomSubjects = @(
+            [pscustomobject]@{ role = 'gateway'; sbomFile = 'sbom/gateway-container.spdx.json'; artifactFile = $gatewayArtifact; imageName = 'secure-integration-gateway'; imageReference = $gatewayReference },
+            [pscustomobject]@{ role = 'migrations'; sbomFile = 'sbom/migrations-container.spdx.json'; artifactFile = $migrationsArtifact; imageName = 'secure-integration-migrations'; imageReference = $migrationsReference })
+    }
+}
+
+function Get-RelativeFilePath {
+    param(
+        [Parameter(Mandatory = $true)][string] $BaseDirectory,
+        [Parameter(Mandatory = $true)][IO.FileInfo] $File,
+        [Parameter(Mandatory = $true)][string] $FailureCode
+    )
+    $relative = $File.FullName.Substring($BaseDirectory.Length + 1).Replace('\', '/')
+    if (-not (Test-ArchiveEntryPath -Path $relative)) { throw $FailureCode }
+    return $relative
+}
+
+function Assert-AlphaReleaseSetBijection {
+    param(
+        [Parameter(Mandatory = $true)][string] $RunDirectory,
+        [Parameter(Mandatory = $true)] $Manifest,
+        [Parameter(Mandatory = $true)] $Profile
+    )
+
+    $expectedArtifacts = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+    foreach ($definition in @($Profile.artifacts)) { $expectedArtifacts.Add([string]$definition.path, $definition) }
+    $actualArtifacts = New-Object 'Collections.Generic.Dictionary[string,IO.FileInfo]' ([StringComparer]::Ordinal)
+    $actualArtifactsIgnoreCase = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $artifactDirectory = Join-Path $RunDirectory 'artifacts'
+    if (-not (Test-Path -LiteralPath $artifactDirectory -PathType Container)) { throw 'ALPHA_ARTIFACT_EXPECTED_FILE_MISSING' }
+    foreach ($file in Get-ChildItem -LiteralPath $artifactDirectory -Recurse -File) {
+        $relative = Get-RelativeFilePath -BaseDirectory $RunDirectory -File $file -FailureCode 'ALPHA_ARTIFACT_FILE_PATH_INVALID'
+        if (-not $actualArtifactsIgnoreCase.Add($relative) -or $actualArtifacts.ContainsKey($relative)) { throw 'ALPHA_ARTIFACT_FILE_CASE_COLLISION' }
+        if (-not $expectedArtifacts.ContainsKey($relative)) { throw "ALPHA_ARTIFACT_UNEXPECTED_FILE: $relative" }
+        $actualArtifacts.Add($relative, $file)
+    }
+    foreach ($expected in $expectedArtifacts.Keys) {
+        if (-not $actualArtifacts.ContainsKey($expected)) { throw "ALPHA_ARTIFACT_EXPECTED_FILE_MISSING: $expected" }
+    }
+
+    $manifestArtifacts = @(Get-ObjectArrayProperty -Object $Manifest -Name 'artifacts')
+    $manifestArtifactByPath = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+    $manifestArtifactPathsIgnoreCase = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in $manifestArtifacts) {
+        $relative = [string](Get-RequiredPropertyValue -Object $entry -Name 'file' -FailureCode 'ALPHA_ARTIFACT_MANIFEST_ARTIFACT_SHAPE_INVALID')
+        if (-not (Test-ArchiveEntryPath -Path $relative)) { throw 'ALPHA_ARTIFACT_MANIFEST_ARTIFACT_PATH_INVALID' }
+        if (-not $manifestArtifactPathsIgnoreCase.Add($relative) -or $manifestArtifactByPath.ContainsKey($relative)) { throw 'ALPHA_ARTIFACT_MANIFEST_ARTIFACT_DUPLICATE' }
+        if (-not $expectedArtifacts.ContainsKey($relative)) { throw "ALPHA_ARTIFACT_MANIFEST_ARTIFACT_UNEXPECTED: $relative" }
+        $kind = [string](Get-RequiredPropertyValue -Object $entry -Name 'kind' -FailureCode 'ALPHA_ARTIFACT_MANIFEST_ARTIFACT_SHAPE_INVALID')
+        if ($kind -cne [string]$expectedArtifacts[$relative].kind) { throw "ALPHA_ARTIFACT_MANIFEST_KIND_MISMATCH: $relative" }
+        [void](Get-RequiredPropertyValue -Object $entry -Name 'bytes' -FailureCode 'ALPHA_ARTIFACT_MANIFEST_ARTIFACT_SHAPE_INVALID')
+        [void](Get-RequiredPropertyValue -Object $entry -Name 'sha256' -FailureCode 'ALPHA_ARTIFACT_MANIFEST_ARTIFACT_SHAPE_INVALID')
+        $manifestArtifactByPath.Add($relative, $entry)
+    }
+    foreach ($expected in $expectedArtifacts.Keys) {
+        if (-not $manifestArtifactByPath.ContainsKey($expected)) { throw "ALPHA_ARTIFACT_MANIFEST_ARTIFACT_MISSING: $expected" }
+    }
+
+    $checksumPath = Join-Path $RunDirectory 'SHA256SUMS'
+    if (-not (Test-Path -LiteralPath $checksumPath -PathType Leaf)) { throw 'ALPHA_ARTIFACT_CHECKSUM_FILE_MISSING' }
+    $checksumByPath = New-Object 'Collections.Generic.Dictionary[string,string]' ([StringComparer]::Ordinal)
+    $checksumPathsIgnoreCase = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($line in @(Get-Content -LiteralPath $checksumPath)) {
+        if ($line -cnotmatch '^([0-9A-F]{64})  ([^\\]+)$') { throw 'ALPHA_ARTIFACT_CHECKSUM_FORMAT_INVALID' }
+        $expectedHash = $Matches[1]
+        $relative = $Matches[2]
+        if (-not (Test-ArchiveEntryPath -Path $relative)) { throw 'ALPHA_ARTIFACT_CHECKSUM_PATH_INVALID' }
+        if ($relative -ceq 'SHA256SUMS') { throw 'ALPHA_ARTIFACT_CHECKSUM_SELF_REFERENCE' }
+        if (-not $checksumPathsIgnoreCase.Add($relative) -or $checksumByPath.ContainsKey($relative)) { throw 'ALPHA_ARTIFACT_CHECKSUM_DUPLICATE' }
+        if (-not $expectedArtifacts.ContainsKey($relative)) { throw "ALPHA_ARTIFACT_CHECKSUM_UNEXPECTED: $relative" }
+        $checksumByPath.Add($relative, $expectedHash)
+    }
+    foreach ($expected in $expectedArtifacts.Keys) {
+        if (-not $checksumByPath.ContainsKey($expected)) { throw "ALPHA_ARTIFACT_CHECKSUM_MISSING: $expected" }
+        $actualHash = (Get-FileHash -LiteralPath $actualArtifacts[$expected].FullName -Algorithm SHA256).Hash
+        if ($actualHash -cne $checksumByPath[$expected]) { throw "ALPHA_ARTIFACT_CHECKSUM_MISMATCH: $expected" }
+    }
+
+    foreach ($expected in $expectedArtifacts.Keys) {
+        $entry = $manifestArtifactByPath[$expected]
+        try { $declaredBytes = [Convert]::ToInt64($entry.bytes, [Globalization.CultureInfo]::InvariantCulture) }
+        catch { throw "ALPHA_ARTIFACT_MANIFEST_SIZE_INVALID: $expected" }
+        $declaredSha256 = ([string]$entry.sha256).ToUpperInvariant()
+        if ($declaredBytes -ne $actualArtifacts[$expected].Length -or $declaredSha256 -cne $checksumByPath[$expected]) {
+            throw "ALPHA_ARTIFACT_MANIFEST_FILE_MISMATCH: $expected"
+        }
+    }
+
+    $expectedSbomFiles = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($relative in @($Profile.sbomFiles)) { [void]$expectedSbomFiles.Add([string]$relative) }
+    $actualSbomFiles = New-Object 'Collections.Generic.Dictionary[string,IO.FileInfo]' ([StringComparer]::Ordinal)
+    $actualSbomPathsIgnoreCase = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $sbomDirectory = Join-Path $RunDirectory 'sbom'
+    if (-not (Test-Path -LiteralPath $sbomDirectory -PathType Container)) { throw 'ALPHA_ARTIFACT_SBOM_FILE_MISSING' }
+    foreach ($file in Get-ChildItem -LiteralPath $sbomDirectory -Recurse -File) {
+        $relative = Get-RelativeFilePath -BaseDirectory $RunDirectory -File $file -FailureCode 'ALPHA_ARTIFACT_SBOM_PATH_INVALID'
+        if (-not $actualSbomPathsIgnoreCase.Add($relative) -or $actualSbomFiles.ContainsKey($relative)) { throw 'ALPHA_ARTIFACT_SBOM_FILE_DUPLICATE' }
+        if (-not $expectedSbomFiles.Contains($relative)) { throw "ALPHA_ARTIFACT_SBOM_FILE_UNEXPECTED: $relative" }
+        $actualSbomFiles.Add($relative, $file)
+    }
+    foreach ($expected in $expectedSbomFiles) {
+        if (-not $actualSbomFiles.ContainsKey($expected)) { throw "ALPHA_ARTIFACT_SBOM_FILE_MISSING: $expected" }
+    }
+
+    $manifestSboms = @(Get-ObjectArrayProperty -Object $Manifest -Name 'sbom')
+    $manifestSbomByPath = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+    $manifestSbomPathsIgnoreCase = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in $manifestSboms) {
+        $relative = [string](Get-RequiredPropertyValue -Object $entry -Name 'file' -FailureCode 'ALPHA_ARTIFACT_SBOM_MANIFEST_SHAPE_INVALID')
+        if (-not (Test-ArchiveEntryPath -Path $relative)) { throw 'ALPHA_ARTIFACT_SBOM_MANIFEST_PATH_INVALID' }
+        if (-not $manifestSbomPathsIgnoreCase.Add($relative) -or $manifestSbomByPath.ContainsKey($relative)) { throw 'ALPHA_ARTIFACT_SBOM_MANIFEST_DUPLICATE' }
+        if (-not $expectedSbomFiles.Contains($relative)) { throw "ALPHA_ARTIFACT_SBOM_MANIFEST_UNEXPECTED: $relative" }
+        [void](Get-RequiredPropertyValue -Object $entry -Name 'bytes' -FailureCode 'ALPHA_ARTIFACT_SBOM_MANIFEST_SHAPE_INVALID')
+        [void](Get-RequiredPropertyValue -Object $entry -Name 'sha256' -FailureCode 'ALPHA_ARTIFACT_SBOM_MANIFEST_SHAPE_INVALID')
+        $manifestSbomByPath.Add($relative, $entry)
+    }
+    foreach ($expected in $expectedSbomFiles) {
+        if (-not $manifestSbomByPath.ContainsKey($expected)) { throw "ALPHA_ARTIFACT_SBOM_MANIFEST_MISSING: $expected" }
+        $entry = $manifestSbomByPath[$expected]
+        $actualHash = (Get-FileHash -LiteralPath $actualSbomFiles[$expected].FullName -Algorithm SHA256).Hash
+        try { $declaredBytes = [Convert]::ToInt64($entry.bytes, [Globalization.CultureInfo]::InvariantCulture) }
+        catch { throw "ALPHA_ARTIFACT_SBOM_MANIFEST_SIZE_INVALID: $expected" }
+        if ($declaredBytes -ne $actualSbomFiles[$expected].Length -or ([string]$entry.sha256).ToUpperInvariant() -cne $actualHash) {
+            throw "ALPHA_ARTIFACT_SBOM_MANIFEST_FILE_MISMATCH: $expected"
+        }
+    }
+
+    $expectedSubjectsByRole = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+    foreach ($subject in @($Profile.sbomSubjects)) { $expectedSubjectsByRole.Add([string]$subject.role, $subject) }
+    $imagesByRole = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+    $imageRolesIgnoreCase = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($image in @(Get-ObjectArrayProperty -Object $Manifest -Name 'images')) {
+        $role = [string](Get-RequiredPropertyValue -Object $image -Name 'role' -FailureCode 'ALPHA_ARTIFACT_IMAGE_MANIFEST_INVALID')
+        if (-not $imageRolesIgnoreCase.Add($role) -or $imagesByRole.ContainsKey($role)) { throw 'ALPHA_ARTIFACT_IMAGE_MANIFEST_DUPLICATE' }
+        if (-not $expectedSubjectsByRole.ContainsKey($role)) { throw "ALPHA_ARTIFACT_IMAGE_MANIFEST_UNEXPECTED: $role" }
+        $expectedSubject = $expectedSubjectsByRole[$role]
+        $reference = [string](Get-RequiredPropertyValue -Object $image -Name 'reference' -FailureCode 'ALPHA_ARTIFACT_IMAGE_MANIFEST_INVALID')
+        $imageId = [string](Get-RequiredPropertyValue -Object $image -Name 'imageId' -FailureCode 'ALPHA_ARTIFACT_IMAGE_MANIFEST_INVALID')
+        if ($reference -cne [string]$expectedSubject.imageReference -or $imageId -cnotmatch '^sha256:[0-9a-f]{64}$') { throw "ALPHA_ARTIFACT_IMAGE_MANIFEST_MISMATCH: $role" }
+        if ([string]$image.versionLabel -cne '0.1.0-alpha.1' -or [string]$image.revisionLabel -cne [string]$Manifest.sourceRevision) { throw "ALPHA_ARTIFACT_IMAGE_MANIFEST_MISMATCH: $role" }
+        $imagesByRole.Add($role, $image)
+    }
+    foreach ($role in $expectedSubjectsByRole.Keys) {
+        if (-not $imagesByRole.ContainsKey($role)) { throw "ALPHA_ARTIFACT_IMAGE_MANIFEST_MISSING: $role" }
+    }
+
+    $associationsByRole = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
+    $associationRolesIgnoreCase = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($association in @(Get-ObjectArrayProperty -Object $Manifest -Name 'sbomSubjects')) {
+        $role = [string](Get-RequiredPropertyValue -Object $association -Name 'role' -FailureCode 'ALPHA_ARTIFACT_SBOM_ASSOCIATION_SHAPE_INVALID')
+        if (-not $associationRolesIgnoreCase.Add($role) -or $associationsByRole.ContainsKey($role)) { throw 'ALPHA_ARTIFACT_SBOM_ASSOCIATION_DUPLICATE' }
+        if (-not $expectedSubjectsByRole.ContainsKey($role)) { throw "ALPHA_ARTIFACT_SBOM_ASSOCIATION_UNEXPECTED: $role" }
+        $expectedSubject = $expectedSubjectsByRole[$role]
+        $image = $imagesByRole[$role]
+        if ([string]$association.sbomFile -cne [string]$expectedSubject.sbomFile -or
+            [string]$association.artifactFile -cne [string]$expectedSubject.artifactFile -or
+            [string]$association.imageReference -cne [string]$expectedSubject.imageReference -or
+            [string]$association.imageId -cne [string]$image.imageId) {
+            throw "ALPHA_ARTIFACT_SBOM_ASSOCIATION_MISMATCH: $role"
+        }
+        $associationsByRole.Add($role, $association)
+    }
+    foreach ($role in $expectedSubjectsByRole.Keys) {
+        if (-not $associationsByRole.ContainsKey($role)) { throw "ALPHA_ARTIFACT_SBOM_ASSOCIATION_MISSING: $role" }
+    }
+
+    foreach ($role in $expectedSubjectsByRole.Keys) {
+        $expectedSubject = $expectedSubjectsByRole[$role]
+        try { $document = Get-Content -LiteralPath $actualSbomFiles[[string]$expectedSubject.sbomFile].FullName -Raw | ConvertFrom-Json }
+        catch { throw "ALPHA_ARTIFACT_SBOM_SUBJECT_INVALID: $role" }
+        if ([string]$document.spdxVersion -cne 'SPDX-2.3' -or [string]$document.SPDXID -cne 'SPDXRef-DOCUMENT') { throw "ALPHA_ARTIFACT_SBOM_SUBJECT_INVALID: $role" }
+        $describedIds = @($document.relationships | Where-Object { [string]$_.spdxElementId -ceq 'SPDXRef-DOCUMENT' -and [string]$_.relationshipType -ceq 'DESCRIBES' } | ForEach-Object { [string]$_.relatedSpdxElement })
+        if ($describedIds.Count -ne 1) { throw "ALPHA_ARTIFACT_SBOM_SUBJECT_INVALID: $role" }
+        $subjectPackages = @($document.packages | Where-Object { [string]$_.SPDXID -ceq $describedIds[0] })
+        if ($subjectPackages.Count -ne 1 -or [string]$subjectPackages[0].name -cne [string]$expectedSubject.imageName) { throw "ALPHA_ARTIFACT_SBOM_SUBJECT_MISMATCH: $role" }
+        $purls = @($subjectPackages[0].externalRefs | Where-Object { [string]$_.referenceCategory -ceq 'PACKAGE-MANAGER' -and [string]$_.referenceType -ceq 'purl' -and [string]$_.referenceLocator -clike 'pkg:oci/*' } | ForEach-Object { [string]$_.referenceLocator })
+        if ($purls.Count -ne 1) { throw "ALPHA_ARTIFACT_SBOM_SUBJECT_INVALID: $role" }
+        $imageId = [string]$imagesByRole[$role].imageId
+        $digest = $imageId.Substring('sha256:'.Length)
+        $reference = [string]$expectedSubject.imageReference
+        $tag = $reference.Substring($reference.IndexOf(':') + 1)
+        if ($purls[0] -cnotmatch ('^pkg:oci/' + [regex]::Escape([string]$expectedSubject.imageName) + '@sha256:' + $digest + '(?:\?|$)') -or
+            $purls[0] -cnotmatch ('(?:[?&])tag=' + [regex]::Escape($tag) + '(?:&|$)')) {
+            throw "ALPHA_ARTIFACT_SBOM_SUBJECT_MISMATCH: $role"
+        }
+    }
+
+    return [pscustomobject]@{
+        expectedArtifactCount = $expectedArtifacts.Count
+        actualArtifactCount = $actualArtifacts.Count
+        expectedSbomSubjectCount = $expectedSubjectsByRole.Count
+        actualSbomSubjectCount = $associationsByRole.Count
+    }
 }
 
 function Assert-NoLocalPathOrSecretText([string] $Text) {
@@ -109,30 +354,26 @@ try {
         throw 'ALPHA_ARTIFACT_MANIFEST_SIDECAR_MISMATCH'
     }
 
-    $checksumPath = Join-Path $run 'SHA256SUMS'
-    $seenChecksums = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
-    foreach ($line in Get-Content -LiteralPath $checksumPath) {
-        if ($line -cnotmatch '^([0-9A-F]{64})  ([^\\]+)$') { throw 'ALPHA_ARTIFACT_CHECKSUM_FORMAT_INVALID' }
-        $expectedHash = $Matches[1]
-        $relative = $Matches[2]
-        if (-not (Test-ArchiveEntryPath -Path $relative) -or -not $seenChecksums.Add($relative)) { throw 'ALPHA_ARTIFACT_CHECKSUM_PATH_INVALID' }
-        $fullPath = [IO.Path]::GetFullPath((Join-Path $run $relative))
-        if (-not $fullPath.StartsWith($run + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or -not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
-            throw 'ALPHA_ARTIFACT_CHECKSUM_TARGET_MISSING'
-        }
-        if ((Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash -cne $expectedHash) { throw 'ALPHA_ARTIFACT_CHECKSUM_MISMATCH' }
-    }
-    foreach ($required in (Get-ReleaseInventory -Directory $run) + @('manifest.json', 'manifest.json.sha256')) {
-        if (-not $seenChecksums.Contains($required)) { throw "ALPHA_ARTIFACT_CHECKSUM_COVERAGE_MISSING: $required" }
+    $profile = Get-AlphaReleaseProfile -ProductVersion $productVersion -SourceCommit $sourceCommit
+    $releaseSetValidation = Assert-AlphaReleaseSetBijection -RunDirectory $run -Manifest $manifest -Profile $profile
+    if ($ReleaseSetOnly) {
+        [pscustomobject]@{
+            status = 'PASS'
+            productVersion = $productVersion
+            sourceRevision = $sourceCommit
+            artifactFileSetBijection = 'PASS'
+            manifestBijection = 'PASS'
+            sha256SumsBijection = 'PASS'
+            sbomSubjectBijection = 'PASS'
+            expectedArtifactCount = $releaseSetValidation.expectedArtifactCount
+            actualArtifactCount = $releaseSetValidation.actualArtifactCount
+            expectedSbomSubjectCount = $releaseSetValidation.expectedSbomSubjectCount
+            actualSbomSubjectCount = $releaseSetValidation.actualSbomSubjectCount
+        } | ConvertTo-Json -Compress
+        return
     }
 
     $artifactFiles = @(Get-ChildItem -LiteralPath (Join-Path $run 'artifacts') -File)
-    if ($artifactFiles.Count -ne 5) { throw 'ALPHA_ARTIFACT_FILE_COUNT_INVALID' }
-    foreach ($entry in @($manifest.artifacts)) {
-        $file = Join-Path $run ([string]$entry.file)
-        if (-not (Test-Path -LiteralPath $file -PathType Leaf) -or [IO.FileInfo]::new($file).Length -ne [long]$entry.bytes -or
-            (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -cne [string]$entry.sha256) { throw 'ALPHA_ARTIFACT_MANIFEST_FILE_MISMATCH' }
-    }
     foreach ($file in $artifactFiles) {
         if ($file.Name -match '(?i)(healthcare|fse2|azure|deployment|evidence|secret|\.env|\.p12|\.pfx|\.pem|\.key)') { throw 'ALPHA_ARTIFACT_FORBIDDEN_FILE_NAME' }
     }
@@ -305,6 +546,14 @@ return 0;
         productVersion = $productVersion
         sourceRevision = $sourceCommit
         sha256Sums = 'PASS'
+        artifactFileSetBijection = 'PASS'
+        manifestBijection = 'PASS'
+        sha256SumsBijection = 'PASS'
+        sbomSubjectBijection = 'PASS'
+        expectedArtifactCount = $releaseSetValidation.expectedArtifactCount
+        actualArtifactCount = $releaseSetValidation.actualArtifactCount
+        expectedSbomSubjectCount = $releaseSetValidation.expectedSbomSubjectCount
+        actualSbomSubjectCount = $releaseSetValidation.actualSbomSubjectCount
         packageContentAllowlist = 'PASS'
         corePackBoundary = 'PASS'
         artifactSecretScan = 'PASS'

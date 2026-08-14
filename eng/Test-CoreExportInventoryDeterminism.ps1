@@ -1,16 +1,45 @@
 [CmdletBinding()]
-param()
+param(
+    [ValidateSet('All', 'DriveQualifiedPaths', 'AdsPaths')]
+    [string] $TestName = 'All'
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+Import-Module (Join-Path $PSScriptRoot 'CoreExportInventory.psm1') -Force
+
+function Assert-CoreInventoryPathRejected {
+    param([Parameter(Mandatory = $true)][string] $Path, [Parameter(Mandatory = $true)][string] $FailureCode)
+    $failed = $false
+    try {
+        New-CoreInventoryIdentity -SourceCommit ('a' * 40) -Files @([pscustomobject]@{ path = $Path; bytes = 1; sha256 = 'B' * 64 }) *> $null
+    }
+    catch {
+        if (-not $_.Exception.Message.StartsWith('CORE_INVENTORY_PATH_INVALID:', [StringComparison]::Ordinal)) { throw }
+        $failed = $true
+    }
+    if (-not $failed) { throw $FailureCode }
+}
+
+if ($TestName -in @('All', 'DriveQualifiedPaths')) {
+    Assert-CoreInventoryPathRejected -Path 'C:/a.txt' -FailureCode 'CORE_INVENTORY_DRIVE_QUALIFIED_FORWARD_SLASH_DID_NOT_FAIL'
+    Assert-CoreInventoryPathRejected -Path 'C:\a.txt' -FailureCode 'CORE_INVENTORY_DRIVE_QUALIFIED_BACKSLASH_DID_NOT_FAIL'
+    Write-Host 'CORE_INVENTORY_DRIVE_QUALIFIED_PATH_NEGATIVE_PASS'
+}
+if ($TestName -in @('All', 'AdsPaths')) {
+    Assert-CoreInventoryPathRejected -Path 'a.txt:stream' -FailureCode 'CORE_INVENTORY_ADS_ROOT_PATH_DID_NOT_FAIL'
+    Assert-CoreInventoryPathRejected -Path 'folder/a.txt:stream' -FailureCode 'CORE_INVENTORY_ADS_NESTED_PATH_DID_NOT_FAIL'
+    Write-Host 'CORE_INVENTORY_ADS_PATH_NEGATIVE_PASS'
+}
+if ($TestName -ne 'All') { return }
+
 $tempBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar))
 $testRoot = Join-Path $tempBase ('core-inventory-determinism-' + [Guid]::NewGuid().ToString('N'))
 if (-not $testRoot.StartsWith($tempBase + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'CORE_INVENTORY_TEST_ROOT_INVALID'
 }
 New-Item -ItemType Directory -Path $testRoot | Out-Null
-Import-Module (Join-Path $PSScriptRoot 'CoreExportInventory.psm1') -Force
 
 function Copy-InventoryFiles([object[]] $Files) {
     return @(($Files | ConvertTo-Json -Depth 8) | ConvertFrom-Json)

@@ -17,7 +17,9 @@
   "toolchain": {
     "dotnetSdk": "10.0.302"
   },
+  "images": [],
   "artifacts": [],
   "sbom": [],
+  "sbomSubjects": [],
   "signatures": []
 }
