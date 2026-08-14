@@ -37,7 +37,7 @@ function New-ContainerSbom {
         dataLicense = 'CC0-1.0'
         SPDXID = 'SPDXRef-DOCUMENT'
         name = "$Name synthetic negative-test SBOM"
-        documentNamespace = "urn:secure-integration:spdx:synthetic:$Name:$ImageId"
+        documentNamespace = "urn:secure-integration:spdx:synthetic:${Name}:$ImageId"
         creationInfo = [ordered]@{ created = '2026-01-01T00:00:00Z'; creators = @('Tool: Test-AlphaReleaseSetBijection.ps1') }
         packages = @([ordered]@{
             SPDXID = 'SPDXRef-DocumentRoot'
