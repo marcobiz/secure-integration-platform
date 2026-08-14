@@ -270,8 +270,10 @@ return 0;
             if (-not $healthy) { throw 'ALPHA_ARTIFACT_CONTAINER_HEALTH_FAILED' }
         }
         finally {
-            $owned = (& docker inspect $containerName --format '{{index .Config.Labels "secure-integration.alpha-artifact-validation"}}' 2>$null | Out-String).Trim()
+            $inspectText = (& docker inspect $containerName 2>$null | Out-String)
             if ($LASTEXITCODE -eq 0) {
+                $containerInspect = @($inspectText | ConvertFrom-Json)[0]
+                $owned = [string]$containerInspect.Config.Labels.'secure-integration.alpha-artifact-validation'
                 if ($owned -cne $sourceCommit) { throw 'ALPHA_ARTIFACT_CONTAINER_CLEANUP_OWNERSHIP_FAILED' }
                 & docker rm --force $containerName *> $null
                 if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_CONTAINER_CLEANUP_FAILED' }
