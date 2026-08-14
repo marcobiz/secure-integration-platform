@@ -41,8 +41,9 @@ function Get-AlphaReleaseContainerTarIdentity {
     }
     if ($SourceCommit -cnotmatch '^[0-9a-f]{40}$') { throw "ALPHA_ARTIFACT_TAR_SOURCE_REVISION_INVALID: $Role" }
     if ($ProductVersion -cne '0.1.0-alpha.1') { throw "ALPHA_ARTIFACT_TAR_PRODUCT_VERSION_INVALID: $Role" }
-    $tarCommand = Get-Command tar -CommandType Application -ErrorAction SilentlyContinue
-    if ($null -eq $tarCommand) { throw 'ALPHA_ARTIFACT_TAR_TOOL_MISSING' }
+    $tarCommands = @(Get-Command tar -CommandType Application -ErrorAction SilentlyContinue)
+    if ($tarCommands.Count -eq 0) { throw 'ALPHA_ARTIFACT_TAR_TOOL_MISSING' }
+    $tarCommand = $tarCommands[0]
 
     $previousErrorActionPreference = $ErrorActionPreference
     try {
