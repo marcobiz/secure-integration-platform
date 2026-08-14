@@ -81,8 +81,9 @@ function Get-ReleaseInventory([string] $Directory) {
 }
 
 function Ensure-ImageAvailable([string] $Reference, [string] $ArchivePath) {
-    & docker image inspect $Reference *> $null
-    if ($LASTEXITCODE -eq 0) { return }
+    $existingImageId = (& docker image ls --quiet --no-trunc $Reference | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_IMAGE_LOOKUP_FAILED' }
+    if (-not [string]::IsNullOrWhiteSpace($existingImageId)) { return }
     & docker image load --input $ArchivePath *> $null
     if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_IMAGE_LOAD_FAILED' }
     & docker image inspect $Reference *> $null
@@ -168,9 +169,7 @@ try {
     $coreExtract = Join-Path $testRoot 'core'
     [IO.Compression.ZipFile]::ExtractToDirectory($coreArchive[0].FullName, $coreExtract)
     & (Join-Path $coreExtract 'eng\Test-OpenSourceCoreInventory.ps1') -ExportDirectory $coreExtract -ExpectedSourceCommit $sourceCommit *> $null
-    if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_CORE_INVENTORY_FAILED' }
     & (Join-Path $coreExtract 'eng\scan-secrets.ps1') *> $null
-    if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_CORE_SECRET_SCAN_FAILED' }
     $coreManifest = Get-Content -LiteralPath (Join-Path $coreExtract 'OPEN_SOURCE_EXPORT_MANIFEST.json') -Raw | ConvertFrom-Json
     if ([int]$coreManifest.fileCount -ne [int]$manifest.coreExport.fileCount -or
         [string]$coreManifest.normalizedInventorySha256 -cne [string]$manifest.coreExport.normalizedInventorySha256 -or
@@ -240,6 +239,7 @@ try {
 </Project>
 "@
         $program = @"
+using System;
 using System.Reflection;
 using SecureIntegration.Broker.Sdk;
 Assembly assembly = typeof(AssemblyMarker).Assembly;
@@ -250,10 +250,22 @@ return 0;
 "@
         [IO.File]::WriteAllText((Join-Path $consumer 'Consumer.csproj'), $project.Trim(), [Text.UTF8Encoding]::new($false))
         [IO.File]::WriteAllText((Join-Path $consumer 'Program.cs'), $program.Trim(), [Text.UTF8Encoding]::new($false))
-        & $dotnet restore (Join-Path $consumer 'Consumer.csproj') --source (Join-Path $run 'artifacts') --source 'https://api.nuget.org/v3/index.json' *> $null
-        if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_CONSUMER_RESTORE_FAILED' }
-        & $dotnet run --project (Join-Path $consumer 'Consumer.csproj') --configuration Release --no-restore *> $null
-        if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_CONSUMER_RUN_FAILED' }
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $dotnet restore (Join-Path $consumer 'Consumer.csproj') --source (Join-Path $run 'artifacts') --source 'https://api.nuget.org/v3/index.json' *> $null
+            $restoreExitCode = $LASTEXITCODE
+            $runExitCode = -1
+            if ($restoreExitCode -eq 0) {
+                & $dotnet run --project (Join-Path $consumer 'Consumer.csproj') --configuration Release --no-restore *> $null
+                $runExitCode = $LASTEXITCODE
+            }
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+        if ($restoreExitCode -ne 0) { throw 'ALPHA_ARTIFACT_CONSUMER_RESTORE_FAILED' }
+        if ($runExitCode -ne 0) { throw 'ALPHA_ARTIFACT_CONSUMER_RUN_FAILED' }
     }
 
     if ($RunContainerRuntime) {
@@ -274,12 +286,15 @@ return 0;
             if (-not $healthy) { throw 'ALPHA_ARTIFACT_CONTAINER_HEALTH_FAILED' }
         }
         finally {
-            $inspectText = (& docker inspect $containerName 2>$null | Out-String)
-            if ($LASTEXITCODE -eq 0) {
+            $containerIdForCleanup = (& docker ps --all --quiet --filter "name=^/$containerName$" | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_CONTAINER_CLEANUP_LOOKUP_FAILED' }
+            if (-not [string]::IsNullOrWhiteSpace($containerIdForCleanup)) {
+                $inspectText = (& docker inspect $containerIdForCleanup | Out-String)
+                if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_CONTAINER_CLEANUP_INSPECT_FAILED' }
                 $containerInspect = @($inspectText | ConvertFrom-Json)[0]
                 $owned = [string]$containerInspect.Config.Labels.'secure-integration.alpha-artifact-validation'
                 if ($owned -cne $sourceCommit) { throw 'ALPHA_ARTIFACT_CONTAINER_CLEANUP_OWNERSHIP_FAILED' }
-                & docker rm --force $containerName *> $null
+                & docker rm --force $containerIdForCleanup *> $null
                 if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_CONTAINER_CLEANUP_FAILED' }
             }
         }

@@ -74,6 +74,17 @@ public sealed class AlphaReleaseArtifactTests
         Assert.Contains("eng/CoreExportInventory.psm1", allowlist, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ALPHA_ART_validator_supports_an_empty_image_store_and_minimal_consumer()
+    {
+        string validator = File.ReadAllText(Path.Combine(Root, "eng", "Test-AlphaReleaseArtifacts.ps1"));
+        Assert.Contains("docker image ls --quiet --no-trunc", validator, StringComparison.Ordinal);
+        Assert.Contains("using System;", validator, StringComparison.Ordinal);
+        Assert.Contains("$ErrorActionPreference = 'Continue'", validator, StringComparison.Ordinal);
+        Assert.DoesNotContain("& docker image inspect $Reference *> $null\r\n    if ($LASTEXITCODE -eq 0)", validator, StringComparison.Ordinal);
+        Assert.DoesNotContain("& docker image inspect $Reference *> $null\n    if ($LASTEXITCODE -eq 0)", validator, StringComparison.Ordinal);
+    }
+
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? current = new(AppContext.BaseDirectory);
