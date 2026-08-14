@@ -410,6 +410,30 @@ public sealed class GatewaySecurityTests
     }
 
     [Fact]
+    public async Task AlphaGoldenPath_Invoke_required_payload_members_fail_closed_before_authority_or_egress()
+    {
+        using Fixture fixture = await Fixture.CreateAsync();
+        RegisteredInstallationIdentity identity = await fixture.EnrollAsync();
+        TrackingResolver resolver = new();
+        RestrictedEgressService service = fixture.CreateEgress(resolver, new RecordingTransport(), GatewayAuthenticationKind.None);
+        GatewayInvokeRequest[] invalid =
+        [
+            new("1.0", null!, Guid.NewGuid()),
+            new("1.0", new(null!, "base64", "e30="), Guid.NewGuid()),
+            new("1.0", new("application/json", "base64", null!), Guid.NewGuid())
+        ];
+
+        foreach (GatewayInvokeRequest request in invalid)
+        {
+            GatewayException failure = await Assert.ThrowsAsync<GatewayException>(() =>
+                service.InvokeAsync(new(identity, request.CorrelationId), "vendor", "send", request, TestContext.Current.CancellationToken));
+            Assert.Equal("BGW-PROTOCOL-PAYLOAD", failure.Code);
+            Assert.Equal(400, failure.StatusCode);
+        }
+        Assert.Equal(0, resolver.CallCount);
+    }
+
+    [Fact]
     public async Task UT_SEC_Audit_is_metadata_only_and_excludes_payload_and_credentials()
     {
         using Fixture fixture = await Fixture.CreateAsync();

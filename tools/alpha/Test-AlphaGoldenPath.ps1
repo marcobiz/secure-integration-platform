@@ -4,7 +4,10 @@ param(
         'All',
         'AlphaGoldenPath_failed_child_output_is_redacted_and_cleanup_still_runs',
         'AlphaGoldenPath_child_timeout_is_bounded_and_cleanup_runs',
-        'AlphaGoldenPath_child_output_limit_is_bounded_and_redacted')]
+        'AlphaGoldenPath_child_output_limit_is_bounded_and_redacted',
+        'AlphaGoldenPath_missing_compatible_dotnet_sdk_returns_actionable_stable_error',
+        'AlphaGoldenPath_missing_dotnet_host_returns_distinct_stable_error',
+        'AlphaGoldenPath_sdk_preflight_does_not_expose_raw_cli_output_or_local_paths')]
     [string] $TestName = 'All'
 )
 
@@ -203,12 +206,52 @@ function Test-ChildOutputLimit {
         -Forbidden @('alpha-output-limit-probe-canary-33c1b471')
 }
 
+function Assert-PreflightFailure {
+    param(
+        [Parameter(Mandatory = $true)][string] $Phase,
+        [Parameter(Mandatory = $true)][string] $ExpectedError,
+        [string[]] $Forbidden = @()
+    )
+    Assert-True (-not (Test-Path -LiteralPath $artifactRoot))
+    $result = Invoke-Captured -File $powerShellHost -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $runner, '-Phase', $Phase)
+    $combined = $result.StdOut + $result.StdErr
+    Assert-True ($result.ExitCode -ne 0)
+    Assert-True ($result.StdOut.Trim().Length -eq 0)
+    Assert-True ($result.StdErr.Trim() -ceq $ExpectedError)
+    foreach ($value in @($Forbidden + @($root, 'System.InvalidOperationException', 'Authorization:', 'Password='))) {
+        Assert-True ($combined.IndexOf($value, [StringComparison]::OrdinalIgnoreCase) -lt 0)
+    }
+    Assert-True (-not (Test-Path -LiteralPath $artifactRoot))
+}
+
+function Test-MissingCompatibleDotNetSdk {
+    Assert-PreflightFailure `
+        -Phase 'DotNetSdkUnavailableProbe' `
+        -ExpectedError 'ALPHA_GOLDEN_PATH_DOTNET_SDK_UNAVAILABLE;BASELINE=10.0.302;ROLL_FORWARD=latestPatch'
+}
+
+function Test-MissingDotNetHost {
+    Assert-PreflightFailure `
+        -Phase 'DotNetHostMissingProbe' `
+        -ExpectedError 'ALPHA_GOLDEN_PATH_DOTNET_HOST_NOT_FOUND'
+}
+
+function Test-DotNetPreflightRedaction {
+    Assert-PreflightFailure `
+        -Phase 'DotNetSdkUnavailableProbe' `
+        -ExpectedError 'ALPHA_GOLDEN_PATH_DOTNET_SDK_UNAVAILABLE;BASELINE=10.0.302;ROLL_FORWARD=latestPatch' `
+        -Forbidden @('alpha-dotnet-sdk-stdout-canary-7b61d8d2', 'No compatible SDK under')
+}
+
 try {
     $tests = if ($TestName -eq 'All') {
         @(
             'AlphaGoldenPath_failed_child_output_is_redacted_and_cleanup_still_runs',
             'AlphaGoldenPath_child_timeout_is_bounded_and_cleanup_runs',
-            'AlphaGoldenPath_child_output_limit_is_bounded_and_redacted')
+            'AlphaGoldenPath_child_output_limit_is_bounded_and_redacted',
+            'AlphaGoldenPath_missing_compatible_dotnet_sdk_returns_actionable_stable_error',
+            'AlphaGoldenPath_missing_dotnet_host_returns_distinct_stable_error',
+            'AlphaGoldenPath_sdk_preflight_does_not_expose_raw_cli_output_or_local_paths')
     }
     else { @($TestName) }
     foreach ($test in $tests) {
@@ -216,6 +259,9 @@ try {
             'AlphaGoldenPath_failed_child_output_is_redacted_and_cleanup_still_runs' { Test-FailedChildOutput }
             'AlphaGoldenPath_child_timeout_is_bounded_and_cleanup_runs' { Test-ChildTimeout }
             'AlphaGoldenPath_child_output_limit_is_bounded_and_redacted' { Test-ChildOutputLimit }
+            'AlphaGoldenPath_missing_compatible_dotnet_sdk_returns_actionable_stable_error' { Test-MissingCompatibleDotNetSdk }
+            'AlphaGoldenPath_missing_dotnet_host_returns_distinct_stable_error' { Test-MissingDotNetHost }
+            'AlphaGoldenPath_sdk_preflight_does_not_expose_raw_cli_output_or_local_paths' { Test-DotNetPreflightRedaction }
         }
         Write-Host "$test PASS"
     }

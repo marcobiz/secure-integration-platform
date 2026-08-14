@@ -17,13 +17,38 @@ qualification. It uses no cloud account, FSE2 material or real credential.
 ## Prerequisites
 
 - Docker Engine with Linux containers and Docker Compose;
-- the .NET SDK selected by `global.json` (`10.0.302` on this baseline);
+- the .NET SDK selected by `global.json`: baseline `10.0.302` with
+  `rollForward: latestPatch`;
 - PowerShell 7 or Windows PowerShell 5.1;
 - network access only when the pinned SDK, NuGet packages or container images are not
   already present in public caches.
 
 Node is built inside the pinned Gateway image for this path. No host `.env`, trusted
 development CA, cloud login or pre-existing project container is required.
+
+From the repository root, verify the SDK resolver without changing the host:
+
+```powershell
+dotnet --version
+```
+
+The command is intentionally run under the directory that contains `global.json`; the
+.NET CLI resolver is authoritative for `latestPatch`. Installing a compatible SDK is the
+adopter's responsibility. The runner never downloads an SDK, changes `PATH`, falls back
+to .NET 8 or turns a missing prerequisite into success.
+
+Preflight reports only bounded stable diagnostics:
+
+```text
+ALPHA_GOLDEN_PATH_DOTNET_HOST_NOT_FOUND
+ALPHA_GOLDEN_PATH_DOTNET_SDK_UNAVAILABLE;BASELINE=10.0.302;ROLL_FORWARD=latestPatch
+ALPHA_GOLDEN_PATH_CHILD_EXIT_NONZERO;COMPONENT=DotNet;EXIT_CODE=<bounded>
+```
+
+The first means no `dotnet` host could be started; the second means the host ran but the
+CLI could not resolve an SDK compatible with `global.json`. The third is reserved for a
+later restore/build/run child failure. Raw CLI output, stack traces and local paths are
+not printed.
 
 ## Run
 
@@ -54,6 +79,38 @@ The runner verifies:
 - zero project containers, networks and volumes plus removal of activation material,
   private keys, PFX files and control output in a `finally` cleanup.
 
+The Direct sample receives HTTP `200` with the public `InvokeResponse` envelope. For the
+canonical operation the minimum observable result is:
+
+```json
+{
+  "correlationId": "11111111-1111-1111-1111-111111111111",
+  "connectorVersion": "1.0.0",
+  "result": {
+    "contentType": "application/json; charset=utf-8",
+    "encoding": "base64",
+    "data": "eyJhY2NlcHRlZCI6dHJ1ZSwidmVuZG9yUmVmZXJlbmNlIjoic3ludGhldGljLW9yZGVyIn0="
+  }
+}
+```
+
+After decoding `result.data`, the sample prints:
+
+```json
+{
+  "accepted": true,
+  "vendorReference": "synthetic-order"
+}
+```
+
+`accepted: true` means only that the local synthetic HTTPS/mTLS mock accepted the one
+canonical request. `synthetic-order` is the expected synthetic reference; neither value
+is an external-service, business-outcome or production claim. During `Run`, the runner
+uses the same correlation ID to verify exactly one `operation.invoke` success audit event
+containing metadata only. In an interactive local Admin session the same redacted audit
+surface is the **Audit** page at `/admin/audit`; the automated run verifies it before its
+isolated database is removed.
+
 Expected final markers are:
 
 ```text
@@ -72,4 +129,6 @@ If a run is interrupted, execute the idempotent, ownership-checked cleanup:
 
 The Direct sample keeps its private key only for the process lifetime. A production
 consumer must use an appropriate protected or non-exportable client key store. The local
-DevelopmentAuth mode and synthetic CA/material are never production controls.
+DevelopmentAuth mode and synthetic CA/material are never production controls. This path
+is a synthetic private-preview evaluation only: it is not an external-service
+qualification, a stable API commitment or a production deployment.

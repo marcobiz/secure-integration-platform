@@ -134,6 +134,8 @@ public sealed class RestrictedEgressService
     {
         if (!string.Equals(request.ProtocolVersion, "1.0", StringComparison.Ordinal) || request.CorrelationId == Guid.Empty)
             throw new GatewayException("BGW-PROTOCOL-VERSION", 400);
+        if (request.Payload is null || string.IsNullOrWhiteSpace(request.Payload.ContentType) || request.Payload.ContentType.Length > 512 || request.Payload.Data is null)
+            throw new GatewayException("BGW-PROTOCOL-PAYLOAD", 400);
         if (request.IdempotencyKey is not null && (request.IdempotencyKey.Length is < 1 or > 128 || request.IdempotencyKey.Any(character => character is < '!' or > '~')))
             throw new GatewayException("BGW-IDEMPOTENCY-KEY", 400);
         RegisteredInstallationIdentity identity = authenticated.Identity;

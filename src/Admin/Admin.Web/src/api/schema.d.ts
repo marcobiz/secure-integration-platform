@@ -1576,13 +1576,38 @@ export interface components {
             operationId: string;
         };
         InvokeRequest: {
+            /** @constant */
+            protocolVersion: "1.0";
+            payload: components["schemas"]["InvokePayload"];
             /** Format: uuid */
             correlationId: string;
-            payload: string;
-            contentType?: string;
-            headers?: {
-                [key: string]: string;
-            };
+            idempotencyKey?: string | null;
+            /** @description Optional application context. It is never authoritative for tenant, endpoint, provider or credential selection. */
+            operatorContext?: unknown;
+            metadata?: {
+                [key: string]: string | number | boolean | null;
+            } | null;
+            extensions?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        InvokePayload: {
+            contentType: string;
+            /** @enum {string} */
+            encoding: "base64" | "utf8";
+            data: string;
+        };
+        InvokeResponse: {
+            /** Format: uuid */
+            correlationId: string;
+            connectorVersion: string;
+            result: components["schemas"]["InvokeResult"];
+        };
+        InvokeResult: {
+            contentType: string;
+            /** @constant */
+            encoding: "base64";
+            data: string;
         };
         ConnectorImportRequest: {
             definition: Record<string, never>;
@@ -1761,12 +1786,14 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Sanitized connector response. */
+            /** @description Sanitized connector response envelope with a bounded application result encoded in result.data. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["InvokeResponse"];
+                };
             };
             default: components["responses"]["Problem"];
         };

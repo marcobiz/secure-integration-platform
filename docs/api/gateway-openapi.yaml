@@ -77,7 +77,21 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/InvokeRequest' }
       responses:
-        '200': { description: Sanitized connector response. }
+        '200':
+          description: Sanitized connector response envelope with a bounded application result encoded in result.data.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InvokeResponse' }
+              examples:
+                canonicalSyntheticSubmit:
+                  summary: Canonical sample-secure-service/submit success.
+                  value:
+                    correlationId: 11111111-1111-1111-1111-111111111111
+                    connectorVersion: 1.0.0
+                    result:
+                      contentType: application/json; charset=utf-8
+                      encoding: base64
+                      data: eyJhY2NlcHRlZCI6dHJ1ZSwidmVuZG9yUmVmZXJlbmNlIjoic3ludGhldGljLW9yZGVyIn0=
         default: { $ref: '#/components/responses/Problem' }
   /admin/v1/connectors:validate:
     post:
@@ -935,12 +949,53 @@ components:
     InvokeRequest:
       type: object
       additionalProperties: false
-      required: [correlationId, payload]
+      required: [protocolVersion, payload, correlationId]
+      properties:
+        protocolVersion:
+          type: string
+          const: '1.0'
+        payload:
+          $ref: '#/components/schemas/InvokePayload'
+        correlationId: { type: string, format: uuid }
+        idempotencyKey:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 128
+          pattern: '^[\u0021-\u007E]+$'
+        operatorContext:
+          description: Optional application context. It is never authoritative for tenant, endpoint, provider or credential selection.
+        metadata:
+          type: [object, 'null']
+          maxProperties: 32
+          additionalProperties: { type: [string, number, boolean, 'null'] }
+        extensions:
+          type: [object, 'null']
+          maxProperties: 16
+          additionalProperties: {}
+    InvokePayload:
+      type: object
+      additionalProperties: false
+      required: [contentType, encoding, data]
+      properties:
+        contentType: { type: string, minLength: 1, maxLength: 512 }
+        encoding: { type: string, enum: [base64, utf8] }
+        data: { type: string }
+    InvokeResponse:
+      type: object
+      additionalProperties: false
+      required: [correlationId, connectorVersion, result]
       properties:
         correlationId: { type: string, format: uuid }
-        payload: { type: string, contentEncoding: base64 }
-        contentType: { type: string }
-        headers: { type: object, additionalProperties: { type: string } }
+        connectorVersion: { type: string, minLength: 1 }
+        result: { $ref: '#/components/schemas/InvokeResult' }
+    InvokeResult:
+      type: object
+      additionalProperties: false
+      required: [contentType, encoding, data]
+      properties:
+        contentType: { type: string, minLength: 1, maxLength: 512 }
+        encoding: { type: string, const: base64 }
+        data: { type: string, contentEncoding: base64 }
     ConnectorImportRequest:
       type: object
       additionalProperties: false

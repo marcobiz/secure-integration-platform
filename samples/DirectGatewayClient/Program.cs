@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using SecureIntegration.Samples.DirectGatewayClient;
 
 string gateway = Required("DIRECT_GATEWAY_URL").TrimEnd('/');
 Guid activationCodeId = Guid.Parse(Required("DIRECT_GATEWAY_ACTIVATION_CODE_ID"));
@@ -55,11 +56,10 @@ Guid correlationId = Environment.GetEnvironmentVariable("DIRECT_GATEWAY_CORRELAT
     ? Guid.Parse(configuredCorrelation)
     : Guid.NewGuid();
 byte[] payload = JsonSerializer.SerializeToUtf8Bytes(new { message = "direct-gateway-sample" });
-byte[] requestBody = JsonSerializer.SerializeToUtf8Bytes(new
+InvokeRequest request = new("1.0", new("application/json", "base64", Convert.ToBase64String(payload)), correlationId);
+byte[] requestBody = JsonSerializer.SerializeToUtf8Bytes(request, new JsonSerializerOptions(JsonSerializerDefaults.Web)
 {
-    protocolVersion = "1.0",
-    payload = new { contentType = "application/json", encoding = "base64", data = Convert.ToBase64String(payload) },
-    correlationId
+    DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
 });
 string timestamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture);
 string nonce = Encode(RandomNumberGenerator.GetBytes(16));
@@ -76,8 +76,8 @@ invoke.Headers.TryAddWithoutValidation("traceparent", $"00-{Convert.ToHexString(
 using HttpResponseMessage response = await client.SendAsync(invoke);
 response.EnsureSuccessStatusCode();
 InvokeResponse result = await response.Content.ReadFromJsonAsync<InvokeResponse>() ?? throw new InvalidOperationException("Gateway returned no result.");
-if (!string.Equals(result.Result.Encoding, "base64", StringComparison.Ordinal)) throw new InvalidOperationException("Gateway returned an unsupported result encoding.");
-Console.WriteLine(Encoding.UTF8.GetString(Convert.FromBase64String(result.Result.Data)));
+SyntheticSubmitResponse applicationResult = InvokeSuccessContract.DeserializeSyntheticSubmit(result);
+Console.WriteLine(JsonSerializer.Serialize(applicationResult, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
 
 static async Task<TResponse> PostAsync<TRequest, TResponse>(HttpClient client, string target, TRequest request)
 {
@@ -101,5 +101,3 @@ internal sealed record ChallengeRequest(Guid ActivationCodeId, string PublicKeyS
 internal sealed record ChallengeResponse(Guid ChallengeId, string Challenge, DateTimeOffset ExpiresAt);
 internal sealed record ActivationRequest(Guid ChallengeId, string ActivationCode, string ClientCertificate, string ProofSignature, string ClientVersion);
 internal sealed record EnrollmentResult(Guid InstallationId, Guid TenantId, Guid ApplicationId, DateTimeOffset CredentialExpiresAt, DateTimeOffset RenewalStartsAt);
-internal sealed record GatewayPayload(string ContentType, string Encoding, string Data);
-internal sealed record InvokeResponse(Guid CorrelationId, string ConnectorVersion, GatewayPayload Result);

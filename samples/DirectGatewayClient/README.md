@@ -20,6 +20,28 @@ $env:DIRECT_GATEWAY_OPERATION_ID = 'submit'
 dotnet run --project samples/DirectGatewayClient/DirectGatewayClient.csproj
 ```
 
+Run the command from the repository root with an SDK compatible with the repository
+`global.json` baseline `10.0.302` and `rollForward: latestPatch`. `dotnet --version` from
+that directory is the safe resolver check; installing the prerequisite remains the
+adopter's responsibility.
+
+The sample sends the public `InvokeRequest` shape (`protocolVersion`, structured
+`payload`, and `correlationId`) and deserializes the HTTP `200` public `InvokeResponse`.
+For `sample-secure-service` version `1.0.0`, operation `submit`, it decodes the bounded
+`result.data` and prints exactly one application JSON document:
+
+```json
+{
+  "accepted": true,
+  "vendorReference": "synthetic-order"
+}
+```
+
+Here `accepted` describes only acceptance by the local synthetic mock and
+`synthetic-order` is the expected synthetic reference. It is not a production or external
+business outcome. The complete runner also verifies the correlated metadata-only
+`operation.invoke` audit event before cleanup.
+
 Do not put activation material in a file, command history, source control or logs. The
 sample contains no vendor credential, destination or provider locator and prints only the
 sanitized application response returned by the Gateway. Its client private key is scoped

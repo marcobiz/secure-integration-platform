@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Validate', 'Run', 'Stop', 'FailureOutputProbe', 'FailureTimeoutProbe', 'FailureOutputLimitProbe')]
+    [ValidateSet('Validate', 'Run', 'Stop', 'FailureOutputProbe', 'FailureTimeoutProbe', 'FailureOutputLimitProbe', 'DotNetHostMissingProbe', 'DotNetSdkUnavailableProbe')]
     [string] $Phase = 'Run',
     [switch] $SkipBuild,
     [string] $DotNetPath
@@ -17,8 +17,16 @@ $baseCompose = Join-Path $root 'deploy\m3\docker-compose.m3a.yml'
 $overlayCompose = Join-Path $root 'deploy\m5\docker-compose.m5.yml'
 $canonicalConnector = Join-Path $root 'docs\connectors\examples\sample-secure-service.connector.json'
 $project = 'secure-integration-m5-quickstart'
-$dotnet = if ([string]::IsNullOrWhiteSpace($DotNetPath)) { Join-Path $root '.dotnet\dotnet.exe' } else { [IO.Path]::GetFullPath($DotNetPath) }
-if (-not (Test-Path -LiteralPath $dotnet -PathType Leaf)) { $dotnet = 'dotnet' }
+$repositoryDotNet = Join-Path $root '.dotnet\dotnet.exe'
+$dotnet = if (-not [string]::IsNullOrWhiteSpace($DotNetPath)) {
+    [IO.Path]::GetFullPath($DotNetPath)
+}
+elseif (Test-Path -LiteralPath $repositoryDotNet -PathType Leaf) {
+    $repositoryDotNet
+}
+else {
+    'dotnet'
+}
 $powerShellHost = try { (Get-Process -Id $PID -ErrorAction Stop).Path } catch { $null }
 if ([string]::IsNullOrWhiteSpace($powerShellHost)) {
     $powerShellHost = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'powershell.exe' } else { 'pwsh' }
@@ -301,7 +309,8 @@ function Invoke-SanitizedChild {
         $result = [pscustomobject]@{ ExitCode = $capture.ExitCode; StdOut = $capture.StdOut; StdErr = $capture.StdErr }
         if ($capture.ExitCode -ne 0 -and -not $AllowFailure) {
             $childCode = if ($capture.StdErr -cmatch '(?m)^(M5_QUICKSTART_[A-Z0-9_]+)\r?$') { ';CHILD_CODE=' + $Matches[1] } else { '' }
-            throw "ALPHA_GOLDEN_PATH_CHILD_EXIT_NONZERO;COMPONENT=$Component;EXIT_CODE=$($capture.ExitCode)$childCode"
+            $stableExitCode = if ($capture.ExitCode -ge 1 -and $capture.ExitCode -le 65535) { $capture.ExitCode } else { 255 }
+            throw "ALPHA_GOLDEN_PATH_CHILD_EXIT_NONZERO;COMPONENT=$Component;EXIT_CODE=$stableExitCode$childCode"
         }
         return $result
     }
@@ -315,6 +324,36 @@ function Invoke-Checked {
         [Parameter(Mandatory = $true)][ValidateSet('Docker', 'DotNet', 'Curl', 'Quickstart')][string] $Component
     )
     return Invoke-SanitizedChild -File $File -Arguments $Arguments -Component $Component
+}
+
+function Get-DotNetRequirement {
+    $configuration = Get-Content -LiteralPath (Join-Path $root 'global.json') -Raw | ConvertFrom-Json
+    $baseline = [string]$configuration.sdk.version
+    $rollForward = [string]$configuration.sdk.rollForward
+    if ($baseline -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+$' -or $rollForward -cnotmatch '^[A-Za-z][A-Za-z0-9]{0,31}$') {
+        throw 'ALPHA_GOLDEN_PATH_GLOBAL_JSON_INVALID'
+    }
+    return [pscustomobject]@{ Baseline = $baseline; RollForward = $rollForward }
+}
+
+function Assert-CompatibleDotNetSdk {
+    param(
+        [Parameter(Mandatory = $true)][string] $File,
+        [string[]] $Arguments = @('--version')
+    )
+    try {
+        $result = Invoke-SanitizedChild -File $File -Arguments $Arguments -Component DotNet -AllowFailure
+    }
+    catch {
+        if ([string]$_.Exception.Message -ceq 'ALPHA_GOLDEN_PATH_CHILD_START_FAILED;COMPONENT=DotNet') {
+            throw 'ALPHA_GOLDEN_PATH_DOTNET_HOST_NOT_FOUND'
+        }
+        throw
+    }
+    if ($result.ExitCode -ne 0) {
+        $requirement = Get-DotNetRequirement
+        throw "ALPHA_GOLDEN_PATH_DOTNET_SDK_UNAVAILABLE;BASELINE=$($requirement.Baseline);ROLL_FORWARD=$($requirement.RollForward)"
+    }
 }
 
 function Invoke-Quickstart {
@@ -475,6 +514,8 @@ function Assert-RedactedText {
 function Get-StableAlphaFailure {
     param([Parameter(Mandatory = $true)] $Failure)
     $message = [string]$Failure.Exception.Message
+    if ($message -ceq 'ALPHA_GOLDEN_PATH_DOTNET_HOST_NOT_FOUND') { return $message }
+    if ($message -cmatch '^ALPHA_GOLDEN_PATH_DOTNET_SDK_UNAVAILABLE;BASELINE=[0-9]+\.[0-9]+\.[0-9]+;ROLL_FORWARD=[A-Za-z][A-Za-z0-9]{0,31}$') { return $message }
     if ($message -cmatch '^ALPHA_GOLDEN_PATH_[A-Z0-9_]+(?:;COMPONENT=(?:Docker|DotNet|Curl|Quickstart|FailureProbe|TimeoutProbe|OutputLimitProbe)(?:;EXIT_CODE=[0-9]{1,5})?(?:;CHILD_CODE=M5_QUICKSTART_[A-Z0-9_]+)?)?$') {
         return $message
     }
@@ -483,10 +524,20 @@ function Get-StableAlphaFailure {
 
 try {
     Initialize-BoundedProcessCapture
+    if ($Phase -eq 'DotNetHostMissingProbe') {
+        $missingHost = Join-Path ([IO.Path]::GetTempPath()) ('alpha-dotnet-host-missing-' + [Guid]::NewGuid().ToString('N') + '.exe')
+        Assert-CompatibleDotNetSdk -File $missingHost
+        throw 'ALPHA_GOLDEN_PATH_DOTNET_HOST_MISSING_PROBE_DID_NOT_FAIL'
+    }
+    if ($Phase -eq 'DotNetSdkUnavailableProbe') {
+        $sdkProbe = '[Console]::Out.WriteLine("alpha-dotnet-sdk-stdout-canary-7b61d8d2"); [Console]::Error.WriteLine("No compatible SDK under ' + $root + '"); exit 86'
+        Assert-CompatibleDotNetSdk -File $powerShellHost -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-Command', $sdkProbe)
+        throw 'ALPHA_GOLDEN_PATH_DOTNET_SDK_PROBE_DID_NOT_FAIL'
+    }
     if ($Phase -eq 'Validate') {
+        Assert-CompatibleDotNetSdk -File $dotnet
         [void](Invoke-Checked -File 'docker' -Arguments @('version') -Component Docker)
         [void](Invoke-Checked -File 'docker' -Arguments @('compose', 'version') -Component Docker)
-        [void](Invoke-Checked -File $dotnet -Arguments @('--version') -Component DotNet)
         [void](Invoke-Checked -File $dotnet -Arguments @('restore', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--locked-mode') -Component DotNet)
         [void](Invoke-Checked -File $dotnet -Arguments @('build', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release', '--no-restore') -Component DotNet)
         Write-Host 'ALPHA_GOLDEN_PATH_VALIDATE_PASS'
@@ -501,6 +552,7 @@ try {
         exit 0
     }
 
+    if ($Phase -eq 'Run') { Assert-CompatibleDotNetSdk -File $dotnet }
     Assert-ZeroProjectResources
     if (Test-Path -LiteralPath $artifactRoot) { throw 'ALPHA_GOLDEN_PATH_ARTIFACT_ROOT_NOT_CLEAN' }
     $cleanupRequired = $true

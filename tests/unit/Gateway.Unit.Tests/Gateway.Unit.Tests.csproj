@@ -20,4 +20,7 @@
   <ItemGroup>
     <Content Include="..\..\..\docs\connectors\examples\sample-secure-service.connector.json" Link="Samples\sample-secure-service.connector.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\..\..\samples\DirectGatewayClient\GatewayApiContracts.cs" Link="Samples\DirectGatewayClient\GatewayApiContracts.cs" />
+  </ItemGroup>
 </Project>

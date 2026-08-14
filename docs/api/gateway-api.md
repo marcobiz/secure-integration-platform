@@ -8,6 +8,44 @@ La specifica machine-readable è [gateway-openapi.yaml](gateway-openapi.yaml).
 
 Il client sceglie soltanto Connector e operation già autorizzati. URL, method, endpoint binding, secret reference, algoritmo e credenziali non fanno parte della request. Il runtime accetta esclusivamente una versione Published e applica i grant deny-by-default prima di risolvere secret o invocare la rete.
 
+La request pubblica minima è:
+
+```json
+{
+  "protocolVersion": "1.0",
+  "payload": {
+    "contentType": "application/json",
+    "encoding": "base64",
+    "data": "eyJtZXNzYWdlIjoiZGlyZWN0LWdhdGV3YXktc2FtcGxlIn0="
+  },
+  "correlationId": "11111111-1111-1111-1111-111111111111"
+}
+```
+
+`payload.encoding` accetta `base64` o `utf8`. `idempotencyKey`, `operatorContext`,
+`metadata` ed `extensions` sono opzionali e non sono authority per Tenant, profilo
+Published, endpoint, provider, transport o credenziali. Campi ulteriori sono rifiutati.
+
+Il successo HTTP `200` usa `application/json` e lo schema pubblico nominato
+`InvokeResponse`:
+
+```json
+{
+  "correlationId": "11111111-1111-1111-1111-111111111111",
+  "connectorVersion": "1.0.0",
+  "result": {
+    "contentType": "application/json; charset=utf-8",
+    "encoding": "base64",
+    "data": "eyJhY2NlcHRlZCI6dHJ1ZSwidmVuZG9yUmVmZXJlbmNlIjoic3ludGhldGljLW9yZGVyIn0="
+  }
+}
+```
+
+`result` contiene esclusivamente il risultato applicativo bounded restituito dal
+Connector autorizzato; non espone status/header HTTP upstream, endpoint risolti,
+provider reference o credenziali. Il caller decodifica `result.data` secondo
+`result.encoding` e deserializza il tipo applicativo previsto dall'operation.
+
 ## Admin Connector API
 
 | Metodo e path | Funzione |
