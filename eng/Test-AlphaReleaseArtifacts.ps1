@@ -35,6 +35,17 @@ function Get-ZipEntries([string] $ArchivePath) {
     finally { $archive.Dispose() }
 }
 
+function Get-Sha256Hex {
+    param([Parameter(Mandatory = $true)][string] $LiteralPath)
+    $stream = [IO.File]::OpenRead($LiteralPath)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try { return [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '') }
+    finally {
+        $sha256.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function Test-ArchiveEntryPath([string] $Path) {
     if ([string]::IsNullOrWhiteSpace($Path) -or $Path.StartsWith('/', [StringComparison]::Ordinal) -or
         $Path.Contains('\') -or $Path.Contains(':') -or $Path.Contains('//')) { return $false }
@@ -164,7 +175,7 @@ function Assert-AlphaReleaseSetBijection {
     }
     foreach ($expected in $expectedArtifacts.Keys) {
         if (-not $checksumByPath.ContainsKey($expected)) { throw "ALPHA_ARTIFACT_CHECKSUM_MISSING: $expected" }
-        $actualHash = (Get-FileHash -LiteralPath $actualArtifacts[$expected].FullName -Algorithm SHA256).Hash
+        $actualHash = Get-Sha256Hex -LiteralPath $actualArtifacts[$expected].FullName
         if ($actualHash -cne $checksumByPath[$expected]) { throw "ALPHA_ARTIFACT_CHECKSUM_MISMATCH: $expected" }
     }
 
@@ -209,7 +220,7 @@ function Assert-AlphaReleaseSetBijection {
     foreach ($expected in $expectedSbomFiles) {
         if (-not $manifestSbomByPath.ContainsKey($expected)) { throw "ALPHA_ARTIFACT_SBOM_MANIFEST_MISSING: $expected" }
         $entry = $manifestSbomByPath[$expected]
-        $actualHash = (Get-FileHash -LiteralPath $actualSbomFiles[$expected].FullName -Algorithm SHA256).Hash
+        $actualHash = Get-Sha256Hex -LiteralPath $actualSbomFiles[$expected].FullName
         try { $declaredBytes = [Convert]::ToInt64($entry.bytes, [Globalization.CultureInfo]::InvariantCulture) }
         catch { throw "ALPHA_ARTIFACT_SBOM_MANIFEST_SIZE_INVALID: $expected" }
         if ($declaredBytes -ne $actualSbomFiles[$expected].Length -or ([string]$entry.sha256).ToUpperInvariant() -cne $actualHash) {
@@ -349,7 +360,7 @@ try {
     }
 
     $manifestPath = Join-Path $run 'manifest.json'
-    $manifestSha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash
+    $manifestSha256 = Get-Sha256Hex -LiteralPath $manifestPath
     if ((Get-Content -LiteralPath (Join-Path $run 'manifest.json.sha256') -Raw).Trim() -cne "$manifestSha256  manifest.json") {
         throw 'ALPHA_ARTIFACT_MANIFEST_SIDECAR_MISMATCH'
     }
@@ -414,7 +425,7 @@ try {
     $coreManifest = Get-Content -LiteralPath (Join-Path $coreExtract 'OPEN_SOURCE_EXPORT_MANIFEST.json') -Raw | ConvertFrom-Json
     if ([int]$coreManifest.fileCount -ne [int]$manifest.coreExport.fileCount -or
         [string]$coreManifest.normalizedInventorySha256 -cne [string]$manifest.coreExport.normalizedInventorySha256 -or
-        (Get-FileHash -LiteralPath (Join-Path $coreExtract 'OPEN_SOURCE_EXPORT_MANIFEST.json') -Algorithm SHA256).Hash -cne [string]$manifest.coreExport.rawManifestSha256RunSpecific) {
+        (Get-Sha256Hex -LiteralPath (Join-Path $coreExtract 'OPEN_SOURCE_EXPORT_MANIFEST.json')) -cne [string]$manifest.coreExport.rawManifestSha256RunSpecific) {
         throw 'ALPHA_ARTIFACT_CORE_MANIFEST_MISMATCH'
     }
 

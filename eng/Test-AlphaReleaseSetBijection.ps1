@@ -20,10 +20,21 @@ function Write-Utf8NoBom {
     [IO.File]::WriteAllText($Path, $Value, [Text.UTF8Encoding]::new($false))
 }
 
+function Get-Sha256Hex {
+    param([Parameter(Mandatory = $true)][string] $LiteralPath)
+    $stream = [IO.File]::OpenRead($LiteralPath)
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try { return [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '') }
+    finally {
+        $sha256.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function Get-FileRecord {
     param([Parameter(Mandatory = $true)][string] $RunDirectory, [Parameter(Mandatory = $true)][string] $RelativePath, [Parameter(Mandatory = $true)][string] $Kind)
     $fullPath = Join-Path $RunDirectory $RelativePath.Replace('/', '\')
-    return [ordered]@{ file = $RelativePath; kind = $Kind; bytes = [IO.FileInfo]::new($fullPath).Length; sha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash }
+    return [ordered]@{ file = $RelativePath; kind = $Kind; bytes = [IO.FileInfo]::new($fullPath).Length; sha256 = Get-Sha256Hex -LiteralPath $fullPath }
 }
 
 function New-ContainerSbom {
@@ -58,7 +69,7 @@ function Write-ManifestAndSidecar {
     param([Parameter(Mandatory = $true)][string] $RunDirectory, [Parameter(Mandatory = $true)] $Manifest)
     $manifestPath = Join-Path $RunDirectory 'manifest.json'
     Write-Utf8NoBom -Path $manifestPath -Value ($Manifest | ConvertTo-Json -Depth 16)
-    $hash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash
+    $hash = Get-Sha256Hex -LiteralPath $manifestPath
     [IO.File]::WriteAllText((Join-Path $RunDirectory 'manifest.json.sha256'), "$hash  manifest.json`r`n", [Text.Encoding]::ASCII)
 }
 
@@ -68,7 +79,7 @@ function Sync-SbomManifestRecord {
     if ($records.Count -ne 1) { throw 'ALPHA_RELEASE_BIJECTION_FIXTURE_SBOM_RECORD_INVALID' }
     $fullPath = Join-Path $RunDirectory $RelativePath.Replace('/', '\')
     $records[0].bytes = [IO.FileInfo]::new($fullPath).Length
-    $records[0].sha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash
+    $records[0].sha256 = Get-Sha256Hex -LiteralPath $fullPath
 }
 
 function New-SyntheticReleaseSet {
@@ -136,7 +147,7 @@ function New-SyntheticReleaseSet {
     Write-ManifestAndSidecar -RunDirectory $RunDirectory -Manifest $manifest
     [string[]]$checksumLines = @($artifactDefinitions | ForEach-Object {
         $fullPath = Join-Path $RunDirectory ([string]$_.path).Replace('/', '\')
-        "$(Get-FileHash -LiteralPath $fullPath -Algorithm SHA256 | Select-Object -ExpandProperty Hash)  $([string]$_.path)"
+        "$(Get-Sha256Hex -LiteralPath $fullPath)  $([string]$_.path)"
     })
     [Array]::Sort($checksumLines, [StringComparer]::Ordinal)
     [IO.File]::WriteAllLines((Join-Path $RunDirectory 'SHA256SUMS'), $checksumLines, [Text.Encoding]::ASCII)
@@ -211,7 +222,7 @@ try {
             param($caseRoot); Write-Utf8NoBom -Path (Join-Path $caseRoot 'artifacts\unexpected.zip') -Value 'unexpected'
         }
         Invoke-NegativeCase -Name 'ExtraChecksum' -ExpectedCode 'ALPHA_ARTIFACT_CHECKSUM_UNEXPECTED:' -BaselineDirectory $baseline -Mutation {
-            param($caseRoot); $path = Join-Path $caseRoot 'SHA256SUMS'; $lines = @(Get-Content $path); $manifestHash = (Get-FileHash (Join-Path $caseRoot 'manifest.json') -Algorithm SHA256).Hash; [IO.File]::WriteAllLines($path, @($lines + "$manifestHash  manifest.json"), [Text.Encoding]::ASCII)
+            param($caseRoot); $path = Join-Path $caseRoot 'SHA256SUMS'; $lines = @(Get-Content $path); $manifestHash = Get-Sha256Hex -LiteralPath (Join-Path $caseRoot 'manifest.json'); [IO.File]::WriteAllLines($path, @($lines + "$manifestHash  manifest.json"), [Text.Encoding]::ASCII)
         }
         Invoke-NegativeCase -Name 'ManifestArtifactCaseCollision' -ExpectedCode 'ALPHA_ARTIFACT_MANIFEST_ARTIFACT_DUPLICATE' -BaselineDirectory $baseline -Mutation {
             param($caseRoot); $manifest = Get-Content (Join-Path $caseRoot 'manifest.json') -Raw | ConvertFrom-Json; $duplicate = @($manifest.artifacts[0] | ConvertTo-Json -Depth 5 | ConvertFrom-Json)[0]; $duplicate.file = ([string]$duplicate.file).ToUpperInvariant(); $manifest.artifacts = @($manifest.artifacts) + @($duplicate); Write-ManifestAndSidecar -RunDirectory $caseRoot -Manifest $manifest
