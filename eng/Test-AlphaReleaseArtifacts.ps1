@@ -26,7 +26,11 @@ if ($dotnet -cne 'dotnet' -and -not (Test-Path -LiteralPath $dotnet -PathType Le
 
 function Get-ZipEntries([string] $ArchivePath) {
     $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
-    try { return @($archive.Entries | Where-Object { $_.FullName.Length -gt 0 -and -not $_.FullName.EndsWith('/', [StringComparison]::Ordinal) } | ForEach-Object { $_.FullName.Replace('\', '/') }) }
+    try {
+        return @($archive.Entries |
+            ForEach-Object { $_.FullName.Replace('\', '/') } |
+            Where-Object { $_.Length -gt 0 -and -not $_.EndsWith('/', [StringComparison]::Ordinal) })
+    }
     finally { $archive.Dispose() }
 }
 
