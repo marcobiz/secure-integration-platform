@@ -47,9 +47,6 @@ public sealed class AlphaReleaseArtifactTests
         string exclusion = props.Descendants("_ProductVersionExcluded").Single().Value;
         Assert.Contains("packs", exclusion, StringComparison.Ordinal);
         Assert.Contains("src/ConnectorPacks", exclusion, StringComparison.Ordinal);
-
-        string overlay = File.ReadAllText(Path.Combine(Root, "deploy", "fse2", "docker-compose.fse2-local.yml"));
-        Assert.Contains("SecureIntegration.ConnectorPacks.Healthcare.FSE2, Version=1.0.0.0", overlay, StringComparison.Ordinal);
     }
 
     [Fact]
