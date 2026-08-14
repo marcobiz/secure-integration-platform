@@ -392,15 +392,18 @@ function Invoke-ContainerArtifactBindingValidation {
         $image = $imagesByRole[$role]
         $association = $associationsByRole[$role]
         $artifact = $artifactRecordsByPath[[string]$subject.artifactFile]
+        $declaredImageId = [string]$image.imageId
+        $boundImageIds = @($identity.boundImageIds | ForEach-Object { [string]$_ })
         if ($null -eq $image -or $null -eq $association -or $null -eq $artifact -or
             [string]$identity.artifactSha256 -cne ([string]$artifact.sha256).ToUpperInvariant() -or
             [string]$identity.repoTag -cne [string]$image.reference -or
-            [string]$identity.imageId -cne [string]$image.imageId -or
+            $boundImageIds.Count -eq 0 -or $boundImageIds -cnotcontains $declaredImageId -or
             [string]$identity.repoTag -cne [string]$association.imageReference -or
-            [string]$identity.imageId -cne [string]$association.imageId -or
+            $declaredImageId -cne [string]$association.imageId -or
             [string]$subject.artifactFile -cne [string]$association.artifactFile) {
             throw "ALPHA_ARTIFACT_TAR_SUBJECT_IDENTITY_MISMATCH: $role"
         }
+        $identity.imageId = $declaredImageId
         $identitiesByRole[$role] = $identity
     }
 

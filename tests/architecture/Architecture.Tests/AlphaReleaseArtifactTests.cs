@@ -125,7 +125,9 @@ public sealed class AlphaReleaseArtifactTests
     {
         string validator = File.ReadAllText(Path.Combine(Root, "eng", "Test-AlphaReleaseArtifacts.ps1"));
         string harness = File.ReadAllText(Path.Combine(Root, "eng", "Test-AlphaReleaseContainerBinding.ps1"));
-        Assert.Contains("identity.imageId -cne [string]$association.imageId", validator, StringComparison.Ordinal);
+        Assert.Contains("boundImageIds -cnotcontains $declaredImageId", validator, StringComparison.Ordinal);
+        Assert.Contains("$loadedImageId -cne [string]$identity.imageId", validator, StringComparison.Ordinal);
+        Assert.Contains("ALPHA_ARTIFACT_BINDING_SOURCE_ID_NOT_BOUND_TO_TAR", harness, StringComparison.Ordinal);
         Assert.Contains("RegeneratedManifestAndSbomForWrongTarRole", harness, StringComparison.Ordinal);
         AssertPowerShellTestPass("eng/Test-AlphaReleaseContainerTarInspection.ps1", "ConfigDigestAndRole", "ALPHA_ART_CONTAINER_TAR_CONFIG_DIGEST_AND_ROLE_NEGATIVES_PASS");
     }

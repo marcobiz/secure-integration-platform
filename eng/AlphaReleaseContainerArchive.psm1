@@ -104,7 +104,10 @@ function Get-AlphaReleaseContainerTarIdentity {
         $actualConfigDigest = (Get-AlphaReleaseSha256Hex -LiteralPath $configFullPath).ToLowerInvariant()
         if ($actualConfigDigest -cne $declaredConfigDigest) { throw "ALPHA_ARTIFACT_TAR_CONFIG_DIGEST_MISMATCH: $Role" }
 
-        $derivedImageId = 'sha256:' + $actualConfigDigest
+        $configImageId = 'sha256:' + $actualConfigDigest
+        $ociManifestImageId = ''
+        $boundImageIds = @($configImageId)
+        $derivedImageId = $configImageId
         if ($entryCounts.ContainsKey('index.json')) {
             $previousErrorActionPreference = $ErrorActionPreference
             try {
@@ -147,7 +150,9 @@ function Get-AlphaReleaseContainerTarIdentity {
                 [long]$ociImageManifest.config.size -ne [IO.FileInfo]::new($configFullPath).Length) {
                 throw "ALPHA_ARTIFACT_TAR_IMAGE_MANIFEST_CONFIG_MISMATCH: $Role"
             }
-            $derivedImageId = $descriptorDigest
+            $ociManifestImageId = $descriptorDigest
+            if ($boundImageIds -cnotcontains $ociManifestImageId) { $boundImageIds += $ociManifestImageId }
+            $derivedImageId = $ociManifestImageId
         }
 
         try { $configDocument = Get-Content -LiteralPath $configFullPath -Raw | ConvertFrom-Json }
@@ -176,6 +181,9 @@ function Get-AlphaReleaseContainerTarIdentity {
             repoTag = $repoTags[0]
             configPath = $configPath
             configSha256 = $actualConfigDigest.ToUpperInvariant()
+            configImageId = $configImageId
+            ociManifestImageId = $ociManifestImageId
+            boundImageIds = @($boundImageIds)
             imageId = $derivedImageId
         }
     }

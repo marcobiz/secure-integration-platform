@@ -10,6 +10,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $validator = Join-Path $PSScriptRoot 'Test-AlphaReleaseArtifacts.ps1'
+Import-Module (Join-Path $PSScriptRoot 'AlphaReleaseContainerArchive.psm1') -Force
 $productVersion = '0.1.0-alpha.1'
 if ($ExpectedSourceCommit -cnotmatch '^[0-9a-f]{40}$') { throw 'ALPHA_ARTIFACT_BINDING_TEST_SOURCE_INVALID' }
 $shortCommit = $ExpectedSourceCommit.Substring(0, 12)
@@ -126,6 +127,16 @@ function New-ReleaseFixture {
     if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_BINDING_GATEWAY_SAVE_FAILED' }
     & docker image save --output (Join-Path $RunDirectory $migrationsArtifact.Replace('/', [IO.Path]::DirectorySeparatorChar)) $migrationsReference
     if ($LASTEXITCODE -ne 0) { throw 'ALPHA_ARTIFACT_BINDING_MIGRATIONS_SAVE_FAILED' }
+    $gatewayIdentity = Get-AlphaReleaseContainerTarIdentity -ArchivePath (Join-Path $RunDirectory $gatewayArtifact.Replace('/', [IO.Path]::DirectorySeparatorChar)) `
+        -Role gateway -ExpectedReference $gatewayReference -ProductVersion $productVersion -SourceCommit $ExpectedSourceCommit `
+        -InspectionDirectory (Join-Path $testRoot ('fixture-inspect-gateway-' + [Guid]::NewGuid().ToString('N')))
+    $migrationsIdentity = Get-AlphaReleaseContainerTarIdentity -ArchivePath (Join-Path $RunDirectory $migrationsArtifact.Replace('/', [IO.Path]::DirectorySeparatorChar)) `
+        -Role migrations -ExpectedReference $migrationsReference -ProductVersion $productVersion -SourceCommit $ExpectedSourceCommit `
+        -InspectionDirectory (Join-Path $testRoot ('fixture-inspect-migrations-' + [Guid]::NewGuid().ToString('N')))
+    if (@($gatewayIdentity.boundImageIds | ForEach-Object { [string]$_ }) -cnotcontains $GatewayImageId -or
+        @($migrationsIdentity.boundImageIds | ForEach-Object { [string]$_ }) -cnotcontains $MigrationsImageId) {
+        throw 'ALPHA_ARTIFACT_BINDING_SOURCE_ID_NOT_BOUND_TO_TAR'
+    }
     $artifactDefinitions = @(
         [pscustomobject]@{ path = "artifacts/SecureIntegration.Broker.Sdk.$productVersion.nupkg"; kind = 'nuget' },
         [pscustomobject]@{ path = "artifacts/admin-web-$productVersion.zip"; kind = 'admin-static-archive' },

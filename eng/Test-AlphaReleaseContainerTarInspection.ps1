@@ -94,6 +94,10 @@ try {
         if ([string]$gateway.imageId -cnotmatch '^sha256:[0-9a-f]{64}$' -or [string]$migrations.imageId -cnotmatch '^sha256:[0-9a-f]{64}$' -or [string]$gateway.imageId -ceq [string]$migrations.imageId) {
             throw 'ALPHA_ARTIFACT_TAR_POSITIVE_IDENTITY_FAILED'
         }
+        if ([string]$gateway.configImageId -cne [string]$gateway.imageId -or @($gateway.boundImageIds).Count -ne 1 -or
+            [string]$migrations.configImageId -cne [string]$migrations.imageId -or @($migrations.boundImageIds).Count -ne 1) {
+            throw 'ALPHA_ARTIFACT_TAR_BOUND_IDENTITY_SET_FAILED'
+        }
         Write-Host 'ALPHA_ART_CONTAINER_TAR_IDENTITY_PASS'
     }
 
