@@ -2,15 +2,20 @@
 param(
     [Parameter(Mandatory = $true)][string] $EvidenceDirectory,
     [Parameter(Mandatory = $true)][string] $ExpectedSourceCommit,
-    [Parameter(Mandatory = $true)][string] $ExpectedRunId
+    [Parameter(Mandatory = $true)][string] $ExpectedRunId,
+    [Parameter(Mandatory = $true)][string] $ExpectedNormalizedDigest,
+    [Parameter(Mandatory = $true)][string] $ExpectedProductVersion
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'AlphaReleaseEvidenceContract.psm1') -Force
 $evidence = [IO.Path]::GetFullPath($EvidenceDirectory)
 if (-not (Test-Path -LiteralPath $evidence -PathType Container)) { throw 'ALPHA_ART_EVIDENCE_DIRECTORY_MISSING' }
 if ($ExpectedSourceCommit -cnotmatch '^[0-9a-f]{40}$') { throw 'ALPHA_ART_EVIDENCE_EXPECTED_SOURCE_INVALID' }
 if ($ExpectedRunId -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{5,127}$') { throw 'ALPHA_ART_EVIDENCE_EXPECTED_RUN_ID_INVALID' }
+if ($ExpectedNormalizedDigest -cnotmatch '^[0-9A-F]{64}$') { throw 'ALPHA_ART_EVIDENCE_EXPECTED_NORMALIZED_DIGEST_INVALID' }
+if ($ExpectedProductVersion -cne '0.1.0-alpha.1') { throw 'ALPHA_ART_EVIDENCE_EXPECTED_PRODUCT_VERSION_INVALID' }
 
 function Get-Sha256Hex {
     param([string] $LiteralPath)
@@ -18,13 +23,6 @@ function Get-Sha256Hex {
     $sha256 = [Security.Cryptography.SHA256]::Create()
     try { return [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '') }
     finally { $sha256.Dispose(); $stream.Dispose() }
-}
-
-function Assert-RecordIdentity {
-    param($Record, [string] $Name, [string] $RunId, [string] $SourceCommit, [string] $NormalizedDigest)
-    if ([string]$Record.runId -cne $RunId) { throw "ALPHA_ART_EVIDENCE_RUN_ID_MISMATCH: $Name" }
-    if ([string]$Record.sourceRevision -cne $SourceCommit) { throw "ALPHA_ART_EVIDENCE_SOURCE_SHA_MISMATCH: $Name" }
-    if ([string]$Record.normalizedInventorySha256 -cne $NormalizedDigest) { throw "ALPHA_ART_EVIDENCE_NORMALIZED_DIGEST_MISMATCH: $Name" }
 }
 
 $manifestPath = Join-Path $evidence 'evidence-manifest.json'
@@ -36,23 +34,20 @@ if ([string]$manifest.schema -cne 'secure-integration.alpha-release-evidence.v1'
 $runId = [string]$manifest.runId
 $sourceCommit = [string]$manifest.sourceRevision
 $normalizedDigest = [string]$manifest.normalizedInventorySha256
+$productVersion = [string]$manifest.productVersion
 if ($runId -cne $ExpectedRunId) { throw 'ALPHA_ART_EVIDENCE_RUN_ID_MISMATCH: evidence-manifest.json' }
 if ($sourceCommit -cne $ExpectedSourceCommit) { throw 'ALPHA_ART_EVIDENCE_SOURCE_SHA_MISMATCH: evidence-manifest.json' }
 if ($normalizedDigest -cnotmatch '^[0-9A-F]{64}$') { throw 'ALPHA_ART_EVIDENCE_NORMALIZED_DIGEST_INVALID' }
+if ($normalizedDigest -cne $ExpectedNormalizedDigest) { throw 'ALPHA_ART_EVIDENCE_NORMALIZED_DIGEST_MISMATCH: evidence-manifest.json' }
+if ($productVersion -cne $ExpectedProductVersion) { throw 'ALPHA_ART_EVIDENCE_PRODUCT_VERSION_MISMATCH: evidence-manifest.json' }
 
 $records = @($manifest.records)
+$recordNames = @($records | ForEach-Object { [string]$_.name })
+Assert-AlphaReleaseEvidenceRecordInventory -RecordName $recordNames
 $recordByName = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
-$namesIgnoreCase = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 foreach ($record in $records) {
     $name = [string]$record.name
-    if ($name -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]*\.(?:json|txt)$' -or -not $namesIgnoreCase.Add($name) -or $recordByName.ContainsKey($name)) {
-        throw 'ALPHA_ART_EVIDENCE_RECORD_NAME_INVALID'
-    }
-    if ($name -in @('evidence-manifest.json', 'evidence-manifest.json.sha256')) { throw 'ALPHA_ART_EVIDENCE_RECORD_NAME_INVALID' }
     $recordByName.Add($name, $record)
-}
-foreach ($required in @('release-set.json', 'targeted-tests.json', 'qualification-summary.json')) {
-    if (-not $recordByName.ContainsKey($required)) { throw "ALPHA_ART_EVIDENCE_REQUIRED_RECORD_MISSING: $required" }
 }
 
 $physical = @(Get-ChildItem -LiteralPath $evidence -File | Where-Object { $_.Name -notin @('evidence-manifest.json', 'evidence-manifest.json.sha256') })
@@ -66,10 +61,10 @@ foreach ($file in $physical) {
 
 $manifestSha256 = Get-Sha256Hex -LiteralPath $manifestPath
 if ((Get-Content -LiteralPath $sidecarPath -Raw).Trim() -cne "$manifestSha256  evidence-manifest.json") { throw 'ALPHA_ART_EVIDENCE_MANIFEST_SIDECAR_MISMATCH' }
-foreach ($name in @('release-set.json', 'targeted-tests.json', 'qualification-summary.json')) {
+foreach ($name in Get-AlphaReleaseEvidenceRecordInventory) {
     try { $document = Get-Content -LiteralPath (Join-Path $evidence $name) -Raw | ConvertFrom-Json }
     catch { throw "ALPHA_ART_EVIDENCE_RECORD_INVALID: $name" }
-    Assert-RecordIdentity -Record $document -Name $name -RunId $runId -SourceCommit $sourceCommit -NormalizedDigest $normalizedDigest
+    Assert-AlphaReleaseEvidenceRecord -Record $document -RecordName $name -ExpectedRunId $ExpectedRunId -ExpectedSourceCommit $ExpectedSourceCommit -ExpectedNormalizedDigest $ExpectedNormalizedDigest -ExpectedProductVersion $ExpectedProductVersion
 }
 
 $sensitivePatterns = @(
@@ -92,6 +87,7 @@ foreach ($file in Get-ChildItem -LiteralPath $evidence -File) {
     runId = $runId
     sourceRevision = $sourceCommit
     normalizedInventorySha256 = $normalizedDigest
+    productVersion = $productVersion
     recordCount = $recordByName.Count
     evidenceManifestSha256 = $manifestSha256
 } | ConvertTo-Json -Compress

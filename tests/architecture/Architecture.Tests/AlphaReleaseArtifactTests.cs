@@ -84,6 +84,7 @@ public sealed class AlphaReleaseArtifactTests
         Assert.Contains("eng/Test-OpenSourceCoreInventory.ps1", allowlist, StringComparison.Ordinal);
         Assert.Contains("eng/CoreExportInventory.psm1", allowlist, StringComparison.Ordinal);
         Assert.Contains("eng/AlphaReleaseContainerArchive.psm1", allowlist, StringComparison.Ordinal);
+        Assert.Contains("eng/AlphaReleaseEvidenceContract.psm1", allowlist, StringComparison.Ordinal);
         Assert.Contains("eng/Test-AlphaReleaseContainerBinding.ps1", allowlist, StringComparison.Ordinal);
         Assert.Contains("eng/Write-AlphaReleaseEvidence.ps1", allowlist, StringComparison.Ordinal);
     }
@@ -136,9 +137,24 @@ public sealed class AlphaReleaseArtifactTests
     public void ALPHA_ART_evidence_rejects_stale_or_cross_run_normalized_digest()
     {
         string writer = File.ReadAllText(Path.Combine(Root, "eng", "Write-AlphaReleaseEvidence.ps1"));
+        string contract = File.ReadAllText(Path.Combine(Root, "eng", "AlphaReleaseEvidenceContract.psm1"));
         Assert.Contains("-ReleaseSetOnly", writer, StringComparison.Ordinal);
-        Assert.Contains("ALPHA_ART_EVIDENCE_NORMALIZED_DIGEST_MISMATCH", writer, StringComparison.Ordinal);
+        Assert.Contains("ALPHA_ART_EVIDENCE_NORMALIZED_DIGEST_MISMATCH", contract, StringComparison.Ordinal);
         AssertPowerShellTestPass("eng/Test-AlphaReleaseEvidenceConsistency.ps1", "StaleOrCrossRun", "ALPHA_ART_EVIDENCE_STALE_OR_CROSS_RUN_NEGATIVES_PASS");
+    }
+
+    [Fact]
+    public void ALPHA_ART_evidence_rejects_unknown_duplicate_or_resealed_supplemental_identity()
+    {
+        string contract = File.ReadAllText(Path.Combine(Root, "eng", "AlphaReleaseEvidenceContract.psm1"));
+        string writer = File.ReadAllText(Path.Combine(Root, "eng", "Write-AlphaReleaseEvidence.ps1"));
+        string validator = File.ReadAllText(Path.Combine(Root, "eng", "Test-AlphaReleaseEvidence.ps1"));
+        Assert.Contains("Assert-AlphaReleaseEvidenceRecordInventory", writer, StringComparison.Ordinal);
+        Assert.Contains("Assert-AlphaReleaseEvidenceRecordInventory", validator, StringComparison.Ordinal);
+        Assert.Contains("ALPHA_ART_EVIDENCE_RECORD_UNKNOWN", contract, StringComparison.Ordinal);
+        Assert.Contains("ALPHA_ART_EVIDENCE_RECORD_DUPLICATE", contract, StringComparison.Ordinal);
+        Assert.Contains("ExpectedNormalizedDigest", validator, StringComparison.Ordinal);
+        AssertPowerShellTestPass("eng/Test-AlphaReleaseEvidenceConsistency.ps1", "ClosedInventory", "ALPHA_ART_EVIDENCE_CLOSED_INVENTORY_NEGATIVES_PASS");
     }
 
     [Fact]

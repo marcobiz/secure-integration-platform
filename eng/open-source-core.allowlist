@@ -48,6 +48,7 @@ docs/testing/test-strategy.md
 eng/build.ps1
 eng/Build-AlphaReleaseArtifacts.ps1
 eng/AlphaReleaseContainerArchive.psm1
+eng/AlphaReleaseEvidenceContract.psm1
 eng/CoreExportInventory.psm1
 eng/generate-sbom.ps1
 eng/open-source-core.allowlist
