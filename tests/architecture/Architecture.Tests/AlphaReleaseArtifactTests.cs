@@ -265,6 +265,7 @@ public sealed class AlphaReleaseArtifactTests
             RedirectStandardError = true,
             CreateNoWindow = true,
         };
+        if (OperatingSystem.IsWindows()) startInfo.Environment.Remove("PSModulePath");
         startInfo.ArgumentList.Add("-NoLogo");
         startInfo.ArgumentList.Add("-NoProfile");
         startInfo.ArgumentList.Add("-NonInteractive");
@@ -301,6 +302,7 @@ public sealed class AlphaReleaseArtifactTests
             RedirectStandardError = true,
             CreateNoWindow = true,
         };
+        if (OperatingSystem.IsWindows()) startInfo.Environment.Remove("PSModulePath");
         startInfo.ArgumentList.Add("-NoLogo");
         startInfo.ArgumentList.Add("-NoProfile");
         startInfo.ArgumentList.Add("-NonInteractive");
