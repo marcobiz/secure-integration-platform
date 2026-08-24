@@ -68,7 +68,7 @@ public sealed class AdminPaginationTests
         AssertPage(await connectors.ListBindingsPageAsync(validated.Id, 100, 1, environmentId, TestContext.Current.CancellationToken), 100);
 
         InMemoryAdminSecurityStore security = new();
-        AdminPrincipalRecord principal = await security.EnsurePrincipalAsync(new("https://issuer.example.invalid", "paged", "Paged", null), TestContext.Current.CancellationToken);
+        AdminPrincipalRecord principal = await security.EnsurePrincipalAsync(new("https://issuer.example.test", "paged", "Paged", null), TestContext.Current.CancellationToken);
         for (int index = 0; index < 101; index++)
         {
             await security.AssignRoleAsync(principal.Id, AdminRole.Viewer, Guid.NewGuid(), principal.Id, Guid.NewGuid(), Now.AddSeconds(index), TestContext.Current.CancellationToken);

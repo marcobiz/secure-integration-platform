@@ -1,17 +1,13 @@
 # Security policy
 
-## Private reporting
+## Private vulnerability reporting
 
-Do not open public issues containing exploitable vulnerabilities, secrets or personal data. Use GitHub Private Vulnerability Reporting / Security Advisories for this repository. The future public contact is currently `SECURITY-CONTACT-PENDING` and must be replaced before publication. Never paste tokens or sensitive evidence into an issue, PR or chat.
+Report a suspected vulnerability privately to [supporto@apocert.it](mailto:supporto@apocert.it). Use a subject that identifies Secure Integration Platform and that the message is a security report. Do not open a public issue for an exploitable vulnerability and never place a secret in an issue, pull request, discussion, or chat.
 
-## Supported versions and response targets
+A useful report contains the affected version or commit, affected component, prerequisites, impact, minimal reproduction steps using synthetic data, and any suggested mitigation. Redact tokens, cookies, authorization headers, private keys, certificate private material, credentials, sensitive payloads, personal data, host identifiers, and raw evidence. Revoke or rotate exposed credentials before reporting them. Do not attach dumps, EVTX, DPAPI blobs, database exports, or reusable certificates.
 
-During private preview only the latest approved `main` baseline is supported. Older baselines receive fixes only when explicitly declared. Maintainers target acknowledgement within three business days and an initial assessment within ten business days; these are operational targets, not contractual SLAs.
+The support scope is the most recent published technical preview. Older versions are supported only when a release note says so. A technical preview is not production-ready, certified, or covered by an SLA. This policy does not promise acknowledgement, assessment, remediation, disclosure, or publication within a particular time.
 
-## Scope
+Relevant findings include authentication or authorization bypass, Named Pipe or ACL weaknesses, Installation/PoP authentication, tenant/RLS isolation, grant enforcement, SSRF/DNS rebinding, TLS/mTLS, Connector publication/rollback/cache, OIDC/session/CSRF/RBAC/four-eyes controls, redaction, and secret disclosure. Local Administrator and SYSTEM are residual privileged threats and are not claimed to be fully mitigated.
 
-Relevant findings include Named Pipe/ACL bypass, Installation/PoP authentication, tenant isolation/RLS, grants, SSRF/DNS rebinding, TLS/mTLS, Connector publication/rollback/cache, OIDC/session/CSRF/RBAC/four-eyes, redaction and secret disclosure.
-
-Local Administrator and SYSTEM are not considered fully mitigable threats. The Gateway is part of the trusted computing base and temporarily observes credentials required for outbound calls; it must not persist, log or return them.
-
-Do not attach raw evidence, dumps, EVTX, DPAPI blobs, tokens, private keys, cookies, authorization headers or database exports. Use minimal synthetic and redacted reproductions. If a secret is exposed, revoke/rotate it before sharing any report.
+For installation questions, usage questions, or other general support, use the repository's public issue templates only when the content is safe to disclose. The security mailbox is for private security reports, not a promise of general or enterprise support. Conduct reports use the process in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), even though the initial contact address is the same.

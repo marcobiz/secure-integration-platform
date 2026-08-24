@@ -15,7 +15,7 @@
   },
   "endpoints": {
     "primary": {
-      "baseUri": "https://managed-soap.example.invalid",
+      "baseUri": "https://managed-soap.example.test",
       "classification": "publicExternal",
       "allowedPorts": [443],
       "tls": {
@@ -79,4 +79,3 @@
     }
   ]
 }
-

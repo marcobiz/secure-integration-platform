@@ -71,4 +71,4 @@ stato corrente.
 - Ogni requisito di sicurezza deve avere almeno un test e un riferimento nella matrice di tracciabilità.
 - Contratti, esempi e JSON Schema devono evolvere nello stesso change set.
 - Non inserire valori provenienti dalle appendici dei report, certificati reali, token, password, chiavi o dati sanitari/personali.
-- Gli esempi devono usare esclusivamente host riservati (`example.invalid`) e identità sintetiche.
+- Gli esempi devono usare esclusivamente host riservati (`example.test`) e identità sintetiche.

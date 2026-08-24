@@ -5,6 +5,7 @@
     <RootNamespace>SecureIntegration.Broker.Sdk</RootNamespace>
     <IsPackable>true</IsPackable>
     <PackageId>SecureIntegration.Broker.Sdk</PackageId>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);IncludePrivateProjectReferenceAssemblies</TargetsForTfmSpecificBuildOutput>
   </PropertyGroup>
   <ItemGroup>
@@ -14,6 +15,10 @@
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
     <PackageReference Include="System.Text.Json" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="../../../LICENSE-APACHE-2.0" Pack="true" PackagePath="" />
+    <None Include="../../../NOTICE" Pack="true" PackagePath="" />
   </ItemGroup>
   <Target Name="IncludePrivateProjectReferenceAssemblies" DependsOnTargets="BuildOnlySettings;ResolveReferences">
     <ItemGroup>

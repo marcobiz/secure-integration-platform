@@ -5,8 +5,8 @@
     {
       "purpose": "mtls-client-authentication",
       "certificate_reference": "urn:example:certificate:umbria-mtls-auth",
-      "subject": "CN=mtls-client.example.invalid",
-      "issuer": "CN=issuer.example.invalid",
+      "subject": "CN=mtls-client.example.test",
+      "issuer": "CN=issuer.example.test",
       "serial_reference": "urn:example:certificate-serial:umbria-mtls-auth",
       "thumbprint_reference": "urn:example:certificate-thumbprint:umbria-mtls-auth",
       "not_before": "2029-01-01T00:00:00Z",
@@ -17,8 +17,8 @@
     {
       "purpose": "jwt-signing",
       "certificate_reference": "urn:example:certificate:umbria-jwt-signing",
-      "subject": "CN=jwt-signer.example.invalid",
-      "issuer": "CN=issuer.example.invalid",
+      "subject": "CN=jwt-signer.example.test",
+      "issuer": "CN=issuer.example.test",
       "serial_reference": "urn:example:certificate-serial:umbria-jwt-signing",
       "thumbprint_reference": "urn:example:certificate-thumbprint:umbria-jwt-signing",
       "not_before": "2029-01-01T00:00:00Z",

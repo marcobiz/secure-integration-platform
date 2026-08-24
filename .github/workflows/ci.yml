@@ -12,6 +12,28 @@ env:
   CANDIDATE_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
+  governance:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ env.CANDIDATE_COMMIT_SHA }}
+      - name: Validate path-based licensing policy
+        shell: pwsh
+        run: |
+          ./eng/Test-LicensePolicy.Tests.ps1
+          ./eng/Test-LicensePolicy.ps1
+      - name: Test DCO gate behavior
+        shell: pwsh
+        run: ./eng/Test-DcoSignoff.Tests.ps1
+      - name: Validate DCO sign-offs for pull request commits
+        if: github.event_name == 'pull_request'
+        shell: pwsh
+        run: ./eng/Test-DcoSignoff.ps1 -BaseCommit '${{ github.event.pull_request.base.sha }}' -HeadCommit '${{ github.event.pull_request.head.sha }}'
+
   build-test:
     strategy:
       matrix:

@@ -89,7 +89,7 @@ function Test-SyntheticContent {
         catch {
             Throw-ValidationError "Malformed HTTP URI in $relativePath."
         }
-        if ($uri.Host -ne 'example.invalid') {
+        if ($uri.Host -ne 'example.test') {
             Throw-ValidationError "Non-example HTTP host in $relativePath."
         }
     }
@@ -103,7 +103,7 @@ function Test-SyntheticContent {
 
     $domainMatches = [Text.RegularExpressions.Regex]::Matches($content, '(?i)(?<![A-Za-z0-9-])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![A-Za-z0-9-])')
     foreach ($match in $domainMatches) {
-        if (-not $match.Value.EndsWith('example.invalid', [StringComparison]::OrdinalIgnoreCase)) {
+        if (-not $match.Value.EndsWith('example.test', [StringComparison]::OrdinalIgnoreCase)) {
             Throw-ValidationError "Non-example domain in $relativePath."
         }
     }

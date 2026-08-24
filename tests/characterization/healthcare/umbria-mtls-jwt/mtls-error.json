@@ -4,7 +4,7 @@
   "error_description": "Synthetic client certificate reference is not accepted.",
   "error_reference": "urn:example:error:umbria-mtls-rejected",
   "certificate_reference": "urn:example:certificate:umbria-rejected",
-  "endpoint": "https://example.invalid/healthcare/umbria",
+  "endpoint": "https://example.test/healthcare/umbria",
   "retryable": false,
   "next_action": "select-approved-certificate-reference"
 }

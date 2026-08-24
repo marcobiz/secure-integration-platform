@@ -8,11 +8,15 @@ ARCHITECTURE.md
 CODE_OF_CONDUCT.md
 BrokerGateway.Core.slnx
 CONTRIBUTING.md
+DCO.md
 Directory.Build.props
 Directory.Build.targets
 Directory.Packages.props
 global.json
-LICENSE-PENDING.md
+LICENSE
+LICENSE-APACHE-2.0
+LICENSING.md
+NOTICE
 OPEN_SOURCE_BOUNDARIES.md
 NuGet.config
 README.md
@@ -50,6 +54,7 @@ eng/Build-AlphaReleaseArtifacts.ps1
 eng/AlphaReleaseContainerArchive.psm1
 eng/AlphaReleaseEvidenceContract.psm1
 eng/CoreExportInventory.psm1
+eng/LicensePolicy.psm1
 eng/generate-sbom.ps1
 eng/open-source-core.allowlist
 eng/scan-secrets.ps1
@@ -61,6 +66,10 @@ eng/Test-AlphaReleaseEvidence.ps1
 eng/Test-AlphaReleaseEvidenceConsistency.ps1
 eng/Test-AlphaReleaseSetBijection.ps1
 eng/Test-CoreExportInventoryDeterminism.ps1
+eng/Test-DcoSignoff.ps1
+eng/Test-DcoSignoff.Tests.ps1
+eng/Test-LicensePolicy.ps1
+eng/Test-LicensePolicy.Tests.ps1
 eng/Write-AlphaReleaseEvidence.ps1
 eng/Test-OpenSourceCoreInventory.ps1
 eng/test-m3-operator-handoff.ps1

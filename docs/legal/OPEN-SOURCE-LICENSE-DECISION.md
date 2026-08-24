@@ -1,17 +1,13 @@
-# Open-source license decision — pending
+# Open-source licensing and contribution decision
 
-No final license is granted by this document. Legal and business review is required before public publication.
+Status: **approved inputs implemented in the public-technical-preview candidate; pending independent review and integration**.
 
-| Topic | Apache-2.0 | MPL-2.0 |
-|---|---|---|
-| Commercial adoption | Very permissive; easy vendor embedding | Permissive use, with file-level copyleft |
-| Core modifications | May remain proprietary if notices are preserved | Modified MPL-covered files must remain available under MPL |
-| Proprietary modules/packs | Straightforward separation | Allowed when kept in separate files/modules |
-| Patent grant | Explicit contributor patent grant and termination | Explicit patent grant and defensive termination |
-| Upstream incentive | Social/process incentive | Stronger requirement to publish changes to covered files |
-| Proprietary fork risk | Higher | Lower for modifications to Core files |
-| Adoption friction | Lowest | Moderate review needed for file boundaries |
+The project-authored repository default is Mozilla Public License 2.0. The .NET SDK, reusable contracts/protocol surfaces, samples, and explicitly enumerated synthetic implementations use Apache License 2.0. Generic reference Connector/configuration examples use the exact dual-license expression `MPL-2.0 OR Apache-2.0`. The authoritative precedence and exact paths are in [`LICENSING.md`](../../LICENSING.md).
 
-Both choices allow proprietary healthcare connectors, deployment packs and legacy adapters when they are physically separate. Dependency inventory currently includes permissive licenses and MPL-2.0 development/runtime tooling; neither candidate is inherently blocked by the inspected dependency set.
+Copyright holder and year: **ApoCert S.r.l., 2026**. Inbound contributions use Developer Certificate of Origin 1.1 with commit sign-off. No Contributor License Agreement is required.
 
-Technical recommendation: **MPL-2.0** if the business priority is keeping fixes to Core files available while selling separate packs; **Apache-2.0** if frictionless platform/vendor adoption is the overriding priority. The current architectural separation makes either viable. Final choice, notice policy, inbound contribution model (DCO versus CLA) and trademark policy remain explicitly open for legal/business approval.
+The current FSE2 reference, local PKCS#12 deployment pack, and Azure deployment pack are `MPL-2.0`. Their optional placement does not change Core dependency direction or create a production qualification. Future customer-specific packs may be governed commercially or contractually in separate private repositories; those repositories are absent from this repository and receive no automatic or retroactive grant from it.
+
+The Core source ZIP is an aggregate containing files under both licenses and is therefore described as `MPL-2.0 AND Apache-2.0`. Individual files retain the license assigned by path. Third-party dependencies and attributed texts retain their own licenses and notices.
+
+This decision authorizes candidate implementation of licensing metadata and governance. It does not authorize a merge, tag, GitHub Release, package feed, container registry publication, production claim, trademark grant, or terms for an external repository. `PUBLIC_RELEASE_GO` remains `NO` until independent review, integration, and the later publication gate.

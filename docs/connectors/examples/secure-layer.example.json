@@ -11,7 +11,7 @@
   "plugin": null,
   "endpoints": {
     "primary": {
-      "baseUri": "https://secure-layer.example.invalid",
+      "baseUri": "https://secure-layer.example.test",
       "classification": "publicExternal",
       "allowedPorts": [443],
       "tls": {
@@ -67,4 +67,3 @@
     }
   ]
 }
-

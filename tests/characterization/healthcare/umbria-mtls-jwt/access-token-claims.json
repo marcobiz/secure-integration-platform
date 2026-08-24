@@ -4,7 +4,7 @@
   "generation_policy": "one-pair-per-synthetic-dispatch",
   "profile": "synthetic-access-token",
   "iss": "urn:example:installation:healthcare-001",
-  "aud": "https://example.invalid/healthcare/umbria",
+  "aud": "https://example.test/healthcare/umbria",
   "sub": "urn:example:operator:synthetic-001",
   "jti": "urn:example:jwt-id:umbria-access-001",
   "iat": 1893456000,

@@ -6,7 +6,7 @@ state transitions only. They are not wire-compatible examples and must not be
 used to infer undocumented provider behavior.
 
 All URI-shaped identifiers use `urn:example`; all HTTP hosts use
-`example.invalid`. Authentication material is represented by non-resolvable
+`example.test`. Authentication material is represented by non-resolvable
 references. The corpus intentionally contains no usable credential, compact
 JWT, certificate bytes, or private material.
 

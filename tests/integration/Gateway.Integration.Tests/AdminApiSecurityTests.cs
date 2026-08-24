@@ -406,7 +406,7 @@ public sealed class AdminApiSecurityTests
         string csrf = await LoginAsync(client, "security-admin", TestContext.Current.CancellationToken);
         using HttpRequestMessage request = new(HttpMethod.Post, "/admin/api/v1/role-assignments")
         {
-            Content = JsonContent.Create(new { principal = new { issuer = "https://issuer.example.invalid", subject = "audited-viewer", displayName = "Audited viewer", email = (string?)null }, role = "Viewer", tenantId = (Guid?)null })
+            Content = JsonContent.Create(new { principal = new { issuer = "https://issuer.example.test", subject = "audited-viewer", displayName = "Audited viewer", email = (string?)null }, role = "Viewer", tenantId = (Guid?)null })
         };
         request.Headers.Add("X-CSRF-TOKEN", csrf);
 
@@ -416,7 +416,7 @@ public sealed class AdminApiSecurityTests
         InMemoryGatewayRegistry registry = factory.Services.GetRequiredService<InMemoryGatewayRegistry>();
         GatewayAuditEvent audit = Assert.Single(registry.SnapshotAuditEvents(), value => value.Action == "admin.role.assign" && value.TargetId != value.ActorId);
         Assert.Equal("success", audit.Outcome);
-        Assert.DoesNotContain("issuer.example.invalid", System.Text.Json.JsonSerializer.Serialize(audit), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("issuer.example.test", System.Text.Json.JsonSerializer.Serialize(audit), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

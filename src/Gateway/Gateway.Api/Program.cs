@@ -515,7 +515,7 @@ app.MapPost("/admin/auth/development/login", async (DevelopmentLoginRequest requ
         _ => throw new GatewayException("BGW-ADMIN-DEVELOPMENT-USER", 401)
     };
     const string issuer = "https://development.invalid";
-    AdminPrincipalRecord principal = await securityStore.EnsurePrincipalAsync(new(issuer, user.Subject, user.Subject, user.Subject + "@example.invalid"), cancellationToken).ConfigureAwait(false);
+    AdminPrincipalRecord principal = await securityStore.EnsurePrincipalAsync(new(issuer, user.Subject, user.Subject, user.Subject + "@example.test"), cancellationToken).ConfigureAwait(false);
     if (user.Roles.Contains(AdminRole.SecurityAdministrator)) _ = await securityStore.TryBootstrapSecurityAdministratorAsync(principal.Id, Guid.NewGuid(), DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
     foreach (AdminRole role in user.Roles.Where(role => role != AdminRole.SecurityAdministrator))
         _ = await securityStore.AssignRoleAsync(principal.Id, role, null, principal.Id, Guid.NewGuid(), DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);

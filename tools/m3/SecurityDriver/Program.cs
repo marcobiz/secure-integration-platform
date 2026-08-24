@@ -77,7 +77,7 @@ Result connectorDenied = await SendSignedAsync(authenticated, "not-granted", "su
 Record("M3-N05", connectorDenied.Status is HttpStatusCode.NotFound or HttpStatusCode.Forbidden, connectorDenied.Code);
 Result operationDenied = await SendSignedAsync(authenticated, "m3-vendor", "not-granted", normalBody).ConfigureAwait(false);
 Record("M3-N06", operationDenied.Status is HttpStatusCode.NotFound or HttpStatusCode.Forbidden, operationDenied.Code);
-Result urlOverride = await SendSignedAsync(authenticated, "m3-vendor", "submit", InvokeBody(("url", "https://attacker.example.invalid/"))).ConfigureAwait(false);
+Result urlOverride = await SendSignedAsync(authenticated, "m3-vendor", "submit", InvokeBody(("url", "https://attacker.example.test/"))).ConfigureAwait(false);
 Record("M3-N07", urlOverride.Status == HttpStatusCode.BadRequest && urlOverride.Code == "BGW-PROTOCOL-JSON", urlOverride.Code);
 
 Result loopback = await SendSignedAsync(authenticated, "m3-vendor", "loopback", normalBody).ConfigureAwait(false);

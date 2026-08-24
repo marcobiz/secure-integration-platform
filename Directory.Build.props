@@ -22,9 +22,11 @@
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <DebugType>embedded</DebugType>
-    <RepositoryUrl>https://example.invalid/secure-integration-platform</RepositoryUrl>
-    <PackageLicenseExpression>Proprietary</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/marcobiz/secure-integration-platform</RepositoryUrl>
+    <PackageLicenseExpression>MPL-2.0</PackageLicenseExpression>
     <Authors>Secure Integration Platform Contributors</Authors>
+    <Company>ApoCert S.r.l.</Company>
+    <Copyright>Copyright © 2026 ApoCert S.r.l.</Copyright>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(MSBuildProjectExtension)' == '.csproj'">

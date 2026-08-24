@@ -72,9 +72,9 @@ public sealed class AdminSecurityTests
     public async Task M5_UT_Admin_identity_is_issuer_and_subject_not_email()
     {
         InMemoryAdminSecurityStore store = new();
-        AdminPrincipalRecord first = await store.EnsurePrincipalAsync(new("https://issuer-a.example.invalid", "subject", "First", "same@example.invalid"), TestContext.Current.CancellationToken);
-        AdminPrincipalRecord second = await store.EnsurePrincipalAsync(new("https://issuer-b.example.invalid", "subject", "Second", "same@example.invalid"), TestContext.Current.CancellationToken);
-        AdminPrincipalRecord renamed = await store.EnsurePrincipalAsync(new("https://issuer-a.example.invalid", "subject", "Renamed", "changed@example.invalid"), TestContext.Current.CancellationToken);
+        AdminPrincipalRecord first = await store.EnsurePrincipalAsync(new("https://issuer-a.example.test", "subject", "First", "same@example.test"), TestContext.Current.CancellationToken);
+        AdminPrincipalRecord second = await store.EnsurePrincipalAsync(new("https://issuer-b.example.test", "subject", "Second", "same@example.test"), TestContext.Current.CancellationToken);
+        AdminPrincipalRecord renamed = await store.EnsurePrincipalAsync(new("https://issuer-a.example.test", "subject", "Renamed", "changed@example.test"), TestContext.Current.CancellationToken);
 
         Assert.NotEqual(first.Id, second.Id);
         Assert.Equal(first.Id, renamed.Id);
@@ -200,7 +200,7 @@ public sealed class AdminSecurityTests
     {
         InMemoryAdminSecurityStore security = new();
         InMemoryAdminSessionStore sessions = new(security);
-        AdminExternalIdentity identity = new("https://issuer.example.invalid", "session-user", "Session user", null);
+        AdminExternalIdentity identity = new("https://issuer.example.test", "session-user", "Session user", null);
 
         (string firstHandle, AdminSessionRecord first) = await sessions.CreateAsync(identity, Now, TimeSpan.FromHours(1), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
         (string secondHandle, _) = await sessions.CreateAsync(identity, Now, TimeSpan.FromHours(1), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
@@ -223,7 +223,7 @@ public sealed class AdminSecurityTests
     {
         InMemoryAdminSecurityStore security = new();
         InMemoryAdminSessionStore sessions = new(security);
-        AdminExternalIdentity identity = new("https://issuer.example.invalid", "idle-user", "Idle user", null);
+        AdminExternalIdentity identity = new("https://issuer.example.test", "idle-user", "Idle user", null);
         (string idleHandle, AdminSessionRecord idleSession) = await sessions.CreateAsync(identity, Now, TimeSpan.FromHours(8), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
         Assert.Null(await sessions.ValidateAsync(idleHandle, idleSession.IdleExpiresAt, TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken));
 
@@ -245,7 +245,7 @@ public sealed class AdminSecurityTests
     }
 
     private static Task<AdminPrincipalRecord> PrincipalAsync(InMemoryAdminSecurityStore store, string subject) =>
-        store.EnsurePrincipalAsync(new("https://issuer.example.invalid", subject, subject, subject + "@example.invalid"), TestContext.Current.CancellationToken);
+        store.EnsurePrincipalAsync(new("https://issuer.example.test", subject, subject, subject + "@example.test"), TestContext.Current.CancellationToken);
 
     private static ConnectorVersionRecord Version(Guid editor) => new(
         Guid.NewGuid(), Guid.NewGuid(), "sample", "1.0.0", "1.0", ConnectorVersionState.Validated,
@@ -256,7 +256,7 @@ public sealed class AdminSecurityTests
     private sealed class DisabledSessionStore : IAdminSessionStore
     {
         public Task<(string Handle, AdminSessionRecord Session)> CreateAsync(AdminExternalIdentity identity, DateTimeOffset now, TimeSpan absoluteLifetime, TimeSpan idleLifetime, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<AdminSessionRecord?> ValidateAsync(string handle, DateTimeOffset now, TimeSpan idleLifetime, CancellationToken cancellationToken) => Task.FromResult<AdminSessionRecord?>(new(Guid.NewGuid(), new(Guid.NewGuid(), "https://issuer.example.invalid", "disabled", "disabled", null, false, Now), Now, Now.AddHours(1), Now.AddMinutes(20), Now, null));
+        public Task<AdminSessionRecord?> ValidateAsync(string handle, DateTimeOffset now, TimeSpan idleLifetime, CancellationToken cancellationToken) => Task.FromResult<AdminSessionRecord?>(new(Guid.NewGuid(), new(Guid.NewGuid(), "https://issuer.example.test", "disabled", "disabled", null, false, Now), Now, Now.AddHours(1), Now.AddMinutes(20), Now, null));
         public Task RevokeAsync(string handle, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task RevokePrincipalAsync(Guid principalId, DateTimeOffset now, CancellationToken cancellationToken) => throw new NotSupportedException();
     }

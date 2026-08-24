@@ -920,9 +920,9 @@ public sealed class PostgresIsolationTests
         Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", revokeCorrelation));
 
         PostgresAdminSecurityStore security = new(storePool);
-        AdminPrincipalRecord editor = await security.EnsurePrincipalAsync(new("https://fault.example.invalid", "editor-" + Guid.NewGuid().ToString("N"), "Editor", null), TestContext.Current.CancellationToken);
-        AdminPrincipalRecord approver = await security.EnsurePrincipalAsync(new("https://fault.example.invalid", "approver-" + Guid.NewGuid().ToString("N"), "Approver", null), TestContext.Current.CancellationToken);
-        AdminPrincipalRecord bootstrapPrincipal = await security.EnsurePrincipalAsync(new("https://fault.example.invalid", "bootstrap-" + Guid.NewGuid().ToString("N"), "Bootstrap", null), TestContext.Current.CancellationToken);
+        AdminPrincipalRecord editor = await security.EnsurePrincipalAsync(new("https://fault.example.test", "editor-" + Guid.NewGuid().ToString("N"), "Editor", null), TestContext.Current.CancellationToken);
+        AdminPrincipalRecord approver = await security.EnsurePrincipalAsync(new("https://fault.example.test", "approver-" + Guid.NewGuid().ToString("N"), "Approver", null), TestContext.Current.CancellationToken);
+        AdminPrincipalRecord bootstrapPrincipal = await security.EnsurePrincipalAsync(new("https://fault.example.test", "bootstrap-" + Guid.NewGuid().ToString("N"), "Bootstrap", null), TestContext.Current.CancellationToken);
         Guid bootstrapCorrelation = Guid.NewGuid();
         PostgresAdminSecurityStore faultedBootstrap = new(storePool, new ThrowingFaultInjector("admin.bootstrap.after-state"));
         await ExecuteNonQueryAsync(migrationConnectionString, "DELETE FROM gateway.admin_bootstrap", TestContext.Current.CancellationToken);
@@ -1048,7 +1048,7 @@ public sealed class PostgresIsolationTests
         PostgresAdminSecurityStore security = new(adminPool);
         PostgresAdminSessionStore sessions = new(adminPool, security);
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        AdminExternalIdentity identity = new("https://session.example.invalid", "session-" + Guid.NewGuid().ToString("N"), "Session test", null);
+        AdminExternalIdentity identity = new("https://session.example.test", "session-" + Guid.NewGuid().ToString("N"), "Session test", null);
 
         (string handle, AdminSessionRecord created) = await sessions.CreateAsync(identity, now, TimeSpan.FromHours(1), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
         string storedDigest = await TextScalarAsync(adminPool.Value, "SELECT encode(handle_sha256,'hex') FROM gateway.admin_session WHERE id=$1", created.Id);

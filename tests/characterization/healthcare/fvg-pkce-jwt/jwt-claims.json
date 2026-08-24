@@ -1,6 +1,6 @@
 {
   "schema": "urn:example:healthcare:fvg-pkce-jwt:claims:v1",
-  "iss": "https://example.invalid/oauth2",
+  "iss": "https://example.test/oauth2",
   "aud": "urn:example:client:fvg-healthcare",
   "sub": "urn:example:operator:synthetic-001",
   "jti": "urn:example:jwt-id:fvg-001",

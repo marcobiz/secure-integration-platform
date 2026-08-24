@@ -3,8 +3,11 @@ info:
   title: Secure Integration Platform Gateway API
   version: 0.1.0-alpha.1
   description: Provider-neutral runtime and same-origin OIDC Admin API.
+  license:
+    name: Apache License 2.0
+    identifier: Apache-2.0
 servers:
-  - url: https://gateway.example.invalid
+  - url: https://localhost:8443
 tags:
   - name: Runtime
   - name: Enrollment

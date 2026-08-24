@@ -16,4 +16,4 @@ The local PKCS#12 pack is an opt-in offline-laboratory provider. Its repository 
 
 `eng/Export-OpenSourceCore.ps1` copies an allowlisted tree to a new temporary directory and rejects raw evidence, private reports, dumps, Event Logs, DPAPI blobs, credentials, private certificates, provider packs and reserved vertical content. It runs secret/boundary/license checks and builds/tests both .NET Core and Admin Web before emitting a SHA-256 manifest. The source repository and history are never rewritten.
 
-The definitive open-source license remains pending; see [the license decision](docs/legal/OPEN-SOURCE-LICENSE-DECISION.md).
+The path-based open-source licensing policy is defined by [LICENSING.md](LICENSING.md) and the [approved decision record](docs/legal/OPEN-SOURCE-LICENSE-DECISION.md). Future customer-specific repositories are external and excluded; this repository does not grant them a license automatically or retroactively.

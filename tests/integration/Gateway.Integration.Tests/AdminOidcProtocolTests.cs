@@ -61,7 +61,7 @@ public sealed class AdminOidcProtocolTests
     {
         await AssertCallbackRejectedAsync(static (factory, state, nonce) => (state + "tampered", nonce));
         await AssertCallbackRejectedAsync(static (factory, state, nonce) => { factory.Backchannel.Nonce = "wrong-nonce"; return (state, nonce); });
-        await AssertCallbackRejectedAsync(static (factory, state, nonce) => { factory.Backchannel.Issuer = "https://wrong-issuer.example.invalid"; return (state, nonce); });
+        await AssertCallbackRejectedAsync(static (factory, state, nonce) => { factory.Backchannel.Issuer = "https://wrong-issuer.example.test"; return (state, nonce); });
     }
 
     private static async Task AssertCallbackRejectedAsync(Func<SyntheticOidcFactory, string, string, (string State, string Nonce)> mutate)
@@ -155,7 +155,7 @@ public sealed class SyntheticOidcPostConfigure(SyntheticOidcBackchannel backchan
 
 public sealed class SyntheticOidcBackchannel : HttpMessageHandler
 {
-    public const string CorrectIssuer = "https://synthetic-oidc.example.invalid";
+    public const string CorrectIssuer = "https://synthetic-oidc.example.test";
     private readonly RSA rsa = RSA.Create(2048);
     public RsaSecurityKey SigningKey { get; }
     public string Issuer { get; set; } = CorrectIssuer;

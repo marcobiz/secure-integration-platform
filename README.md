@@ -57,7 +57,7 @@ Admin Web pins Node/npm and all dependencies in its lockfile; its lint, unit, Pl
 
 No vendor secret passes through legacy software or the Broker; the browser never receives provider secret values or private keys. Endpoints and provider references are resolved server-side. Report vulnerabilities through [SECURITY.md](SECURITY.md), never in a public issue with exploitable details.
 
-The definitive open-source license is still [under legal/business review](docs/legal/OPEN-SOURCE-LICENSE-DECISION.md). Reserved source documents and raw evidence are excluded from the repeatable Core export.
+The repository uses the path-based MPL-2.0/Apache-2.0 model in [LICENSING.md](LICENSING.md), with the approved inputs recorded in the [licensing decision](docs/legal/OPEN-SOURCE-LICENSE-DECISION.md). Independent candidate review and the publication gate remain required. Reserved source documents and raw evidence are excluded from the repeatable Core export.
 
 ## Documentation
 
