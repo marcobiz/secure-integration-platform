@@ -92,7 +92,6 @@ tests/architecture/Architecture.Tests/AlphaReleaseArtifactTests.cs
 tests/architecture/Architecture.Tests/Architecture.Tests.csproj
 tests/architecture/Architecture.Tests/CiSecurityTests.cs
 tests/architecture/Architecture.Tests/ConnectorExecutionSeamBoundaryTests.cs
-tests/architecture/Architecture.Tests/Fixtures/licenza-è.txt
 tests/architecture/Architecture.Tests/HttpOAuthBoundaryTests.cs
 tests/architecture/Architecture.Tests/packages.lock.json
 tests/architecture/Architecture.Tests/ProviderBoundaryTests.cs

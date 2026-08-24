@@ -71,10 +71,55 @@ Assert-ValidatorRejects 'ALPHA_LIC_nul_character_negative' ("sdk/$([char]0)file"
 Assert-ValidatorRejects 'ALPHA_LIC_control_character_negative' ("sdk/$([char]1)file") 'LICENSE_POLICY_PATH_CONTROL_CHARACTER'
 
 $unicodePath = 'tests/architecture/Architecture.Tests/Fixtures/licenza-' + [char]0x00E8 + '.txt'
-$unicodePolicy = Get-RepositoryLicensePolicy -Path $unicodePath -TrackedPathSet $trackedSet
+$unicodeTrackedSet = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+[void]$unicodeTrackedSet.Add($unicodePath)
+$unicodePolicy = Get-RepositoryLicensePolicy -Path $unicodePath -TrackedPathSet $unicodeTrackedSet
 Assert-Equal 'ALPHA_LIC_valid_unicode_path_identity_is_unchanged' ([string]$unicodePolicy.path) $unicodePath
-& $validator -RepositoryRoot $repositoryRoot -AdditionalPathToValidate @($unicodePath) -Json *> $null
-Write-Host 'ALPHA_LIC_valid_unicode_path_full_validator PASS'
+$unicodeTempBase = [IO.Path]::GetTempPath().TrimEnd([IO.Path]::DirectorySeparatorChar)
+$unicodeRoot = Join-Path $unicodeTempBase ('secure-integration-license-unicode-' + [Guid]::NewGuid().ToString('N'))
+try {
+    New-Item -ItemType Directory -Path $unicodeRoot | Out-Null
+    $validatorFixturePaths = @(
+        'LICENSE',
+        'LICENSE-APACHE-2.0',
+        'DCO.md',
+        'LICENSING.md',
+        'Directory.Build.props',
+        'sdk/dotnet/Broker.Sdk/Broker.Sdk.csproj',
+        'src/Shared/SecureIntegration.Contracts/SecureIntegration.Contracts.csproj',
+        'src/Admin/Admin.Web/package.json',
+        'src/Admin/Admin.Web/package-lock.json',
+        'docs/api/gateway-openapi.yaml',
+        'docs/connectors/examples/LICENSE.md',
+        'src/Gateway/Gateway.Api/Dockerfile',
+        'src/Gateway/Gateway.Migrations/Dockerfile',
+        'deploy/release-manifest.template.json',
+        'eng/generate-sbom.ps1'
+    )
+    foreach ($fixturePath in $validatorFixturePaths) {
+        $fixtureDestination = Join-Path $unicodeRoot $fixturePath.Replace('/', [IO.Path]::DirectorySeparatorChar)
+        New-Item -ItemType Directory -Path (Split-Path -Parent $fixtureDestination) -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $repositoryRoot $fixturePath.Replace('/', [IO.Path]::DirectorySeparatorChar)) -Destination $fixtureDestination
+    }
+    $unicodeFullPath = Join-Path $unicodeRoot $unicodePath.Replace('/', [IO.Path]::DirectorySeparatorChar)
+    New-Item -ItemType Directory -Path (Split-Path -Parent $unicodeFullPath) -Force | Out-Null
+    [IO.File]::WriteAllText($unicodeFullPath, 'Unicode Git path identity fixture.', [Text.UTF8Encoding]::new($false))
+    & git -C $unicodeRoot init --quiet
+    if ($LASTEXITCODE -ne 0) { throw 'LICENSE_POLICY_SELF_TEST_UNICODE_GIT_INIT_FAILED' }
+    & git -C $unicodeRoot -c core.autocrlf=false add -- .
+    if ($LASTEXITCODE -ne 0) { throw 'LICENSE_POLICY_SELF_TEST_UNICODE_GIT_ADD_FAILED' }
+    & $validator -RepositoryRoot $unicodeRoot -AdditionalPathToValidate @($unicodePath) -Json *> $null
+    Write-Host 'ALPHA_LIC_valid_unicode_path_full_validator PASS'
+}
+finally {
+    if (Test-Path -LiteralPath $unicodeRoot) {
+        $resolvedUnicodeRoot = [IO.Path]::GetFullPath($unicodeRoot)
+        if (-not $resolvedUnicodeRoot.StartsWith($unicodeTempBase + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'LICENSE_POLICY_SELF_TEST_UNICODE_CLEANUP_TARGET_INVALID'
+        }
+        Remove-Item -LiteralPath $resolvedUnicodeRoot -Recurse -Force
+    }
+}
 
 $ambiguousRejected = $false
 try { Assert-RepositorySpdxExpression 'MPL / Apache' } catch { $ambiguousRejected = $_.Exception.Message -match 'AMBIGUOUS' }
