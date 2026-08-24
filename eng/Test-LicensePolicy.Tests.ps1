@@ -28,14 +28,50 @@ function Assert-ValidatorRejects {
     Write-Host "$Name PASS"
 }
 
-$previousOutputEncoding = [Console]::OutputEncoding
-try {
-    [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
-    $tracked = @(& git -C $repositoryRoot -c core.quotepath=false ls-files)
-    $gitInventoryExitCode = $LASTEXITCODE
+function Get-SelfTestTrackedPathInventory {
+    $gitMetadataPath = Join-Path $repositoryRoot '.git'
+    $insideGitWorktree = $false
+    if (Test-Path -LiteralPath $gitMetadataPath) {
+        $insideGitWorktree = ((& git -C $repositoryRoot rev-parse --is-inside-work-tree | Out-String).Trim() -ceq 'true') -and $LASTEXITCODE -eq 0
+    }
+    if (-not $insideGitWorktree) {
+        $exportManifestPath = Join-Path $repositoryRoot 'OPEN_SOURCE_EXPORT_MANIFEST.json'
+        if (-not (Test-Path -LiteralPath $exportManifestPath -PathType Leaf)) { throw 'LICENSE_POLICY_SELF_TEST_INVENTORY_FAILED' }
+        try { $exportManifest = Get-Content -LiteralPath $exportManifestPath -Raw | ConvertFrom-Json }
+        catch { throw 'LICENSE_POLICY_SELF_TEST_EXPORT_INVENTORY_INVALID' }
+        $exportPaths = @($exportManifest.files | ForEach-Object { [string]$_.path })
+        if ($exportPaths.Count -eq 0 -or [int]$exportManifest.fileCount -ne $exportPaths.Count) {
+            throw 'LICENSE_POLICY_SELF_TEST_EXPORT_INVENTORY_INVALID'
+        }
+        return $exportPaths
+    }
+
+    if ($repositoryRoot.Contains('"')) { throw 'LICENSE_POLICY_SELF_TEST_GIT_INVENTORY_FAILED' }
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'git'
+    $startInfo.Arguments = '-C "' + $repositoryRoot + '" -c core.quotepath=false ls-files -z'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+    $startInfo.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) { throw 'LICENSE_POLICY_SELF_TEST_GIT_INVENTORY_FAILED' }
+        $rawInventory = $process.StandardOutput.ReadToEnd()
+        [void]$process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) { throw 'LICENSE_POLICY_SELF_TEST_GIT_INVENTORY_FAILED' }
+        $gitPaths = @($rawInventory.Split([char[]]@([char]0), [StringSplitOptions]::RemoveEmptyEntries))
+        if ($gitPaths.Count -eq 0) { throw 'LICENSE_POLICY_SELF_TEST_GIT_INVENTORY_FAILED' }
+        return $gitPaths
+    }
+    finally { $process.Dispose() }
 }
-finally { [Console]::OutputEncoding = $previousOutputEncoding }
-if ($gitInventoryExitCode -ne 0 -or $tracked.Count -eq 0) { throw 'LICENSE_POLICY_SELF_TEST_GIT_INVENTORY_FAILED' }
+
+$tracked = @(Get-SelfTestTrackedPathInventory)
 $trackedSet = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
 foreach ($path in $tracked) {
     if (-not $trackedSet.Add($path)) { throw 'LICENSE_POLICY_SELF_TEST_DUPLICATE_INVENTORY' }
