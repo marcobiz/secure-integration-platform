@@ -10,33 +10,54 @@ $script:ApacheExactPaths = @(
     'docs/connectors/connector-specification.md'
 )
 
-function ConvertTo-LicensePolicyPath {
-    param([Parameter(Mandatory = $true)][string] $Path)
-    $normalized = $Path.Replace('\', '/').TrimStart('./')
-    if ([string]::IsNullOrWhiteSpace($normalized) -or $normalized.Contains('//') -or $normalized.StartsWith('../', [StringComparison]::Ordinal)) {
-        throw "LICENSE_POLICY_PATH_INVALID: $Path"
+function Assert-LicensePolicyGitPathIdentity {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $Path,
+        [Parameter(Mandatory = $true)][Collections.Generic.HashSet[string]] $TrackedPathSet
+    )
+
+    if ([string]::IsNullOrEmpty($Path)) { throw 'LICENSE_POLICY_PATH_EMPTY' }
+    foreach ($character in $Path.ToCharArray()) {
+        if ([char]::IsControl($character)) { throw 'LICENSE_POLICY_PATH_CONTROL_CHARACTER' }
     }
-    return $normalized
+    if ($Path.StartsWith('/', [StringComparison]::Ordinal) -or $Path.StartsWith('\', [StringComparison]::Ordinal)) {
+        throw 'LICENSE_POLICY_PATH_ROOTED'
+    }
+    if ($Path -cmatch '^[A-Za-z]:') { throw 'LICENSE_POLICY_PATH_DRIVE_QUALIFIED' }
+    if ($Path.Contains('\')) { throw 'LICENSE_POLICY_PATH_BACKSLASH' }
+    if ($Path.Contains(':')) { throw 'LICENSE_POLICY_PATH_ADS_OR_COLON' }
+    if ($Path.EndsWith('/', [StringComparison]::Ordinal)) { throw 'LICENSE_POLICY_PATH_TRAILING_SLASH' }
+    if ($Path.Contains('//')) { throw 'LICENSE_POLICY_PATH_EMPTY_SEGMENT' }
+    foreach ($segment in $Path.Split('/')) {
+        if ($segment -ceq '.' -or $segment -ceq '..') { throw 'LICENSE_POLICY_PATH_TRAVERSAL_SEGMENT' }
+    }
+    if (-not $TrackedPathSet.Contains($Path)) { throw 'LICENSE_POLICY_PATH_NOT_TRACKED' }
 }
 
 function Get-RepositoryLicensePolicy {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][string] $Path)
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string] $Path,
+        [Parameter(Mandatory = $true)][Collections.Generic.HashSet[string]] $TrackedPathSet
+    )
 
-    $normalized = ConvertTo-LicensePolicyPath -Path $Path
-    if ($normalized.StartsWith('docs/connectors/examples/', [StringComparison]::Ordinal)) {
-        return [pscustomobject]@{ path = $normalized; rule = 'generic-reference'; spdxExpression = 'MPL-2.0 OR Apache-2.0'; precedence = 1 }
+    Assert-LicensePolicyGitPathIdentity -Path $Path -TrackedPathSet $TrackedPathSet
+    $explicitMatches = [Collections.Generic.List[object]]::new()
+    if ($Path.StartsWith('docs/connectors/examples/', [StringComparison]::Ordinal)) {
+        $explicitMatches.Add([pscustomobject]@{ path = $Path; rule = 'generic-reference'; spdxExpression = 'MPL-2.0 OR Apache-2.0'; precedence = 1 })
     }
 
-    $apacheSubtree = $normalized.StartsWith('sdk/', [StringComparison]::Ordinal) -or
-        $normalized.StartsWith('src/Shared/SecureIntegration.Contracts/', [StringComparison]::Ordinal) -or
-        $normalized.StartsWith('samples/', [StringComparison]::Ordinal) -or
-        $normalized.StartsWith('src/Providers/Synthetic/', [StringComparison]::Ordinal)
-    if ($apacheSubtree -or $script:ApacheExactPaths -ccontains $normalized) {
-        return [pscustomobject]@{ path = $normalized; rule = 'apache-override'; spdxExpression = 'Apache-2.0'; precedence = 2 }
+    $apacheSubtree = $Path.StartsWith('sdk/', [StringComparison]::Ordinal) -or
+        $Path.StartsWith('src/Shared/SecureIntegration.Contracts/', [StringComparison]::Ordinal) -or
+        $Path.StartsWith('samples/', [StringComparison]::Ordinal) -or
+        $Path.StartsWith('src/Providers/Synthetic/', [StringComparison]::Ordinal)
+    if ($apacheSubtree -or $script:ApacheExactPaths -ccontains $Path) {
+        $explicitMatches.Add([pscustomobject]@{ path = $Path; rule = 'apache-override'; spdxExpression = 'Apache-2.0'; precedence = 2 })
     }
 
-    return [pscustomobject]@{ path = $normalized; rule = 'repository-default'; spdxExpression = 'MPL-2.0'; precedence = 3 }
+    if ($explicitMatches.Count -gt 1) { throw "LICENSE_POLICY_EXPLICIT_RULE_OVERLAP: $Path" }
+    if ($explicitMatches.Count -eq 1) { return $explicitMatches[0] }
+    return [pscustomobject]@{ path = $Path; rule = 'repository-default'; spdxExpression = 'MPL-2.0'; precedence = 3 }
 }
 
 function Assert-RepositorySpdxExpression {

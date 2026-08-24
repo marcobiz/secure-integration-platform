@@ -1,0 +1,1 @@
+Unicode Git path identity fixture for the license-policy validator.

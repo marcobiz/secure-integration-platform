@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string] $RepositoryRoot,
+    [AllowEmptyCollection()][AllowEmptyString()][string[]] $AdditionalPathToValidate = @(),
     [switch] $Json
 )
 
@@ -21,14 +22,38 @@ function Assert-CanonicalSha256 {
     if ($actual -cne $ExpectedSha256) { throw "$FailureCode expected=$ExpectedSha256 actual=$actual" }
 }
 
+function Get-GitTrackedPathInventory {
+    if ($root.Contains('"')) { throw 'LICENSE_POLICY_GIT_INVENTORY_FAILED' }
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = 'git'
+    $startInfo.Arguments = '-C "' + $root + '" -c core.quotepath=false ls-files -z'
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+    $startInfo.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) { throw 'LICENSE_POLICY_GIT_INVENTORY_FAILED' }
+        $rawInventory = $process.StandardOutput.ReadToEnd()
+        [void]$process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) { throw 'LICENSE_POLICY_GIT_INVENTORY_FAILED' }
+        return @($rawInventory.Split([char[]]@([char]0), [StringSplitOptions]::RemoveEmptyEntries))
+    }
+    finally { $process.Dispose() }
+}
+
 $gitMetadataPath = Join-Path $root '.git'
 $insideGitWorktree = $false
 if (Test-Path -LiteralPath $gitMetadataPath) {
     $insideGitWorktree = ((& git -C $root rev-parse --is-inside-work-tree | Out-String).Trim() -ceq 'true') -and $LASTEXITCODE -eq 0
 }
 if ($insideGitWorktree) {
-    $tracked = @(& git -C $root -c core.quotepath=false ls-files)
-    if ($LASTEXITCODE -ne 0 -or $tracked.Count -eq 0) { throw 'LICENSE_POLICY_GIT_INVENTORY_FAILED' }
+    $tracked = @(Get-GitTrackedPathInventory)
+    if ($tracked.Count -eq 0) { throw 'LICENSE_POLICY_GIT_INVENTORY_FAILED' }
 }
 else {
     $exportManifestPath = Join-Path $root 'OPEN_SOURCE_EXPORT_MANIFEST.json'
@@ -39,20 +64,35 @@ else {
     if ($tracked.Count -eq 0 -or [int]$exportManifest.fileCount -ne $tracked.Count) { throw 'LICENSE_POLICY_EXPORT_INVENTORY_INVALID' }
 }
 $trackedSet = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+$duplicatePaths = [Collections.Generic.List[string]]::new()
 $unclassified = [Collections.Generic.List[string]]::new()
-$multiple = [Collections.Generic.List[string]]::new()
+$overlapping = [Collections.Generic.List[string]]::new()
 $classifications = [Collections.Generic.List[object]]::new()
 foreach ($path in $tracked) {
-    if (-not $trackedSet.Add($path)) { $multiple.Add($path); continue }
-    $policy = @(Get-RepositoryLicensePolicy -Path $path)
+    if (-not $trackedSet.Add($path)) { $duplicatePaths.Add($path) }
+}
+if ($duplicatePaths.Count -ne 0) { throw "LICENSE_POLICY_DUPLICATE_INVENTORY_PATHS: $($duplicatePaths -join ', ')" }
+
+foreach ($path in $tracked) {
+    try { $policy = @(Get-RepositoryLicensePolicy -Path $path -TrackedPathSet $trackedSet) }
+    catch {
+        if ($_.Exception.Message -clike 'LICENSE_POLICY_EXPLICIT_RULE_OVERLAP:*') { $overlapping.Add($path); continue }
+        throw
+    }
     if ($policy.Count -eq 0) { $unclassified.Add($path); continue }
-    if ($policy.Count -ne 1) { $multiple.Add($path); continue }
+    if ($policy.Count -ne 1) { $overlapping.Add($path); continue }
     Assert-RepositorySpdxExpression -Expression ([string]$policy[0].spdxExpression)
     $classifications.Add($policy[0])
 }
 if ($unclassified.Count -ne 0) { throw "LICENSE_POLICY_UNCLASSIFIED_PATHS: $($unclassified -join ', ')" }
-if ($multiple.Count -ne 0) { throw "LICENSE_POLICY_MULTIPLE_CLASSIFICATIONS: $($multiple -join ', ')" }
+if ($overlapping.Count -ne 0) { throw "LICENSE_POLICY_EXPLICIT_RULE_OVERLAP: $($overlapping -join ', ')" }
 if ($classifications.Count -ne $tracked.Count) { throw 'LICENSE_POLICY_CLASSIFICATION_CARDINALITY_MISMATCH' }
+
+foreach ($additionalPath in $AdditionalPathToValidate) {
+    $additionalPolicy = @(Get-RepositoryLicensePolicy -Path $additionalPath -TrackedPathSet $trackedSet)
+    if ($additionalPolicy.Count -ne 1) { throw 'LICENSE_POLICY_ADDITIONAL_PATH_CLASSIFICATION_INVALID' }
+    Assert-RepositorySpdxExpression -Expression ([string]$additionalPolicy[0].spdxExpression)
+}
 
 Assert-CanonicalSha256 'LICENSE' '3F3D9E0024B1921B067D6F7F88DEB4A60CBE7A78E76C64E3F1D7FC3B779B9D04' 'LICENSE_POLICY_MPL_TEXT_MISMATCH'
 Assert-CanonicalSha256 'LICENSE-APACHE-2.0' 'CFC7749B96F63BD31C3C42B5C471BF756814053E847C10F3EB003417BC523D30' 'LICENSE_POLICY_APACHE_TEXT_MISMATCH'
@@ -117,7 +157,8 @@ $result = [ordered]@{
     status = 'PASS'
     trackedPathsClassified = $classifications.Count
     unclassifiedPaths = $unclassified.Count
-    multipleClassificationPaths = $multiple.Count
+    overlappingPaths = $overlapping.Count
+    multipleClassificationPaths = $overlapping.Count
     licenseTextsCanonical = 'PASS'
     spdxValidation = 'PASS'
     packageMetadata = 'PASS'
