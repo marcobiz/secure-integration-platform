@@ -31,7 +31,9 @@ if ($productVersion -cne '0.1.0-alpha.1') { throw 'ALPHA_RELEASE_PRODUCT_VERSION
 $templatePath = Join-Path $root 'deploy\release-manifest.template.json'
 $template = Get-Content -LiteralPath $templatePath -Raw | ConvertFrom-Json
 if ([int]$template.schemaVersion -ne 1 -or [string]$template.product -cne 'SecureIntegrationPlatform' -or
-    [string]$template.releaseChannel -cne 'private-preview') { throw 'ALPHA_RELEASE_MANIFEST_TEMPLATE_INVALID' }
+    [string]$template.releaseChannel -cne 'public-technical-preview' -or
+    [string]$template.releaseClass -cne 'PUBLIC TECHNICAL PREVIEW' -or
+    [string]$template.licensePolicy.coreSourceArchive -cne 'MPL-2.0 AND Apache-2.0') { throw 'ALPHA_RELEASE_MANIFEST_TEMPLATE_INVALID' }
 $repositoryDotNet = Join-Path $root '.dotnet\dotnet.exe'
 $dotnet = if (-not [string]::IsNullOrWhiteSpace($DotNetPath)) { [IO.Path]::GetFullPath($DotNetPath) }
     elseif (Test-Path -LiteralPath $repositoryDotNet -PathType Leaf) { $repositoryDotNet }
@@ -96,7 +98,7 @@ try {
     Invoke-Checked -File $dotnet -Arguments @(
         'pack', $sdkProject, '--configuration', 'Release', '--no-restore', '--output', $artifactsDirectory,
         '/p:ContinuousIntegrationBuild=true', ('/p:PathMap=' + $root + '=/_/src'),
-        '/p:NoWarn=NU5124', '/p:AlphaReleasePack=true') -FailureCode 'ALPHA_RELEASE_SDK_PACK_FAILED'
+        '/p:AlphaReleasePack=true') -FailureCode 'ALPHA_RELEASE_SDK_PACK_FAILED'
     $packages = @(Get-ChildItem -LiteralPath $artifactsDirectory -File -Filter '*.nupkg')
     if ($packages.Count -ne 1 -or $packages[0].Name -cne "SecureIntegration.Broker.Sdk.$productVersion.nupkg") {
         throw 'ALPHA_RELEASE_NUGET_INVENTORY_INVALID'
@@ -109,8 +111,15 @@ try {
         Invoke-Checked -File 'npm' -Arguments @('run', 'build') -FailureCode 'ALPHA_RELEASE_ADMIN_BUILD_FAILED'
     }
     finally { Pop-Location }
+    $adminStage = Join-Path $workDirectory 'admin-web'
+    New-Item -ItemType Directory -Path $adminStage | Out-Null
+    foreach ($child in Get-ChildItem -LiteralPath (Join-Path $adminRoot 'dist') -Force) {
+        Copy-Item -LiteralPath $child.FullName -Destination $adminStage -Recurse
+    }
+    Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $adminStage 'LICENSE')
+    Copy-Item -LiteralPath (Join-Path $root 'NOTICE') -Destination (Join-Path $adminStage 'NOTICE')
     $adminArchive = Join-Path $artifactsDirectory "admin-web-$productVersion.zip"
-    Compress-DirectoryContents -SourceDirectory (Join-Path $adminRoot 'dist') -DestinationArchive $adminArchive
+    Compress-DirectoryContents -SourceDirectory $adminStage -DestinationArchive $adminArchive
 
     $coreExportDirectory = Join-Path $workDirectory 'core-export'
     & (Join-Path $PSScriptRoot 'Export-OpenSourceCore.ps1') -OutputDirectory $coreExportDirectory -SkipVerification
@@ -157,7 +166,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'ALPHA_RELEASE_MIGRATIONS_IMAGE_INSPECT_FAILED' }
     foreach ($inspect in @($gatewayInspect, $migrationsInspect)) {
         if ([string]$inspect.Config.Labels.'org.opencontainers.image.version' -cne $productVersion -or
-            [string]$inspect.Config.Labels.'org.opencontainers.image.revision' -cne $sourceCommit) {
+            [string]$inspect.Config.Labels.'org.opencontainers.image.revision' -cne $sourceCommit -or
+            [string]$inspect.Config.Labels.'org.opencontainers.image.source' -cne 'https://github.com/marcobiz/secure-integration-platform' -or
+            [string]$inspect.Config.Labels.'org.opencontainers.image.vendor' -cne 'ApoCert S.r.l.' -or
+            [string]$inspect.Config.Labels.'org.opencontainers.image.licenses' -cne 'MPL-2.0') {
             throw 'ALPHA_RELEASE_OCI_LABEL_MISMATCH'
         }
         if ([string]::IsNullOrWhiteSpace([string]$inspect.Config.User) -or [string]$inspect.Config.User -ceq '0' -or [string]$inspect.Config.User -ceq 'root') {
@@ -179,32 +191,45 @@ try {
             elseif ($name.StartsWith('migrations-image-', [StringComparison]::Ordinal)) { 'oci-image-archive' }
             elseif ($name.StartsWith('admin-web-', [StringComparison]::Ordinal)) { 'admin-static-archive' }
             else { 'core-source-archive' }
-        Get-FileRecord -File $artifactByName[$name] -BaseDirectory $output -Kind $kind
+        $record = Get-FileRecord -File $artifactByName[$name] -BaseDirectory $output -Kind $kind
+        $record['licenseExpression'] = if ($kind -ceq 'nuget') { 'Apache-2.0' }
+            elseif ($kind -ceq 'core-source-archive') { 'MPL-2.0 AND Apache-2.0' }
+            else { 'MPL-2.0' }
+        $record
     }
     $sbomFiles = @(Get-ChildItem -LiteralPath $sbomDirectory -File)
     [string[]]$sbomNames = @($sbomFiles.Name)
     [Array]::Sort($sbomNames, [StringComparer]::Ordinal)
     $sbomByName = @{}
     foreach ($file in $sbomFiles) { $sbomByName[$file.Name] = $file }
-    $sbomEntries = foreach ($name in $sbomNames) { Get-FileRecord -File $sbomByName[$name] -BaseDirectory $output -Kind 'spdx-or-aggregate' }
+    $sbomEntries = foreach ($name in $sbomNames) {
+        $record = Get-FileRecord -File $sbomByName[$name] -BaseDirectory $output -Kind 'spdx-or-aggregate'
+        $record['subjectLicenseExpression'] = if ($name -ceq 'sdk-dotnet.spdx.json') { 'Apache-2.0' }
+            elseif ($name -ceq 'aggregate-manifest.json') { 'MPL-2.0 AND Apache-2.0' }
+            else { 'MPL-2.0' }
+        $record
+    }
     $gatewayArtifactFile = 'artifacts/' + [IO.Path]::GetFileName($gatewayImageArchive)
     $migrationsArtifactFile = 'artifacts/' + [IO.Path]::GetFileName($migrationsImageArchive)
     $imageEntries = @(
-        [ordered]@{ role = 'gateway'; reference = $gatewayImage; imageId = [string]$gatewayInspect.Id; versionLabel = $productVersion; revisionLabel = $sourceCommit },
-        [ordered]@{ role = 'migrations'; reference = $migrationsImage; imageId = [string]$migrationsInspect.Id; versionLabel = $productVersion; revisionLabel = $sourceCommit })
+        [ordered]@{ role = 'gateway'; reference = $gatewayImage; imageId = [string]$gatewayInspect.Id; versionLabel = $productVersion; revisionLabel = $sourceCommit; sourceLabel = 'https://github.com/marcobiz/secure-integration-platform'; vendorLabel = 'ApoCert S.r.l.'; titleLabel = 'Secure Integration Platform Gateway'; licenseLabel = 'MPL-2.0' },
+        [ordered]@{ role = 'migrations'; reference = $migrationsImage; imageId = [string]$migrationsInspect.Id; versionLabel = $productVersion; revisionLabel = $sourceCommit; sourceLabel = 'https://github.com/marcobiz/secure-integration-platform'; vendorLabel = 'ApoCert S.r.l.'; titleLabel = 'Secure Integration Platform Migrations'; licenseLabel = 'MPL-2.0' })
     $sbomSubjectEntries = @(
-        [ordered]@{ role = 'gateway'; sbomFile = 'sbom/gateway-container.spdx.json'; artifactFile = $gatewayArtifactFile; imageReference = $gatewayImage; imageId = [string]$gatewayInspect.Id },
-        [ordered]@{ role = 'migrations'; sbomFile = 'sbom/migrations-container.spdx.json'; artifactFile = $migrationsArtifactFile; imageReference = $migrationsImage; imageId = [string]$migrationsInspect.Id })
+        [ordered]@{ role = 'gateway'; sbomFile = 'sbom/gateway-container.spdx.json'; artifactFile = $gatewayArtifactFile; imageReference = $gatewayImage; imageId = [string]$gatewayInspect.Id; licenseExpression = 'MPL-2.0' },
+        [ordered]@{ role = 'migrations'; sbomFile = 'sbom/migrations-container.spdx.json'; artifactFile = $migrationsArtifactFile; imageReference = $migrationsImage; imageId = [string]$migrationsInspect.Id; licenseExpression = 'MPL-2.0' })
 
     $manifest = [ordered]@{
         schemaVersion = 1
         product = 'SecureIntegrationPlatform'
         version = $productVersion
         sourceRevision = $sourceCommit
-        releaseChannel = 'private-preview'
+        releaseChannel = 'public-technical-preview'
+        releaseClass = 'PUBLIC TECHNICAL PREVIEW'
+        distributionTarget = 'GitHub public prerelease v0.1.0-alpha.1'
         generatedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
         claims = [ordered]@{ publicReleaseGo = $false; productionReady = $false }
         versionIdentity = [ordered]@{ productVersion = $productVersion; protocolVersion = '1.0'; canonicalConnectorVersion = '1.0.0'; imageRevision = $sourceCommit; openApiVersion = $productVersion }
+        licensePolicy = [ordered]@{ default = 'MPL-2.0'; sdk = 'Apache-2.0'; contractsProtocol = 'Apache-2.0'; syntheticExamples = 'Apache-2.0'; genericReference = 'MPL-2.0 OR Apache-2.0'; coreSourceArchive = 'MPL-2.0 AND Apache-2.0' }
         coreExport = [ordered]@{ fileCount = $coreFileCount; rawManifestSha256RunSpecific = $coreRawManifestSha256; normalizedInventorySha256 = $coreNormalizedInventorySha256 }
         images = $imageEntries
         artifacts = @($artifactEntries)

@@ -19,8 +19,13 @@ ARG SOURCE_REVISION
 WORKDIR /app
 COPY --from=build /app .
 COPY --from=admin-web /src/src/Admin/Admin.Web/dist ./wwwroot/admin
+COPY LICENSE NOTICE /licenses/
 LABEL org.opencontainers.image.version=$PRODUCT_VERSION \
-      org.opencontainers.image.revision=$SOURCE_REVISION
+      org.opencontainers.image.revision=$SOURCE_REVISION \
+      org.opencontainers.image.source="https://github.com/marcobiz/secure-integration-platform" \
+      org.opencontainers.image.vendor="ApoCert S.r.l." \
+      org.opencontainers.image.title="Secure Integration Platform Gateway" \
+      org.opencontainers.image.licenses="MPL-2.0"
 USER $APP_UID
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080

@@ -3,7 +3,9 @@
   "product": "SecureIntegrationPlatform",
   "version": "0.0.0-replaced-by-pipeline",
   "sourceRevision": "replaced-by-pipeline",
-  "releaseChannel": "private-preview",
+  "releaseChannel": "public-technical-preview",
+  "releaseClass": "PUBLIC TECHNICAL PREVIEW",
+  "distributionTarget": "GitHub public prerelease v0.1.0-alpha.1",
   "generatedAtUtc": "replaced-by-pipeline",
   "claims": {
     "publicReleaseGo": false,
@@ -16,6 +18,14 @@
   },
   "toolchain": {
     "dotnetSdk": "10.0.302"
+  },
+  "licensePolicy": {
+    "default": "MPL-2.0",
+    "sdk": "Apache-2.0",
+    "contractsProtocol": "Apache-2.0",
+    "syntheticExamples": "Apache-2.0",
+    "genericReference": "MPL-2.0 OR Apache-2.0",
+    "coreSourceArchive": "MPL-2.0 AND Apache-2.0"
   },
   "images": [],
   "artifacts": [],

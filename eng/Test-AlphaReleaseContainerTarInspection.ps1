@@ -43,6 +43,10 @@ function New-SyntheticContainerTar {
         Labels = [ordered]@{
             'org.opencontainers.image.version' = $productVersion
             'org.opencontainers.image.revision' = $sourceCommit
+            'org.opencontainers.image.source' = 'https://github.com/marcobiz/secure-integration-platform'
+            'org.opencontainers.image.vendor' = 'ApoCert S.r.l.'
+            'org.opencontainers.image.title' = $(if ($ConfigRole -ceq 'gateway') { 'Secure Integration Platform Gateway' } else { 'Secure Integration Platform Migrations' })
+            'org.opencontainers.image.licenses' = 'MPL-2.0'
         }
     }
     if ($ConfigRole -ceq 'gateway') { $runtimeConfig.Healthcheck = [ordered]@{ Test = @('CMD', 'dotnet', 'SecureIntegration.Gateway.Api.dll', '--health-probe') } }

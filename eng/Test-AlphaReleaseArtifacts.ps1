@@ -88,11 +88,11 @@ function Get-AlphaReleaseProfile {
     $migrationsReference = "secure-integration-migrations:$ProductVersion-$shortCommit"
     return [pscustomobject]@{
         artifacts = @(
-            [pscustomobject]@{ path = "artifacts/SecureIntegration.Broker.Sdk.$ProductVersion.nupkg"; kind = 'nuget' },
-            [pscustomobject]@{ path = "artifacts/admin-web-$ProductVersion.zip"; kind = 'admin-static-archive' },
-            [pscustomobject]@{ path = $gatewayArtifact; kind = 'oci-image-archive' },
-            [pscustomobject]@{ path = $migrationsArtifact; kind = 'oci-image-archive' },
-            [pscustomobject]@{ path = "artifacts/secure-integration-core-$ProductVersion-source.zip"; kind = 'core-source-archive' })
+            [pscustomobject]@{ path = "artifacts/SecureIntegration.Broker.Sdk.$ProductVersion.nupkg"; kind = 'nuget'; licenseExpression = 'Apache-2.0' },
+            [pscustomobject]@{ path = "artifacts/admin-web-$ProductVersion.zip"; kind = 'admin-static-archive'; licenseExpression = 'MPL-2.0' },
+            [pscustomobject]@{ path = $gatewayArtifact; kind = 'oci-image-archive'; licenseExpression = 'MPL-2.0' },
+            [pscustomobject]@{ path = $migrationsArtifact; kind = 'oci-image-archive'; licenseExpression = 'MPL-2.0' },
+            [pscustomobject]@{ path = "artifacts/secure-integration-core-$ProductVersion-source.zip"; kind = 'core-source-archive'; licenseExpression = 'MPL-2.0 AND Apache-2.0' })
         sbomFiles = @(
             'sbom/admin-frontend.spdx.json',
             'sbom/aggregate-manifest.json',
@@ -104,8 +104,8 @@ function Get-AlphaReleaseProfile {
             'sbom/migrations-container.spdx.json',
             'sbom/sdk-dotnet.spdx.json')
         sbomSubjects = @(
-            [pscustomobject]@{ role = 'gateway'; sbomFile = 'sbom/gateway-container.spdx.json'; artifactFile = $gatewayArtifact; imageName = 'secure-integration-gateway'; imageReference = $gatewayReference },
-            [pscustomobject]@{ role = 'migrations'; sbomFile = 'sbom/migrations-container.spdx.json'; artifactFile = $migrationsArtifact; imageName = 'secure-integration-migrations'; imageReference = $migrationsReference })
+            [pscustomobject]@{ role = 'gateway'; sbomFile = 'sbom/gateway-container.spdx.json'; artifactFile = $gatewayArtifact; imageName = 'secure-integration-gateway'; imageReference = $gatewayReference; licenseExpression = 'MPL-2.0' },
+            [pscustomobject]@{ role = 'migrations'; sbomFile = 'sbom/migrations-container.spdx.json'; artifactFile = $migrationsArtifact; imageName = 'secure-integration-migrations'; imageReference = $migrationsReference; licenseExpression = 'MPL-2.0' })
     }
 }
 
@@ -153,6 +153,9 @@ function Assert-AlphaReleaseSetBijection {
         if (-not $expectedArtifacts.ContainsKey($relative)) { throw "ALPHA_ARTIFACT_MANIFEST_ARTIFACT_UNEXPECTED: $relative" }
         $kind = [string](Get-RequiredPropertyValue -Object $entry -Name 'kind' -FailureCode 'ALPHA_ARTIFACT_MANIFEST_ARTIFACT_SHAPE_INVALID')
         if ($kind -cne [string]$expectedArtifacts[$relative].kind) { throw "ALPHA_ARTIFACT_MANIFEST_KIND_MISMATCH: $relative" }
+        if ([string](Get-RequiredPropertyValue -Object $entry -Name 'licenseExpression' -FailureCode 'ALPHA_ARTIFACT_MANIFEST_ARTIFACT_SHAPE_INVALID') -cne [string]$expectedArtifacts[$relative].licenseExpression) {
+            throw "ALPHA_ARTIFACT_MANIFEST_LICENSE_MISMATCH: $relative"
+        }
         [void](Get-RequiredPropertyValue -Object $entry -Name 'bytes' -FailureCode 'ALPHA_ARTIFACT_MANIFEST_ARTIFACT_SHAPE_INVALID')
         [void](Get-RequiredPropertyValue -Object $entry -Name 'sha256' -FailureCode 'ALPHA_ARTIFACT_MANIFEST_ARTIFACT_SHAPE_INVALID')
         $manifestArtifactByPath.Add($relative, $entry)
@@ -228,6 +231,22 @@ function Assert-AlphaReleaseSetBijection {
         if ($declaredBytes -ne $actualSbomFiles[$expected].Length -or ([string]$entry.sha256).ToUpperInvariant() -cne $actualHash) {
             throw "ALPHA_ARTIFACT_SBOM_MANIFEST_FILE_MISMATCH: $expected"
         }
+        $expectedSubjectLicense = if ($expected -ceq 'sbom/sdk-dotnet.spdx.json') { 'Apache-2.0' }
+            elseif ($expected -ceq 'sbom/aggregate-manifest.json') { 'MPL-2.0 AND Apache-2.0' }
+            else { 'MPL-2.0' }
+        if ([string]$entry.subjectLicenseExpression -cne $expectedSubjectLicense) { throw "ALPHA_ARTIFACT_SBOM_MANIFEST_LICENSE_MISMATCH: $expected" }
+        if ($expected -ceq 'sbom/aggregate-manifest.json' -and -not $ReleaseSetOnly -and -not $ContainerBindingOnly) {
+            $aggregateSbom = Get-Content -LiteralPath $actualSbomFiles[$expected].FullName -Raw | ConvertFrom-Json
+            if ([string]$aggregateSbom.aggregateLicenseExpression -cne 'MPL-2.0 AND Apache-2.0') { throw 'ALPHA_ARTIFACT_SBOM_AGGREGATE_LICENSE_MISMATCH' }
+        }
+        elseif ($expected -cne 'sbom/aggregate-manifest.json' -and -not $ReleaseSetOnly -and -not $ContainerBindingOnly) {
+            $spdx = Get-Content -LiteralPath $actualSbomFiles[$expected].FullName -Raw | ConvertFrom-Json
+            $spdxDescribedIds = @($spdx.relationships | Where-Object { [string]$_.relationshipType -ceq 'DESCRIBES' } | ForEach-Object { [string]$_.relatedSpdxElement })
+            $spdxSubjects = @($spdx.packages | Where-Object { $spdxDescribedIds -ccontains [string]$_.SPDXID })
+            if ($spdxSubjects.Count -eq 0 -or @($spdxSubjects | Where-Object { [string]$_.licenseDeclared -cne $expectedSubjectLicense -or [string]$_.licenseConcluded -cne $expectedSubjectLicense }).Count -ne 0) {
+                throw "ALPHA_ARTIFACT_SBOM_SUBJECT_LICENSE_MISMATCH: $expected"
+            }
+        }
     }
 
     $expectedSubjectsByRole = New-Object 'Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
@@ -243,6 +262,10 @@ function Assert-AlphaReleaseSetBijection {
         $imageId = [string](Get-RequiredPropertyValue -Object $image -Name 'imageId' -FailureCode 'ALPHA_ARTIFACT_IMAGE_MANIFEST_INVALID')
         if ($reference -cne [string]$expectedSubject.imageReference -or $imageId -cnotmatch '^sha256:[0-9a-f]{64}$') { throw "ALPHA_ARTIFACT_IMAGE_MANIFEST_MISMATCH: $role" }
         if ([string]$image.versionLabel -cne '0.1.0-alpha.1' -or [string]$image.revisionLabel -cne [string]$Manifest.sourceRevision) { throw "ALPHA_ARTIFACT_IMAGE_MANIFEST_MISMATCH: $role" }
+        $expectedTitle = if ($role -ceq 'gateway') { 'Secure Integration Platform Gateway' } else { 'Secure Integration Platform Migrations' }
+        if ([string]$image.sourceLabel -cne 'https://github.com/marcobiz/secure-integration-platform' -or
+            [string]$image.vendorLabel -cne 'ApoCert S.r.l.' -or [string]$image.titleLabel -cne $expectedTitle -or
+            [string]$image.licenseLabel -cne 'MPL-2.0') { throw "ALPHA_ARTIFACT_IMAGE_LICENSE_MISMATCH: $role" }
         $imagesByRole.Add($role, $image)
     }
     foreach ($role in $expectedSubjectsByRole.Keys) {
@@ -260,7 +283,8 @@ function Assert-AlphaReleaseSetBijection {
         if ([string]$association.sbomFile -cne [string]$expectedSubject.sbomFile -or
             [string]$association.artifactFile -cne [string]$expectedSubject.artifactFile -or
             [string]$association.imageReference -cne [string]$expectedSubject.imageReference -or
-            [string]$association.imageId -cne [string]$image.imageId) {
+            [string]$association.imageId -cne [string]$image.imageId -or
+            [string]$association.licenseExpression -cne [string]$expectedSubject.licenseExpression) {
             throw "ALPHA_ARTIFACT_SBOM_ASSOCIATION_MISMATCH: $role"
         }
         $associationsByRole.Add($role, $association)
@@ -277,7 +301,9 @@ function Assert-AlphaReleaseSetBijection {
         $describedIds = @($document.relationships | Where-Object { [string]$_.spdxElementId -ceq 'SPDXRef-DOCUMENT' -and [string]$_.relationshipType -ceq 'DESCRIBES' } | ForEach-Object { [string]$_.relatedSpdxElement })
         if ($describedIds.Count -ne 1) { throw "ALPHA_ARTIFACT_SBOM_SUBJECT_INVALID: $role" }
         $subjectPackages = @($document.packages | Where-Object { [string]$_.SPDXID -ceq $describedIds[0] })
-        if ($subjectPackages.Count -ne 1 -or [string]$subjectPackages[0].name -cne [string]$expectedSubject.imageName) { throw "ALPHA_ARTIFACT_SBOM_SUBJECT_MISMATCH: $role" }
+        if ($subjectPackages.Count -ne 1 -or [string]$subjectPackages[0].name -cne [string]$expectedSubject.imageName -or
+            [string]$subjectPackages[0].licenseDeclared -cne [string]$expectedSubject.licenseExpression -or
+            [string]$subjectPackages[0].licenseConcluded -cne [string]$expectedSubject.licenseExpression) { throw "ALPHA_ARTIFACT_SBOM_SUBJECT_MISMATCH: $role" }
         $purls = @($subjectPackages[0].externalRefs | Where-Object { [string]$_.referenceCategory -ceq 'PACKAGE-MANAGER' -and [string]$_.referenceType -ceq 'purl' -and [string]$_.referenceLocator -clike 'pkg:oci/*' } | ForEach-Object { [string]$_.referenceLocator })
         if ($purls.Count -ne 1) { throw "ALPHA_ARTIFACT_SBOM_SUBJECT_INVALID: $role" }
         $imageId = [string]$imagesByRole[$role].imageId
@@ -439,6 +465,11 @@ try {
     if ($sourceCommit -cnotmatch '^[0-9a-f]{40}$') { throw 'ALPHA_ARTIFACT_SOURCE_REVISION_INVALID' }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedSourceCommit) -and $sourceCommit -cne $ExpectedSourceCommit) { throw 'ALPHA_ARTIFACT_SOURCE_REVISION_MISMATCH' }
     if ($manifest.claims.publicReleaseGo -ne $false -or $manifest.claims.productionReady -ne $false) { throw 'ALPHA_ARTIFACT_RELEASE_CLAIM_INVALID' }
+    if ([string]$manifest.releaseChannel -cne 'public-technical-preview' -or [string]$manifest.releaseClass -cne 'PUBLIC TECHNICAL PREVIEW' -or
+        [string]$manifest.distributionTarget -cne 'GitHub public prerelease v0.1.0-alpha.1' -or
+        [string]$manifest.licensePolicy.default -cne 'MPL-2.0' -or [string]$manifest.licensePolicy.sdk -cne 'Apache-2.0' -or
+        [string]$manifest.licensePolicy.genericReference -cne 'MPL-2.0 OR Apache-2.0' -or
+        [string]$manifest.licensePolicy.coreSourceArchive -cne 'MPL-2.0 AND Apache-2.0') { throw 'ALPHA_ARTIFACT_RELEASE_LICENSE_POLICY_INVALID' }
     if ([string]$manifest.versionIdentity.protocolVersion -cne '1.0' -or [string]$manifest.versionIdentity.canonicalConnectorVersion -cne '1.0.0' -or
         [string]$manifest.versionIdentity.openApiVersion -cne $productVersion -or [string]$manifest.versionIdentity.imageRevision -cne $sourceCommit) {
         throw 'ALPHA_ARTIFACT_VERSION_IDENTITY_INVALID'
@@ -480,7 +511,7 @@ try {
     if ($package.Count -ne 1 -or $package[0].Name -cne "SecureIntegration.Broker.Sdk.$productVersion.nupkg") { throw 'ALPHA_ARTIFACT_NUGET_INVENTORY_INVALID' }
     [string[]]$packageEntries = @(Get-ZipEntries -ArchivePath $package[0].FullName)
     foreach ($entry in $packageEntries) {
-        if (-not (Test-ArchiveEntryPath -Path $entry) -or $entry -cnotmatch '^(?:_rels/\.rels|\[Content_Types\]\.xml|SecureIntegration\.Broker\.Sdk\.nuspec|package/services/metadata/core-properties/[0-9a-f-]+\.psmdcp|lib/(?:net10\.0|netstandard2\.0)/SecureIntegration\.(?:Broker\.Sdk|Contracts)\.(?:dll|xml))$') {
+        if (-not (Test-ArchiveEntryPath -Path $entry) -or $entry -cnotmatch '^(?:_rels/\.rels|\[Content_Types\]\.xml|SecureIntegration\.Broker\.Sdk\.nuspec|LICENSE-APACHE-2\.0|NOTICE|package/services/metadata/core-properties/[0-9a-f-]+\.psmdcp|lib/(?:net10\.0|netstandard2\.0)/SecureIntegration\.(?:Broker\.Sdk|Contracts)\.(?:dll|xml))$') {
             throw "ALPHA_ARTIFACT_NUGET_CONTENT_NOT_ALLOWLISTED: $entry"
         }
     }
@@ -488,6 +519,9 @@ try {
     [IO.Compression.ZipFile]::ExtractToDirectory($package[0].FullName, $packageExtract)
     [xml]$nuspec = Get-Content -LiteralPath (Join-Path $packageExtract 'SecureIntegration.Broker.Sdk.nuspec') -Raw
     if ([string]$nuspec.package.metadata.version -cne $productVersion) { throw 'ALPHA_ARTIFACT_NUGET_VERSION_MISMATCH' }
+    if ([string]$nuspec.package.metadata.license.type -cne 'expression' -or [string]$nuspec.package.metadata.license.'#text' -cne 'Apache-2.0') { throw 'ALPHA_ARTIFACT_NUGET_LICENSE_MISMATCH' }
+    if ((Get-Sha256Hex -LiteralPath (Join-Path $packageExtract 'LICENSE-APACHE-2.0')) -cne 'CFC7749B96F63BD31C3C42B5C471BF756814053E847C10F3EB003417BC523D30' -or
+        -not (Test-Path -LiteralPath (Join-Path $packageExtract 'NOTICE') -PathType Leaf)) { throw 'ALPHA_ARTIFACT_NUGET_LICENSE_CONTENT_INVALID' }
     [byte[]]$rootBytes = [Text.Encoding]::UTF8.GetBytes($root)
     try {
         foreach ($assembly in Get-ChildItem -LiteralPath (Join-Path $packageExtract 'lib') -Recurse -File -Filter '*.dll') {
@@ -507,6 +541,10 @@ try {
     }
     $coreExtract = Join-Path $testRoot 'core'
     [IO.Compression.ZipFile]::ExtractToDirectory($coreArchive[0].FullName, $coreExtract)
+    if ((Get-Sha256Hex -LiteralPath (Join-Path $coreExtract 'LICENSE')) -cne '3F3D9E0024B1921B067D6F7F88DEB4A60CBE7A78E76C64E3F1D7FC3B779B9D04' -or
+        (Get-Sha256Hex -LiteralPath (Join-Path $coreExtract 'LICENSE-APACHE-2.0')) -cne 'CFC7749B96F63BD31C3C42B5C471BF756814053E847C10F3EB003417BC523D30' -or
+        -not (Test-Path -LiteralPath (Join-Path $coreExtract 'LICENSING.md') -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path $coreExtract 'NOTICE') -PathType Leaf)) { throw 'ALPHA_ARTIFACT_CORE_LICENSE_CONTENT_INVALID' }
     & (Join-Path $coreExtract 'eng\Test-OpenSourceCoreInventory.ps1') -ExportDirectory $coreExtract -ExpectedSourceCommit $sourceCommit *> $null
     & (Join-Path $coreExtract 'eng\scan-secrets.ps1') *> $null
     $coreManifest = Get-Content -LiteralPath (Join-Path $coreExtract 'OPEN_SOURCE_EXPORT_MANIFEST.json') -Raw | ConvertFrom-Json
@@ -524,6 +562,8 @@ try {
     }
     $adminExtract = Join-Path $testRoot 'admin'
     [IO.Compression.ZipFile]::ExtractToDirectory($adminArchive[0].FullName, $adminExtract)
+    if ((Get-Sha256Hex -LiteralPath (Join-Path $adminExtract 'LICENSE')) -cne '3F3D9E0024B1921B067D6F7F88DEB4A60CBE7A78E76C64E3F1D7FC3B779B9D04' -or
+        -not (Test-Path -LiteralPath (Join-Path $adminExtract 'NOTICE') -PathType Leaf)) { throw 'ALPHA_ARTIFACT_ADMIN_LICENSE_CONTENT_INVALID' }
     foreach ($textFile in Get-ChildItem -LiteralPath $adminExtract -Recurse -File | Where-Object { $_.Extension -in '.html', '.js', '.css', '.json', '.svg' }) {
         Assert-NoLocalPathOrSecretText -Text (Get-Content -LiteralPath $textFile.FullName -Raw)
     }
@@ -542,6 +582,9 @@ try {
         $imageUser = [string]$inspect.Config.User
         if ($LASTEXITCODE -ne 0 -or [string]$inspect.Config.Labels.'org.opencontainers.image.version' -cne $productVersion -or
             [string]$inspect.Config.Labels.'org.opencontainers.image.revision' -cne $sourceCommit -or
+            [string]$inspect.Config.Labels.'org.opencontainers.image.source' -cne 'https://github.com/marcobiz/secure-integration-platform' -or
+            [string]$inspect.Config.Labels.'org.opencontainers.image.vendor' -cne 'ApoCert S.r.l.' -or
+            [string]$inspect.Config.Labels.'org.opencontainers.image.licenses' -cne 'MPL-2.0' -or
             [string]$inspect.Id -cne [string]$image.imageId -or [string]::IsNullOrWhiteSpace($imageUser) -or
             $imageUser -in @('0', 'root')) { throw 'ALPHA_ARTIFACT_IMAGE_METADATA_INVALID' }
         $history = (& docker image history --no-trunc --format '{{.CreatedBy}}' ([string]$image.reference) | Out-String)

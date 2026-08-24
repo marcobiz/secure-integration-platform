@@ -44,7 +44,7 @@ function New-ContainerSbom {
         creationInfo = [ordered]@{ created = '2026-01-01T00:00:00Z'; creators = @('Tool: Test-AlphaReleaseEvidenceConsistency.ps1') }
         packages = @([ordered]@{
             SPDXID = 'SPDXRef-DocumentRoot'; name = $Name; versionInfo = $Tag; downloadLocation = 'NOASSERTION'; filesAnalyzed = $false
-            licenseConcluded = 'NOASSERTION'; licenseDeclared = 'NOASSERTION'; copyrightText = 'NOASSERTION'
+            licenseConcluded = 'MPL-2.0'; licenseDeclared = 'MPL-2.0'; copyrightText = 'Copyright 2026 ApoCert S.r.l.'
             externalRefs = @([ordered]@{ referenceCategory = 'PACKAGE-MANAGER'; referenceType = 'purl'; referenceLocator = "pkg:oci/$Name@$ImageId`?repository_url=docker.io&tag=$Tag" })
         })
         relationships = @([ordered]@{ spdxElementId = 'SPDXRef-DOCUMENT'; relationshipType = 'DESCRIBES'; relatedSpdxElement = 'SPDXRef-DocumentRoot' })
@@ -64,11 +64,11 @@ function New-SyntheticReleaseSet {
     $gatewayArtifact = "artifacts/gateway-image-$productVersion-$shortCommit.tar"
     $migrationsArtifact = "artifacts/migrations-image-$productVersion-$shortCommit.tar"
     $artifactDefinitions = @(
-        [pscustomobject]@{ path = "artifacts/SecureIntegration.Broker.Sdk.$productVersion.nupkg"; kind = 'nuget' },
-        [pscustomobject]@{ path = "artifacts/admin-web-$productVersion.zip"; kind = 'admin-static-archive' },
-        [pscustomobject]@{ path = $gatewayArtifact; kind = 'oci-image-archive' },
-        [pscustomobject]@{ path = $migrationsArtifact; kind = 'oci-image-archive' },
-        [pscustomobject]@{ path = "artifacts/secure-integration-core-$productVersion-source.zip"; kind = 'core-source-archive' })
+        [pscustomobject]@{ path = "artifacts/SecureIntegration.Broker.Sdk.$productVersion.nupkg"; kind = 'nuget'; licenseExpression = 'Apache-2.0' },
+        [pscustomobject]@{ path = "artifacts/admin-web-$productVersion.zip"; kind = 'admin-static-archive'; licenseExpression = 'MPL-2.0' },
+        [pscustomobject]@{ path = $gatewayArtifact; kind = 'oci-image-archive'; licenseExpression = 'MPL-2.0' },
+        [pscustomobject]@{ path = $migrationsArtifact; kind = 'oci-image-archive'; licenseExpression = 'MPL-2.0' },
+        [pscustomobject]@{ path = "artifacts/secure-integration-core-$productVersion-source.zip"; kind = 'core-source-archive'; licenseExpression = 'MPL-2.0 AND Apache-2.0' })
     foreach ($definition in $artifactDefinitions) {
         Write-Utf8NoBom -Path (Join-Path $RunDirectory ([string]$definition.path).Replace('/', '\')) -Value ("evidence-test-artifact:" + [string]$definition.path)
     }
@@ -82,22 +82,23 @@ function New-SyntheticReleaseSet {
     foreach ($name in @('admin-frontend.spdx.json','auth-certificate-signing.spdx.json','broker.spdx.json','connector-cli.spdx.json','gateway.spdx.json','sdk-dotnet.spdx.json')) {
         Write-Utf8NoBom -Path (Join-Path $RunDirectory ('sbom\' + $name)) -Value '{"spdxVersion":"SPDX-2.3","SPDXID":"SPDXRef-DOCUMENT"}'
     }
-    Write-Utf8NoBom -Path (Join-Path $RunDirectory 'sbom\aggregate-manifest.json') -Value '{"schemaVersion":1,"artifacts":[]}'
+    Write-Utf8NoBom -Path (Join-Path $RunDirectory 'sbom\aggregate-manifest.json') -Value '{"schemaVersion":1,"aggregateLicenseExpression":"MPL-2.0 AND Apache-2.0","artifacts":[]}'
 
-    $artifactEntries = @($artifactDefinitions | ForEach-Object { Get-FileRecord -RunDirectory $RunDirectory -RelativePath ([string]$_.path) -Kind ([string]$_.kind) })
-    $sbomEntries = @(Get-ChildItem -LiteralPath (Join-Path $RunDirectory 'sbom') -File | Sort-Object Name | ForEach-Object { Get-FileRecord -RunDirectory $RunDirectory -RelativePath ('sbom/' + $_.Name) -Kind 'spdx-or-aggregate' })
+    $artifactEntries = @($artifactDefinitions | ForEach-Object { $record = Get-FileRecord -RunDirectory $RunDirectory -RelativePath ([string]$_.path) -Kind ([string]$_.kind); $record['licenseExpression'] = [string]$_.licenseExpression; $record })
+    $sbomEntries = @(Get-ChildItem -LiteralPath (Join-Path $RunDirectory 'sbom') -File | Sort-Object Name | ForEach-Object { $record = Get-FileRecord -RunDirectory $RunDirectory -RelativePath ('sbom/' + $_.Name) -Kind 'spdx-or-aggregate'; $record['subjectLicenseExpression'] = if ($_.Name -ceq 'sdk-dotnet.spdx.json') { 'Apache-2.0' } elseif ($_.Name -ceq 'aggregate-manifest.json') { 'MPL-2.0 AND Apache-2.0' } else { 'MPL-2.0' }; $record })
     $manifest = [ordered]@{
-        schemaVersion = 1; product = 'SecureIntegrationPlatform'; version = $productVersion; sourceRevision = $sourceCommit; releaseChannel = 'private-preview'
+        schemaVersion = 1; product = 'SecureIntegrationPlatform'; version = $productVersion; sourceRevision = $sourceCommit; releaseChannel = 'public-technical-preview'; releaseClass = 'PUBLIC TECHNICAL PREVIEW'; distributionTarget = 'GitHub public prerelease v0.1.0-alpha.1'
         generatedAtUtc = '2026-01-01T00:00:00.0000000+00:00'; claims = [ordered]@{ publicReleaseGo = $false; productionReady = $false }
         versionIdentity = [ordered]@{ productVersion = $productVersion; protocolVersion = '1.0'; canonicalConnectorVersion = '1.0.0'; imageRevision = $sourceCommit; openApiVersion = $productVersion }
+        licensePolicy = [ordered]@{ default = 'MPL-2.0'; sdk = 'Apache-2.0'; contractsProtocol = 'Apache-2.0'; syntheticExamples = 'Apache-2.0'; genericReference = 'MPL-2.0 OR Apache-2.0'; coreSourceArchive = 'MPL-2.0 AND Apache-2.0' }
         coreExport = [ordered]@{ fileCount = 452; rawManifestSha256RunSpecific = 'E' * 64; normalizedInventorySha256 = $normalizedDigest }
         images = @(
-            [ordered]@{ role = 'gateway'; reference = $gatewayReference; imageId = $gatewayImageId; versionLabel = $productVersion; revisionLabel = $sourceCommit },
-            [ordered]@{ role = 'migrations'; reference = $migrationsReference; imageId = $migrationsImageId; versionLabel = $productVersion; revisionLabel = $sourceCommit })
+            [ordered]@{ role = 'gateway'; reference = $gatewayReference; imageId = $gatewayImageId; versionLabel = $productVersion; revisionLabel = $sourceCommit; sourceLabel = 'https://github.com/marcobiz/secure-integration-platform'; vendorLabel = 'ApoCert S.r.l.'; titleLabel = 'Secure Integration Platform Gateway'; licenseLabel = 'MPL-2.0' },
+            [ordered]@{ role = 'migrations'; reference = $migrationsReference; imageId = $migrationsImageId; versionLabel = $productVersion; revisionLabel = $sourceCommit; sourceLabel = 'https://github.com/marcobiz/secure-integration-platform'; vendorLabel = 'ApoCert S.r.l.'; titleLabel = 'Secure Integration Platform Migrations'; licenseLabel = 'MPL-2.0' })
         artifacts = $artifactEntries; sbom = $sbomEntries
         sbomSubjects = @(
-            [ordered]@{ role = 'gateway'; sbomFile = 'sbom/gateway-container.spdx.json'; artifactFile = $gatewayArtifact; imageReference = $gatewayReference; imageId = $gatewayImageId },
-            [ordered]@{ role = 'migrations'; sbomFile = 'sbom/migrations-container.spdx.json'; artifactFile = $migrationsArtifact; imageReference = $migrationsReference; imageId = $migrationsImageId })
+            [ordered]@{ role = 'gateway'; sbomFile = 'sbom/gateway-container.spdx.json'; artifactFile = $gatewayArtifact; imageReference = $gatewayReference; imageId = $gatewayImageId; licenseExpression = 'MPL-2.0' },
+            [ordered]@{ role = 'migrations'; sbomFile = 'sbom/migrations-container.spdx.json'; artifactFile = $migrationsArtifact; imageReference = $migrationsReference; imageId = $migrationsImageId; licenseExpression = 'MPL-2.0' })
         signatures = @(); knownFollowUps = @('NONDETERMINISTIC_UI_MOCK_20_AXE_SNAPSHOT')
     }
     Write-ReleaseManifestAndSidecar -RunDirectory $RunDirectory -Manifest $manifest

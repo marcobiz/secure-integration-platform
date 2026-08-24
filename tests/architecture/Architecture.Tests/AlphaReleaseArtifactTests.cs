@@ -51,6 +51,66 @@ public sealed class AlphaReleaseArtifactTests
     }
 
     [Fact]
+    public void ALPHA_LIC_package_API_and_OCI_metadata_match_the_path_policy()
+    {
+        XDocument props = XDocument.Load(Path.Combine(Root, "Directory.Build.props"));
+        Assert.Equal("MPL-2.0", props.Descendants("PackageLicenseExpression").Single().Value);
+        Assert.Equal("https://github.com/marcobiz/secure-integration-platform", props.Descendants("RepositoryUrl").Single().Value);
+        Assert.Equal("ApoCert S.r.l.", props.Descendants("Company").Single().Value);
+
+        XDocument sdk = XDocument.Load(Path.Combine(Root, "sdk", "dotnet", "Broker.Sdk", "Broker.Sdk.csproj"));
+        XDocument contracts = XDocument.Load(Path.Combine(Root, "src", "Shared", "SecureIntegration.Contracts", "SecureIntegration.Contracts.csproj"));
+        Assert.Equal("Apache-2.0", sdk.Descendants("PackageLicenseExpression").Single().Value);
+        Assert.Equal("Apache-2.0", contracts.Descendants("PackageLicenseExpression").Single().Value);
+
+        using JsonDocument admin = JsonDocument.Parse(File.ReadAllText(Path.Combine(Root, "src", "Admin", "Admin.Web", "package.json")));
+        Assert.Equal("MPL-2.0", admin.RootElement.GetProperty("license").GetString());
+        Assert.Contains("identifier: Apache-2.0", File.ReadAllText(Path.Combine(Root, "docs", "api", "gateway-openapi.yaml")), StringComparison.Ordinal);
+
+        foreach (string relativePath in new[] { "src/Gateway/Gateway.Api/Dockerfile", "src/Gateway/Gateway.Migrations/Dockerfile" })
+        {
+            string dockerfile = File.ReadAllText(Path.Combine(Root, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+            Assert.Contains("org.opencontainers.image.licenses=\"MPL-2.0\"", dockerfile, StringComparison.Ordinal);
+            Assert.Contains("org.opencontainers.image.vendor=\"ApoCert S.r.l.\"", dockerfile, StringComparison.Ordinal);
+            Assert.Contains("COPY LICENSE NOTICE /licenses/", dockerfile, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ALPHA_LIC_five_artifact_license_expressions_are_exact_and_bound_to_release_metadata()
+    {
+        using JsonDocument template = JsonDocument.Parse(File.ReadAllText(Path.Combine(Root, "deploy", "release-manifest.template.json")));
+        JsonElement policy = template.RootElement.GetProperty("licensePolicy");
+        Assert.Equal("public-technical-preview", template.RootElement.GetProperty("releaseChannel").GetString());
+        Assert.Equal("MPL-2.0", policy.GetProperty("default").GetString());
+        Assert.Equal("Apache-2.0", policy.GetProperty("sdk").GetString());
+        Assert.Equal("MPL-2.0 OR Apache-2.0", policy.GetProperty("genericReference").GetString());
+        Assert.Equal("MPL-2.0 AND Apache-2.0", policy.GetProperty("coreSourceArchive").GetString());
+
+        string writer = File.ReadAllText(Path.Combine(Root, "eng", "Build-AlphaReleaseArtifacts.ps1"));
+        string validator = File.ReadAllText(Path.Combine(Root, "eng", "Test-AlphaReleaseArtifacts.ps1"));
+        Assert.Contains("$record['licenseExpression']", writer, StringComparison.Ordinal);
+        Assert.Contains("ALPHA_ARTIFACT_MANIFEST_LICENSE_MISMATCH", validator, StringComparison.Ordinal);
+        Assert.Contains("ALPHA_ARTIFACT_NUGET_LICENSE_MISMATCH", validator, StringComparison.Ordinal);
+        Assert.Contains("ALPHA_ARTIFACT_CORE_LICENSE_CONTENT_INVALID", validator, StringComparison.Ordinal);
+        Assert.Contains("ALPHA_ARTIFACT_ADMIN_LICENSE_CONTENT_INVALID", validator, StringComparison.Ordinal);
+        Assert.Contains("ALPHA_ARTIFACT_SBOM_SUBJECT_LICENSE_MISMATCH", validator, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ALPHA_LIC_all_tracked_paths_canonical_texts_and_publishable_placeholders_pass_the_gate()
+    {
+        AssertPowerShellScriptPass("eng/Test-LicensePolicy.Tests.ps1", "ALPHA_LIC_license_policy_self_tests PASS");
+        AssertPowerShellScriptPass("eng/Test-LicensePolicy.ps1", "LICENSE_POLICY_PASS");
+    }
+
+    [Fact]
+    public void ALPHA_DCO_current_PR_range_gate_has_positive_negative_and_non_retroactive_tests()
+    {
+        AssertPowerShellScriptPass("eng/Test-DcoSignoff.Tests.ps1", "ALPHA_DCO_self_tests PASS");
+    }
+
+    [Fact]
     public void ALPHA_ART_only_the_existing_alpha_SDK_project_is_explicitly_packable()
     {
         string[] packable = Directory.EnumerateFiles(Root, "*.csproj", SearchOption.AllDirectories)
@@ -226,6 +286,40 @@ public sealed class AlphaReleaseArtifactTests
         string stderr = stderrTask.GetAwaiter().GetResult();
         Assert.True(exited, $"PowerShell test timed out: {relativeScript} {testName}");
         Assert.True(process.ExitCode == 0, $"PowerShell test failed: {relativeScript} {testName}; stderr={stderr}");
+        Assert.Contains(expectedMarker, stdout, StringComparison.Ordinal);
+    }
+
+    private static void AssertPowerShellScriptPass(string relativeScript, string expectedMarker)
+    {
+        string host = OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh";
+        ProcessStartInfo startInfo = new()
+        {
+            FileName = host,
+            WorkingDirectory = Root,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("-NoLogo");
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(Path.Combine(Root, relativeScript.Replace('/', Path.DirectorySeparatorChar)));
+
+        using Process process = Process.Start(startInfo) ?? throw new InvalidOperationException("PowerShell test process did not start.");
+        Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+        bool exited = process.WaitForExit(120_000);
+        if (!exited)
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+        }
+        string stdout = stdoutTask.GetAwaiter().GetResult();
+        string stderr = stderrTask.GetAwaiter().GetResult();
+        Assert.True(exited, $"PowerShell test timed out: {relativeScript}");
+        Assert.True(process.ExitCode == 0, $"PowerShell test failed: {relativeScript}; stderr={stderr}");
         Assert.Contains(expectedMarker, stdout, StringComparison.Ordinal);
     }
 
