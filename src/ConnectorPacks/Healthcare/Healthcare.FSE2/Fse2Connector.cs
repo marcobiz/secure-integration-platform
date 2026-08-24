@@ -124,7 +124,7 @@ public sealed class Fse2OrganizationExecutionStrategy(
             execution, profile, inbound, cancellationToken).ConfigureAwait(false);
         byte[] exactOutboundBody = Fse2ExactBodyComposer.Compose(profile, inbound, execution.RequestContentType);
         IReadOnlyDictionary<string, JsonElement> integrityClaims = BuildIntegrityClaims(
-            profile, inbound, security, exactOutboundBody);
+            profile, inbound, security);
 
         _ = await execution.Capabilities.CreateSignedTokenAsync(
             profile.AuthorizationSigningSlot,
@@ -228,8 +228,7 @@ public sealed class Fse2OrganizationExecutionStrategy(
     private static FrozenDictionary<string, JsonElement> BuildIntegrityClaims(
         Fse2PublishedOrganizationProfile profile,
         Fse2InboundPayload inbound,
-        Fse2WorkflowExecutionContext security,
-        ReadOnlyMemory<byte> exactOutboundBody)
+        Fse2WorkflowExecutionContext security)
     {
         Dictionary<string, JsonElement> claims = new(StringComparer.Ordinal)
         {
@@ -248,7 +247,7 @@ public sealed class Fse2OrganizationExecutionStrategy(
         if (security.ClinicalClaims.ResourceHl7Type is not null)
             claims["resource_hl7_type"] = JsonSerializer.SerializeToElement(security.ClinicalClaims.ResourceHl7Type);
         if (profile.Operation.RequiresAttachmentHash)
-            claims["attachment_hash"] = JsonSerializer.SerializeToElement(Fse2Validation.ComputeAttachmentHash(exactOutboundBody));
+            claims["attachment_hash"] = JsonSerializer.SerializeToElement(Fse2Validation.ComputeAttachmentHash(inbound.Document));
         return claims.ToFrozenDictionary(StringComparer.Ordinal);
     }
 

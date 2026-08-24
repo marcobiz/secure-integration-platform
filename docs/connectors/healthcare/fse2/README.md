@@ -48,8 +48,9 @@ restricted-egress, redirect, timeout, and response-bound authority.
 
 `bodyMode: none` creates no `HttpContent`, body bytes, or `Content-Type` on DELETE and status GET.
 Payload operations use REQUIRED; omitting `bodyMode` retains Core's historical REQUIRED default.
-For document operations the pack creates one deterministic multipart byte sequence. The same bytes
-feed `attachment_hash` and restricted transport without reserialization.
+For document operations the pack creates one deterministic multipart byte sequence for restricted
+transport. Where the frozen operation requires `attachment_hash`, the claim is SHA-256 of the exact
+input file bytes, never of the multipart HTTP envelope. `validate-cda` does not emit the claim.
 
 ## Exact outbound policy
 

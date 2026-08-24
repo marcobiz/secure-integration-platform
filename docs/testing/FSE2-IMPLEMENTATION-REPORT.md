@@ -57,9 +57,10 @@ Private-key handling, chain construction, leaf-first `x5c`, RS256, provider reso
 transport and the A1 mTLS validator are unchanged.
 
 FSE2 claim composition remains connector-local. The integrity token receives only allowlisted
-business/derived scalar claims. For document operations, the connector composes one immutable,
-deterministic multipart body and computes lowercase SHA-256 over those exact final outbound bytes;
-the same copied byte array is handed to restricted transport without later serialization. The
+business/derived scalar claims. For document operations, the connector snapshots the exact input
+file bytes, derives `attachment_hash` from those bytes only where the frozen operation requires it,
+and separately composes one immutable deterministic multipart body for restricted transport.
+`validate-cda` does not emit `attachment_hash`. The
 frozen eleven-operation inventory is unchanged: nine Production-available operations, two official
 test-only operations, and no speculative FHIR create/replace, callback or consumer surface. All
 eleven use Core `pathTemplate`; DELETE and both status GETs use `bodyMode: none`, producing no
@@ -87,7 +88,8 @@ operations. For every operation it verifies two distinct compact tokens and `jti
 the full expected `x5c` chain, the same signing leaf, distinct `auth:`/`integrity:` issuers, fixed
 organization subject, audience, `iat+exp` without `nbf`, exact Published lifetime,
 DAP/purpose/action, the exact claim set, organization/locality/application and person claims, and
-the SHA-256 of network-observed bytes where required. The matrix observes exactly 11 single
+the SHA-256 of exact input-file bytes where required while explicitly rejecting the multipart
+envelope digest. The matrix observes exactly 11 single
 outbounds. The create operation correlates successfully to both workflow and trace status.
 
 The runtime-only synthetic certificate fixture gives the shared S1 signing identity a critical
