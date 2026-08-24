@@ -167,7 +167,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     }
 
     [Fact]
-    public async Task FSE2_IT_all_11_operations_use_Published_path_templates_and_exact_body_modes()
+    public async Task FSE2_IT_all_11_operations_use_Published_paths_body_modes_and_exact_input_file_hash_contract()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
         TrackingCapabilityProvider provider = new(Provider(material));
@@ -245,7 +245,9 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             Assert.True(observed.DualDistinctTokensObserved);
             Assert.True(observed.ExactJwtPolicyObserved);
             Assert.True(observed.ExactClaimsObserved);
-            Assert.True(observed.ExactDigestObserved);
+            Assert.True(observed.ExactInputFileDigestObserved);
+            Assert.True(observed.MultipartEnvelopeDigestRejected);
+            Assert.Equal(operation.RequiresAttachmentHash, observed.AttachmentHashPresent);
             if (operation.HasDocument)
             {
                 Assert.Equal($"multipart/form-data; boundary={Boundary}", observed.ContentType);
@@ -421,7 +423,8 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Assert.True(server.FixedSubjectObserved);
         Assert.True(server.OrganizationClaimsObserved);
         Assert.True(server.TemporalPolicyObserved);
-        Assert.True(server.ExactPayloadDigestObserved);
+        Assert.True(server.ExactInputFileDigestObserved);
+        Assert.True(server.MultipartEnvelopeDigestRejected);
         Assert.True(server.ExpectedMultipartPayloadObserved);
         Assert.Equal(2, provider.SignDigestCalls);
         Assert.Equal(1, fixture.GenericTransportRequests);
@@ -796,10 +799,16 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
                 StringComparison.Ordinal);
         bool exactClaims = exactJwtPolicy && AuthorizationClaimsAreExact(authorizationToken!.Payload) &&
             IntegrityClaimsAreExact(integrityToken!.Payload, operation);
-        bool exactDigest = exactClaims && (!operation.RequiresAttachmentHash || string.Equals(
-            integrityToken!.Payload.GetProperty("attachment_hash").GetString(),
-            Convert.ToHexStringLower(SHA256.HashData(body)),
-            StringComparison.Ordinal));
+        JsonElement attachmentHash = default;
+        bool attachmentHashPresent = exactClaims &&
+            integrityToken!.Payload.TryGetProperty("attachment_hash", out attachmentHash);
+        string exactInputFileDigest = Convert.ToHexStringLower(
+            SHA256.HashData(Fse2OrganizationHostedIntegrationTests.DocumentBytes()));
+        string multipartEnvelopeDigest = Convert.ToHexStringLower(SHA256.HashData(body));
+        bool exactInputFileDigestObserved = exactClaims && (!operation.RequiresAttachmentHash || string.Equals(
+            attachmentHash.GetString(), exactInputFileDigest, StringComparison.Ordinal));
+        bool multipartEnvelopeDigestRejected = exactClaims && (!operation.RequiresAttachmentHash || !string.Equals(
+            attachmentHash.GetString(), multipartEnvelopeDigest, StringComparison.Ordinal));
         bool exactDocumentAndJson = body.AsSpan().IndexOf(Fse2OrganizationHostedIntegrationTests.DocumentBytes()) >= 0 &&
             body.AsSpan().IndexOf("{\"metadata\":\"published-exact\"}"u8) >= 0;
         bool hasHttpContent = context.Request.ContentLength.HasValue ||
@@ -818,7 +827,9 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
                 dualDistinct,
                 exactJwtPolicy,
                 exactClaims,
-                exactDigest,
+                attachmentHashPresent,
+                exactInputFileDigestObserved,
+                multipartEnvelopeDigestRejected,
                 exactDocumentAndJson));
         }
 
@@ -920,7 +931,9 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         bool DualDistinctTokensObserved,
         bool ExactJwtPolicyObserved,
         bool ExactClaimsObserved,
-        bool ExactDigestObserved,
+        bool AttachmentHashPresent,
+        bool ExactInputFileDigestObserved,
+        bool MultipartEnvelopeDigestRejected,
         bool ExactDocumentAndJsonObserved);
 
     private sealed record MatrixToken(JsonElement Payload);
@@ -949,7 +962,8 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
     private int fixedSubjectObserved;
     private int organizationClaimsObserved;
     private int temporalPolicyObserved;
-    private int exactPayloadDigestObserved;
+    private int exactInputFileDigestObserved;
+    private int multipartEnvelopeDigestRejected;
     private int expectedMultipartPayloadObserved;
 
     private SyntheticFse2OrganizationServer(
@@ -978,7 +992,8 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
     internal bool FixedSubjectObserved => Volatile.Read(ref fixedSubjectObserved) == 1;
     internal bool OrganizationClaimsObserved => Volatile.Read(ref organizationClaimsObserved) == 1;
     internal bool TemporalPolicyObserved => Volatile.Read(ref temporalPolicyObserved) == 1;
-    internal bool ExactPayloadDigestObserved => Volatile.Read(ref exactPayloadDigestObserved) == 1;
+    internal bool ExactInputFileDigestObserved => Volatile.Read(ref exactInputFileDigestObserved) == 1;
+    internal bool MultipartEnvelopeDigestRejected => Volatile.Read(ref multipartEnvelopeDigestRejected) == 1;
     internal bool ExpectedMultipartPayloadObserved => Volatile.Read(ref expectedMultipartPayloadObserved) == 1;
 
     internal static async Task<SyntheticFse2OrganizationServer> StartAsync(
@@ -1057,9 +1072,14 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
                     Interlocked.Exchange(ref fixedSubjectObserved, 1);
                 if (OrganizationClaimsAreExact(integrity.Payload))
                     Interlocked.Exchange(ref organizationClaimsObserved, 1);
-                string digest = Convert.ToHexStringLower(SHA256.HashData(body));
-                if (string.Equals(integrity.Payload.GetProperty("attachment_hash").GetString(), digest, StringComparison.Ordinal))
-                    Interlocked.Exchange(ref exactPayloadDigestObserved, 1);
+                string exactInputFileDigest = Convert.ToHexStringLower(
+                    SHA256.HashData(Fse2OrganizationHostedIntegrationTests.DocumentBytes()));
+                string multipartEnvelopeDigest = Convert.ToHexStringLower(SHA256.HashData(body));
+                string? attachmentHash = integrity.Payload.GetProperty("attachment_hash").GetString();
+                if (string.Equals(attachmentHash, exactInputFileDigest, StringComparison.Ordinal))
+                    Interlocked.Exchange(ref exactInputFileDigestObserved, 1);
+                if (!string.Equals(attachmentHash, multipartEnvelopeDigest, StringComparison.Ordinal))
+                    Interlocked.Exchange(ref multipartEnvelopeDigestRejected, 1);
             }
         }
 

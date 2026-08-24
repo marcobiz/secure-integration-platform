@@ -246,12 +246,17 @@ public sealed class Fse2FoundationTests
     }
 
     [Fact]
-    public void FSE2_HASH_uses_exact_unmodified_bytes()
+    public void FSE2_HASH_validate_cda_omits_claim_and_publication_uses_exact_input_file_bytes_not_multipart()
     {
         byte[] exact = [0x00, 0x0d, 0x0a, 0xc3, 0xa8, 0xff];
+        byte[] multipartEnvelope = [0x2d, 0x2d, 0x62, 0x0d, 0x0a, .. exact, 0x0d, 0x0a, 0x2d, 0x2d, 0x62, 0x2d, 0x2d];
         Assert.Equal("50f0a4377f9046168548c11702a121faaa42eae07548682170d6e7202eb80124", Fse2Validation.ComputeAttachmentHash(exact));
         Assert.NotEqual(Fse2Validation.ComputeAttachmentHash(exact),
             Fse2Validation.ComputeAttachmentHash(exact.AsMemory(0, exact.Length - 1)));
+        Assert.NotEqual(Fse2Validation.ComputeAttachmentHash(exact), Fse2Validation.ComputeAttachmentHash(multipartEnvelope));
+        Assert.False(Fse2OperationCatalog.Get(Fse2Operation.ValidateCda).RequiresAttachmentHash);
+        Assert.True(Fse2OperationCatalog.Get(Fse2Operation.Create).RequiresAttachmentHash);
+        Assert.True(Fse2OperationCatalog.Get(Fse2Operation.Replace).RequiresAttachmentHash);
     }
 
     [Fact]
