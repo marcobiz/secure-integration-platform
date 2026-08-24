@@ -72,6 +72,7 @@ eng/Test-LicensePolicy.ps1
 eng/Test-LicensePolicy.Tests.ps1
 eng/Write-AlphaReleaseEvidence.ps1
 eng/Test-OpenSourceCoreInventory.ps1
+eng/Test-PostReleaseTruth.ps1
 eng/test-m3-operator-handoff.ps1
 eng/test-m3-split-firewall.ps1
 eng/test-m3-split-network.ps1

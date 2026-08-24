@@ -128,8 +128,14 @@ foreach ($dockerfile in @('src/Gateway/Gateway.Api/Dockerfile', 'src/Gateway/Gat
 }
 
 $releaseTemplate = Get-Content -LiteralPath (Join-Path $root 'deploy/release-manifest.template.json') -Raw | ConvertFrom-Json
-if ([string]$releaseTemplate.releaseChannel -cne 'public-technical-preview' -or [string]$releaseTemplate.licensePolicy.coreSourceArchive -cne 'MPL-2.0 AND Apache-2.0' -or
-    [string]$releaseTemplate.licensePolicy.genericReference -cne 'MPL-2.0 OR Apache-2.0' -or $releaseTemplate.claims.publicReleaseGo -ne $false -or $releaseTemplate.claims.productionReady -ne $false) {
+if ([int]$releaseTemplate.schemaVersion -ne 2 -or [string]$releaseTemplate.releaseChannel -cne 'public-technical-preview' -or
+    [string]$releaseTemplate.licensePolicy.coreSourceArchive -cne 'MPL-2.0 AND Apache-2.0' -or
+    [string]$releaseTemplate.licensePolicy.genericReference -cne 'MPL-2.0 OR Apache-2.0' -or
+    [string]$releaseTemplate.publication.state -cne 'pre-publication-candidate' -or
+    $releaseTemplate.publication.occurred -ne $false -or
+    [string]$releaseTemplate.publication.publicManifestName -cne 'release-manifest.json' -or
+    $releaseTemplate.claims.productionReady -ne $false -or
+    $null -ne $releaseTemplate.claims.PSObject.Properties['publicReleaseGo']) {
     throw 'LICENSE_POLICY_RELEASE_TEMPLATE_INVALID'
 }
 Assert-TextContains 'eng/generate-sbom.ps1' "licenseDeclared=`$LicenseExpression" 'LICENSE_POLICY_SBOM_METADATA_NOT_BOUND'

@@ -81,7 +81,17 @@ public sealed class AlphaReleaseArtifactTests
     {
         using JsonDocument template = JsonDocument.Parse(File.ReadAllText(Path.Combine(Root, "deploy", "release-manifest.template.json")));
         JsonElement policy = template.RootElement.GetProperty("licensePolicy");
+        JsonElement publication = template.RootElement.GetProperty("publication");
+        JsonElement claims = template.RootElement.GetProperty("claims");
+        Assert.Equal(2, template.RootElement.GetProperty("schemaVersion").GetInt32());
         Assert.Equal("public-technical-preview", template.RootElement.GetProperty("releaseChannel").GetString());
+        Assert.Equal("pre-publication-candidate", publication.GetProperty("state").GetString());
+        Assert.False(publication.GetProperty("occurred").GetBoolean());
+        Assert.Equal("release-manifest.json", publication.GetProperty("publicManifestName").GetString());
+        Assert.Equal(2, publication.GetProperty("publicSbomAssets").GetArrayLength());
+        Assert.Equal(9, publication.GetProperty("internalEvidenceSboms").GetArrayLength());
+        Assert.False(claims.TryGetProperty("publicReleaseGo", out _));
+        Assert.False(claims.GetProperty("productionReady").GetBoolean());
         Assert.Equal("MPL-2.0", policy.GetProperty("default").GetString());
         Assert.Equal("Apache-2.0", policy.GetProperty("sdk").GetString());
         Assert.Equal("MPL-2.0 OR Apache-2.0", policy.GetProperty("genericReference").GetString());
@@ -239,6 +249,18 @@ public sealed class AlphaReleaseArtifactTests
     public void ALPHA_ART_release_set_rejects_wrong_or_extra_sbom_association()
     {
         AssertPowerShellTestPass("eng/Test-AlphaReleaseSetBijection.ps1", "SbomWrongExtra", "ALPHA_ART_RELEASE_SET_WRONG_EXTRA_SBOM_NEGATIVES_PASS");
+    }
+
+    [Fact]
+    public void ALPHA_ART_future_publication_contract_rejects_ambiguous_state_and_sbom_inventories()
+    {
+        AssertPowerShellTestPass("eng/Test-AlphaReleaseSetBijection.ps1", "PublicationContract", "ALPHA_ART_FUTURE_PUBLICATION_CONTRACT_NEGATIVES_PASS");
+    }
+
+    [Fact]
+    public void ALPHA_REL_post_release_truth_and_future_publication_contract_are_closed()
+    {
+        AssertPowerShellTestPass("eng/Test-PostReleaseTruth.ps1", "All", "POST_RELEASE_TRUTH_PASS");
     }
 
     [Fact]

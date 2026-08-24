@@ -75,10 +75,10 @@ La slice ALPHA-DOC-01 è Done soltanto se:
 
 ## `0.1.0-alpha` DoD
 
-Si applicano ALPHA-01..08 in
-[`0.1.0-alpha-scope.md`](0.1.0-alpha-scope.md). In sintesi:
+ALPHA-01..08 sono stati applicati alla prerelease pubblicata descritta nelle
+[release notes](../releases/0.1.0-alpha.1.md). In sintesi:
 
-- versione comune `0.1.0-alpha.1`, futuro tag exact commit e artifact/checksum/SPDX coerenti;
+- versione comune `0.1.0-alpha.1`, tag exact commit e artifact/checksum/SPDX coerenti;
 - licenza OSS approvata e canale security/governance minimi operativi;
 - clean clone e quickstart ripetibili;
 - unico golden path supportato: Direct .NET → Gateway → REST Connector Published →
@@ -93,6 +93,28 @@ Si applicano ALPHA-01..08 in
 
 MSI, C ABI/COM, fuzzing, performance, Azure live, FSE2, HA/DR e API stability non
 bloccano l'alpha perché sono fuori scope; non possono essere dichiarati inclusi.
+
+## Publication closure DoD per release future
+
+Per le release successive a `v0.1.0-alpha.1`:
+
+- il manifest candidato dichiara esplicitamente lo stato
+  `pre-publication-candidate`; la pubblicazione è un evento autorizzato separato;
+- `claims.publicReleaseGo` non viene usato per descrivere lo stato successivo
+  all'upload;
+- `publicSbomAssets` e `internalEvidenceSboms` sono inventari distinti e validati;
+- il manifest candidato `manifest.json` è pubblicato con il nome reale
+  `release-manifest.json`, usato anche dalla procedura di verifica;
+- dopo l'upload, manifest, `SHA256SUMS`, SBOM pubblici e asset ausiliari sono chiusi per
+  nome, byte count e SHA-256 mediante sidecar pubblici o publication attestation
+  repository-reviewed;
+- la publication attestation fissa anche tag target, release ID/URL/timestamp ed exact
+  source commit senza path locali, token, account, log o dati sensibili.
+
+Il contratto completo è in
+[`docs/releases/publication-contract.md`](../releases/publication-contract.md). Il
+manifest immutabile della prima alpha conserva l'errata storica
+`claims.publicReleaseGo=false` e non viene ricostruito o sostituito.
 
 ## FSE2 OfficialTest DoD
 

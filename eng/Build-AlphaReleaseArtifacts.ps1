@@ -30,9 +30,12 @@ $productVersion = if ($null -eq $productVersionNode) { '' } else { [string]$prod
 if ($productVersion -cne '0.1.0-alpha.1') { throw 'ALPHA_RELEASE_PRODUCT_VERSION_INVALID' }
 $templatePath = Join-Path $root 'deploy\release-manifest.template.json'
 $template = Get-Content -LiteralPath $templatePath -Raw | ConvertFrom-Json
-if ([int]$template.schemaVersion -ne 1 -or [string]$template.product -cne 'SecureIntegrationPlatform' -or
+if ([int]$template.schemaVersion -ne 2 -or [string]$template.product -cne 'SecureIntegrationPlatform' -or
     [string]$template.releaseChannel -cne 'public-technical-preview' -or
     [string]$template.releaseClass -cne 'PUBLIC TECHNICAL PREVIEW' -or
+    [string]$template.publication.state -cne 'pre-publication-candidate' -or
+    $template.publication.occurred -ne $false -or
+    [string]$template.publication.publicManifestName -cne 'release-manifest.json' -or
     [string]$template.licensePolicy.coreSourceArchive -cne 'MPL-2.0 AND Apache-2.0') { throw 'ALPHA_RELEASE_MANIFEST_TEMPLATE_INVALID' }
 $repositoryDotNet = Join-Path $root '.dotnet\dotnet.exe'
 $dotnet = if (-not [string]::IsNullOrWhiteSpace($DotNetPath)) { [IO.Path]::GetFullPath($DotNetPath) }
@@ -219,7 +222,7 @@ try {
         [ordered]@{ role = 'migrations'; sbomFile = 'sbom/migrations-container.spdx.json'; artifactFile = $migrationsArtifactFile; imageReference = $migrationsImage; imageId = [string]$migrationsInspect.Id; licenseExpression = 'MPL-2.0' })
 
     $manifest = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         product = 'SecureIntegrationPlatform'
         version = $productVersion
         sourceRevision = $sourceCommit
@@ -227,7 +230,17 @@ try {
         releaseClass = 'PUBLIC TECHNICAL PREVIEW'
         distributionTarget = 'GitHub public prerelease v0.1.0-alpha.1'
         generatedAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
-        claims = [ordered]@{ publicReleaseGo = $false; productionReady = $false }
+        publication = [ordered]@{
+            state = 'pre-publication-candidate'
+            occurred = $false
+            candidateManifestName = 'manifest.json'
+            publicManifestName = 'release-manifest.json'
+            checksumsName = 'SHA256SUMS'
+            integrityClosure = 'sidecar-or-publication-attestation-required'
+            publicSbomAssets = @('gateway-container.spdx.json', 'migrations-container.spdx.json')
+            internalEvidenceSboms = @($sbomNames | ForEach-Object { 'sbom/' + $_ })
+        }
+        claims = [ordered]@{ productionReady = $false }
         versionIdentity = [ordered]@{ productVersion = $productVersion; protocolVersion = '1.0'; canonicalConnectorVersion = '1.0.0'; imageRevision = $sourceCommit; openApiVersion = $productVersion }
         licensePolicy = [ordered]@{ default = 'MPL-2.0'; sdk = 'Apache-2.0'; contractsProtocol = 'Apache-2.0'; syntheticExamples = 'Apache-2.0'; genericReference = 'MPL-2.0 OR Apache-2.0'; coreSourceArchive = 'MPL-2.0 AND Apache-2.0' }
         coreExport = [ordered]@{ fileCount = $coreFileCount; rawManifestSha256RunSpecific = $coreRawManifestSha256; normalizedInventorySha256 = $coreNormalizedInventorySha256 }
