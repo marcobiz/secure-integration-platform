@@ -1,31 +1,33 @@
 # Backlog attivo ordinato per dipendenze
 
 Aggiornato: 2026-08-24
-Baseline CURRENT: `97daa565f582d575da5d61665126c50ea52be3ed`
+Baseline CURRENT: `ee3072be5e34a7b0477907a2580dcf454b8a4aba`
 
-Questo backlog contiene soltanto le due track attive. `Todo` non autorizza lavoro fuori
-scope; `BLOCKED_EXTERNAL` non autorizza workaround insicuri. Gate e claim sono definiti
-in [`0.1.0-alpha-scope.md`](0.1.0-alpha-scope.md).
+Questo backlog conserva l'esito chiuso della Core alpha e mantiene una sola track
+corrente: FSE2 Organization OfficialTest. `Todo` non autorizza lavoro fuori scope;
+`BLOCKED_EXTERNAL` non autorizza workaround insicuri. La release pubblicata e i suoi
+limiti sono descritti nelle [release notes](../releases/0.1.0-alpha.1.md) e nella
+[publication attestation](../releases/0.1.0-alpha.1-publication-attestation.json).
 
-## P0 — Core `0.1.0-alpha`
+## Esito chiuso — Core `0.1.0-alpha.1`
 
 | ID | Outcome | Stato | Dipendenza | Gate | Non prova |
 |---|---|---|---|---|---|
-| ALPHA-DOC-01 | Riconciliare governance, scope, backlog e DoD con PR #33 sull'exact main. | In progress | Exact main e dirty truth source preservato | ALPHA-05 | Architettura/security complete, API parity o FSE2 runbook. |
-| ALPHA-DOC-02 | Allineare architecture, security e deployment boundaries, inclusi claim PostgreSQL/audit e traceability pertinenti. | Todo | ALPHA-DOC-01 | ALPHA-04/05 | Modifiche di codice, threat remediation o qualifica production. |
-| ALPHA-DOC-03 | Rendere coerenti OpenAPI, API docs e generated types con le route effettive e i parity test. | Surface sufficient (authorized baseline) | ALPHA-DOC-01 | ALPHA-05 | API stabile o backward compatibility futura. |
-| ALPHA-DOC-04 | Allineare la documentazione FSE2 all'exact main e separare synthetic, OfficialTest e production. | Candidate truth-aligned | ALPHA-DOC-01 e stato PR #33 integrato | ALPHA-05; nessun gate FSE2 | Custody reale, import, call OfficialTest o FSE2-T01..T06 PASS. |
-| ALPHA-VER | Derivare una sola versione `0.1.0-alpha.1` per assembly, package, Admin, OpenAPI, immagini e manifest; nessun default prodotto `1.0.0`. | Closed (candidate) | ALPHA-DOC-01 | ALPHA-06/08 | Pubblicazione o stabilità API. |
-| ALPHA-REST | Consolidare un solo `sample-secure-service` Published con Synthetic Provider, API key+mTLS, mock e tutorial coerente. | Closed (authorized baseline) | ALPHA-DOC-01 | ALPHA-02/03 | Supporto ad altri Connector o provider reali. |
-| ALPHA-CLEAN | Provare clean clone e quickstart unico con cleanup/canary su macchina non preparata. | Closed (authorized baseline) | ALPHA-DOC-01 | ALPHA-01/02 | Installer, Azure live o production operations. |
-| ALPHA-DIRECT | Documentare e provare Direct .NET come evaluation integration, con limite del key storage esplicito. | Closed (authorized baseline) | ALPHA-DOC-01 | ALPHA-03/08 | SDK production-grade o supporto native/COM. |
+| ALPHA-DOC-01 | Riconciliare governance, scope, backlog e DoD con PR #33 sull'exact main. | PASS | Exact main e dirty truth source preservato | ALPHA-05 | Architettura/security complete, API parity o FSE2 runbook. |
+| ALPHA-DOC-02 | Allineare architecture, security e deployment boundaries, inclusi claim PostgreSQL/audit e traceability pertinenti. | PASS | ALPHA-DOC-01 | ALPHA-04/05 | Modifiche di codice, threat remediation o qualifica production. |
+| ALPHA-DOC-03 | Rendere coerenti OpenAPI, API docs e generated types con le route effettive e i parity test. | PASS per la release; follow-up registrato | ALPHA-DOC-01 | ALPHA-05 | API stabile o backward compatibility futura. |
+| ALPHA-DOC-04 | Allineare la documentazione FSE2 all'exact main e separare synthetic, OfficialTest e production. | PASS — truth-only | ALPHA-DOC-01 e stato PR #33 integrato | ALPHA-05; nessun gate FSE2 | Custody reale, import, call OfficialTest o FSE2-T01..T06 PASS. |
+| ALPHA-VER | Derivare una sola versione `0.1.0-alpha.1` per assembly, package, Admin, OpenAPI, immagini e manifest; nessun default prodotto `1.0.0`. | PASS | ALPHA-DOC-01 | ALPHA-06/08 | Stabilità API. |
+| ALPHA-REST | Consolidare un solo `sample-secure-service` Published con Synthetic Provider, API key+mTLS, mock e tutorial coerente. | PASS | ALPHA-DOC-01 | ALPHA-02/03 | Supporto ad altri Connector o provider reali. |
+| ALPHA-CLEAN | Provare clean clone e quickstart unico con cleanup/canary su macchina non preparata. | PASS | ALPHA-DOC-01 | ALPHA-01/02 | Installer, Azure live o production operations. |
+| ALPHA-DIRECT | Documentare e provare Direct .NET come evaluation integration, con limite del key storage esplicito. | PASS | ALPHA-DOC-01 | ALPHA-03/08 | SDK production-grade o supporto native/COM. |
 | ALPHA-ADOPT | Far completare enrollment→publish→grant→invoke a un secondo utilizzatore usando soltanto documentazione pubblica. | PASS — independent adopter simulation | ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN, ALPHA-DOC-02, ALPHA-DOC-03 | ALPHA-03 | Market fit, support SLA o production adoption. |
-| ALPHA-ART | Produrre archive/checksum/SBOM/vulnerability inventory e aggiungere un normalized Core export inventory digest separato dal raw manifest run-specific. | Closed (candidate) | ALPHA-VER | ALPHA-06 | Riproducibilità binaria assoluta, firma release o production provenance. |
-| ALPHA-LIC | Applicare decisione path-based MPL-2.0/Apache-2.0, testi, metadata, artifact binding e validatore. | Candidate implemented, pending independent review/integration | ALPHA-DOC-01; decisione legal/business ricevuta | ALPHA-07 | Publication GO, trademark grant o licenza per repository esterni. |
-| ALPHA-SEC | Applicare security contact, Contributor Covenant 3.0 e DCO 1.1 senza CLA. | Candidate implemented, pending independent review/integration | ALPHA-DOC-01; decisione maintainer/legal ricevuta | ALPHA-07 | Certificazione, SLA o security support enterprise. |
-| ALPHA-REL | Preparare release notes/known limits e rieseguire ALPHA-01..08 sull'exact candidate; tag e pubblicazione richiedono una slice/autorizzazione successiva. | NOT CLOSED | ALPHA-DOC-01, ALPHA-DOC-02, ALPHA-DOC-03, ALPHA-DOC-04 (solo truth alignment), ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN, ALPHA-ADOPT, ALPHA-VER, ALPHA-ART, ALPHA-LIC, ALPHA-SEC | ALPHA-01..08 | Production readiness, FSE2 qualification, tag, publication o merge automatico. |
+| ALPHA-ART | Produrre archive/checksum/SBOM/vulnerability inventory e aggiungere un normalized Core export inventory digest separato dal raw manifest run-specific. | PASS | ALPHA-VER | ALPHA-06 | Riproducibilità binaria assoluta, firma release o production provenance. |
+| ALPHA-LIC | Applicare decisione path-based MPL-2.0/Apache-2.0, testi, metadata, artifact binding e validatore. | PASS | ALPHA-DOC-01; decisione legal/business ricevuta | ALPHA-07 | Trademark grant o licenza per repository esterni. |
+| ALPHA-SEC | Applicare security contact, Contributor Covenant 3.0 e DCO 1.1 senza CLA. | PASS | ALPHA-DOC-01; decisione maintainer/legal ricevuta | ALPHA-07 | Certificazione, SLA o security support enterprise. |
+| ALPHA-REL | Pubblicare tag annotato e GitHub public prerelease sull'exact source commit con release notes e inventario verificabili. | PASS | ALPHA-DOC-01..04, ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN, ALPHA-ADOPT, ALPHA-VER, ALPHA-ART, ALPHA-LIC, ALPHA-SEC | ALPHA-01..08 | Production readiness, FSE2 qualification, NuGet/registry publication o merge automatico. |
 
-`P3-CORE-EXPORT-DIGEST` è **Closed (candidate)**. Il raw SHA del manifest resta evidence
+`P3-CORE-EXPORT-DIGEST` è **PASS per la release**. Il raw SHA del manifest resta evidence
 della singola run perché include `generatedAtUtc`; `normalizedInventorySha256` copre
 separatamente source commit, file count e inventario path/byte/SHA-256 in ordine ordinal,
 con payload canonico UTF-8 senza BOM. Il finding non reinterpreta i raw SHA storici.
@@ -33,13 +35,26 @@ con payload canonico UTF-8 senza BOM. Il finding non reinterpreta i raw SHA stor
 `NONDETERMINISTIC_UI_MOCK_20_AXE_SNAPSHOT` è registrato come follow-up noto non
 bloccante. Questa slice non modifica comportamento UI, CSS o soglie Axe; il solo fixture hostname pubblico è riallineato al dominio riservato `.test`.
 
-DOC-02/03, ALPHA-REST/DIRECT/CLEAN, ALPHA-VER, DOC-04 e i blocker umani possono
-procedere in parallelo dopo DOC-01. DOC-04 è richiesto da ALPHA-REL soltanto per
-descrivere veritieramente il pack opzionale: non richiede `validate-cda` live o
-FSE2-T01..T06. I gate FSE2 non sono dipendenze di ALPHA-REL e un blocker Track B non
-blocca la Core alpha, salvo che riveli un difetto generale di sicurezza del Core.
+La prerelease pubblica contiene nove asset: cinque artefatti prodotto, due SBOM container,
+`release-manifest.json` e `SHA256SUMS`. Il manifest conserva nove record SBOM interni e
+`claims.publicReleaseGo=false`; questo valore è un'errata storica di stato
+pre-pubblicazione, non un finding di integrità. I gate FSE2 non erano dipendenze di
+ALPHA-REL e restano aperti.
 
-## P0 parallelo — FSE2 Organization OfficialTest
+## Follow-up documentali — non implementati in questa PR
+
+| ID | Outcome | Stato | Limite |
+|---|---|---|---|
+| DOC-CONTRACT-ROUTES | Verificare se session-handshake e session-admission siano route pubbliche; se sì, riallineare OpenAPI, runtime e generated types, altrimenti correggerne la classificazione. | Todo | Nessuna modifica OpenAPI/session in questa PR. |
+| DOC-BROKER-CONTRACT | Rimuovere o implementare consapevolmente le quattro operazioni IPC, le extensions e lo streaming dichiarati ma non presenti. | Todo | Nessuna modifica Broker IPC in questa PR. |
+| DOC-CONNECTOR-SPEC | Riallineare capability schema e retry rule all'implementazione. | Todo | Nessuna modifica alla Connector specification in questa PR. |
+
+Il threat model contiene ID duplicati `TM-083`..`TM-086`; la rinumerazione resta un
+follow-up e non viene applicata qui. La distinzione FSE2 tra hash degli exact file bytes e
+hash del multipart è in gestione al writer FSE2; questa PR non modifica documentazione o
+gate FSE2 dettagliati.
+
+## Track corrente — FSE2 Organization OfficialTest
 
 FSE2-PROV e FSE2-PACK non sono più candidate fuori main: PR #33 ha integrato provider
 Local PKCS12, importer, overlay e vertical image e li ha qualificati sinteticamente. Le
@@ -66,7 +81,7 @@ per le sole claim create/status autorizzate.
 
 ## Stop list della fase
 
-Fino alla chiusura dell'alpha e del primo `validate-cda` non si avviano o autorizzano:
+Fino alla chiusura del primo `validate-cda` OfficialTest non si avviano o autorizzano:
 
 - nuove capability Core generiche senza un blocker riproducibile;
 - nuovi Connector verticali;
@@ -80,8 +95,8 @@ Fino alla chiusura dell'alpha e del primo `validate-cda` non si avviano o autori
 - claim production;
 - merge automatici.
 
-I claim esplicitamente non autorizzati sono elencati nello
-[`scope`](0.1.0-alpha-scope.md#claim-non-autorizzati).
+I claim non autorizzati restano quelli esclusi dalle release notes: production readiness,
+FSE2 OfficialTest/production, cloud qualification, SLA, stabilità API, firma e provenance.
 
 ## Deferred fuori dalle track attive
 

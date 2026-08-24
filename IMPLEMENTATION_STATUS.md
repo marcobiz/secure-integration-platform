@@ -1,7 +1,7 @@
 # Implementation dashboard
 
 Aggiornato: 2026-08-24
-Baseline CURRENT: `origin/main` = `97daa565f582d575da5d61665126c50ea52be3ed`
+Baseline CURRENT: `origin/main` = `ee3072be5e34a7b0477907a2580dcf454b8a4aba`
 
 Questo file descrive lo stato integrato corrente. I dettagli storici restano nei tag,
 nei report di test e nelle review già versionate; non vengono ricopiati qui. I termini
@@ -21,15 +21,15 @@ ciò che è ancora da ottenere e l'evidenza immutabile di baseline precedenti.
 | Healthcare — FSE2 Organization | **Synthetic-qualified** | Profilo Organization e 11 operation implementati con dual JWT S1 `contentCommitment` e A1 mTLS distinta; nessuna chiamata FSE2 live. |
 | FSE2 Local PKCS12 e vertical image | **Integrati; synthetic lab qualified** | Provider opzionale, importer offline, overlay Compose e immagine verticale con `Healthcare.FSE2` integrati da PR #33. Il pack dichiara `SecretValues=false`; import/custody reali e OfficialTest restano aperti. |
 | Healthcare — ePrescription regionale | **Foundation soltanto** | Profili regionali `BLOCKED_BY_SPEC`; non pubblicabili. |
-| Productization `0.1.0-alpha.1` | **PUBLIC TECHNICAL PREVIEW governance candidate; non pubblicata** | REST/Direct/clean baseline chiuse e adopter simulation PASS. Licenza path-based, DCO/security/CoC e release metadata sono candidate implementate; review indipendente, integrazione e publication gate restano aperti. |
+| Productization `0.1.0-alpha.1` | **GitHub public prerelease pubblicata** | [Public Technical Preview](https://github.com/marcobiz/secure-integration-platform/releases/tag/v0.1.0-alpha.1) pubblicata dal source commit `ee3072be5e34a7b0477907a2580dcf454b8a4aba`; non equivale a production readiness o qualifica FSE2 OfficialTest. |
 | Produzione enterprise | **Non qualificata** | Azure live, MSI, adapter native/COM, HA/DR, restore/load/soak, pentest, firma artefatti e pilot restano fuori dal CURRENT. |
 
-## Due sole track attive
+## Release Core pubblicata e track corrente
 
-### Track A — Core `0.1.0-alpha.1`
+### Core `0.1.0-alpha.1` — esito pubblicato
 
-TARGET: una developer alpha non-production, provider-neutral, con un solo percorso
-supportato e ripetibile:
+La release pubblicata è una developer alpha non-production, provider-neutral, con un
+solo percorso supportato e ripetibile:
 
 ```text
 Direct .NET
@@ -41,33 +41,38 @@ Direct .NET
 ```
 
 FSE2, MSI, COM/C ABI, Azure live, HA/DR e stabilità API non sono promesse della release.
-Scope e gate ALPHA-01..08 sono in
-[`docs/implementation/0.1.0-alpha-scope.md`](docs/implementation/0.1.0-alpha-scope.md).
+Il resoconto e l'inventario pubblico verificato sono nelle
+[release notes](docs/releases/0.1.0-alpha.1.md) e nella
+[publication attestation](docs/releases/0.1.0-alpha.1-publication-attestation.json).
 
-### Track B — FSE2 Organization OfficialTest
+### Track corrente — FSE2 Organization OfficialTest
 
 TARGET iniziale: `validate-cda` nell'ambiente ufficiale di test, con dataset sintetico
 autorizzato e evidence redatta. Solo dopo si affrontano `attachment_hash` sugli exact
 file bytes, create/replace, status e gli ulteriori workflow autorizzati. Questa track usa
 un pack verticale opzionale e non amplia le dipendenze del Core.
 
-## Candidate ALPHA-GOV-REL
+## Esito ALPHA-GOV-REL
 
-| Slice | Stato candidate | Limite |
+| Slice | Stato | Limite |
 |---|---|---|
-| ALPHA-LIC | **Candidate implemented, pending independent review/integration** | MPL-2.0 default, override Apache-2.0 e dual license `OR` sono path-based e verificati; non è un publication GO. |
-| ALPHA-SEC | **Candidate implemented, pending independent review/integration** | Security contact, Contributor Covenant 3.0 e DCO 1.1 sono configurati; il required-check DCO richiede handoff di branch protection dopo integrazione. |
-| ALPHA-DOC-04 | **Candidate truth-aligned** | FSE2 resta synthetic-qualified con A1/S1, Local PKCS12 e vertical image opzionali; nessun materiale reale, OfficialTest o claim production. |
-| ALPHA-REL | **NOT CLOSED** | Nessun tag, GitHub Release, registry/NuGet publication o merge è autorizzato da questa slice. |
+| ALPHA-LIC | **PASS** | MPL-2.0 default, override Apache-2.0 e dual license `OR` sono path-based e verificati; non costituisce un claim production. |
+| ALPHA-SEC | **PASS** | Security contact, Contributor Covenant 3.0 e DCO 1.1 sono configurati. |
+| ALPHA-DOC-04 | **PASS — truth-only** | FSE2 resta synthetic-qualified con A1/S1, Local PKCS12 e vertical image opzionali; nessun materiale reale, OfficialTest o claim production. |
+| ALPHA-REL | **PASS** | Tag annotato e GitHub public prerelease pubblicati sull'exact source commit; nessuna pubblicazione NuGet/registry e nessuna qualifica production/FSE2. |
 
-`PUBLIC_RELEASE_GO = NO` e `PRODUCTION_READY = NO` fino a review indipendente, integrazione e publication gate sull'exact release commit.
+`PUBLICATION_OCCURRED = YES` e `PRODUCTION_READY = NO`. La pubblicazione è un evento
+distinto dalla readiness e da qualunque qualifica di servizio esterno.
 
-## Exact-main precheck del technical candidate
+## Exact source della prerelease pubblicata
 
-L'exact main autorizzato per ALPHA-GOV-REL è `97daa565f582d575da5d61665126c50ea52be3ed`.
-General CI è **6/6 PASS** e M5/Admin CI è **15/15 PASS** sulla baseline. Il candidate
-non crea tag, release GitHub o pubblicazioni registry e mantiene
-`PUBLIC_RELEASE_GO = NO` / `PRODUCTION_READY = NO`.
+Il tag annotato `v0.1.0-alpha.1` e la GitHub Release puntano a
+`ee3072be5e34a7b0477907a2580dcf454b8a4aba`. La release pubblica è una prerelease con
+classificazione **PUBLIC TECHNICAL PREVIEW**. I nove asset, i loro byte count e i digest
+GitHub sono fissati dalla publication attestation; i cinque artefatti prodotto sono
+coerenti con manifest, `SHA256SUMS` e digest GitHub. Il valore storico
+`claims.publicReleaseGo=false` nel manifest pubblicato è classificato come errata di
+stato pre-pubblicazione senza impatto sull'integrità.
 
 ## PR #33 — evidence storica preservata
 
@@ -94,7 +99,7 @@ configurazione OfficialTest, chiamate FSE2, `validate-cda` live, accreditamento 
 create/status live o qualifica production. Nessun materiale reale è stato consultato o
 importato durante PR #33 e nessuna chiamata live è stata eseguita.
 
-## Core export storico e candidate normalizzato
+## Core export storico e release normalizzata
 
 - inventario: **431 file**;
 - allowlist/hash/byte entries: **431/431**;
@@ -104,10 +109,10 @@ importato durante PR #33 e nessuna chiamata live è stata eseguita.
   `CC622E4F8FCACE420232C99B4F474429E22C2259DD1B2829B6C55BBD265D6234`.
 
 Il raw SHA è evidence della singola run e non è un expected cross-run, perché il manifest
-include `generatedAtUtc`. Il candidate `0.1.0-alpha.1` aggiunge
+include `generatedAtUtc`. La release `0.1.0-alpha.1` aggiunge
 `normalizedInventorySha256`, distinto dal manifest run-specific e calcolato su exact
 commit, file count, path ordinal normalizzati, byte count e SHA-256 per file.
-`P3-CORE-EXPORT-DIGEST` è chiuso dalla slice candidate senza reinterpretare i raw SHA
+`P3-CORE-EXPORT-DIGEST` è chiuso dalla release senza reinterpretare i raw SHA
 storici.
 
 ## Tassonomia delle evidenze
@@ -126,11 +131,9 @@ dei gate di release.
 
 ## Priorità operative
 
-1. Revisionare e integrare ALPHA-LIC, ALPHA-SEC e ALPHA-DOC-04 sull'exact candidate.
-2. Attivare il gate DCO come required check con configurazione GitHub esterna dopo integrazione.
-3. Mantenere DOC-04 e la track FSE2 separate dalla preview Core.
-4. Creare il futuro tag `v0.1.0-alpha.1` o pubblicare soltanto con nuova autorizzazione
-   dopo tutti i gate ALPHA-01..08.
+1. Mantenere la track FSE2 OfficialTest separata dalla prerelease Core e non chiuderne i gate senza evidence live autorizzata.
+2. Risolvere i tre follow-up di contratto documentale registrati nel backlog senza ampliarli in questa PR.
+3. Per la prossima release, applicare il contratto candidato/pubblicazione e chiudere pubblicamente l'integrità di manifest, checksum e asset ausiliari.
 
 Il backlog operativo e la stop list sono in
 [`docs/implementation/backlog.md`](docs/implementation/backlog.md).

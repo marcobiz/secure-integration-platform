@@ -8,12 +8,13 @@ The platform removes hard-coded secrets and distributed credentials while minimi
 
 ## Status
 
-M0-M5.5 and the provider-neutral authentication foundation are integrated. The active
-tracks are a narrow, non-production Core `0.1.0-alpha.1` technical candidate and the separate FSE2 Organization
-OfficialTest track. M3B remains an unqualified Azure Deployment Pack gate and is not a
-Core dependency. See `IMPLEMENTATION_STATUS.md` in the complete repository for the current
-dashboard; early-adopter,
-OfficialTest and production completion are not claimed.
+M0-M5.5 and the provider-neutral authentication foundation are integrated. The
+[`v0.1.0-alpha.1` GitHub public prerelease](https://github.com/marcobiz/secure-integration-platform/releases/tag/v0.1.0-alpha.1)
+is available as a **Public Technical Preview**. It is not production-ready and does not
+claim API stability, SLA, artifact signing, provenance, cloud qualification, or FSE2
+OfficialTest qualification. The separate FSE2 Organization OfficialTest track remains
+open. M3B remains an unqualified Azure Deployment Pack gate and is not a Core dependency.
+See `IMPLEMENTATION_STATUS.md` in the complete repository for the current dashboard.
 
 ## Local quick start, no cloud account
 
@@ -57,7 +58,7 @@ Admin Web pins Node/npm and all dependencies in its lockfile; its lint, unit, Pl
 
 No vendor secret passes through legacy software or the Broker; the browser never receives provider secret values or private keys. Endpoints and provider references are resolved server-side. Report vulnerabilities through [SECURITY.md](SECURITY.md), never in a public issue with exploitable details.
 
-The repository uses the path-based MPL-2.0/Apache-2.0 model in [LICENSING.md](LICENSING.md), with the approved inputs recorded in the [licensing decision](docs/legal/OPEN-SOURCE-LICENSE-DECISION.md). Independent candidate review and the publication gate remain required. Reserved source documents and raw evidence are excluded from the repeatable Core export.
+The repository uses the path-based MPL-2.0/Apache-2.0 model in [LICENSING.md](LICENSING.md), with the approved inputs recorded in the [licensing decision](docs/legal/OPEN-SOURCE-LICENSE-DECISION.md). Future releases still require independent candidate review and a distinct publication gate. Reserved source documents and raw evidence are excluded from the repeatable Core export.
 
 ## Documentation
 
