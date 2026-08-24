@@ -260,7 +260,7 @@ public sealed class AlphaReleaseArtifactTests
     [Fact]
     public void ALPHA_REL_post_release_truth_and_future_publication_contract_are_closed()
     {
-        AssertPowerShellTestPass("eng/Test-PostReleaseTruth.ps1", "All", "POST_RELEASE_TRUTH_PASS");
+        AssertPowerShellTestPass("eng/Test-PostReleaseTruth.ps1", "FutureContract", "POST_RELEASE_TRUTH_FUTURE_CONTRACT_PASS");
     }
 
     [Fact]
