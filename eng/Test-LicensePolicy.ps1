@@ -21,8 +21,23 @@ function Assert-CanonicalSha256 {
     if ($actual -cne $ExpectedSha256) { throw "$FailureCode expected=$ExpectedSha256 actual=$actual" }
 }
 
-$tracked = @(& git -C $root -c core.quotepath=false ls-files)
-if ($LASTEXITCODE -ne 0 -or $tracked.Count -eq 0) { throw 'LICENSE_POLICY_GIT_INVENTORY_FAILED' }
+$gitMetadataPath = Join-Path $root '.git'
+$insideGitWorktree = $false
+if (Test-Path -LiteralPath $gitMetadataPath) {
+    $insideGitWorktree = ((& git -C $root rev-parse --is-inside-work-tree | Out-String).Trim() -ceq 'true') -and $LASTEXITCODE -eq 0
+}
+if ($insideGitWorktree) {
+    $tracked = @(& git -C $root -c core.quotepath=false ls-files)
+    if ($LASTEXITCODE -ne 0 -or $tracked.Count -eq 0) { throw 'LICENSE_POLICY_GIT_INVENTORY_FAILED' }
+}
+else {
+    $exportManifestPath = Join-Path $root 'OPEN_SOURCE_EXPORT_MANIFEST.json'
+    if (-not (Test-Path -LiteralPath $exportManifestPath -PathType Leaf)) { throw 'LICENSE_POLICY_GIT_INVENTORY_FAILED' }
+    try { $exportManifest = Get-Content -LiteralPath $exportManifestPath -Raw | ConvertFrom-Json }
+    catch { throw 'LICENSE_POLICY_EXPORT_INVENTORY_INVALID' }
+    $tracked = @($exportManifest.files | ForEach-Object { [string]$_.path })
+    if ($tracked.Count -eq 0 -or [int]$exportManifest.fileCount -ne $tracked.Count) { throw 'LICENSE_POLICY_EXPORT_INVENTORY_INVALID' }
+}
 $trackedSet = New-Object 'Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
 $unclassified = [Collections.Generic.List[string]]::new()
 $multiple = [Collections.Generic.List[string]]::new()
