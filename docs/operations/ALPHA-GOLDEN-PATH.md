@@ -133,5 +133,5 @@ If a run is interrupted, execute the idempotent, ownership-checked cleanup:
 The Direct sample keeps its private key only for the process lifetime. A production
 consumer must use an appropriate protected or non-exportable client key store. The local
 DevelopmentAuth mode and synthetic CA/material are never production controls. This path
-is a synthetic private-preview evaluation only: it is not an external-service
+is a synthetic public-technical-preview evaluation only: it is not an external-service
 qualification, a stable API commitment or a production deployment.

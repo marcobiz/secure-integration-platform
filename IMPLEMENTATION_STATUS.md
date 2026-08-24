@@ -1,7 +1,7 @@
 # Implementation dashboard
 
-Aggiornato: 2026-08-14
-Baseline CURRENT: `main` / `origin/main` = `f0dd79cc79f8ee48423a182fed5a212f12fc2acb`
+Aggiornato: 2026-08-24
+Baseline CURRENT: `origin/main` = `97daa565f582d575da5d61665126c50ea52be3ed`
 
 Questo file descrive lo stato integrato corrente. I dettagli storici restano nei tag,
 nei report di test e nelle review già versionate; non vengono ricopiati qui. I termini
@@ -21,7 +21,7 @@ ciò che è ancora da ottenere e l'evidenza immutabile di baseline precedenti.
 | Healthcare — FSE2 Organization | **Synthetic-qualified** | Profilo Organization e 11 operation implementati con dual JWT S1 `contentCommitment` e A1 mTLS distinta; nessuna chiamata FSE2 live. |
 | FSE2 Local PKCS12 e vertical image | **Integrati; synthetic lab qualified** | Provider opzionale, importer offline, overlay Compose e immagine verticale con `Healthcare.FSE2` integrati da PR #33. Il pack dichiara `SecretValues=false`; import/custody reali e OfficialTest restano aperti. |
 | Healthcare — ePrescription regionale | **Foundation soltanto** | Profili regionali `BLOCKED_BY_SPEC`; non pubblicabili. |
-| Productization `0.1.0-alpha.1` | **Technical RC candidate, non pubblicata** | REST/Direct/clean baseline chiuse e adopter simulation PASS; questa slice chiude versione, artifact writer e digest normalizzato. Licenza/security governance, tag e pubblicazione restano aperti. |
+| Productization `0.1.0-alpha.1` | **PUBLIC TECHNICAL PREVIEW governance candidate; non pubblicata** | REST/Direct/clean baseline chiuse e adopter simulation PASS. Licenza path-based, DCO/security/CoC e release metadata sono candidate implementate; review indipendente, integrazione e publication gate restano aperti. |
 | Produzione enterprise | **Non qualificata** | Azure live, MSI, adapter native/COM, HA/DR, restore/load/soak, pentest, firma artefatti e pilot restano fuori dal CURRENT. |
 
 ## Due sole track attive
@@ -51,9 +51,20 @@ autorizzato e evidence redatta. Solo dopo si affrontano `attachment_hash` sugli 
 file bytes, create/replace, status e gli ulteriori workflow autorizzati. Questa track usa
 un pack verticale opzionale e non amplia le dipendenze del Core.
 
+## Candidate ALPHA-GOV-REL
+
+| Slice | Stato candidate | Limite |
+|---|---|---|
+| ALPHA-LIC | **Candidate implemented, pending independent review/integration** | MPL-2.0 default, override Apache-2.0 e dual license `OR` sono path-based e verificati; non è un publication GO. |
+| ALPHA-SEC | **Candidate implemented, pending independent review/integration** | Security contact, Contributor Covenant 3.0 e DCO 1.1 sono configurati; il required-check DCO richiede handoff di branch protection dopo integrazione. |
+| ALPHA-DOC-04 | **Candidate truth-aligned** | FSE2 resta synthetic-qualified con A1/S1, Local PKCS12 e vertical image opzionali; nessun materiale reale, OfficialTest o claim production. |
+| ALPHA-REL | **NOT CLOSED** | Nessun tag, GitHub Release, registry/NuGet publication o merge è autorizzato da questa slice. |
+
+`PUBLIC_RELEASE_GO = NO` e `PRODUCTION_READY = NO` fino a review indipendente, integrazione e publication gate sull'exact release commit.
+
 ## Exact-main precheck del technical candidate
 
-L'exact main autorizzato è `f0dd79cc79f8ee48423a182fed5a212f12fc2acb`.
+L'exact main autorizzato per ALPHA-GOV-REL è `97daa565f582d575da5d61665126c50ea52be3ed`.
 General CI è **6/6 PASS** e M5/Admin CI è **15/15 PASS** sulla baseline. Il candidate
 non crea tag, release GitHub o pubblicazioni registry e mantiene
 `PUBLIC_RELEASE_GO = NO` / `PRODUCTION_READY = NO`.
@@ -115,9 +126,9 @@ dei gate di release.
 
 ## Priorità operative
 
-1. Qualificare e revisionare ALPHA-VER, ALPHA-ART e P3 sull'exact candidate.
-2. Risolvere soltanto con decisione umana ALPHA-LIC e ALPHA-SEC.
-3. Mantenere DOC-04 e la track FSE2 separate dal technical RC Core.
+1. Revisionare e integrare ALPHA-LIC, ALPHA-SEC e ALPHA-DOC-04 sull'exact candidate.
+2. Attivare il gate DCO come required check con configurazione GitHub esterna dopo integrazione.
+3. Mantenere DOC-04 e la track FSE2 separate dalla preview Core.
 4. Creare il futuro tag `v0.1.0-alpha.1` o pubblicare soltanto con nuova autorizzazione
    dopo tutti i gate ALPHA-01..08.
 

@@ -1,7 +1,7 @@
 # Piano di implementazione corrente
 
-Aggiornato: 2026-08-13
-Baseline CURRENT: `eec2fa5556eccc7e8e3b47fc7d7b127bcac1ed9e`
+Aggiornato: 2026-08-24
+Baseline CURRENT: `97daa565f582d575da5d61665126c50ea52be3ed`
 
 Questa è la roadmap attiva. Lo stato sintetico è in
 [`IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md), i gate in
@@ -31,7 +31,7 @@ Questa è la roadmap attiva. Lo stato sintetico è in
 | Authentication foundation / Wave 1 | Integrata | Primitive provider-neutral e moduli esterni non qualificano automaticamente un servizio esterno. |
 | FSE2 Organization | Synthetic-qualified | 11 operation, dual JWT, S1 `contentCommitment`, A1 mTLS distinta e PostgreSQL canonico; nessuna call live. |
 | Local PKCS12 / FSE2 vertical image | Integrati da PR #33, synthetic lab qualified | Provider opzionale `SecretValues=false`, importer offline, overlay e vertical image; custody e OfficialTest aperti. |
-| Productization alpha | Non pronta | Governance, versione, artefatti, clean-clone e prova esterna aperti. |
+| Productization alpha | Governance candidate | Versione/artefatti e golden path sono candidate; ALPHA-LIC/SEC/DOC-04 sono implementate sul branch ma attendono review/integrazione. ALPHA-REL non è chiusa. |
 | Legacy/enterprise | Deferred | MSI, native/COM, cloud live, HA/DR e production non sono track attive. |
 
 PR #33 è merged tramite fast-forward sull'exact main. General 6/6, M5/Admin 15/15,
@@ -63,7 +63,7 @@ DOC-01 è il solo prerequisito comune iniziale. Dopo DOC-01 procedono in paralle
 - **consumption Core:** ALPHA-REST, ALPHA-DIRECT e ALPHA-CLEAN;
 - **productization:** ALPHA-VER può iniziare senza attendere DOC-02/03; ALPHA-ART segue
   ALPHA-VER;
-- **governance umana:** ALPHA-LIC e ALPHA-SEC restano blocker esterni paralleli;
+- **governance:** le decisioni umane ALPHA-LIC e ALPHA-SEC sono implementate nella slice ALPHA-GOV-REL e restano pending independent review/integration;
 - **documentazione FSE2:** DOC-04 riallinea il pack opzionale allo stato integrato da
   PR #33, senza eseguire o richiedere FSE2-T01..T06.
 
@@ -83,7 +83,7 @@ la release Core alpha.
 - MSI, COM/C ABI, Azure live, HA/DR e API compatibility stabile restano esclusi;
 - il raw SHA del Core export è evidence della singola run. `ALPHA-ART` aggiunge un digest
   normalizzato dell'inventario perché `generatedAtUtc` rende il raw manifest run-specific;
-- nessuna pubblicazione precede le decisioni umane ALPHA-LIC e ALPHA-SEC.
+- nessuna pubblicazione precede review indipendente, integrazione e publication gate di ALPHA-LIC e ALPHA-SEC.
 
 ## Track B — FSE2 Organization OfficialTest
 
