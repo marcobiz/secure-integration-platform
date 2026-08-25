@@ -122,9 +122,12 @@ public sealed class Fse2OrganizationExecutionStrategy(
 
         Fse2WorkflowExecutionContext security = await ResolveSecurityContextAsync(
             execution, profile, inbound, cancellationToken).ConfigureAwait(false);
-        byte[] exactOutboundBody = Fse2ExactBodyComposer.Compose(profile, inbound, execution.RequestContentType);
+        string? exactAttachmentHash = profile.Operation.RequiresAttachmentHash
+            ? Fse2Validation.ComputeAttachmentHash(inbound.Document)
+            : null;
         IReadOnlyDictionary<string, JsonElement> integrityClaims = BuildIntegrityClaims(
-            profile, inbound, security);
+            profile, security, exactAttachmentHash);
+        byte[] exactOutboundBody = Fse2ExactBodyComposer.Compose(profile, inbound, execution.RequestContentType);
 
         _ = await execution.Capabilities.CreateSignedTokenAsync(
             profile.AuthorizationSigningSlot,
@@ -227,8 +230,8 @@ public sealed class Fse2OrganizationExecutionStrategy(
 
     private static FrozenDictionary<string, JsonElement> BuildIntegrityClaims(
         Fse2PublishedOrganizationProfile profile,
-        Fse2InboundPayload inbound,
-        Fse2WorkflowExecutionContext security)
+        Fse2WorkflowExecutionContext security,
+        string? exactAttachmentHash)
     {
         Dictionary<string, JsonElement> claims = new(StringComparer.Ordinal)
         {
@@ -246,8 +249,8 @@ public sealed class Fse2OrganizationExecutionStrategy(
         };
         if (security.ClinicalClaims.ResourceHl7Type is not null)
             claims["resource_hl7_type"] = JsonSerializer.SerializeToElement(security.ClinicalClaims.ResourceHl7Type);
-        if (profile.Operation.RequiresAttachmentHash)
-            claims["attachment_hash"] = JsonSerializer.SerializeToElement(Fse2Validation.ComputeAttachmentHash(inbound.Document));
+        if (exactAttachmentHash is not null)
+            claims["attachment_hash"] = JsonSerializer.SerializeToElement(exactAttachmentHash);
         return claims.ToFrozenDictionary(StringComparer.Ordinal);
     }
 

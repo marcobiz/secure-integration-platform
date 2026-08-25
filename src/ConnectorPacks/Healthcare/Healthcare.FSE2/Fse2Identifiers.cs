@@ -171,6 +171,14 @@ public static partial class Fse2Validation
         {
             using JsonDocument document = JsonDocument.Parse(value, new JsonDocumentOptions { AllowTrailingCommas = false, CommentHandling = JsonCommentHandling.Disallow, MaxDepth = 32 });
             if (document.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException();
+            if (document.RootElement.EnumerateObject().Any(property =>
+                property.Name.Equals("attachment_hash", StringComparison.OrdinalIgnoreCase) ||
+                property.Name.Equals("attachmentHash", StringComparison.OrdinalIgnoreCase) ||
+                property.Name.Equals("attachment_hash_algorithm", StringComparison.OrdinalIgnoreCase) ||
+                property.Name.Equals("attachmentHashAlgorithm", StringComparison.OrdinalIgnoreCase) ||
+                property.Name.Equals("attachment_hash_input", StringComparison.OrdinalIgnoreCase) ||
+                property.Name.Equals("attachmentHashInput", StringComparison.OrdinalIgnoreCase)))
+                throw new JsonException();
         }
         catch (JsonException) { throw new ArgumentException("FSE2_REQUEST_BODY_INVALID", nameof(value)); }
     }

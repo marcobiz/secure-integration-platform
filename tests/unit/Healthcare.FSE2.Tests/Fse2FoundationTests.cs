@@ -211,6 +211,23 @@ public sealed class Fse2FoundationTests
     }
 
     [Theory]
+    [InlineData("attachment_hash")]
+    [InlineData("attachmentHash")]
+    [InlineData("attachment_hash_algorithm")]
+    [InlineData("attachmentHashAlgorithm")]
+    [InlineData("attachment_hash_input")]
+    [InlineData("attachmentHashInput")]
+    public void FSE2_SEC_request_body_attachment_hash_authority_is_denied(string propertyName)
+    {
+        byte[] requestBody = Encoding.UTF8.GetBytes($$"""{"metadata":true,"{{propertyName}}":"caller"}""");
+
+        ArgumentException denied = Assert.Throws<ArgumentException>(() =>
+            Fse2Request.Create(new byte[] { 0x01 }, requestBody, Claims()));
+
+        Assert.Contains("FSE2_REQUEST_BODY_INVALID", denied.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("3.1")]
     [InlineData("1.40")]
     [InlineData("0.40")]
