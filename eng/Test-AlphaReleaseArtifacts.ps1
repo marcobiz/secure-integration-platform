@@ -464,7 +464,32 @@ try {
     if ($productVersion -cne '0.1.0-alpha.1') { throw 'ALPHA_ARTIFACT_PRODUCT_VERSION_MISMATCH' }
     if ($sourceCommit -cnotmatch '^[0-9a-f]{40}$') { throw 'ALPHA_ARTIFACT_SOURCE_REVISION_INVALID' }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedSourceCommit) -and $sourceCommit -cne $ExpectedSourceCommit) { throw 'ALPHA_ARTIFACT_SOURCE_REVISION_MISMATCH' }
-    if ($manifest.claims.publicReleaseGo -ne $false -or $manifest.claims.productionReady -ne $false) { throw 'ALPHA_ARTIFACT_RELEASE_CLAIM_INVALID' }
+    $profile = Get-AlphaReleaseProfile -ProductVersion $productVersion -SourceCommit $sourceCommit
+    if ([int]$manifest.schemaVersion -ne 2) { throw 'ALPHA_ARTIFACT_RELEASE_SCHEMA_INVALID' }
+    $claimProperties = @($manifest.claims.PSObject.Properties | ForEach-Object { [string]$_.Name })
+    if ($claimProperties.Count -ne 1 -or $claimProperties[0] -cne 'productionReady' -or $manifest.claims.productionReady -ne $false) {
+        throw 'ALPHA_ARTIFACT_RELEASE_CLAIM_INVALID'
+    }
+    if ([string]$manifest.publication.state -cne 'pre-publication-candidate' -or
+        $manifest.publication.occurred -ne $false -or
+        [string]$manifest.publication.candidateManifestName -cne 'manifest.json' -or
+        [string]$manifest.publication.publicManifestName -cne 'release-manifest.json' -or
+        [string]$manifest.publication.checksumsName -cne 'SHA256SUMS' -or
+        [string]$manifest.publication.integrityClosure -cne 'sidecar-or-publication-attestation-required') {
+        throw 'ALPHA_ARTIFACT_PUBLICATION_CONTRACT_INVALID'
+    }
+    [string[]]$publicSbomAssets = @(Get-ObjectArrayProperty -Object $manifest.publication -Name 'publicSbomAssets' | ForEach-Object { [string]$_ })
+    [string[]]$internalEvidenceSboms = @(Get-ObjectArrayProperty -Object $manifest.publication -Name 'internalEvidenceSboms' | ForEach-Object { [string]$_ })
+    [string[]]$expectedPublicSbomAssets = @('gateway-container.spdx.json', 'migrations-container.spdx.json')
+    [string[]]$expectedInternalEvidenceSboms = @($profile.sbomFiles)
+    [Array]::Sort($publicSbomAssets, [StringComparer]::Ordinal)
+    [Array]::Sort($internalEvidenceSboms, [StringComparer]::Ordinal)
+    [Array]::Sort($expectedPublicSbomAssets, [StringComparer]::Ordinal)
+    [Array]::Sort($expectedInternalEvidenceSboms, [StringComparer]::Ordinal)
+    if (($publicSbomAssets -join "`n") -cne ($expectedPublicSbomAssets -join "`n") -or
+        ($internalEvidenceSboms -join "`n") -cne ($expectedInternalEvidenceSboms -join "`n")) {
+        throw 'ALPHA_ARTIFACT_PUBLICATION_SBOM_INVENTORY_INVALID'
+    }
     if ([string]$manifest.releaseChannel -cne 'public-technical-preview' -or [string]$manifest.releaseClass -cne 'PUBLIC TECHNICAL PREVIEW' -or
         [string]$manifest.distributionTarget -cne 'GitHub public prerelease v0.1.0-alpha.1' -or
         [string]$manifest.licensePolicy.default -cne 'MPL-2.0' -or [string]$manifest.licensePolicy.sdk -cne 'Apache-2.0' -or
@@ -481,7 +506,6 @@ try {
         throw 'ALPHA_ARTIFACT_MANIFEST_SIDECAR_MISMATCH'
     }
 
-    $profile = Get-AlphaReleaseProfile -ProductVersion $productVersion -SourceCommit $sourceCommit
     $releaseSetValidation = Assert-AlphaReleaseSetBijection -RunDirectory $run -Manifest $manifest -Profile $profile
     if ($ReleaseSetOnly) {
         [pscustomobject]@{

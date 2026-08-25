@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "product": "SecureIntegrationPlatform",
   "version": "0.0.0-replaced-by-pipeline",
   "sourceRevision": "replaced-by-pipeline",
@@ -7,8 +7,30 @@
   "releaseClass": "PUBLIC TECHNICAL PREVIEW",
   "distributionTarget": "GitHub public prerelease v0.1.0-alpha.1",
   "generatedAtUtc": "replaced-by-pipeline",
+  "publication": {
+    "state": "pre-publication-candidate",
+    "occurred": false,
+    "candidateManifestName": "manifest.json",
+    "publicManifestName": "release-manifest.json",
+    "checksumsName": "SHA256SUMS",
+    "integrityClosure": "sidecar-or-publication-attestation-required",
+    "publicSbomAssets": [
+      "gateway-container.spdx.json",
+      "migrations-container.spdx.json"
+    ],
+    "internalEvidenceSboms": [
+      "sbom/admin-frontend.spdx.json",
+      "sbom/aggregate-manifest.json",
+      "sbom/auth-certificate-signing.spdx.json",
+      "sbom/broker.spdx.json",
+      "sbom/connector-cli.spdx.json",
+      "sbom/gateway-container.spdx.json",
+      "sbom/gateway.spdx.json",
+      "sbom/migrations-container.spdx.json",
+      "sbom/sdk-dotnet.spdx.json"
+    ]
+  },
   "claims": {
-    "publicReleaseGo": false,
     "productionReady": false
   },
   "coreExport": {

@@ -1,11 +1,11 @@
 # Piano di implementazione corrente
 
 Aggiornato: 2026-08-24
-Baseline CURRENT: `97daa565f582d575da5d61665126c50ea52be3ed`
+Baseline CURRENT: `ee3072be5e34a7b0477907a2580dcf454b8a4aba`
 
 Questa è la roadmap attiva. Lo stato sintetico è in
-[`IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md), i gate in
-[`0.1.0-alpha-scope.md`](0.1.0-alpha-scope.md) e le slice ordinate nel
+[`IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md), la release pubblicata nelle
+[release notes](../releases/0.1.0-alpha.1.md) e le slice ordinate nel
 [`backlog`](backlog.md). La cronologia dettagliata resta nei tag e nei report esistenti.
 
 ## Principi di pianificazione
@@ -19,7 +19,8 @@ Questa è la roadmap attiva. Lo stato sintetico è in
   path Core o del gate FSE2;
 - una dichiarazione del maintainer non diventa evidence repository;
 - le baseline attestate non vengono riscritte;
-- esistono due sole track attive: Core alpha e FSE2 Organization OfficialTest.
+- la Core alpha è una prerelease pubblicata; l'unica track corrente è FSE2 Organization
+  OfficialTest.
 
 ## Baseline CURRENT
 
@@ -31,7 +32,7 @@ Questa è la roadmap attiva. Lo stato sintetico è in
 | Authentication foundation / Wave 1 | Integrata | Primitive provider-neutral e moduli esterni non qualificano automaticamente un servizio esterno. |
 | FSE2 Organization | Synthetic-qualified | 11 operation, dual JWT, S1 `contentCommitment`, A1 mTLS distinta e PostgreSQL canonico; nessuna call live. |
 | Local PKCS12 / FSE2 vertical image | Integrati da PR #33, synthetic lab qualified | Provider opzionale `SecretValues=false`, importer offline, overlay e vertical image; custody e OfficialTest aperti. |
-| Productization alpha | Governance candidate | Versione/artefatti e golden path sono candidate; ALPHA-LIC/SEC/DOC-04 sono implementate sul branch ma attendono review/integrazione. ALPHA-REL non è chiusa. |
+| Productization alpha | GitHub public prerelease pubblicata | `v0.1.0-alpha.1` è una Public Technical Preview pubblicata dall'exact source commit `ee3072be5e34a7b0477907a2580dcf454b8a4aba`; ALPHA-LIC/SEC/DOC-04/REL sono PASS senza claim production o FSE2 OfficialTest. |
 | Legacy/enterprise | Deferred | MSI, native/COM, cloud live, HA/DR e production non sono track attive. |
 
 PR #33 è merged tramite fast-forward sull'exact main. General 6/6, M5/Admin 15/15,
@@ -39,7 +40,7 @@ PostgreSQL FSE2 1/1 zero skip, provider 30/30, architecture 42/42, provider-acti
 synthetic lab e security micro-review sono PASS/GO nel perimetro attestato. Questi gate
 non includono materiale reale, import operativo o chiamate FSE2.
 
-## Track A — Core `0.1.0-alpha`
+## Esito pubblicato — Core `0.1.0-alpha.1`
 
 ### Outcome
 
@@ -54,26 +55,26 @@ Direct .NET
 → risposta sanificata e audit metadata-only
 ```
 
-### Dipendenze e lavoro parallelo
+### Dipendenze chiuse
 
-DOC-01 è il solo prerequisito comune iniziale. Dopo DOC-01 procedono in parallelo:
+DOC-01 è stato il prerequisito comune iniziale. Dopo DOC-01 sono stati chiusi:
 
 - **documentazione Core:** DOC-02 per architecture/security/deployment e DOC-03 per
   OpenAPI/API/generated types;
 - **consumption Core:** ALPHA-REST, ALPHA-DIRECT e ALPHA-CLEAN;
 - **productization:** ALPHA-VER può iniziare senza attendere DOC-02/03; ALPHA-ART segue
   ALPHA-VER;
-- **governance:** le decisioni umane ALPHA-LIC e ALPHA-SEC sono implementate nella slice ALPHA-GOV-REL e restano pending independent review/integration;
+- **governance:** ALPHA-LIC e ALPHA-SEC, inclusi i gate di licenza e DCO applicabili;
 - **documentazione FSE2:** DOC-04 riallinea il pack opzionale allo stato integrato da
   PR #33, senza eseguire o richiedere FSE2-T01..T06.
 
-ALPHA-ADOPT inizia quando il golden path è documentato e ripetibile: richiede
-ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN e la documentazione Core applicabile DOC-02/03.
+ALPHA-ADOPT è PASS sulla simulazione indipendente autorizzata; non prova adoption
+production o market fit.
 
-ALPHA-REL è l'ultimo step e richiede esplicitamente ALPHA-DOC-01, ALPHA-DOC-02,
+ALPHA-REL è stato l'ultimo step e ha richiesto ALPHA-DOC-01, ALPHA-DOC-02,
 ALPHA-DOC-03, ALPHA-DOC-04, ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN, ALPHA-ADOPT,
 ALPHA-VER, ALPHA-ART, ALPHA-LIC e ALPHA-SEC, oltre ad ALPHA-01..08 verdi sull'exact
-release candidate. ALPHA-DOC-04 è una dipendenza di verità documentale soltanto: non
+release commit. ALPHA-DOC-04 è una dipendenza di verità documentale soltanto: non
 richiede `validate-cda` live né FSE2-T01..T06. La qualifica FSE2 OfficialTest non blocca
 la release Core alpha.
 
@@ -83,9 +84,10 @@ la release Core alpha.
 - MSI, COM/C ABI, Azure live, HA/DR e API compatibility stabile restano esclusi;
 - il raw SHA del Core export è evidence della singola run. `ALPHA-ART` aggiunge un digest
   normalizzato dell'inventario perché `generatedAtUtc` rende il raw manifest run-specific;
-- nessuna pubblicazione precede review indipendente, integrazione e publication gate di ALPHA-LIC e ALPHA-SEC.
+- la pubblicazione non implica production readiness, stabilità API, firma/provenance o
+  qualifica di servizi esterni.
 
-## Track B — FSE2 Organization OfficialTest
+## Track corrente — FSE2 Organization OfficialTest
 
 ### Outcome
 
@@ -135,7 +137,7 @@ configurazione attestata. FSE2-T05 abilita soltanto i successivi workflow effett
 eseguiti. I test sintetici delle 11 operation non diventano una claim 11/11 live. Nessun
 gate di questa track implica production.
 
-## Relazione tra le track
+## Relazione storica di chiusura e track corrente
 
 ```text
 DOC-01
@@ -153,10 +155,10 @@ Track B indipendente: intake/custody/composition → offline preflight → exact
                                                 → validate-cda → hash/create/status
 ```
 
-Le due track possono avanzare separatamente. Un problema FSE2 non blocca il Core alpha,
-salvo che dimostri un difetto di sicurezza generale. Una nuova astrazione Core richiede
-un blocker e un test concreti. DOC-04 non converte i gate FSE2 in gate Core: mantiene
-soltanto veritiera la documentazione del pack opzionale.
+La Core alpha è pubblicata e non è più una release-candidate track attiva. Un problema
+FSE2 non reinterpreta la release Core, salvo che dimostri un difetto di sicurezza generale.
+Una nuova astrazione Core richiede un blocker e un test concreti. DOC-04 non converte i
+gate FSE2 in gate Core: mantiene soltanto veritiera la documentazione del pack opzionale.
 
 ## HISTORICAL e lavoro deferred
 

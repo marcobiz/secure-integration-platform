@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('All', 'ArtifactBijection', 'ArtifactMissingUnexpected', 'SbomBijection', 'SbomWrongExtra')]
+    [ValidateSet('All', 'ArtifactBijection', 'ArtifactMissingUnexpected', 'SbomBijection', 'SbomWrongExtra', 'PublicationContract')]
     [string] $TestName = 'All'
 )
 
@@ -126,7 +126,7 @@ function New-SyntheticReleaseSet {
         $record
     })
     $manifest = [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         product = 'SecureIntegrationPlatform'
         version = $productVersion
         sourceRevision = $sourceCommit
@@ -134,7 +134,17 @@ function New-SyntheticReleaseSet {
         releaseClass = 'PUBLIC TECHNICAL PREVIEW'
         distributionTarget = 'GitHub public prerelease v0.1.0-alpha.1'
         generatedAtUtc = '2026-01-01T00:00:00.0000000+00:00'
-        claims = [ordered]@{ publicReleaseGo = $false; productionReady = $false }
+        publication = [ordered]@{
+            state = 'pre-publication-candidate'
+            occurred = $false
+            candidateManifestName = 'manifest.json'
+            publicManifestName = 'release-manifest.json'
+            checksumsName = 'SHA256SUMS'
+            integrityClosure = 'sidecar-or-publication-attestation-required'
+            publicSbomAssets = @('gateway-container.spdx.json', 'migrations-container.spdx.json')
+            internalEvidenceSboms = @('sbom/admin-frontend.spdx.json', 'sbom/aggregate-manifest.json', 'sbom/auth-certificate-signing.spdx.json', 'sbom/broker.spdx.json', 'sbom/connector-cli.spdx.json', 'sbom/gateway-container.spdx.json', 'sbom/gateway.spdx.json', 'sbom/migrations-container.spdx.json', 'sbom/sdk-dotnet.spdx.json')
+        }
+        claims = [ordered]@{ productionReady = $false }
         versionIdentity = [ordered]@{ productVersion = $productVersion; protocolVersion = '1.0'; canonicalConnectorVersion = '1.0.0'; imageRevision = $sourceCommit; openApiVersion = $productVersion }
         licensePolicy = [ordered]@{ default = 'MPL-2.0'; sdk = 'Apache-2.0'; contractsProtocol = 'Apache-2.0'; syntheticExamples = 'Apache-2.0'; genericReference = 'MPL-2.0 OR Apache-2.0'; coreSourceArchive = 'MPL-2.0 AND Apache-2.0' }
         coreExport = [ordered]@{ fileCount = 0; rawManifestSha256RunSpecific = 'D' * 64; normalizedInventorySha256 = 'E' * 64 }
@@ -259,6 +269,25 @@ try {
             param($caseRoot); $manifest = Get-Content (Join-Path $caseRoot 'manifest.json') -Raw | ConvertFrom-Json; $gateway = [string]$manifest.sbomSubjects[0].sbomFile; $manifest.sbomSubjects[0].sbomFile = [string]$manifest.sbomSubjects[1].sbomFile; $manifest.sbomSubjects[1].sbomFile = $gateway; Write-ManifestAndSidecar -RunDirectory $caseRoot -Manifest $manifest
         }
         Write-Host 'ALPHA_ART_RELEASE_SET_WRONG_EXTRA_SBOM_NEGATIVES_PASS'
+    }
+
+    if ($TestName -in @('All', 'PublicationContract')) {
+        Invoke-NegativeCase -Name 'PublicationStateIsNotCandidate' -ExpectedCode 'ALPHA_ARTIFACT_PUBLICATION_CONTRACT_INVALID' -BaselineDirectory $baseline -Mutation {
+            param($caseRoot); $manifest = Get-Content (Join-Path $caseRoot 'manifest.json') -Raw | ConvertFrom-Json; $manifest.publication.state = 'published'; Write-ManifestAndSidecar -RunDirectory $caseRoot -Manifest $manifest
+        }
+        Invoke-NegativeCase -Name 'PublicManifestNameIsCandidateName' -ExpectedCode 'ALPHA_ARTIFACT_PUBLICATION_CONTRACT_INVALID' -BaselineDirectory $baseline -Mutation {
+            param($caseRoot); $manifest = Get-Content (Join-Path $caseRoot 'manifest.json') -Raw | ConvertFrom-Json; $manifest.publication.publicManifestName = 'manifest.json'; Write-ManifestAndSidecar -RunDirectory $caseRoot -Manifest $manifest
+        }
+        Invoke-NegativeCase -Name 'LegacyPublicReleaseGoReintroduced' -ExpectedCode 'ALPHA_ARTIFACT_RELEASE_CLAIM_INVALID' -BaselineDirectory $baseline -Mutation {
+            param($caseRoot); $manifest = Get-Content (Join-Path $caseRoot 'manifest.json') -Raw | ConvertFrom-Json; $manifest.claims | Add-Member -NotePropertyName publicReleaseGo -NotePropertyValue $false; Write-ManifestAndSidecar -RunDirectory $caseRoot -Manifest $manifest
+        }
+        Invoke-NegativeCase -Name 'InternalSbomPromotedToPublicInventory' -ExpectedCode 'ALPHA_ARTIFACT_PUBLICATION_SBOM_INVENTORY_INVALID' -BaselineDirectory $baseline -Mutation {
+            param($caseRoot); $manifest = Get-Content (Join-Path $caseRoot 'manifest.json') -Raw | ConvertFrom-Json; $manifest.publication.publicSbomAssets = @($manifest.publication.publicSbomAssets) + @('broker.spdx.json'); Write-ManifestAndSidecar -RunDirectory $caseRoot -Manifest $manifest
+        }
+        Invoke-NegativeCase -Name 'InternalSbomInventoryIncomplete' -ExpectedCode 'ALPHA_ARTIFACT_PUBLICATION_SBOM_INVENTORY_INVALID' -BaselineDirectory $baseline -Mutation {
+            param($caseRoot); $manifest = Get-Content (Join-Path $caseRoot 'manifest.json') -Raw | ConvertFrom-Json; $manifest.publication.internalEvidenceSboms = @($manifest.publication.internalEvidenceSboms | Select-Object -Skip 1); Write-ManifestAndSidecar -RunDirectory $caseRoot -Manifest $manifest
+        }
+        Write-Host 'ALPHA_ART_FUTURE_PUBLICATION_CONTRACT_NEGATIVES_PASS'
     }
 }
 finally {

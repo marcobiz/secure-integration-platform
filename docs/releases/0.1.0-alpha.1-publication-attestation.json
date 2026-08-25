@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "tag": "v0.1.0-alpha.1",
+  "tagTarget": "ee3072be5e34a7b0477907a2580dcf454b8a4aba",
+  "releaseId": 375842367,
+  "releaseUrl": "https://github.com/marcobiz/secure-integration-platform/releases/tag/v0.1.0-alpha.1",
+  "publishedAt": "2026-08-24T16:38:04Z",
+  "sourceCommit": "ee3072be5e34a7b0477907a2580dcf454b8a4aba",
+  "uploadedAssetCount": 9,
+  "productArtifactCount": 5,
+  "publicSbomAssetCount": 2,
+  "internalSbomRecordCount": 9,
+  "uploadedAssets": [
+    {
+      "name": "admin-web-0.1.0-alpha.1.zip",
+      "bytes": 405298,
+      "githubSha256": "025e96940b3c70556d5ddd803691669243b024636151056ef1cb0f54c6a816dc"
+    },
+    {
+      "name": "gateway-container.spdx.json",
+      "bytes": 1986648,
+      "githubSha256": "b2efe488015e4427b998ea9dd82d60d2426539d20a77f1a3ac841155536d9b23"
+    },
+    {
+      "name": "gateway-image-0.1.0-alpha.1-ee3072be5e34.tar",
+      "bytes": 100960256,
+      "githubSha256": "230bf346d7cd0f1958a86cc6bf5765bafb1bbac7253f8b18368e71d80fcf8f2f"
+    },
+    {
+      "name": "migrations-container.spdx.json",
+      "bytes": 1598160,
+      "githubSha256": "61b432f3794a32867a718b6d71c58f698015d7c2aab7fd1663f54d77a73e96e8"
+    },
+    {
+      "name": "migrations-image-0.1.0-alpha.1-ee3072be5e34.tar",
+      "bytes": 86171136,
+      "githubSha256": "02c6b91c594f91b9ec35229aafdb469768f34f840439dc0fa52ce316447915ea"
+    },
+    {
+      "name": "release-manifest.json",
+      "bytes": 9960,
+      "githubSha256": "431af84eb2264ceab03c39e666d1d5cfe23231cf4f7f7b8c6b3285f116f23385"
+    },
+    {
+      "name": "secure-integration-core-0.1.0-alpha.1-source.zip",
+      "bytes": 1274657,
+      "githubSha256": "7474c4b67e6a6c7687fd02cf76d3bef5ed4e296637119ea4d2a21ac8614fa817"
+    },
+    {
+      "name": "SecureIntegration.Broker.Sdk.0.1.0-alpha.1.nupkg",
+      "bytes": 82769,
+      "githubSha256": "6dd4192220b642f7359cc2e42c4d4e81b90ec1b77556e2bcd7195b1ae37369dc"
+    },
+    {
+      "name": "SHA256SUMS",
+      "bytes": 604,
+      "githubSha256": "256de635fe074c5cf0402ac77a56ab3c366bac823bc76f63e5a6de19e8adee53"
+    }
+  ],
+  "releaseManifestSha256": "431af84eb2264ceab03c39e666d1d5cfe23231cf4f7f7b8c6b3285f116f23385",
+  "sha256SumsSha256": "256de635fe074c5cf0402ac77a56ab3c366bac823bc76f63e5a6de19e8adee53",
+  "manifestFalseGoClassification": "HISTORICAL_PRE_PUBLICATION_STATE_ERRATUM_NO_INTEGRITY_IMPACT",
+  "publicSbomAssets": [
+    "gateway-container.spdx.json",
+    "migrations-container.spdx.json"
+  ],
+  "internalBuildSbomRecords": [
+    "sbom/admin-frontend.spdx.json",
+    "sbom/aggregate-manifest.json",
+    "sbom/auth-certificate-signing.spdx.json",
+    "sbom/broker.spdx.json",
+    "sbom/connector-cli.spdx.json",
+    "sbom/gateway-container.spdx.json",
+    "sbom/gateway.spdx.json",
+    "sbom/migrations-container.spdx.json",
+    "sbom/sdk-dotnet.spdx.json"
+  ],
+  "productionReady": false,
+  "fse2OfficialTestQualified": false
+}

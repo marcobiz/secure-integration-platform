@@ -2,7 +2,7 @@
 
 Questa matrice distingue requisito, test nominativo, tipo di evidence e stato. Il riepilogo
 DOC-02 è riconciliato con la baseline governance
-`97daa565f582d575da5d61665126c50ea52be3ed`; le sezioni milestone successive conservano
+`ee3072be5e34a7b0477907a2580dcf454b8a4aba`; le sezioni milestone successive conservano
 anche evidence storica legata ai candidate indicati.
 
 Stati usati:
@@ -36,13 +36,14 @@ livelli distinti.
 | Local PKCS#12 import/custody | `Test-Fse2LocalPkcs12Material.ps1` usa fixture per-run; importer default read-only | Lab sintetico `AUTOMATED`; import ufficiale `MANUAL`/`UNVERIFIED` |
 | FSE2 OfficialTest | Gate FSE2-T01..T06 in DOC-01; nessuna call live nella baseline | `EXTERNAL`/`BLOCKED`; primo outcome futuro `validate-cda` |
 | Early-adopter completion | Dipendenze `ALPHA-DOC-02/03`, `ALPHA-REST`, `ALPHA-DIRECT`, `ALPHA-CLEAN` → `ALPHA-ADOPT` | `PASS` — independent adopter simulation autorizzata; non prova production adoption |
-| Product/release version | `AlphaReleaseArtifactTests.ALPHA_VER_all_product_surfaces_report_0_1_0_alpha_1`, package consumer e label OCI | `AUTOMATED` — candidate `0.1.0-alpha.1`; protocollo `1.0` e Connector `1.0.0` invariati |
-| Core export digest deterministico | `Test-CoreExportInventoryDeterminism.ps1`, `Test-OpenSourceCoreInventory.ps1`, doppia produzione artifact | `AUTOMATED` — P3 closed sul candidate; raw manifest SHA ancora run-specific |
-| Licenza path-based completa e univoca | `ALPHA_LIC_all_tracked_paths_have_one_policy`, `ALPHA_LIC_apache_override_precedes_default_mpl`, `ALPHA_LIC_generic_reference_expression_is_exact`, `eng/Test-LicensePolicy.ps1` | `AUTOMATED` candidate; pending independent review/integration |
-| Licenze dei cinque artefatti e metadata coerenti | `AlphaReleaseArtifactTests` più `Test-AlphaReleaseArtifacts.ps1`: NuGet Apache, Admin/OCI MPL, Core aggregate entrambe, manifest/SBOM binding | `AUTOMATED` candidate; cardinalità cinque e binding esistenti invariati |
-| DCO 1.1 sui soli nuovi commit PR | `ALPHA_DCO_new_human_commit_with_matching_signoff`, `ALPHA_DCO_unsigned_human_commit_is_rejected`, `ALPHA_DCO_mismatched_signoff_is_rejected`, `ALPHA_DCO_pre_policy_history_is_not_evaluated_retroactively` | `AUTOMATED` candidate; required-check GitHub da attivare dopo integrazione |
-| Security/CoC pubblici e distinti | `SECURITY.md`, Contributor Covenant 3.0 con contact `supporto@apocert.it`; security report distinto dal conduct report | `MANUAL` independent review pending; nessuno SLA o claim production |
-| DOC-04 FSE2 truth-only | Stato exact-main synthetic-qualified; S1 `contentCommitment`, A1 mTLS, Local PKCS12/vertical image opzionali; nessun materiale reale/OfficialTest; `validate-cda` aperto | Candidate truth-aligned; nessun gate FSE2 dichiarato PASS |
+| Product/release version | `AlphaReleaseArtifactTests.ALPHA_VER_all_product_surfaces_report_0_1_0_alpha_1`, package consumer e label OCI | `AUTOMATED` — release `0.1.0-alpha.1` pubblicata; protocollo `1.0` e Connector `1.0.0` invariati |
+| Core export digest deterministico | `Test-CoreExportInventoryDeterminism.ps1`, `Test-OpenSourceCoreInventory.ps1`, doppia produzione artifact | `AUTOMATED` — P3 PASS per la release; raw manifest SHA ancora run-specific |
+| Licenza path-based completa e univoca | `ALPHA_LIC_all_tracked_paths_have_one_policy`, `ALPHA_LIC_apache_override_precedes_default_mpl`, `ALPHA_LIC_generic_reference_expression_is_exact`, `eng/Test-LicensePolicy.ps1` | `AUTOMATED` — ALPHA-LIC PASS |
+| Licenze dei cinque artefatti e metadata coerenti | `AlphaReleaseArtifactTests` più `Test-AlphaReleaseArtifacts.ps1`: NuGet Apache, Admin/OCI MPL, Core aggregate entrambe, manifest/SBOM binding | `AUTOMATED` — cardinalità cinque e binding invariati; hash pubblici verificati |
+| DCO 1.1 sui soli nuovi commit PR | `ALPHA_DCO_new_human_commit_with_matching_signoff`, `ALPHA_DCO_unsigned_human_commit_is_rejected`, `ALPHA_DCO_mismatched_signoff_is_rejected`, `ALPHA_DCO_pre_policy_history_is_not_evaluated_retroactively` | `AUTOMATED` — ALPHA-SEC PASS |
+| Security/CoC pubblici e distinti | `SECURITY.md`, Contributor Covenant 3.0 con contact `supporto@apocert.it`; security report distinto dal conduct report | PASS; nessuno SLA o claim production |
+| DOC-04 FSE2 truth-only | Stato exact-main synthetic-qualified; S1 `contentCommitment`, A1 mTLS, Local PKCS12/vertical image opzionali; nessun materiale reale/OfficialTest; `validate-cda` aperto | PASS truth-only; nessun gate FSE2 dichiarato PASS |
+| ALPHA-REL publication truth | `eng/Test-PostReleaseTruth.ps1`, `docs/releases/0.1.0-alpha.1-publication-attestation.json`, release ID `375842367` | PASS — nove asset pubblici, cinque artefatti prodotto, due SBOM pubblici e nove record SBOM interni; `productionReady=false`, FSE2 OfficialTest non qualificato |
 
 ### Riconciliazione PR #29-#34
 
@@ -57,8 +58,8 @@ livelli distinti.
 
 Le tabelle dettagliate sotto restano utili per i test nominativi. Qualsiasi stato
 “exact-head pending” associato a un vecchio candidate è storico e non prevale sul
-riepilogo exact-main sopra. API/OpenAPI/generated parity sarà riconciliata in DOC-03; la
-documentazione FSE2 dettagliata in DOC-04.
+riepilogo exact-main sopra. I tre follow-up di contratto documentale sono registrati nel
+backlog; la documentazione FSE2 dettagliata resta in gestione alla track dedicata.
 
 ## Requisiti funzionali
 
@@ -151,7 +152,7 @@ documentazione FSE2 dettagliata in DOC-04.
 | Pagination/selectors | unit and PG18 stable totals/order with 101 records; `UI-MOCK-31` selects records 51/101 by keyboard | PASS local + CI |
 | i18n/theme/a11y | Recursive backend emission inventory generates `runtime-wire-codes.json` and the typed frontend contract; exact backend/published/typed/IT/EN parity and known-code coverage; named Vitest/UI-MOCK cases; axe critical/serious = 0 | `AUTOMATED` — PASS |
 | OpenAPI operational client | `AdminOpenApiParityTests`, generated `paths` client and `npm run check:api` | PASS local + CI |
-| Packaging/open-source boundary | Gateway/full-stack and Core export build/test/license/secret gates; `ProviderBoundaryTests`, Core export validation and manifest hash verification | `AUTOMATED` — PASS; raw manifest SHA non deterministico cross-run, P3 deferred |
+| Packaging/open-source boundary | Gateway/full-stack and Core export build/test/license/secret gates; `ProviderBoundaryTests`, Core export validation and manifest hash verification | `AUTOMATED` — PASS; raw manifest SHA non deterministico cross-run, P3 chiuso dal digest normalizzato |
 | Secret scanner negative control | hidden/untracked synthetic `client_secret` fixture must fail; fixture removal followed by clean scan must pass | PASS local + CI |
 
 ## M5.5 Direct Gateway Access
