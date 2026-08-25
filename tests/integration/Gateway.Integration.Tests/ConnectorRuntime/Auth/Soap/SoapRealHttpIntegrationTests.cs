@@ -114,7 +114,11 @@ public sealed class SoapRealHttpIntegrationTests
         using CertificateFixture certificates = CertificateFixture.Create();
         await using SyntheticSoapServerInstance server = await SyntheticSoapServerHost.StartAsync(
             new("synthetic-user", "synthetic-password", false, TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2)), certificates.Server, TestContext.Current.CancellationToken);
-        SoapSessionClient client = CreateClient(certificates.Root, certificates.Server, server.Endpoint);
+        ResponseBodyDeadlineTransport transport = new(
+            new SystemRestrictedTransport(new X509Certificate2Collection(certificates.Root), Convert.ToHexString(SHA256.HashData(certificates.Server.RawData))),
+            TimeSpan.FromMilliseconds(StalledBodyTimeoutMilliseconds),
+            TestContext.Current.CancellationToken);
+        SoapSessionClient client = CreateClient(certificates.Root, certificates.Server, server.Endpoint, transport);
         SystemGatewayClock clock = new();
         ConnectorAuthExecutionContext context = Context(clock);
         SoapEndpointBinding endpoint = new(server.Endpoint, 4);
@@ -126,6 +130,8 @@ public sealed class SoapRealHttpIntegrationTests
         using CancellationTokenSource observationDeadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         observationDeadline.CancelAfter(TimeSpan.FromSeconds(10));
         await server.Counters.WaitForBodyHeadersFlushedAsync(observationDeadline.Token);
+        Assert.False(invocation.IsCompleted);
+        transport.StartResponseBodyDeadline();
         SoapAuthException timeout = await Assert.ThrowsAsync<SoapAuthException>(() => invocation);
         Assert.Equal("SOAP-TIMEOUT", timeout.Code);
         Assert.Equal(1, server.Counters.Business);
@@ -141,8 +147,8 @@ public sealed class SoapRealHttpIntegrationTests
         return request;
     }
 
-    private static SoapSessionClient CreateClient(X509Certificate2 root, X509Certificate2 server, Uri endpoint) => new(
-        new FixedSecrets(), new FixedResolver(), new SystemRestrictedTransport(new X509Certificate2Collection(root), Convert.ToHexString(SHA256.HashData(server.RawData))), new SystemGatewayClock(), new MatchingStampProvider(), new LoopbackAllowance(endpoint.DnsSafeHost));
+    private static SoapSessionClient CreateClient(X509Certificate2 root, X509Certificate2 server, Uri endpoint, IRestrictedTransport? transport = null) => new(
+        new FixedSecrets(), new FixedResolver(), transport ?? new SystemRestrictedTransport(new X509Certificate2Collection(root), Convert.ToHexString(SHA256.HashData(server.RawData))), new SystemGatewayClock(), new MatchingStampProvider(), new LoopbackAllowance(endpoint.DnsSafeHost));
 
     private static ConnectorAuthExecutionContext Context(SystemGatewayClock clock) => new(
         Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "synthetic-soap", "1.0.0", "business", 3, 4, 9, "basic-session", Guid.NewGuid(), clock.UtcNow.AddMinutes(2));
@@ -179,6 +185,48 @@ public sealed class SoapRealHttpIntegrationTests
     private sealed class LoopbackAllowance(string host) : IPrivateDestinationAllowance
     {
         public bool IsAllowed(string candidateHost, IPAddress address) => string.Equals(host, candidateHost, StringComparison.OrdinalIgnoreCase) && IPAddress.IsLoopback(address);
+    }
+
+    private sealed class ResponseBodyDeadlineTransport(IRestrictedTransport restricted, TimeSpan expectedTimeout, CancellationToken callerCancellation) : IRestrictedTransport
+    {
+        private readonly TaskCompletionSource deadlineStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal void StartResponseBodyDeadline() => deadlineStarted.TrySetResult();
+
+        public Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken) =>
+            restricted.SendAsync(request, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, cancellationToken);
+
+        public Task<ExternalResponse> SendSoapAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
+        {
+            if (timeout != expectedTimeout)
+                return restricted.SendSoapAsync(request, approvedAddresses, timeout, maximumResponseBytes, cancellationToken);
+
+            // The client-created operation token has already started counting. This test-only path
+            // instead starts that same bounded timeout after the real response headers are observed.
+            _ = cancellationToken;
+            return SendStalledBodyAsync(request, approvedAddresses, timeout, maximumResponseBytes);
+        }
+
+        private async Task<ExternalResponse> SendStalledBodyAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, TimeSpan timeout, long maximumResponseBytes)
+        {
+            using CancellationTokenSource responseBodyDeadline = CancellationTokenSource.CreateLinkedTokenSource(callerCancellation);
+            Task<ExternalResponse> pending = restricted.SendSoapAsync(
+                request, approvedAddresses, Timeout.InfiniteTimeSpan, maximumResponseBytes, responseBodyDeadline.Token);
+            Task start = deadlineStarted.Task.WaitAsync(callerCancellation);
+            try
+            {
+                if (await Task.WhenAny(pending, start).ConfigureAwait(false) == pending)
+                    return await pending.ConfigureAwait(false);
+
+                await start.ConfigureAwait(false);
+                responseBodyDeadline.CancelAfter(timeout);
+                return await pending.ConfigureAwait(false);
+            }
+            finally
+            {
+                await responseBodyDeadline.CancelAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     private sealed class CertificateFixture(X509Certificate2 root, X509Certificate2 server) : IDisposable
