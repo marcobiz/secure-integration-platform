@@ -79,6 +79,8 @@ public sealed class SecureLayerVerticalSliceTests
 
     private sealed class VerticalSliceHarness : IAsyncDisposable
     {
+        private static readonly TimeSpan PositiveClientOperationTimeout = TimeSpan.FromSeconds(60);
+
         private readonly TestDirectory temporary;
         private readonly WebApplication external;
         private readonly WebApplication gateway;
@@ -232,9 +234,9 @@ public sealed class SecureLayerVerticalSliceTests
             NamedPipeBrokerServer broker = new(brokerOptions, new ApplicationAuthorizer(brokerOptions.Applications), new BrokerRequestDispatcher(service));
             CancellationTokenSource stopped = new();
             Task brokerTask = broker.RunAsync(stopped.Token);
-            // The ordinary path includes two in-process HTTPS handshakes and uses the production
-            // operation deadline under shared-runner load. Deadline behavior is covered below.
-            BrokerClient client = new(new BrokerClientOptions { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId });
+            // The positive test path includes two in-process HTTPS handshakes and has a bounded
+            // fixture-only deadline for shared-runner load. Deadline behavior is covered below.
+            BrokerClient client = new(new BrokerClientOptions { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId, OperationTimeout = PositiveClientOperationTimeout });
             BrokerClient shortClient = new(new BrokerClientOptions { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId, OperationTimeout = TimeSpan.FromMilliseconds(150) });
             harness = new VerticalSliceHarness(temporary, external, gateway, broker, stopped, brokerTask, secrets, keys, gatewayAddress, pipeName, client, shortClient, brokerClientCertificate, gatewayClientCertificate, gatewayServerCertificate, externalServerCertificate);
             harness.PlatformAudit.AddRange(audit.Events);

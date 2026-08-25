@@ -108,6 +108,9 @@ public sealed class SoapRealHttpIntegrationTests
     [Fact]
     public async Task M6_IT_SOAP_real_HTTPS_timeout_covers_headers_flushed_then_stalled_response_body()
     {
+        const int SetupTimeoutMilliseconds = 10_000;
+        const int StalledBodyTimeoutMilliseconds = 250;
+
         using CertificateFixture certificates = CertificateFixture.Create();
         await using SyntheticSoapServerInstance server = await SyntheticSoapServerHost.StartAsync(
             new("synthetic-user", "synthetic-password", false, TimeSpan.FromMinutes(5), TimeSpan.FromSeconds(2)), certificates.Server, TestContext.Current.CancellationToken);
@@ -115,9 +118,9 @@ public sealed class SoapRealHttpIntegrationTests
         SystemGatewayClock clock = new();
         ConnectorAuthExecutionContext context = Context(clock);
         SoapEndpointBinding endpoint = new(server.Endpoint, 4);
-        SoapSessionProfile loginProfile = Profile(SoapEnvelopeVersion.Soap11, timeoutMilliseconds: 2_000, maximumResponseBytes: 4_096);
+        SoapSessionProfile loginProfile = Profile(SoapEnvelopeVersion.Soap11, timeoutMilliseconds: SetupTimeoutMilliseconds, maximumResponseBytes: 4_096);
         OpaqueSoapSessionReference session = await client.AcquireSessionAsync(context, endpoint, loginProfile, TestContext.Current.CancellationToken);
-        SoapSessionProfile stalledBodyProfile = Profile(SoapEnvelopeVersion.Soap11, timeoutMilliseconds: 250, maximumResponseBytes: 4_096);
+        SoapSessionProfile stalledBodyProfile = Profile(SoapEnvelopeVersion.Soap11, timeoutMilliseconds: StalledBodyTimeoutMilliseconds, maximumResponseBytes: 4_096);
 
         Task<SoapBusinessResult> invocation = client.InvokeAsync(context, endpoint, stalledBodyProfile, new Dictionary<string, string> { ["payload"] = "body-stalled" }, session, TestContext.Current.CancellationToken);
         using CancellationTokenSource observationDeadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
