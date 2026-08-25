@@ -6,6 +6,13 @@ using System.Text.RegularExpressions;
 
 namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2;
 
+internal static class Fse2OfficialIdentifierBounds
+{
+    internal const int TraceIdMaximumLength = 100;
+    internal const int SpanIdMaximumLength = 100;
+    internal const int WorkflowInstanceIdMaximumLength = 256;
+}
+
 /// <summary>Strict FSE2-only CX and XON formatting. This is not a general IHE framework.</summary>
 public static partial class Fse2IheFormatter
 {
@@ -145,7 +152,9 @@ public static partial class Fse2Validation
     public static string ValidateWorkflowId(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
-        if (value.Length > 512 || value != value.Trim() || value.Any(character => char.IsControl(character) || character is '/' or '?' or '#' or '\\'))
+        if (value.Length > Fse2OfficialIdentifierBounds.WorkflowInstanceIdMaximumLength ||
+            value != value.Trim() ||
+            value.Any(character => char.IsControl(character) || character is '/' or '?' or '#' or '\\'))
             throw new ArgumentException("FSE2_WORKFLOW_ID_INVALID", nameof(value));
         return value;
     }
@@ -153,7 +162,8 @@ public static partial class Fse2Validation
     public static string ValidateTraceId(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
-        if (!TraceRegex().IsMatch(value)) throw new ArgumentException("FSE2_TRACE_ID_INVALID", nameof(value));
+        if (value.Length > Fse2OfficialIdentifierBounds.TraceIdMaximumLength || !TraceRegex().IsMatch(value))
+            throw new ArgumentException("FSE2_TRACE_ID_INVALID", nameof(value));
         return value;
     }
 
@@ -193,6 +203,6 @@ public static partial class Fse2Validation
     [GeneratedRegex("^[A-Z0-9][A-Z0-9._-]{1,31}$", RegexOptions.CultureInvariant)] private static partial Regex OrganizationCodeRegex();
     [GeneratedRegex("^[0-9]+(?:\\.[0-9]+)+(?:\\^[A-Za-z0-9._-]{1,128})?$", RegexOptions.CultureInvariant)] private static partial Regex DocumentOidRegex();
     [GeneratedRegex("^[a-f0-9]{24}$", RegexOptions.CultureInvariant)] private static partial Regex DocumentHexRegex();
-    [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", RegexOptions.CultureInvariant)] private static partial Regex TraceRegex();
+    [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9._-]*$", RegexOptions.CultureInvariant)] private static partial Regex TraceRegex();
     [GeneratedRegex("^\\('[0-9A-Za-z.-]{1,32}\\^\\^[0-9]+(?:\\.[0-9]+)+ '\\)$", RegexOptions.IgnorePatternWhitespace | RegexOptions.CultureInvariant)] private static partial Regex ResourceTypeRegex();
 }

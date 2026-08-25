@@ -584,6 +584,59 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task FSE2_SEC_workflowInstanceId_257_is_denied_before_signing_DNS_HTTPS_and_network()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        await using SyntheticFse2OperationMatrixServer server = await SyntheticFse2OperationMatrixServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-workflow-bound-negative",
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
+        Fse2OperationDescriptor status = Fse2OperationCatalog.Get(Fse2Operation.GetStatusByWorkflow);
+        string connectorId = "fse2-workflow-bound-negative-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-workflow-bound-negative-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-workflow-bound-negative-application");
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId,
+            "1.0.0",
+            environmentId,
+            server.Endpoint,
+            DefinitionForOperations(connectorId, "1.0.0", SpkiSha256(material.SigningKeyRevision1),
+                SpkiSha256(material.ClientCertificateRevision1), "1.0.0", [status]),
+            provider,
+            "sign-r1",
+            "mtls-r1",
+            operationId: status.OperationId);
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "fse2-workflow-bound-negative-identity");
+        await fixture.AddOperationGrantAsync(identity, connectorId, status.OperationId);
+
+        string invalidPayload = PayloadFor(status).Replace(
+            "workflow-fse2-1",
+            new string('w', 257),
+            StringComparison.Ordinal);
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{status.OperationId}:invoke",
+            InvokeRequest(invalidPayload));
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Equal(0, provider.SignDigestCalls);
+        Assert.Equal(0, fixture.HostResolutionCount);
+        Assert.Equal(0, server.Requests);
+        Assert.Equal(0, fixture.GenericTransportRequests);
+    }
+
     private static async Task RunSuccessAsync(
         string? runtimeConnection,
         string? adminConnection,

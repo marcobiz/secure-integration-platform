@@ -422,8 +422,11 @@ public static class Fse2ResponseMapper
             using JsonDocument document = JsonDocument.Parse(response.Body, new JsonDocumentOptions { MaxDepth = 16 });
             JsonElement root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object) throw new JsonException();
-            return new(response.StatusCode, correlationId, Safe(root, "workflowInstanceId", 512, workflow: true),
-                Safe(root, "traceID", 128), Safe(root, "spanID", 128), Safe(root, "warning", 96), operation.RetryClass);
+            return new(response.StatusCode, correlationId,
+                Safe(root, "workflowInstanceId", Fse2OfficialIdentifierBounds.WorkflowInstanceIdMaximumLength, workflow: true),
+                Safe(root, "traceID", Fse2OfficialIdentifierBounds.TraceIdMaximumLength),
+                Safe(root, "spanID", Fse2OfficialIdentifierBounds.SpanIdMaximumLength),
+                Safe(root, "warning", 96), operation.RetryClass);
         }
         catch (Fse2ConnectorException) { throw; }
         catch (Exception) { throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID"); }

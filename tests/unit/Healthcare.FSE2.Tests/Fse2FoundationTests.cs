@@ -287,6 +287,116 @@ public sealed class Fse2FoundationTests
         Assert.DoesNotContain(canary, error.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void FSE2_RESPONSE_official_exact_maximum_trace_span_and_workflow_identifiers_are_accepted()
+    {
+        string traceId = new('t', 100);
+        string spanId = new('s', 100);
+        string workflowInstanceId = new('w', 256);
+        byte[] body = JsonSerializer.SerializeToUtf8Bytes(new { traceID = traceId, spanID = spanId, workflowInstanceId });
+
+        Fse2Response response = Fse2ResponseMapper.Map(
+            new(200, "application/json", body),
+            Guid.NewGuid(),
+            Fse2OperationCatalog.Get(Fse2Operation.ValidateCda));
+
+        Assert.Equal(traceId, response.TraceId);
+        Assert.Equal(spanId, response.SpanId);
+        Assert.Equal(workflowInstanceId, response.WorkflowInstanceId);
+    }
+
+    [Fact]
+    public void FSE2_RESPONSE_traceID_101_is_rejected()
+    {
+        string rawIdentifier = new('t', 101);
+        Fse2ConnectorException error = Assert.Throws<Fse2ConnectorException>(() => Fse2ResponseMapper.Map(
+            new(200, "application/json", JsonSerializer.SerializeToUtf8Bytes(new { traceID = rawIdentifier })),
+            Guid.NewGuid(),
+            Fse2OperationCatalog.Get(Fse2Operation.ValidateCda)));
+
+        Assert.Equal(Fse2ErrorCategory.ResponseInvalid, error.Category);
+        Assert.Equal("FSE2_RESPONSE_INVALID", error.SafeCode);
+    }
+
+    [Fact]
+    public void FSE2_RESPONSE_spanID_101_is_rejected()
+    {
+        string rawIdentifier = new('s', 101);
+        Fse2ConnectorException error = Assert.Throws<Fse2ConnectorException>(() => Fse2ResponseMapper.Map(
+            new(200, "application/json", JsonSerializer.SerializeToUtf8Bytes(new { spanID = rawIdentifier })),
+            Guid.NewGuid(),
+            Fse2OperationCatalog.Get(Fse2Operation.ValidateCda)));
+
+        Assert.Equal(Fse2ErrorCategory.ResponseInvalid, error.Category);
+        Assert.Equal("FSE2_RESPONSE_INVALID", error.SafeCode);
+    }
+
+    [Fact]
+    public void FSE2_RESPONSE_workflowInstanceId_257_is_rejected()
+    {
+        string rawIdentifier = new('w', 257);
+        Fse2ConnectorException error = Assert.Throws<Fse2ConnectorException>(() => Fse2ResponseMapper.Map(
+            new(200, "application/json", JsonSerializer.SerializeToUtf8Bytes(new { workflowInstanceId = rawIdentifier })),
+            Guid.NewGuid(),
+            Fse2OperationCatalog.Get(Fse2Operation.ValidateCda)));
+
+        Assert.Equal(Fse2ErrorCategory.ResponseInvalid, error.Category);
+        Assert.Equal("FSE2_RESPONSE_INVALID", error.SafeCode);
+    }
+
+    [Fact]
+    public void FSE2_RESPONSE_invalid_identifier_error_is_sanitized_without_raw_value()
+    {
+        string rawIdentifier = "raw-identifier-canary-" + new string('x', 100);
+        Fse2ConnectorException error = Assert.Throws<Fse2ConnectorException>(() => Fse2ResponseMapper.Map(
+            new(200, "application/json", JsonSerializer.SerializeToUtf8Bytes(new { traceID = rawIdentifier })),
+            Guid.NewGuid(),
+            Fse2OperationCatalog.Get(Fse2Operation.ValidateCda)));
+
+        Assert.Equal("FSE2_RESPONSE_INVALID", error.Message);
+        Assert.DoesNotContain(rawIdentifier, error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FSE2_RESPONSE_invalid_warning_and_raw_response_are_not_exposed()
+    {
+        const string rawWarning = "raw warning canary";
+        const string rawResponseCanary = "raw-response-canary";
+        byte[] rawResponse = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            warning = rawWarning,
+            upstreamPayload = rawResponseCanary
+        });
+
+        Fse2ConnectorException error = Assert.Throws<Fse2ConnectorException>(() => Fse2ResponseMapper.Map(
+            new(200, "application/json", rawResponse),
+            Guid.NewGuid(),
+            Fse2OperationCatalog.Get(Fse2Operation.ValidateCda)));
+
+        Assert.Equal("FSE2_RESPONSE_INVALID", error.SafeCode);
+        Assert.DoesNotContain(rawWarning, error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(rawResponseCanary, error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(Encoding.UTF8.GetString(rawResponse), error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FSE2_REQUEST_status_traceID_100_is_accepted_and_101_is_rejected()
+    {
+        string exactMaximum = new('t', 100);
+
+        Assert.Equal(exactMaximum, Fse2Request.GetStatusByTrace(exactMaximum, Claims()).ResourceIdentifier);
+        Assert.Throws<ArgumentException>(() => Fse2Request.GetStatusByTrace(new string('t', 101), Claims()));
+    }
+
+    [Fact]
+    public void FSE2_REQUEST_status_workflowInstanceId_256_is_accepted_and_257_is_rejected()
+    {
+        string exactMaximum = new('w', 256);
+
+        Assert.Equal(exactMaximum, Fse2Request.GetStatusByWorkflow(exactMaximum, Claims()).ResourceIdentifier);
+        Assert.Throws<ArgumentException>(() => Fse2Request.GetStatusByWorkflow(new string('w', 257), Claims()));
+    }
+
     private static Fse2ClinicalClaims Claims() => Fse2ClinicalClaims.CreatePerson(
         "RSSMRA80A01H501U",
         "2.16.840.1.113883.2.9.4.3.2",
