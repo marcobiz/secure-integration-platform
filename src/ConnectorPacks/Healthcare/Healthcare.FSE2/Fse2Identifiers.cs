@@ -174,7 +174,11 @@ public static partial class Fse2Validation
         return value;
     }
 
-    public static void ValidateJsonObject(ReadOnlyMemory<byte> value)
+    public static void ValidateJsonObject(ReadOnlyMemory<byte> value) => ValidateJsonObject(value, operation: null);
+
+    internal static void ValidateJsonObject(ReadOnlyMemory<byte> value, Fse2Operation operation) => ValidateJsonObject(value, (Fse2Operation?)operation);
+
+    private static void ValidateJsonObject(ReadOnlyMemory<byte> value, Fse2Operation? operation)
     {
         if (value.IsEmpty || value.Length > 1024 * 1024) throw new ArgumentException("FSE2_REQUEST_BODY_INVALID", nameof(value));
         try
@@ -189,8 +193,33 @@ public static partial class Fse2Validation
                 property.Name.Equals("attachment_hash_input", StringComparison.OrdinalIgnoreCase) ||
                 property.Name.Equals("attachmentHashInput", StringComparison.OrdinalIgnoreCase)))
                 throw new JsonException();
+            if (operation is Fse2Operation.Create or Fse2Operation.Replace)
+                ValidatePublicationWorkflowInstanceId(value.Span);
         }
-        catch (JsonException) { throw new ArgumentException("FSE2_REQUEST_BODY_INVALID", nameof(value)); }
+        catch (Exception exception) when (exception is JsonException or ArgumentException)
+        {
+            throw new ArgumentException("FSE2_REQUEST_BODY_INVALID", nameof(value));
+        }
+    }
+
+    private static void ValidatePublicationWorkflowInstanceId(ReadOnlySpan<byte> value)
+    {
+        const string propertyName = "workflowInstanceId";
+        Utf8JsonReader reader = new(value, new JsonReaderOptions { AllowTrailingCommas = false, CommentHandling = JsonCommentHandling.Disallow, MaxDepth = 32 });
+        bool observed = false;
+        while (reader.Read())
+        {
+            if (reader.TokenType != JsonTokenType.PropertyName || reader.CurrentDepth != 1) continue;
+
+            string? observedName = reader.GetString();
+            if (!string.Equals(observedName, propertyName, StringComparison.OrdinalIgnoreCase)) continue;
+            if (observed || reader.ValueIsEscaped || !string.Equals(observedName, propertyName, StringComparison.Ordinal))
+                throw new JsonException();
+
+            observed = true;
+            if (!reader.Read() || reader.TokenType != JsonTokenType.String) throw new JsonException();
+            _ = ValidateWorkflowId(reader.GetString()!);
+        }
     }
 
     internal static bool IsSafeIdentifier(string? value) => !string.IsNullOrWhiteSpace(value) && value.Length <= 128 && value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');

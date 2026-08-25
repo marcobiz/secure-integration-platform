@@ -214,7 +214,7 @@ public sealed class Fse2OrganizationExecutionStrategy(
             operation.HasJsonBody != !inbound.RequestBody.IsEmpty ||
             operation.RequiresResourceIdentifier != (inbound.ResourceIdentifier is not null))
             throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_REQUEST_SHAPE_DENIED");
-        if (operation.HasJsonBody) Fse2Validation.ValidateJsonObject(inbound.RequestBody);
+        if (operation.HasJsonBody) Fse2Validation.ValidateJsonObject(inbound.RequestBody, operation.Operation);
         if (inbound.ResourceIdentifier is not null)
             _ = operation.Operation switch
             {

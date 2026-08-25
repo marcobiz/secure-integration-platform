@@ -515,6 +515,83 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     }
 
     [Fact]
+    public Task FSE2_REQUEST_create_and_replace_workflowInstanceId_256_are_accepted_and_exact_wire_bytes_are_preserved()
+    {
+        string exactMaximum = new('w', 256);
+        return AssertJsonBodiesAcceptedAndPreservedAsync(new Dictionary<Fse2Operation, string>
+        {
+            [Fse2Operation.Create] = JsonSerializer.Serialize(new { workflowInstanceId = exactMaximum, metadata = "create-exact" }, WebJson),
+            [Fse2Operation.Replace] = JsonSerializer.Serialize(new { workflowInstanceId = exactMaximum, metadata = "replace-exact" }, WebJson)
+        });
+    }
+
+    [Fact]
+    public Task FSE2_REQUEST_absent_workflowInstanceId_and_innocent_string_remain_compatible()
+    {
+        return AssertJsonBodiesAcceptedAndPreservedAsync(new Dictionary<Fse2Operation, string>
+        {
+            [Fse2Operation.Create] = "{\"metadata\":\"workflow-field-absent\"}",
+            [Fse2Operation.Replace] = "{\"note\":\"workflowInstanceId is text, not a property\"}"
+        });
+    }
+
+    [Fact]
+    public Task FSE2_REQUEST_other_operations_preserve_existing_JSON_object_behavior()
+    {
+        string existingBehaviorBody = JsonSerializer.Serialize(new
+        {
+            workflowInstanceId = new string('w', 257),
+            metadata = "operation-aware-scope"
+        }, WebJson);
+        return AssertJsonBodiesAcceptedAndPreservedAsync(new Dictionary<Fse2Operation, string>
+        {
+            [Fse2Operation.UpdateMetadata] = existingBehaviorBody
+        });
+    }
+
+    [Fact]
+    public Task FSE2_SEC_create_and_replace_workflowInstanceId_257_invoke_strategy_once_and_deny_before_store_signing_DNS_HTTPS_transport_and_network()
+    {
+        string invalidBody = JsonSerializer.Serialize(new
+        {
+            workflowInstanceId = new string('w', 257),
+            metadata = "raw-workflow-canary-not-exposed"
+        }, WebJson);
+        return AssertPublicationWorkflowBodiesDeniedAsync("max-plus-one", [invalidBody]);
+    }
+
+    [Fact]
+    public Task FSE2_SEC_create_and_replace_workflowInstanceId_alternative_JSON_types_invoke_strategy_once_and_deny_before_store_signing_DNS_HTTPS_transport_and_network() =>
+        AssertPublicationWorkflowBodiesDeniedAsync("alternate-types",
+        [
+            "{\"workflowInstanceId\":7,\"metadata\":\"raw-workflow-canary-not-exposed\"}",
+            "{\"workflowInstanceId\":true,\"metadata\":\"raw-workflow-canary-not-exposed\"}",
+            "{\"workflowInstanceId\":{},\"metadata\":\"raw-workflow-canary-not-exposed\"}",
+            "{\"workflowInstanceId\":[],\"metadata\":\"raw-workflow-canary-not-exposed\"}",
+            "{\"workflowInstanceId\":null,\"metadata\":\"raw-workflow-canary-not-exposed\"}"
+        ]);
+
+    [Fact]
+    public Task FSE2_SEC_create_and_replace_workflowInstanceId_duplicate_casing_escaped_and_exact_alias_forms_invoke_strategy_once_and_deny_before_store_signing_DNS_HTTPS_transport_and_network() =>
+        AssertPublicationWorkflowBodiesDeniedAsync("property-forms",
+        [
+            "{\"workflowInstanceId\":\"raw-workflow-canary-not-exposed\",\"workflowInstanceId\":\"second\"}",
+            "{\"WorkflowInstanceId\":\"raw-workflow-canary-not-exposed\"}",
+            "{\"\\u0077orkflowInstanceId\":\"raw-workflow-canary-not-exposed\"}",
+            "{\"workflowInstanceId\":\"raw-workflow-canary-not-exposed\",\"WorkflowInstanceId\":\"second\"}"
+        ]);
+
+    [Fact]
+    public Task FSE2_SEC_create_and_replace_workflowInstanceId_whitespace_control_and_separator_forms_invoke_strategy_once_and_deny_before_store_signing_DNS_HTTPS_transport_and_network() =>
+        AssertPublicationWorkflowBodiesDeniedAsync("identifier-forms",
+        [
+            "{\"workflowInstanceId\":\" raw-workflow-canary-not-exposed\"}",
+            "{\"workflowInstanceId\":\"raw-workflow-canary-not-exposed \"}",
+            "{\"workflowInstanceId\":\"raw-workflow-canary-not-exposed\\u000A\"}",
+            "{\"workflowInstanceId\":\"raw-workflow-canary/not-exposed\"}"
+        ]);
+
+    [Fact]
     public async Task FSE2_SEC_dynamic_path_missing_extra_encoded_and_noncanonical_values_deny_before_signing_and_network()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
@@ -631,6 +708,154 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             InvokeRequest(invalidPayload));
 
         Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Equal(0, provider.SignDigestCalls);
+        Assert.Equal(0, fixture.HostResolutionCount);
+        Assert.Equal(0, server.Requests);
+        Assert.Equal(0, fixture.GenericTransportRequests);
+    }
+
+    private static async Task AssertJsonBodiesAcceptedAndPreservedAsync(
+        IReadOnlyDictionary<Fse2Operation, string> requestBodies)
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        await using SyntheticFse2OperationMatrixServer server = await SyntheticFse2OperationMatrixServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-workflow-request-positive",
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
+
+        Fse2OperationDescriptor[] operations = requestBodies.Keys
+            .Select(Fse2OperationCatalog.Get)
+            .ToArray();
+        string connectorId = "fse2-workflow-request-positive-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-workflow-request-positive-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-workflow-request-positive-application");
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId,
+            "1.0.0",
+            environmentId,
+            server.Endpoint,
+            DefinitionForOperations(connectorId, "1.0.0", SpkiSha256(material.SigningKeyRevision1),
+                SpkiSha256(material.ClientCertificateRevision1), "1.0.0", operations),
+            provider,
+            "sign-r1",
+            "mtls-r1",
+            operationId: "*",
+            expectedOperationCount: operations.Length);
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "fse2-workflow-request-positive-identity");
+        foreach (Fse2OperationDescriptor operation in operations)
+            await fixture.AddOperationGrantAsync(identity, connectorId, operation.OperationId);
+
+        foreach (Fse2OperationDescriptor operation in operations)
+        {
+            string exactRequestBody = requestBodies[operation.Operation];
+            using HttpResponseMessage response = await fixture.SendSignedAsync(
+                identity,
+                HttpMethod.Post,
+                $"/v1/connectors/{connectorId}/operations/{operation.OperationId}:invoke",
+                InvokeRequest(PayloadFor(operation, exactRequestBody)));
+            string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+            Assert.True(response.StatusCode == HttpStatusCode.OK, $"{operation.OperationId}:{responseBody}");
+        }
+
+        Assert.Equal(operations.Length, server.Requests);
+        Assert.Equal(operations.Length * 2, provider.SignDigestCalls);
+        Assert.Equal(operations.Length, fixture.HostResolutionCount);
+        Assert.Equal(operations.Length, fixture.GenericTransportRequests);
+        foreach (Fse2OperationDescriptor operation in operations)
+        {
+            SyntheticFse2OperationMatrixServer.Observation observation = Assert.Single(
+                server.Observations, value => value.Operation == operation.Operation);
+            byte[] exactRequestBody = Encoding.UTF8.GetBytes(requestBodies[operation.Operation]);
+            if (operation.HasDocument)
+                Assert.True(observation.Body.AsSpan().IndexOf(exactRequestBody) >= 0, operation.OperationId);
+            else
+                Assert.Equal(exactRequestBody, observation.Body);
+            Assert.True(observation.DualDistinctTokensObserved);
+            Assert.True(observation.ExactJwtPolicyObserved);
+            Assert.True(observation.ExactClaimsObserved);
+        }
+    }
+
+    private static async Task AssertPublicationWorkflowBodiesDeniedAsync(
+        string scenario,
+        IReadOnlyList<string> invalidRequestBodies)
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        await using SyntheticFse2OperationMatrixServer server = await SyntheticFse2OperationMatrixServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-workflow-request-negative-" + scenario,
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
+
+        Fse2OperationDescriptor[] operations =
+        [
+            Fse2OperationCatalog.Get(Fse2Operation.Create),
+            Fse2OperationCatalog.Get(Fse2Operation.Replace)
+        ];
+        string connectorId = "fse2-workflow-request-negative-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-workflow-request-negative-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-workflow-request-negative-application");
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId,
+            "1.0.0",
+            environmentId,
+            server.Endpoint,
+            DefinitionForOperations(connectorId, "1.0.0", SpkiSha256(material.SigningKeyRevision1),
+                SpkiSha256(material.ClientCertificateRevision1), "1.0.0", operations),
+            provider,
+            "sign-r1",
+            "mtls-r1",
+            operationId: "*",
+            expectedOperationCount: operations.Length);
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "fse2-workflow-request-negative-identity");
+        foreach (Fse2OperationDescriptor operation in operations)
+            await fixture.AddOperationGrantAsync(identity, connectorId, operation.OperationId);
+
+        foreach (Fse2OperationDescriptor operation in operations)
+        {
+            foreach (string invalidRequestBody in invalidRequestBodies)
+            {
+                int signingBefore = provider.SignDigestCalls;
+                int dnsBefore = fixture.HostResolutionCount;
+                int httpsBefore = server.Requests;
+                int transportBefore = fixture.GenericTransportRequests;
+                using HttpResponseMessage response = await fixture.SendSignedAsync(
+                    identity,
+                    HttpMethod.Post,
+                    $"/v1/connectors/{connectorId}/operations/{operation.OperationId}:invoke",
+                    InvokeRequest(PayloadFor(operation, invalidRequestBody)));
+                string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+                Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+                Assert.DoesNotContain("workflowInstanceId", responseBody, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("raw-workflow-canary-not-exposed", responseBody, StringComparison.Ordinal);
+                Assert.DoesNotContain(Convert.ToBase64String(Encoding.UTF8.GetBytes(invalidRequestBody)), responseBody, StringComparison.Ordinal);
+                Assert.Equal(signingBefore, provider.SignDigestCalls);
+                Assert.Equal(dnsBefore, fixture.HostResolutionCount);
+                Assert.Equal(httpsBefore, server.Requests);
+                Assert.Equal(transportBefore, fixture.GenericTransportRequests);
+            }
+        }
+
         Assert.Equal(0, provider.SignDigestCalls);
         Assert.Equal(0, fixture.HostResolutionCount);
         Assert.Equal(0, server.Requests);
@@ -867,7 +1092,9 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         }
         """;
 
-    private static string PayloadFor(Fse2OperationDescriptor operation)
+    private static string PayloadFor(
+        Fse2OperationDescriptor operation,
+        string requestBodyJson = "{\"metadata\":\"published-exact\"}")
     {
         string? resourceIdentifier = operation.Operation switch
         {
@@ -890,7 +1117,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
                 : "application/pdf";
         }
         if (operation.HasJsonBody)
-            payload["requestBodyBase64"] = Convert.ToBase64String("{\"metadata\":\"published-exact\"}"u8);
+            payload["requestBodyBase64"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(requestBodyJson));
         if (resourceIdentifier is not null) payload["resourceIdentifier"] = resourceIdentifier;
         return JsonSerializer.Serialize(payload, WebJson);
     }
