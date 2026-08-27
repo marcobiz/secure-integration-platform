@@ -121,18 +121,36 @@ redirect zero, mTLS identity and dual signing-slot policies are unchanged.
 
 Only this preflight-qualified FSE2 path can receive a bounded HTTP non-success result for mapping.
 The mapper retains at most the status/category and a code/type from the frozen official allowlist;
-malformed, duplicate, unknown or oversized problems collapse without preserving body, title or
-detail. DNS, TCP connect, TLS server validation, mutual-TLS client authentication, timeout and other
-transport failures are distinct closed phases. Audit is metadata-only and the external caller still
-receives the historical generic sanitized Gateway Problem.
+its structured HTTP Content-Type parser accepts only exact case-insensitive
+`application/problem+json` with syntactically valid parameters. Broken parameters, missing values,
+unclosed quotes, concatenated media types, controls/CRLF and over-limit headers collapse, as do
+malformed, duplicate, unknown or oversized problems, without preserving body, parameters, title or
+detail. Redirects are never followed: 3xx crosses the mapper only in the bounded FSE2 mode and
+retains no `Location`; legacy and non-FSE2 calls remain `BGW-EGRESS-REDIRECT-DENIED`.
+
+The internal observation lifecycle distinguishes DNS, TCP connect, TLS handshake, response headers,
+response-body reading and completion. mTLS client-auth classification requires a pre-header
+handshake failure plus structural server-certificate acceptance and client-certificate
+request/selection evidence. Post-header reset/EOF/body exceptions and ambiguous TLS failures become
+`TRANSPORT_FAILURE_OTHER`; caller cancellation remains cancellation and timeout remains `TIMEOUT`.
+Audit is metadata-only, every representative failure (including redirect) produces exactly one
+failure audit and zero success, and the external caller still receives the historical generic
+sanitized Gateway Problem.
 
 The offline case 476 contract pins official documentation commit
-`430e6b5d9dde8a35b04ae635c11303db787a977e`, dataset commit
-`d937255fd7e9c079c5641c537da17fe98a2f2259`, dataset SHA-256
-`7B54299D5AD7E87CA7D5569E98ADAC2D687D3E9432FD4D015194E733A2ADAABD`,
-`POST /documents/validation`, activity `VERIFICA`, `healthDataFormat=CDA`,
-`mode=ATTACHMENT`, multipart parts `requestBody` and `file`, and absence of `attachment_hash`.
-It performs no DNS resolution or network dispatch.
+`430e6b5d9dde8a35b04ae635c11303db787a977e` and dataset commit
+`d937255fd7e9c079c5641c537da17fe98a2f2259`. The canonical XML is
+`Test Case/Validazione/Documenti XML Casi OK/8 - Casi OK Profilo Sanitario Sintetico/PSS476.xml`,
+Git blob `6b654344431a21e02b979ab4907bc53b38cb4143`, 58,712 bytes, SHA-256
+`7B54299D5AD7E87CA7D5569E98ADAC2D687D3E9432FD4D015194E733A2ADAABD`; it is not a PDF.
+The exact PDF selected through checklist row 476 and embedded-CDA matching is
+`GATEWAY/A1#111#DAVINCI.CARE/DaVinci Healthcare/DaVinci/3.3/FILES/PSS476.pdf`, Git blob
+`a4bf835cbf08661a6c530f95bdea1770e0ca4ad0`, 60,148 bytes, SHA-256
+`129BE437228376B897B8D176DE099CA165714901DA3CB7B78EE2F9B68F4A252E`. Its embedded `cda.xml`
+matches the canonical XML byte-for-byte. The exact PDF, not the XML, is projected through
+`Fse2Request` and the multipart `file` part for `POST /documents/validation`; `requestBody` is
+`VERIFICA`/`CDA`/`ATTACHMENT` and `attachment_hash` is absent. The gate uses only a loopback mock and
+performs no OfficialTest DNS resolution or network dispatch.
 
 The historical live evidence at
 `fse2-configuration-authority-reconciliation-20260827T083259Z-7edddfe` remains immutable. Its one

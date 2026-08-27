@@ -27,13 +27,23 @@ already depend on the existing fail-closed non-success behavior.
   Published/Core authority.
 - `IRestrictedTransport.SendAsync` preserves its historical semantics. A separate bounded-problem
   operation is selected only by the qualified FSE2 path. It may return a non-success response with
-  status, content type and at most 16 KiB of body; redirects remain denied and an oversized body is
-  collapsed without retaining its bytes.
+  status, content type and at most 16 KiB of body. It never follows redirects; a 3xx in this exact
+  mode is returned as the same bounded upstream result and crosses the FSE2 mapper without
+  retaining `Location`. Generic, SOAP and every other non-FSE2 path retain the historical
+  `BGW-EGRESS-REDIRECT-DENIED` behavior. An oversized body is collapsed without retaining bytes.
 - `Fse2ResponseMapper` may retain only a code/type from the frozen official allowlist. Duplicate,
-  malformed, non-object, unknown-code and oversized problems collapse safely. `title`, `detail`, raw
-  body, URL, JWT, certificate and exception text are never returned, audited or evidenced.
+  malformed, non-object, unknown-code and oversized problems collapse safely. Content type is
+  parsed as structured HTTP syntax: only exact case-insensitive `application/problem+json` with
+  valid parameters is eligible, and controls, CR/LF, concatenated values, missing parameter values,
+  broken quotes and over-limit headers collapse. `title`, `detail`, parameters, raw body, URL, JWT,
+  certificate and exception text are never returned, audited or evidenced.
 - DNS, TCP connect, TLS server validation, mutual-TLS client authentication, timeout and other
-  transport failures use a closed internal phase. An upstream HTTP response uses
+  transport failures use a closed internal lifecycle: DNS, TCP connect, TLS handshake, response
+  headers received, response body reading and completed. `MTLS_CLIENT_AUTH_FAILURE` requires a
+  pre-header handshake failure plus structural server-certificate acceptance and client-certificate
+  request/selection evidence. A post-header reset, premature EOF or body-read exception is always
+  `TRANSPORT_FAILURE_OTHER`; ambiguous TLS failures collapse to the same safe class. Caller-token
+  cancellation propagates and is not relabeled timeout. An upstream HTTP response uses
   `UPSTREAM_HTTP_RESPONSE` plus the bounded status/category and optional allowlisted FSE2 code.
   Application audit receives only correlation, operation, connector version, caller kind and these
   safe diagnostics. The caller still receives the existing generic sanitized Problem.
@@ -42,7 +52,10 @@ already depend on the existing fail-closed non-success behavior.
   the current qualified scope, only for non-success status, and only with the mapper's bounded safe
   code. It cannot acquire an endpoint, header, policy, transport, response body or second dispatch.
 - The frozen case 476 request contract is reconstructed offline against the sealed plan and official
-  baseline. No OfficialTest DNS resolution or network dispatch is part of this decision evidence.
+  baseline. `PSS476.xml` and the selected `PSS476.pdf` are distinct Git objects; selection requires
+  the ministerial checklist row 476 plus byte-for-byte equality between the canonical XML and the
+  PDF's embedded `cda.xml`. The exact PDF bytes must survive `Fse2Request` and the observed multipart
+  file part. No OfficialTest DNS resolution or network dispatch is part of this decision evidence.
 
 ## Consequences
 
