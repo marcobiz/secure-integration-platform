@@ -333,6 +333,40 @@ public sealed class Fse2FoundationTests
     }
 
     [Fact]
+    public void FSE2_TRANSPORT_valid_problem_media_type_parameters_are_accepted()
+    {
+        QualifiedGatewayExecutionResult[] responses =
+        [
+            new(400, "application/problem+json; charset=utf-8", "{\"type\":\"https://fse.example/msg/syntax\"}"u8.ToArray()),
+            new(400, "Application/Problem+Json; profile=\"safe-profile\"", "{\"type\":\"https://fse.example/msg/semantic\"}"u8.ToArray())
+        ];
+
+        Assert.Equal("syntax", Fse2ResponseMapper.MapProblem(responses[0], Fse2RetryClass.NoAutomaticRetry).SafeCode);
+        Assert.Equal("semantic", Fse2ResponseMapper.MapProblem(responses[1], Fse2RetryClass.NoAutomaticRetry).SafeCode);
+    }
+
+    [Fact]
+    public void FSE2_TRANSPORT_malformed_problem_media_type_is_safely_collapsed()
+    {
+        string[] malformedContentTypes =
+        [
+            "application/problem+json; broken",
+            "application/problem+json; charset=",
+            "application/problem+json; profile=\"unterminated",
+            "application/problem+json, application/json",
+            "application/problem+json\r\nX-Unsafe: value",
+            "application/problem+json\0",
+            "application/problem+json; profile=" + new string('x', 512)
+        ];
+
+        Assert.All(malformedContentTypes, contentType => Assert.Equal(
+            "FSE2_UPSTREAM_REJECTED",
+            Fse2ResponseMapper.MapProblem(
+                new(400, contentType, "{\"type\":\"https://fse.example/msg/syntax\"}"u8.ToArray()),
+                Fse2RetryClass.NoAutomaticRetry).SafeCode));
+    }
+
+    [Fact]
     public void FSE2_TRANSPORT_HTTP_503_preserves_safe_retry_classification()
     {
         Fse2ConnectorException safeRetry = Fse2ResponseMapper.MapProblem(
@@ -402,7 +436,14 @@ public sealed class Fse2FoundationTests
         const string documentationCommit = "430e6b5d9dde8a35b04ae635c11303db787a977e";
         const string datasetCommit = "d937255fd7e9c079c5641c537da17fe98a2f2259";
         const string datasetCase = "476 / VALIDAZIONE_CDA2_PSS_CT23";
-        const string datasetSha256 = "7B54299D5AD7E87CA7D5569E98ADAC2D687D3E9432FD4D015194E733A2ADAABD";
+        const string datasetXmlPath = "Test Case/Validazione/Documenti XML Casi OK/8 - Casi OK Profilo Sanitario Sintetico/PSS476.xml";
+        const string datasetXmlBlob = "6b654344431a21e02b979ab4907bc53b38cb4143";
+        const int datasetXmlBytes = 58_712;
+        const string datasetXmlSha256 = "7B54299D5AD7E87CA7D5569E98ADAC2D687D3E9432FD4D015194E733A2ADAABD";
+        const string datasetPdfPath = "GATEWAY/A1#111#DAVINCI.CARE/DaVinci Healthcare/DaVinci/3.3/FILES/PSS476.pdf";
+        const string datasetPdfBlob = "a4bf835cbf08661a6c530f95bdea1770e0ca4ad0";
+        const int datasetPdfBytes = 60_148;
+        const string datasetPdfSha256 = "129BE437228376B897B8D176DE099CA165714901DA3CB7B78EE2F9B68F4A252E";
         byte[] requestBody = "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}"u8.ToArray();
         Fse2Request request = Fse2Request.ValidateCda("synthetic-pdf-fixture"u8.ToArray(), requestBody, Claims());
         using JsonDocument payload = JsonDocument.Parse(request.SerializeAuthorizedPayload());
@@ -421,7 +462,23 @@ public sealed class Fse2FoundationTests
         Assert.Equal("430e6b5d9dde8a35b04ae635c11303db787a977e", documentationCommit);
         Assert.Equal("d937255fd7e9c079c5641c537da17fe98a2f2259", datasetCommit);
         Assert.Equal("476 / VALIDAZIONE_CDA2_PSS_CT23", datasetCase);
-        Assert.Equal("7B54299D5AD7E87CA7D5569E98ADAC2D687D3E9432FD4D015194E733A2ADAABD", datasetSha256);
+        Assert.EndsWith("PSS476.xml", datasetXmlPath, StringComparison.Ordinal);
+        Assert.EndsWith("PSS476.pdf", datasetPdfPath, StringComparison.Ordinal);
+        Assert.NotEqual(datasetXmlBlob, datasetPdfBlob);
+        Assert.NotEqual(datasetXmlBytes, datasetPdfBytes);
+        Assert.NotEqual(datasetXmlSha256, datasetPdfSha256);
+    }
+
+    [Fact]
+    public void FSE2_T03_case_476_selects_official_PDF_not_PSS476_XML()
+    {
+        const string xmlIdentity = "6b654344431a21e02b979ab4907bc53b38cb4143/58712/7B54299D5AD7E87CA7D5569E98ADAC2D687D3E9432FD4D015194E733A2ADAABD";
+        const string pdfIdentity = "a4bf835cbf08661a6c530f95bdea1770e0ca4ad0/60148/129BE437228376B897B8D176DE099CA165714901DA3CB7B78EE2F9B68F4A252E";
+        const string selectedPdfPath = "GATEWAY/A1#111#DAVINCI.CARE/DaVinci Healthcare/DaVinci/3.3/FILES/PSS476.pdf";
+
+        Assert.EndsWith(".pdf", selectedPdfPath, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("PSS476.xml", selectedPdfPath, StringComparison.Ordinal);
+        Assert.NotEqual(xmlIdentity, pdfIdentity);
     }
 
     [Fact]

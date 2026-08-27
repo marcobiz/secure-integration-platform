@@ -421,6 +421,7 @@ internal static class Fse2ExactBodyComposer
 public static class Fse2ResponseMapper
 {
     private const int MaximumProblemBytes = 16 * 1024;
+    private const int MaximumProblemContentTypeCharacters = 512;
     private static readonly FrozenSet<string> OfficialProblemCodes = new[]
     {
         "cda-element", "cda-extraction", "cda-match", "cda-validation", "document-hash",
@@ -482,10 +483,77 @@ public static class Fse2ResponseMapper
 
     private static bool IsProblemJson(string contentType)
     {
-        int parameter = contentType.IndexOf(';');
-        string mediaType = parameter < 0 ? contentType : contentType[..parameter];
-        return string.Equals(mediaType.Trim(), "application/problem+json", StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(contentType) ||
+            contentType.Length > MaximumProblemContentTypeCharacters ||
+            contentType.Any(char.IsControl))
+            return false;
+
+        ReadOnlySpan<char> value = contentType.AsSpan();
+        int offset = 0;
+        if (!TryReadHttpToken(value, ref offset, out ReadOnlySpan<char> type) ||
+            offset >= value.Length || value[offset++] != '/' ||
+            !TryReadHttpToken(value, ref offset, out ReadOnlySpan<char> subtype) ||
+            !type.Equals("application", StringComparison.OrdinalIgnoreCase) ||
+            !subtype.Equals("problem+json", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        SkipOptionalWhitespace(value, ref offset);
+        while (offset < value.Length)
+        {
+            if (value[offset++] != ';') return false;
+            SkipOptionalWhitespace(value, ref offset);
+            if (!TryReadHttpToken(value, ref offset, out _)) return false;
+            SkipOptionalWhitespace(value, ref offset);
+            if (offset >= value.Length || value[offset++] != '=') return false;
+            SkipOptionalWhitespace(value, ref offset);
+            if (offset >= value.Length) return false;
+
+            if (value[offset] == '"')
+            {
+                if (!TryReadHttpQuotedString(value, ref offset)) return false;
+            }
+            else if (!TryReadHttpToken(value, ref offset, out _))
+            {
+                return false;
+            }
+            SkipOptionalWhitespace(value, ref offset);
+        }
+        return true;
     }
+
+    private static bool TryReadHttpToken(ReadOnlySpan<char> value, ref int offset, out ReadOnlySpan<char> token)
+    {
+        int start = offset;
+        while (offset < value.Length && IsHttpTokenCharacter(value[offset])) offset++;
+        token = value[start..offset];
+        return token.Length > 0;
+    }
+
+    private static bool TryReadHttpQuotedString(ReadOnlySpan<char> value, ref int offset)
+    {
+        if (offset >= value.Length || value[offset++] != '"') return false;
+        while (offset < value.Length)
+        {
+            char character = value[offset++];
+            if (character == '"') return true;
+            if (character == '\\')
+            {
+                if (offset >= value.Length || value[offset] is < (char)0x20 or > (char)0x7e) return false;
+                offset++;
+                continue;
+            }
+            if (character is < (char)0x20 or > (char)0x7e) return false;
+        }
+        return false;
+    }
+
+    private static void SkipOptionalWhitespace(ReadOnlySpan<char> value, ref int offset)
+    {
+        while (offset < value.Length && value[offset] == ' ') offset++;
+    }
+
+    private static bool IsHttpTokenCharacter(char value) =>
+        char.IsAsciiLetterOrDigit(value) || value is '!' or '#' or '$' or '%' or '&' or '\'' or '*' or '+' or '-' or '.' or '^' or '_' or '`' or '|' or '~';
 
     private static string? SafeProblemValue(JsonElement root, string name)
     {

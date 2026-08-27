@@ -13,6 +13,16 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
 {
     private const int MaximumProblemDetailsBytes = 16 * 1024;
 
+    private enum TransportObservationPhase
+    {
+        Dns,
+        TcpConnect,
+        TlsHandshake,
+        ResponseHeadersReceived,
+        ResponseBodyReading,
+        Completed
+    }
+
     /// <inheritdoc />
     public Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken) =>
         SendCoreAsync(request, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, preserveNonSuccessResponse: false, classifyTransportFailures: false, cancellationToken);
@@ -37,9 +47,11 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
     {
         string expectedHost = request.RequestUri?.DnsSafeHost ?? throw new GatewayException("BGW-EGRESS-DESTINATION-DENIED", 500);
         SslClientAuthenticationOptions sslOptions = new() { EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13 };
+        int observationPhase = (int)TransportObservationPhase.Dns;
         int tcpConnected = 0;
         int serverCertificateAccepted = 0;
         int serverCertificateRejected = 0;
+        int clientCertificateRequested = 0;
         int clientCertificateSelected = 0;
         if (customTrustRoots is { Count: > 0 })
         {
@@ -100,6 +112,7 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
             ConnectCallback = async (context, token) =>
             {
                 if (!string.Equals(context.DnsEndPoint.Host, expectedHost, StringComparison.OrdinalIgnoreCase)) throw new GatewayException("BGW-EGRESS-DESTINATION-DENIED", 403);
+                Interlocked.Exchange(ref observationPhase, (int)TransportObservationPhase.TcpConnect);
                 Exception? last = null;
                 foreach (IPAddress address in approvedAddresses)
                 {
@@ -108,6 +121,7 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
                     {
                         await socket.ConnectAsync(new IPEndPoint(address, context.DnsEndPoint.Port), token).ConfigureAwait(false);
                         Interlocked.Exchange(ref tcpConnected, 1);
+                        Interlocked.Exchange(ref observationPhase, (int)TransportObservationPhase.TlsHandshake);
                         return new NetworkStream(socket, ownsSocket: true);
                     }
                     catch (Exception exception) when (exception is SocketException or OperationCanceledException)
@@ -125,6 +139,7 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
             handler.SslOptions.ClientCertificates = [clientCertificate];
             handler.SslOptions.LocalCertificateSelectionCallback = (_, _, _, _, _) =>
             {
+                Interlocked.Exchange(ref clientCertificateRequested, 1);
                 Interlocked.Exchange(ref clientCertificateSelected, 1);
                 return clientCertificate;
             };
@@ -137,6 +152,7 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
         try
         {
             response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, effectiveToken).ConfigureAwait(false);
+            Interlocked.Exchange(ref observationPhase, (int)TransportObservationPhase.ResponseHeadersReceived);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -148,27 +164,33 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
             throw ClassifiedFailure(
                 exception,
                 effectiveDeadline.IsCancellationRequested,
+                Volatile.Read(ref observationPhase),
                 tcpConnected,
                 serverCertificateAccepted,
                 serverCertificateRejected,
+                clientCertificateRequested,
                 clientCertificateSelected);
         }
         using (response)
         {
-        if ((int)response.StatusCode is >= 300 and < 400) throw new GatewayException("BGW-EGRESS-REDIRECT-DENIED", 502);
+        bool boundedProblemMode = preserveNonSuccessResponse && classifyTransportFailures;
+        if ((int)response.StatusCode is >= 300 and < 400 && !boundedProblemMode)
+            throw new GatewayException("BGW-EGRESS-REDIRECT-DENIED", 502);
         bool nonSuccess = (int)response.StatusCode is < 200 or >= 300;
         if (!preserveNonSuccessResponse && nonSuccess) throw new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502);
-        long retainedBodyLimit = classifyTransportFailures && nonSuccess
+        long retainedBodyLimit = boundedProblemMode && nonSuccess
             ? Math.Min(maximumResponseBytes, MaximumProblemDetailsBytes)
             : maximumResponseBytes;
         if (response.Content.Headers.ContentLength > retainedBodyLimit)
         {
-            if (classifyTransportFailures && nonSuccess)
+            Interlocked.Exchange(ref observationPhase, (int)TransportObservationPhase.Completed);
+            if (boundedProblemMode && nonSuccess)
                 return new ExternalResponse((int)response.StatusCode, response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream", []);
             throw new GatewayException("BGW-EGRESS-RESPONSE-TOO-LARGE", 502);
         }
         try
         {
+            Interlocked.Exchange(ref observationPhase, (int)TransportObservationPhase.ResponseBodyReading);
             await using Stream input = await response.Content.ReadAsStreamAsync(effectiveToken).ConfigureAwait(false);
             using MemoryStream output = new();
             byte[] buffer = new byte[81920];
@@ -178,12 +200,14 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
                 if (read == 0) break;
                 if (output.Length + read > retainedBodyLimit)
                 {
-                    if (classifyTransportFailures && nonSuccess)
+                    Interlocked.Exchange(ref observationPhase, (int)TransportObservationPhase.Completed);
+                    if (boundedProblemMode && nonSuccess)
                         return new ExternalResponse((int)response.StatusCode, response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream", []);
                     throw new GatewayException("BGW-EGRESS-RESPONSE-TOO-LARGE", 502);
                 }
                 output.Write(buffer, 0, read);
             }
+            Interlocked.Exchange(ref observationPhase, (int)TransportObservationPhase.Completed);
             return new ExternalResponse((int)response.StatusCode, response.Content.Headers.ContentType?.ToString() ?? "application/octet-stream", output.ToArray());
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -196,9 +220,11 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
             throw ClassifiedFailure(
                 exception,
                 effectiveDeadline.IsCancellationRequested,
+                Volatile.Read(ref observationPhase),
                 tcpConnected,
                 serverCertificateAccepted,
                 serverCertificateRejected,
+                clientCertificateRequested,
                 clientCertificateSelected);
         }
         }
@@ -207,18 +233,23 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
     private static RestrictedTransportFailureException ClassifiedFailure(
         Exception exception,
         bool deadlineElapsed,
+        int observationPhase,
         int tcpConnected,
         int serverCertificateAccepted,
         int serverCertificateRejected,
+        int clientCertificateRequested,
         int clientCertificateSelected)
     {
+        TransportObservationPhase observed = (TransportObservationPhase)observationPhase;
+        bool structuredHandshakeFailure = exception is AuthenticationException or HttpRequestException;
         RestrictedTransportFailurePhase phase = exception is OperationCanceledException or TimeoutException || deadlineElapsed
             ? RestrictedTransportFailurePhase.Timeout
-            : tcpConnected == 0
+            : observed == TransportObservationPhase.TcpConnect || tcpConnected == 0
                 ? RestrictedTransportFailurePhase.TcpConnectFailure
-                : serverCertificateRejected != 0
+                : observed == TransportObservationPhase.TlsHandshake && serverCertificateRejected != 0
                     ? RestrictedTransportFailurePhase.TlsServerValidationFailure
-                    : serverCertificateAccepted != 0 && clientCertificateSelected != 0
+                    : observed == TransportObservationPhase.TlsHandshake && structuredHandshakeFailure &&
+                      serverCertificateAccepted != 0 && clientCertificateRequested != 0 && clientCertificateSelected != 0
                         ? RestrictedTransportFailurePhase.MutualTlsClientAuthenticationFailure
                         : RestrictedTransportFailurePhase.TransportFailureOther;
         return new(phase);

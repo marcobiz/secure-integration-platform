@@ -1,5 +1,7 @@
 using System.Net;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -45,7 +47,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         RunSuccessAsync(runtimeConnection: null, adminConnection: null, requirePostgres: false, includeNegatives: false);
 
     [Fact]
-    public async Task FSE2_TRANSPORT_hosted_HTTP_problem_is_sanitized_and_audited_without_raw_body()
+    public async Task FSE2_AUDIT_failure_emits_exactly_one_failure_and_zero_success()
     {
         const string canary = "upstream-problem-raw-canary";
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
@@ -102,12 +104,172 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Assert.Contains("safeUpstreamCode", audit, StringComparison.Ordinal);
         Assert.Contains("syntax", audit, StringComparison.Ordinal);
         Assert.DoesNotContain(canary, audit, StringComparison.Ordinal);
+        (int failure, int success) = CountInvokeAuditOutcomes(audit);
+        Assert.Equal(1, failure);
+        Assert.Equal(0, success);
         Assert.Equal(1, server.Requests);
         Assert.True(server.ExactApplicationJsonAcceptObserved);
     }
 
     [Fact]
-    public async Task FSE2_TRANSPORT_oversized_problem_body_is_not_retained()
+    public async Task FSE2_TRANSPORT_bounded_redirect_reaches_mapper_without_following()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        await using SyntheticFse2OrganizationServer server = await SyntheticFse2OrganizationServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken,
+            responseStatusCode: StatusCodes.Status302Found,
+            responseContentType: "application/problem+json",
+            responseBody: "{\"type\":\"https://fse.example/msg/syntax\"}",
+            responseLocation: "https://redirect-canary.invalid/not-followed");
+        SystemRestrictedTransport transport = new(new X509Certificate2Collection(material.RootCertificate));
+        using HttpRequestMessage request = new(HttpMethod.Post, new Uri(server.Endpoint, "documents"));
+
+        ExternalResponse upstream = await transport.SendProblemDetailsAsync(
+            request,
+            [IPAddress.Loopback],
+            material.ClientCertificateRevision1,
+            TimeSpan.FromSeconds(5),
+            4096,
+            TestContext.Current.CancellationToken);
+        Fse2ConnectorException mapped = Fse2ResponseMapper.MapProblem(
+            new(upstream.StatusCode, upstream.ContentType, upstream.Body),
+            Fse2RetryClass.NoAutomaticRetry);
+
+        Assert.Equal(StatusCodes.Status302Found, upstream.StatusCode);
+        Assert.Equal("syntax", mapped.SafeCode);
+        Assert.Equal(1, server.Requests);
+    }
+
+    [Fact]
+    public async Task FSE2_AUDIT_bounded_redirect_emits_exactly_one_failure_and_zero_success()
+    {
+        const string locationCanary = "redirect-location-audit-canary.invalid";
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        await using SyntheticFse2OrganizationServer server = await SyntheticFse2OrganizationServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken,
+            responseStatusCode: StatusCodes.Status302Found,
+            responseContentType: "application/problem+json",
+            responseBody: "{\"type\":\"https://fse.example/msg/syntax\"}",
+            responseLocation: $"https://{locationCanary}/not-followed");
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-redirect",
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
+
+        string connectorId = "fse2-redirect-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-redirect-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-redirect-application");
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId,
+            "1.0.0",
+            environmentId,
+            server.Endpoint,
+            Definition(connectorId, "1.0.0", SpkiSha256(material.SigningKeyRevision1),
+                SpkiSha256(material.ClientCertificateRevision1), "1.0.0"),
+            provider,
+            "sign-r1",
+            "mtls-r1",
+            operationId: "create");
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "fse2-redirect-identity");
+        await AddGrantAsync(fixture, identity, connectorId);
+
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/create:invoke",
+            InvokeRequest(Payload()));
+        string callerProblem = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        string audit = await fixture.SerializeAuditAsync(tenantId);
+        (int failure, int success) = CountInvokeAuditOutcomes(audit);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Contains("BGW-EGRESS-UPSTREAM-REJECTED", callerProblem, StringComparison.Ordinal);
+        Assert.DoesNotContain("BGW-EGRESS-REDIRECT-DENIED", callerProblem, StringComparison.Ordinal);
+        Assert.DoesNotContain(locationCanary, callerProblem, StringComparison.Ordinal);
+        Assert.DoesNotContain(locationCanary, audit, StringComparison.Ordinal);
+        Assert.Contains("syntax", audit, StringComparison.Ordinal);
+        Assert.Equal(1, failure);
+        Assert.Equal(0, success);
+        Assert.Equal(1, server.Requests);
+    }
+
+    [Fact]
+    public async Task FSE2_TRANSPORT_bounded_redirect_does_not_expose_location()
+    {
+        const string locationCanary = "redirect-location-must-not-escape.invalid";
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        await using SyntheticFse2OrganizationServer server = await SyntheticFse2OrganizationServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken,
+            responseStatusCode: StatusCodes.Status307TemporaryRedirect,
+            responseContentType: "application/problem+json",
+            responseBody: "{}",
+            responseLocation: $"https://{locationCanary}/not-followed");
+        SystemRestrictedTransport transport = new(new X509Certificate2Collection(material.RootCertificate));
+        using HttpRequestMessage request = new(HttpMethod.Post, new Uri(server.Endpoint, "documents"));
+
+        ExternalResponse upstream = await transport.SendProblemDetailsAsync(
+            request,
+            [IPAddress.Loopback],
+            material.ClientCertificateRevision1,
+            TimeSpan.FromSeconds(5),
+            4096,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(StatusCodes.Status307TemporaryRedirect, upstream.StatusCode);
+        Assert.DoesNotContain(typeof(ExternalResponse).GetProperties(), property =>
+            property.Name.Contains("location", StringComparison.OrdinalIgnoreCase) ||
+            property.Name.Contains("header", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(locationCanary, Encoding.UTF8.GetString(upstream.Body), StringComparison.Ordinal);
+        Assert.Equal(1, server.Requests);
+    }
+
+    [Fact]
+    public async Task FSE2_TRANSPORT_legacy_redirect_behavior_is_unchanged()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        await using SyntheticFse2OrganizationServer server = await SyntheticFse2OrganizationServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken,
+            responseStatusCode: StatusCodes.Status302Found,
+            responseContentType: "text/plain",
+            responseBody: "legacy-redirect",
+            responseLocation: "https://redirect-canary.invalid/not-followed");
+        SystemRestrictedTransport transport = new(new X509Certificate2Collection(material.RootCertificate));
+        using HttpRequestMessage request = new(HttpMethod.Post, new Uri(server.Endpoint, "documents"));
+
+        GatewayException failure = await Assert.ThrowsAsync<GatewayException>(() => transport.SendAsync(
+            request,
+            [IPAddress.Loopback],
+            material.ClientCertificateRevision1,
+            TimeSpan.FromSeconds(5),
+            4096,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-EGRESS-REDIRECT-DENIED", failure.Code);
+        Assert.Equal(1, server.Requests);
+    }
+
+    [Fact]
+    public async Task FSE2_TRANSPORT_streaming_body_over_limit_is_bounded()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
         await using SyntheticFse2OrganizationServer server = await SyntheticFse2OrganizationServer.StartAsync(
@@ -137,7 +299,111 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     }
 
     [Fact]
-    public async Task FSE2_TRANSPORT_TLS_or_transport_failure_is_distinct_from_HTTP_response()
+    public async Task FSE2_TRANSPORT_content_length_over_limit_is_rejected_before_body_read()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        await using SyntheticFse2RawResponseServer server = await SyntheticFse2RawResponseServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.RootCertificate,
+            SyntheticFse2RawResponseBehavior.HeadersOnlyOversizedContentLength,
+            TestContext.Current.CancellationToken);
+        SystemRestrictedTransport transport = new(new X509Certificate2Collection(material.RootCertificate));
+        using HttpRequestMessage request = new(HttpMethod.Post, new Uri(server.Endpoint, "documents"));
+
+        ExternalResponse response = await transport.SendProblemDetailsAsync(
+            request,
+            [IPAddress.Loopback],
+            material.ClientCertificateRevision1,
+            TimeSpan.FromSeconds(5),
+            maximumResponseBytes: 32 * 1024,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(StatusCodes.Status400BadRequest, response.StatusCode);
+        Assert.Empty(response.Body);
+        Assert.Equal(1, server.Requests);
+        Assert.True(server.HeadersSent);
+    }
+
+    [Fact]
+    public async Task FSE2_TRANSPORT_post_handshake_body_reset_is_transport_other()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        await using SyntheticFse2RawResponseServer server = await SyntheticFse2RawResponseServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.RootCertificate,
+            SyntheticFse2RawResponseBehavior.ResetDuringBody,
+            TestContext.Current.CancellationToken);
+        SystemRestrictedTransport transport = new(new X509Certificate2Collection(material.RootCertificate));
+        using HttpRequestMessage request = new(HttpMethod.Post, new Uri(server.Endpoint, "documents"));
+
+        RestrictedTransportFailureException failure = await Assert.ThrowsAsync<RestrictedTransportFailureException>(() =>
+            transport.SendProblemDetailsAsync(
+                request,
+                [IPAddress.Loopback],
+                material.ClientCertificateRevision1,
+                TimeSpan.FromSeconds(5),
+                4096,
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(RestrictedTransportFailurePhase.TransportFailureOther, failure.Phase);
+        Assert.Equal(1, server.Requests);
+        Assert.True(server.HeadersSent);
+    }
+
+    [Fact]
+    public async Task FSE2_TRANSPORT_caller_cancellation_is_not_timeout()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        await using SyntheticFse2RawResponseServer server = await SyntheticFse2RawResponseServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.RootCertificate,
+            SyntheticFse2RawResponseBehavior.HeadersThenWait,
+            TestContext.Current.CancellationToken);
+        SystemRestrictedTransport transport = new(new X509Certificate2Collection(material.RootCertificate));
+        using HttpRequestMessage request = new(HttpMethod.Post, new Uri(server.Endpoint, "documents"));
+        using CancellationTokenSource callerCancellation = new();
+
+        Task<ExternalResponse> pending = transport.SendProblemDetailsAsync(
+            request,
+            [IPAddress.Loopback],
+            material.ClientCertificateRevision1,
+            TimeSpan.FromSeconds(10),
+            4096,
+            callerCancellation.Token);
+        await server.WaitForHeadersAsync(TestContext.Current.CancellationToken);
+        callerCancellation.Cancel();
+
+        OperationCanceledException cancellation = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        Assert.IsNotType<RestrictedTransportFailureException>(cancellation);
+        Assert.Equal(1, server.Requests);
+    }
+
+    [Fact]
+    public async Task FSE2_TRANSPORT_ambiguous_TLS_failure_collapses_safely()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        await using SyntheticTlsAbortServer server = await SyntheticTlsAbortServer.StartAsync(TestContext.Current.CancellationToken);
+        SystemRestrictedTransport transport = new(new X509Certificate2Collection(material.RootCertificate));
+        using HttpRequestMessage request = new(HttpMethod.Post, new Uri(server.Endpoint, "documents"));
+
+        RestrictedTransportFailureException failure = await Assert.ThrowsAsync<RestrictedTransportFailureException>(() =>
+            transport.SendProblemDetailsAsync(
+                request,
+                [IPAddress.Loopback],
+                material.ClientCertificateRevision1,
+                TimeSpan.FromSeconds(5),
+                4096,
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(RestrictedTransportFailurePhase.TransportFailureOther, failure.Phase);
+        Assert.Equal(1, server.Connections);
+    }
+
+    [Fact]
+    public async Task FSE2_TRANSPORT_mtls_failure_requires_pre_header_structural_evidence()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
         using SyntheticAuthenticationMaterial wrongMaterial = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
@@ -1185,6 +1451,31 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             ["mtls-r1"] = [material.RootCertificate]
         });
 
+    private static (int Failure, int Success) CountInvokeAuditOutcomes(string serializedAudit)
+    {
+        using JsonDocument document = JsonDocument.Parse(serializedAudit);
+        int failure = 0;
+        int success = 0;
+        foreach (JsonElement entry in document.RootElement.EnumerateArray())
+        {
+            string? action = Property(entry, "action");
+            string? outcome = Property(entry, "outcome");
+            if (!string.Equals(action, "operation.invoke", StringComparison.Ordinal)) continue;
+            if (string.Equals(outcome, "failure", StringComparison.OrdinalIgnoreCase)) failure++;
+            if (string.Equals(outcome, "success", StringComparison.OrdinalIgnoreCase)) success++;
+        }
+        return (failure, success);
+
+        static string? Property(JsonElement entry, string name)
+        {
+            foreach (JsonProperty property in entry.EnumerateObject())
+                if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase) &&
+                    property.Value.ValueKind == JsonValueKind.String)
+                    return property.Value.GetString();
+            return null;
+        }
+    }
+
     private static string RemoveIntegritySigningSlot(string definition)
     {
         JsonObject root = JsonNode.Parse(definition)!.AsObject();
@@ -1642,6 +1933,7 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
     private readonly int responseStatusCode;
     private readonly string responseContentType;
     private readonly string responseBody;
+    private readonly string? responseLocation;
     private int requests;
     private int expectedClientCertificateObserved;
     private int expectedMethodPathAndContentTypeObserved;
@@ -1666,7 +1958,8 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
         byte[] expectedRoot,
         int responseStatusCode,
         string responseContentType,
-        string responseBody)
+        string responseBody,
+        string? responseLocation)
     {
         this.application = application;
         Endpoint = endpoint;
@@ -1676,6 +1969,7 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
         this.responseStatusCode = responseStatusCode;
         this.responseContentType = responseContentType;
         this.responseBody = responseBody;
+        this.responseLocation = responseLocation;
     }
 
     internal Uri Endpoint { get; }
@@ -1703,7 +1997,8 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
         CancellationToken cancellationToken,
         int responseStatusCode = StatusCodes.Status202Accepted,
         string responseContentType = "application/json",
-        string responseBody = "{\"workflowInstanceId\":\"workflow-fse2-1\",\"traceID\":\"trace-fse2-1\",\"spanID\":\"span-fse2-1\"}")
+        string responseBody = "{\"workflowInstanceId\":\"workflow-fse2-1\",\"traceID\":\"trace-fse2-1\",\"spanID\":\"span-fse2-1\"}",
+        string? responseLocation = null)
     {
         WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0, listen => listen.UseHttps(https =>
@@ -1727,7 +2022,8 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
             trustedRootCertificate.RawData.ToArray(),
             responseStatusCode,
             responseContentType,
-            responseBody);
+            responseBody,
+            responseLocation);
         return server;
     }
 
@@ -1793,6 +2089,7 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
 
         context.Response.StatusCode = responseStatusCode;
         context.Response.ContentType = responseContentType;
+        if (responseLocation is not null) context.Response.Headers.Location = responseLocation;
         await context.Response.WriteAsync(responseBody, context.RequestAborted);
     }
 
@@ -1866,5 +2163,213 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
     {
         await application.StopAsync();
         await application.DisposeAsync();
+    }
+}
+
+internal enum SyntheticFse2RawResponseBehavior
+{
+    HeadersOnlyOversizedContentLength,
+    HeadersThenWait,
+    ResetDuringBody
+}
+
+internal sealed class SyntheticFse2RawResponseServer : IAsyncDisposable
+{
+    private static readonly byte[] HeaderTerminator = "\r\n\r\n"u8.ToArray();
+    private readonly TcpListener listener;
+    private readonly CancellationTokenSource shutdown;
+    private readonly Task serverTask;
+    private readonly TaskCompletionSource headersSent = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int requests;
+
+    private SyntheticFse2RawResponseServer(
+        TcpListener listener,
+        X509Certificate2 serverCertificate,
+        X509Certificate2 expectedClientCertificate,
+        X509Certificate2 trustedRootCertificate,
+        SyntheticFse2RawResponseBehavior behavior,
+        CancellationToken cancellationToken)
+    {
+        this.listener = listener;
+        shutdown = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        Endpoint = new Uri($"https://localhost:{port}/", UriKind.Absolute);
+        serverTask = ServeAsync(
+            serverCertificate,
+            expectedClientCertificate,
+            trustedRootCertificate,
+            behavior,
+            shutdown.Token);
+    }
+
+    internal Uri Endpoint { get; }
+    internal int Requests => Volatile.Read(ref requests);
+    internal bool HeadersSent => headersSent.Task.IsCompletedSuccessfully;
+
+    internal static Task<SyntheticFse2RawResponseServer> StartAsync(
+        X509Certificate2 serverCertificate,
+        X509Certificate2 expectedClientCertificate,
+        X509Certificate2 trustedRootCertificate,
+        SyntheticFse2RawResponseBehavior behavior,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        TcpListener listener = new(IPAddress.Loopback, 0);
+        listener.Start();
+        return Task.FromResult(new SyntheticFse2RawResponseServer(
+            listener,
+            serverCertificate,
+            expectedClientCertificate,
+            trustedRootCertificate,
+            behavior,
+            cancellationToken));
+    }
+
+    internal Task WaitForHeadersAsync(CancellationToken cancellationToken) =>
+        headersSent.Task.WaitAsync(cancellationToken);
+
+    private async Task ServeAsync(
+        X509Certificate2 serverCertificate,
+        X509Certificate2 expectedClientCertificate,
+        X509Certificate2 trustedRootCertificate,
+        SyntheticFse2RawResponseBehavior behavior,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using TcpClient client = await listener.AcceptTcpClientAsync(cancellationToken);
+            using SslStream tls = new(client.GetStream(), leaveInnerStreamOpen: false);
+            await tls.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+            {
+                ServerCertificate = serverCertificate,
+                ClientCertificateRequired = true,
+                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+                RemoteCertificateValidationCallback = (_, certificate, _, _) => ValidateClientCertificate(
+                    certificate,
+                    expectedClientCertificate,
+                    trustedRootCertificate)
+            }, cancellationToken);
+            await ReadRequestHeadersAsync(tls, cancellationToken);
+            Interlocked.Increment(ref requests);
+
+            string responseHeaders = behavior switch
+            {
+                SyntheticFse2RawResponseBehavior.HeadersOnlyOversizedContentLength =>
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/problem+json\r\nContent-Length: 32768\r\nConnection: close\r\n\r\n",
+                SyntheticFse2RawResponseBehavior.HeadersThenWait =>
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/problem+json\r\nContent-Length: 1024\r\nConnection: close\r\n\r\n",
+                SyntheticFse2RawResponseBehavior.ResetDuringBody =>
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/problem+json\r\nContent-Length: 256\r\nConnection: close\r\n\r\n{\"type\":\"https://fse.example/msg/syntax\",",
+                _ => throw new InvalidOperationException("Unknown synthetic response behavior.")
+            };
+            await tls.WriteAsync(Encoding.ASCII.GetBytes(responseHeaders), cancellationToken);
+            await tls.FlushAsync(cancellationToken);
+            headersSent.TrySetResult();
+
+            if (behavior == SyntheticFse2RawResponseBehavior.ResetDuringBody)
+            {
+                client.Client.LingerState = new LingerOption(enable: true, seconds: 0);
+                return;
+            }
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            headersSent.TrySetCanceled(cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            headersSent.TrySetException(exception);
+            throw;
+        }
+    }
+
+    private static async Task ReadRequestHeadersAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        using MemoryStream buffer = new();
+        byte[] chunk = new byte[1024];
+        while (buffer.Length < 16 * 1024)
+        {
+            int read = await stream.ReadAsync(chunk, cancellationToken);
+            if (read == 0) throw new IOException("Synthetic request ended before headers.");
+            buffer.Write(chunk, 0, read);
+            if (buffer.GetBuffer().AsSpan(0, checked((int)buffer.Length)).IndexOf(HeaderTerminator) >= 0) return;
+        }
+        throw new IOException("Synthetic request headers exceeded the test bound.");
+    }
+
+    private static bool ValidateClientCertificate(
+        X509Certificate? certificate,
+        X509Certificate2 expectedClientCertificate,
+        X509Certificate2 trustedRootCertificate)
+    {
+        if (certificate is null) return false;
+        if (certificate is X509Certificate2 certificate2)
+            return SyntheticSignedMutualTlsServer.ValidateClientCertificate(
+                certificate2,
+                expectedClientCertificate,
+                trustedRootCertificate);
+        using X509Certificate2 copy = new(certificate);
+        return SyntheticSignedMutualTlsServer.ValidateClientCertificate(
+            copy,
+            expectedClientCertificate,
+            trustedRootCertificate);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        shutdown.Cancel();
+        listener.Stop();
+        try { await serverTask.ConfigureAwait(false); }
+        catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { }
+        shutdown.Dispose();
+    }
+}
+
+internal sealed class SyntheticTlsAbortServer : IAsyncDisposable
+{
+    private readonly TcpListener listener;
+    private readonly CancellationTokenSource shutdown;
+    private readonly Task serverTask;
+    private int connections;
+
+    private SyntheticTlsAbortServer(TcpListener listener, CancellationToken cancellationToken)
+    {
+        this.listener = listener;
+        shutdown = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        Endpoint = new Uri($"https://localhost:{port}/", UriKind.Absolute);
+        serverTask = ServeAsync(shutdown.Token);
+    }
+
+    internal Uri Endpoint { get; }
+    internal int Connections => Volatile.Read(ref connections);
+
+    internal static Task<SyntheticTlsAbortServer> StartAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        TcpListener listener = new(IPAddress.Loopback, 0);
+        listener.Start();
+        return Task.FromResult(new SyntheticTlsAbortServer(listener, cancellationToken));
+    }
+
+    private async Task ServeAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using TcpClient client = await listener.AcceptTcpClientAsync(cancellationToken);
+            Interlocked.Increment(ref connections);
+            client.Client.LingerState = new LingerOption(enable: true, seconds: 0);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        shutdown.Cancel();
+        listener.Stop();
+        try { await serverTask.ConfigureAwait(false); }
+        catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { }
+        shutdown.Dispose();
     }
 }
