@@ -1,4 +1,7 @@
+using System.Reflection;
+using System.Security.Authentication;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.Infrastructure;
 using Xunit;
 
 namespace SecureIntegration.Gateway.Unit.Tests;
@@ -35,5 +38,111 @@ public sealed class RestrictedTransportDiagnosticTests
         Assert.Equal(
             [nameof(SafeUpstreamFailureDiagnostics.FailurePhase), nameof(SafeUpstreamFailureDiagnostics.SafeUpstreamCode), nameof(SafeUpstreamFailureDiagnostics.UpstreamStatus)],
             typeof(SafeUpstreamFailureDiagnostics).GetProperties().Select(value => value.Name).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void FSE2_TRANSPORT_caller_cancellation_wins_over_timeout_race()
+    {
+        using CancellationTokenSource callerCancellation = new();
+        callerCancellation.Cancel();
+
+        Exception classified = Classify(
+            new OperationCanceledException(),
+            timeoutCancellationRequested: true,
+            callerCancellation.Token);
+
+        OperationCanceledException cancellation = Assert.IsType<OperationCanceledException>(classified);
+        Assert.Equal(callerCancellation.Token, cancellation.CancellationToken);
+    }
+
+    [Fact]
+    public void FSE2_TRANSPORT_HttpRequestException_after_caller_cancellation_propagates_cancellation()
+    {
+        using CancellationTokenSource callerCancellation = new();
+        callerCancellation.Cancel();
+
+        Exception classified = Classify(
+            new HttpRequestException("Synthetic structured wrapper."),
+            timeoutCancellationRequested: false,
+            callerCancellation.Token);
+
+        Assert.IsType<OperationCanceledException>(classified);
+    }
+
+    [Fact]
+    public void FSE2_TRANSPORT_IOException_after_caller_cancellation_propagates_cancellation()
+    {
+        using CancellationTokenSource callerCancellation = new();
+        callerCancellation.Cancel();
+
+        Exception classified = Classify(
+            new IOException("Synthetic stream wrapper."),
+            timeoutCancellationRequested: true,
+            callerCancellation.Token);
+
+        Assert.IsType<OperationCanceledException>(classified);
+    }
+
+    [Fact]
+    public void FSE2_TRANSPORT_timeout_without_caller_cancellation_is_timeout()
+    {
+        Exception classified = Classify(
+            new OperationCanceledException(),
+            timeoutCancellationRequested: true,
+            CancellationToken.None);
+
+        RestrictedTransportFailureException failure = Assert.IsType<RestrictedTransportFailureException>(classified);
+        Assert.Equal(RestrictedTransportFailurePhase.Timeout, failure.Phase);
+    }
+
+    [Fact]
+    public void FSE2_TRANSPORT_mtls_failure_requires_pre_header_structural_evidence()
+    {
+        Exception classified = Classify(
+            new HttpRequestException(
+                "Synthetic wrapper whose text is not inspected.",
+                new AuthenticationException("Synthetic structured authentication failure.")),
+            timeoutCancellationRequested: false,
+            CancellationToken.None);
+
+        RestrictedTransportFailureException failure = Assert.IsType<RestrictedTransportFailureException>(classified);
+        Assert.Equal(RestrictedTransportFailurePhase.MutualTlsClientAuthenticationFailure, failure.Phase);
+    }
+
+    [Fact]
+    public void FSE2_TRANSPORT_generic_pre_header_HttpRequestException_is_transport_other()
+    {
+        Exception classified = Classify(
+            new HttpRequestException("Synthetic ambiguous connection failure."),
+            timeoutCancellationRequested: false,
+            CancellationToken.None);
+
+        RestrictedTransportFailureException failure = Assert.IsType<RestrictedTransportFailureException>(classified);
+        Assert.Equal(RestrictedTransportFailurePhase.TransportFailureOther, failure.Phase);
+    }
+
+    private static Exception Classify(
+        Exception exception,
+        bool timeoutCancellationRequested,
+        CancellationToken callerCancellation)
+    {
+        MethodInfo classifier = typeof(SystemRestrictedTransport).GetMethod(
+            "ClassifiedFailureOrCallerCancellation",
+            BindingFlags.NonPublic | BindingFlags.Static) ??
+            throw new InvalidOperationException("Restricted transport classifier was not found.");
+
+        object? result = classifier.Invoke(null,
+        [
+            exception,
+            timeoutCancellationRequested,
+            2,
+            1,
+            1,
+            0,
+            1,
+            1,
+            callerCancellation
+        ]);
+        return Assert.IsAssignableFrom<Exception>(result);
     }
 }

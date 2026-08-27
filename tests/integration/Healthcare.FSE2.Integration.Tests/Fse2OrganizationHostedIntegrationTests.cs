@@ -353,6 +353,35 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     }
 
     [Fact]
+    public async Task FSE2_TRANSPORT_successful_mtls_handshake_then_pre_header_reset_is_transport_other()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        await using SyntheticFse2RawResponseServer server = await SyntheticFse2RawResponseServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.RootCertificate,
+            SyntheticFse2RawResponseBehavior.ResetBeforeResponseHeaders,
+            TestContext.Current.CancellationToken);
+        SystemRestrictedTransport transport = new(new X509Certificate2Collection(material.RootCertificate));
+        using HttpRequestMessage request = new(HttpMethod.Post, new Uri(server.Endpoint, "documents"));
+
+        RestrictedTransportFailureException failure = await Assert.ThrowsAsync<RestrictedTransportFailureException>(() =>
+            transport.SendProblemDetailsAsync(
+                request,
+                [IPAddress.Loopback],
+                material.ClientCertificateRevision1,
+                TimeSpan.FromSeconds(5),
+                4096,
+                TestContext.Current.CancellationToken));
+        await server.WaitForRequestAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(RestrictedTransportFailurePhase.TransportFailureOther, failure.Phase);
+        Assert.Equal(1, server.Requests);
+        Assert.True(server.ClientCertificateObserved);
+        Assert.False(server.HeadersSent);
+    }
+
+    [Fact]
     public async Task FSE2_TRANSPORT_caller_cancellation_is_not_timeout()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
@@ -425,13 +454,15 @@ public sealed class Fse2OrganizationHostedIntegrationTests
                 4096,
                 TestContext.Current.CancellationToken));
 
+        using X509Certificate2 publicOnlyClientCertificate = X509CertificateLoader.LoadCertificate(
+            material.ClientCertificateRevision1.Export(X509ContentType.Cert));
         using HttpRequestMessage mutualTlsRequest = new(HttpMethod.Post, new Uri(server.Endpoint, "documents"));
         SystemRestrictedTransport correctTrust = new(new X509Certificate2Collection(material.RootCertificate));
-        RestrictedTransportFailureException mutualTls = await Assert.ThrowsAsync<RestrictedTransportFailureException>(() =>
+        RestrictedTransportFailureException ambiguousClientAuthentication = await Assert.ThrowsAsync<RestrictedTransportFailureException>(() =>
             correctTrust.SendProblemDetailsAsync(
                 mutualTlsRequest,
                 [IPAddress.Loopback],
-                wrongMaterial.ClientCertificateRevision1,
+                publicOnlyClientCertificate,
                 TimeSpan.FromSeconds(5),
                 4096,
                 TestContext.Current.CancellationToken));
@@ -451,7 +482,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
                 TestContext.Current.CancellationToken));
 
         Assert.Equal(RestrictedTransportFailurePhase.TlsServerValidationFailure, tls.Phase);
-        Assert.Equal(RestrictedTransportFailurePhase.MutualTlsClientAuthenticationFailure, mutualTls.Phase);
+        Assert.Equal(RestrictedTransportFailurePhase.TransportFailureOther, ambiguousClientAuthentication.Phase);
         Assert.Equal(RestrictedTransportFailurePhase.TcpConnectFailure, tcp.Phase);
         Assert.Equal(0, server.Requests);
     }
@@ -2170,7 +2201,8 @@ internal enum SyntheticFse2RawResponseBehavior
 {
     HeadersOnlyOversizedContentLength,
     HeadersThenWait,
-    ResetDuringBody
+    ResetDuringBody,
+    ResetBeforeResponseHeaders
 }
 
 internal sealed class SyntheticFse2RawResponseServer : IAsyncDisposable
@@ -2179,7 +2211,9 @@ internal sealed class SyntheticFse2RawResponseServer : IAsyncDisposable
     private readonly TcpListener listener;
     private readonly CancellationTokenSource shutdown;
     private readonly Task serverTask;
+    private readonly TaskCompletionSource requestRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource headersSent = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int clientCertificateObserved;
     private int requests;
 
     private SyntheticFse2RawResponseServer(
@@ -2203,6 +2237,7 @@ internal sealed class SyntheticFse2RawResponseServer : IAsyncDisposable
     }
 
     internal Uri Endpoint { get; }
+    internal bool ClientCertificateObserved => Volatile.Read(ref clientCertificateObserved) != 0;
     internal int Requests => Volatile.Read(ref requests);
     internal bool HeadersSent => headersSent.Task.IsCompletedSuccessfully;
 
@@ -2228,6 +2263,9 @@ internal sealed class SyntheticFse2RawResponseServer : IAsyncDisposable
     internal Task WaitForHeadersAsync(CancellationToken cancellationToken) =>
         headersSent.Task.WaitAsync(cancellationToken);
 
+    internal Task WaitForRequestAsync(CancellationToken cancellationToken) =>
+        requestRead.Task.WaitAsync(cancellationToken);
+
     private async Task ServeAsync(
         X509Certificate2 serverCertificate,
         X509Certificate2 expectedClientCertificate,
@@ -2244,13 +2282,26 @@ internal sealed class SyntheticFse2RawResponseServer : IAsyncDisposable
                 ServerCertificate = serverCertificate,
                 ClientCertificateRequired = true,
                 EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-                RemoteCertificateValidationCallback = (_, certificate, _, _) => ValidateClientCertificate(
-                    certificate,
-                    expectedClientCertificate,
-                    trustedRootCertificate)
+                RemoteCertificateValidationCallback = (_, certificate, _, _) =>
+                {
+                    bool accepted = ValidateClientCertificate(
+                        certificate,
+                        expectedClientCertificate,
+                        trustedRootCertificate);
+                    if (accepted) Interlocked.Exchange(ref clientCertificateObserved, 1);
+                    return accepted;
+                }
             }, cancellationToken);
             await ReadRequestHeadersAsync(tls, cancellationToken);
             Interlocked.Increment(ref requests);
+            requestRead.TrySetResult();
+
+            if (behavior == SyntheticFse2RawResponseBehavior.ResetBeforeResponseHeaders)
+            {
+                client.Client.LingerState = new LingerOption(enable: true, seconds: 0);
+                client.Client.Dispose();
+                return;
+            }
 
             string responseHeaders = behavior switch
             {
@@ -2275,10 +2326,12 @@ internal sealed class SyntheticFse2RawResponseServer : IAsyncDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            requestRead.TrySetCanceled(cancellationToken);
             headersSent.TrySetCanceled(cancellationToken);
         }
         catch (Exception exception)
         {
+            requestRead.TrySetException(exception);
             headersSent.TrySetException(exception);
             throw;
         }

@@ -145,9 +145,12 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
             };
         }
         using HttpClient client = new(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        using CancellationTokenSource effectiveDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        effectiveDeadline.CancelAfter(timeout);
-        CancellationToken effectiveToken = effectiveDeadline.Token;
+        using CancellationTokenSource timeoutCancellation = new();
+        timeoutCancellation.CancelAfter(timeout);
+        using CancellationTokenSource effectiveCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeoutCancellation.Token);
+        CancellationToken effectiveToken = effectiveCancellation.Token;
         HttpResponseMessage response;
         try
         {
@@ -161,15 +164,16 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
         catch (Exception exception) when (classifyTransportFailures &&
             exception is OperationCanceledException or TimeoutException or HttpRequestException or AuthenticationException or IOException)
         {
-            throw ClassifiedFailure(
+            throw ClassifiedFailureOrCallerCancellation(
                 exception,
-                effectiveDeadline.IsCancellationRequested,
+                timeoutCancellation.IsCancellationRequested,
                 Volatile.Read(ref observationPhase),
                 tcpConnected,
                 serverCertificateAccepted,
                 serverCertificateRejected,
                 clientCertificateRequested,
-                clientCertificateSelected);
+                clientCertificateSelected,
+                cancellationToken);
         }
         using (response)
         {
@@ -217,32 +221,37 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
         catch (Exception exception) when (classifyTransportFailures &&
             exception is OperationCanceledException or TimeoutException or HttpRequestException or AuthenticationException or IOException)
         {
-            throw ClassifiedFailure(
+            throw ClassifiedFailureOrCallerCancellation(
                 exception,
-                effectiveDeadline.IsCancellationRequested,
+                timeoutCancellation.IsCancellationRequested,
                 Volatile.Read(ref observationPhase),
                 tcpConnected,
                 serverCertificateAccepted,
                 serverCertificateRejected,
                 clientCertificateRequested,
-                clientCertificateSelected);
+                clientCertificateSelected,
+                cancellationToken);
         }
         }
     }
 
-    private static RestrictedTransportFailureException ClassifiedFailure(
+    private static Exception ClassifiedFailureOrCallerCancellation(
         Exception exception,
-        bool deadlineElapsed,
+        bool timeoutCancellationRequested,
         int observationPhase,
         int tcpConnected,
         int serverCertificateAccepted,
         int serverCertificateRejected,
         int clientCertificateRequested,
-        int clientCertificateSelected)
+        int clientCertificateSelected,
+        CancellationToken callerCancellation)
     {
+        if (callerCancellation.IsCancellationRequested)
+            return new OperationCanceledException(callerCancellation);
+
         TransportObservationPhase observed = (TransportObservationPhase)observationPhase;
-        bool structuredHandshakeFailure = exception is AuthenticationException or HttpRequestException;
-        RestrictedTransportFailurePhase phase = exception is OperationCanceledException or TimeoutException || deadlineElapsed
+        bool structuredHandshakeFailure = HasStructuredSecureConnectionFailure(exception);
+        RestrictedTransportFailurePhase phase = timeoutCancellationRequested
             ? RestrictedTransportFailurePhase.Timeout
             : observed == TransportObservationPhase.TcpConnect || tcpConnected == 0
                 ? RestrictedTransportFailurePhase.TcpConnectFailure
@@ -252,6 +261,19 @@ public sealed class SystemRestrictedTransport(X509Certificate2Collection? custom
                       serverCertificateAccepted != 0 && clientCertificateRequested != 0 && clientCertificateSelected != 0
                         ? RestrictedTransportFailurePhase.MutualTlsClientAuthenticationFailure
                         : RestrictedTransportFailurePhase.TransportFailureOther;
-        return new(phase);
+        return new RestrictedTransportFailureException(phase);
+    }
+
+    private static bool HasStructuredSecureConnectionFailure(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is AuthenticationException)
+                return true;
+            if (current is HttpRequestException { HttpRequestError: HttpRequestError.SecureConnectionError })
+                return true;
+        }
+
+        return false;
     }
 }
