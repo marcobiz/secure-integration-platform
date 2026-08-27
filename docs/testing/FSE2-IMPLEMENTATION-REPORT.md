@@ -143,7 +143,12 @@ The offline case 476 contract pins official documentation commit
 `Test Case/Validazione/Documenti XML Casi OK/8 - Casi OK Profilo Sanitario Sintetico/PSS476.xml`,
 Git blob `6b654344431a21e02b979ab4907bc53b38cb4143`, 58,712 bytes, SHA-256
 `7B54299D5AD7E87CA7D5569E98ADAC2D687D3E9432FD4D015194E733A2ADAABD`; it is not a PDF.
-The exact PDF selected through checklist row 476 and embedded-CDA matching is
+The exact-object gate enumerates every checklist XLSX blob from the frozen Git tree. Of 64 rows with
+ID 476, exactly 17 are executed (`SI`); 16 resolve to an existing direct `FILES` PDF through the closed
+ID token, CT23 test-code, bounded nearest execution timestamp, then single-file rule. It reads and
+hashes all 16 PDF blobs and records the embedded-CDA result for each; the YOO Multimedia candidate is
+an unparseable repository blob and is therefore an explicit false match, not a skipped candidate.
+The sole byte-identical embedded-CDA match is
 `GATEWAY/A1#111#DAVINCI.CARE/DaVinci Healthcare/DaVinci/3.3/FILES/PSS476.pdf`, Git blob
 `a4bf835cbf08661a6c530f95bdea1770e0ca4ad0`, 60,148 bytes, SHA-256
 `129BE437228376B897B8D176DE099CA165714901DA3CB7B78EE2F9B68F4A252E`. Its embedded `cda.xml`

@@ -52,10 +52,12 @@ already depend on the existing fail-closed non-success behavior.
   the current qualified scope, only for non-success status, and only with the mapper's bounded safe
   code. It cannot acquire an endpoint, header, policy, transport, response body or second dispatch.
 - The frozen case 476 request contract is reconstructed offline against the sealed plan and official
-  baseline. `PSS476.xml` and the selected `PSS476.pdf` are distinct Git objects; selection requires
-  the ministerial checklist row 476 plus byte-for-byte equality between the canonical XML and the
-  PDF's embedded `cda.xml`. The exact PDF bytes must survive `Fse2Request` and the observed multipart
-  file part. No OfficialTest DNS resolution or network dispatch is part of this decision evidence.
+  baseline. The exact Git tree contains 64 checklist rows with ID 476; 17 are executed records marked
+  `SI`, and 16 resolve to an existing direct `FILES` PDF by a closed ID/test-code/execution-time/single-file
+  rule. Every referenced blob is read with `git cat-file` and its embedded CDA comparison is recorded;
+  `PSS476.pdf` is the sole byte-identical match with the canonical `PSS476.xml`. The exact selected PDF
+  bytes must survive `Fse2Request` and the observed multipart file part. No OfficialTest DNS resolution
+  or network dispatch is part of this decision evidence.
 
 ## Consequences
 
