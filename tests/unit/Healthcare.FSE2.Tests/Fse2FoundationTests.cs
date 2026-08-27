@@ -280,11 +280,148 @@ public sealed class Fse2FoundationTests
     public void FSE2_ERROR_RFC7807_mapper_retains_only_safe_code()
     {
         const string canary = "clinical-payload-redaction-canary";
-        byte[] problem = Encoding.UTF8.GetBytes($$"""{"type":"https://errors.example/FSE2_DOCUMENT_REJECTED","detail":"{{canary}}"}""");
+        byte[] problem = Encoding.UTF8.GetBytes($$"""{"type":"https://fse.example/msg/syntax","detail":"{{canary}}"}""");
         Fse2ConnectorException error = Fse2ResponseMapper.MapProblem(
             new(400, "application/problem+json", problem), Fse2RetryClass.NoAutomaticRetry);
-        Assert.Equal("FSE2_DOCUMENT_REJECTED", error.SafeCode);
+        Assert.Equal("syntax", error.SafeCode);
         Assert.DoesNotContain(canary, error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FSE2_SEC_caller_cannot_override_accept_or_inject_headers()
+    {
+        string[] requestProperties = typeof(Fse2Request).GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Select(value => value.Name).ToArray();
+        string[] transportProperties = typeof(AuthorizedConnectorRestrictedTransportRequest)
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance).Select(value => value.Name).ToArray();
+
+        Assert.DoesNotContain(requestProperties, value => value.Contains("accept", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("header", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(transportProperties, value => value.Contains("accept", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("header", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal([nameof(AuthorizedConnectorRestrictedTransportRequest.BodyLength), nameof(AuthorizedConnectorRestrictedTransportRequest.PathParameterCount)],
+            transportProperties);
+    }
+
+    [Fact]
+    public void FSE2_TRANSPORT_bounded_HTTP_problem_reaches_FSE2_mapper()
+    {
+        Fse2ConnectorException error = Assert.Throws<Fse2ConnectorException>(() => Fse2ResponseMapper.Map(
+            new(400, "application/problem+json", "{\"type\":\"https://fse.example/msg/semantic\"}"u8.ToArray()),
+            Guid.NewGuid(),
+            Fse2OperationCatalog.Get(Fse2Operation.ValidateCda)));
+
+        Assert.Equal(Fse2ErrorCategory.UpstreamRejected, error.Category);
+        Assert.Equal("semantic", error.SafeCode);
+    }
+
+    [Fact]
+    public void FSE2_TRANSPORT_HTTP_400_preserves_only_safe_status_and_code()
+    {
+        const string secretCanary = "raw-upstream-detail-must-not-survive";
+        byte[] body = Encoding.UTF8.GetBytes($$"""
+            {"type":"https://fse.example/msg/cda-validation","title":"{{secretCanary}}","detail":"{{secretCanary}}","code":"not-allowlisted"}
+            """);
+
+        Fse2ConnectorException error = Fse2ResponseMapper.MapProblem(
+            new(400, "application/problem+json; charset=utf-8", body), Fse2RetryClass.NoAutomaticRetry);
+
+        Assert.Equal(Fse2ErrorCategory.UpstreamRejected, error.Category);
+        Assert.Equal("cda-validation", error.SafeCode);
+        Assert.False(error.Retryable);
+        Assert.DoesNotContain(secretCanary, error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FSE2_TRANSPORT_HTTP_503_preserves_safe_retry_classification()
+    {
+        Fse2ConnectorException safeRetry = Fse2ResponseMapper.MapProblem(
+            new(503, "application/problem+json", "{\"type\":\"https://fse.example/msg/service-error\"}"u8.ToArray()),
+            Fse2RetryClass.SafeRetry);
+        Fse2ConnectorException validateCda = Fse2ResponseMapper.MapProblem(
+            new(503, "application/problem+json", "{\"type\":\"https://fse.example/msg/service-error\"}"u8.ToArray()),
+            Fse2RetryClass.NoAutomaticRetry);
+
+        Assert.Equal(Fse2ErrorCategory.TemporarilyUnavailable, safeRetry.Category);
+        Assert.Equal("service-error", safeRetry.SafeCode);
+        Assert.True(safeRetry.Retryable);
+        Assert.False(validateCda.Retryable);
+    }
+
+    [Fact]
+    public void FSE2_TRANSPORT_malformed_or_oversized_problem_is_safely_collapsed()
+    {
+        QualifiedGatewayExecutionResult[] responses =
+        [
+            new(400, "application/problem+json", "{malformed"u8.ToArray()),
+            new(400, "application/problem+json", Encoding.UTF8.GetBytes(
+                "{\"type\":\"https://fse.example/msg/syntax\",\"detail\":\"" + new string('x', 17 * 1024) + "\"}")),
+            new(400, "application/problem+json", "{\"type\":\"https://attacker.invalid/msg/not-official\"}"u8.ToArray()),
+            new(400, "application/problem+json", "{\"type\":\"https://fse.example/msg/syntax\",\"type\":\"https://fse.example/msg/semantic\"}"u8.ToArray()),
+            new(400, "application/problem+json.evil", "{\"type\":\"https://fse.example/msg/syntax\"}"u8.ToArray())
+        ];
+
+        Assert.All(responses, response => Assert.Equal(
+            "FSE2_UPSTREAM_REJECTED",
+            Fse2ResponseMapper.MapProblem(response, Fse2RetryClass.NoAutomaticRetry).SafeCode));
+    }
+
+    [Fact]
+    public void FSE2_TRANSPORT_failure_phase_contract_is_closed_and_distinct_from_HTTP_problem()
+    {
+        RestrictedTransportFailureException tls = new(RestrictedTransportFailurePhase.TlsServerValidationFailure);
+        RestrictedTransportFailureException other = new(RestrictedTransportFailurePhase.TransportFailureOther);
+        Fse2ConnectorException http = Fse2ResponseMapper.MapProblem(
+            new(400, "application/problem+json", "{\"type\":\"https://fse.example/msg/syntax\"}"u8.ToArray()),
+            Fse2RetryClass.NoAutomaticRetry);
+
+        Assert.Equal(RestrictedTransportFailurePhase.TlsServerValidationFailure, tls.Phase);
+        Assert.Equal(RestrictedTransportFailurePhase.TransportFailureOther, other.Phase);
+        Assert.Equal("syntax", http.SafeCode);
+        Assert.IsNotType<RestrictedTransportFailureException>(http);
+    }
+
+    [Fact]
+    public void FSE2_TRANSPORT_non_FSE2_callers_preserve_existing_failure_semantics()
+    {
+        AuthorizedPublishedOperationExpectations defaultExpectations = new(
+            GatewayAuthenticationKind.None, restrictedTransportRequired: false, []);
+
+        Assert.Equal(AuthorizedRestrictedTransportResponseMode.SuccessOnly,
+            defaultExpectations.RestrictedTransportResponseMode);
+        Assert.Throws<ArgumentException>(() => new AuthorizedPublishedOperationExpectations(
+            GatewayAuthenticationKind.None,
+            restrictedTransportRequired: false,
+            [],
+            restrictedTransportResponseMode: AuthorizedRestrictedTransportResponseMode.BoundedProblemDetails));
+    }
+
+    [Fact]
+    public void FSE2_LIVE_FIXTURE_matches_frozen_validate_cda_contract_without_network()
+    {
+        const string documentationCommit = "430e6b5d9dde8a35b04ae635c11303db787a977e";
+        const string datasetCommit = "d937255fd7e9c079c5641c537da17fe98a2f2259";
+        const string datasetCase = "476 / VALIDAZIONE_CDA2_PSS_CT23";
+        const string datasetSha256 = "7B54299D5AD7E87CA7D5569E98ADAC2D687D3E9432FD4D015194E733A2ADAABD";
+        byte[] requestBody = "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}"u8.ToArray();
+        Fse2Request request = Fse2Request.ValidateCda("synthetic-pdf-fixture"u8.ToArray(), requestBody, Claims());
+        using JsonDocument payload = JsonDocument.Parse(request.SerializeAuthorizedPayload());
+        using JsonDocument sealedRequest = JsonDocument.Parse(
+            Convert.FromBase64String(payload.RootElement.GetProperty("requestBodyBase64").GetString()!));
+        Fse2OperationDescriptor operation = Fse2OperationCatalog.Get(request.Operation);
+
+        Assert.Equal(Fse2Operation.ValidateCda, request.Operation);
+        Assert.Equal("POST", operation.Method.Method);
+        Assert.Equal("/documents/validation", operation.PathTemplate);
+        Assert.Equal("VERIFICA", sealedRequest.RootElement.GetProperty("activity").GetString());
+        Assert.Equal("CDA", sealedRequest.RootElement.GetProperty("healthDataFormat").GetString());
+        Assert.Equal("ATTACHMENT", sealedRequest.RootElement.GetProperty("mode").GetString());
+        Assert.False(operation.RequiresAttachmentHash);
+        Assert.DoesNotContain("attachment_hash", Encoding.UTF8.GetString(request.SerializeAuthorizedPayload()), StringComparison.Ordinal);
+        Assert.Equal("430e6b5d9dde8a35b04ae635c11303db787a977e", documentationCommit);
+        Assert.Equal("d937255fd7e9c079c5641c537da17fe98a2f2259", datasetCommit);
+        Assert.Equal("476 / VALIDAZIONE_CDA2_PSS_CT23", datasetCase);
+        Assert.Equal("7B54299D5AD7E87CA7D5569E98ADAC2D687D3E9432FD4D015194E733A2ADAABD", datasetSha256);
     }
 
     [Fact]

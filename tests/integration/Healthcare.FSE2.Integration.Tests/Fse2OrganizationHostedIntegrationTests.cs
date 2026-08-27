@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -38,6 +39,156 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     [Fact]
     public Task FSE2_IT_PRODUCTION_HOST_in_memory_Published_Organization_dual_JWT_mTLS_exact_bytes() =>
         RunSuccessAsync(runtimeConnection: null, adminConnection: null, requirePostgres: false, includeNegatives: true);
+
+    [Fact]
+    public Task FSE2_TRANSPORT_sets_server_owned_application_json_accept() =>
+        RunSuccessAsync(runtimeConnection: null, adminConnection: null, requirePostgres: false, includeNegatives: false);
+
+    [Fact]
+    public async Task FSE2_TRANSPORT_hosted_HTTP_problem_is_sanitized_and_audited_without_raw_body()
+    {
+        const string canary = "upstream-problem-raw-canary";
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        await using SyntheticFse2OrganizationServer server = await SyntheticFse2OrganizationServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken,
+            responseStatusCode: StatusCodes.Status400BadRequest,
+            responseContentType: "application/problem+json",
+            responseBody: $$"""{"type":"https://fse.example/msg/syntax","title":"{{canary}}","detail":"{{canary}}"}""");
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-problem",
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
+
+        string connectorId = "fse2-problem-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-problem-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-problem-application");
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId,
+            "1.0.0",
+            environmentId,
+            server.Endpoint,
+            Definition(connectorId, "1.0.0", SpkiSha256(material.SigningKeyRevision1),
+                SpkiSha256(material.ClientCertificateRevision1), "1.0.0"),
+            provider,
+            "sign-r1",
+            "mtls-r1",
+            operationId: "create");
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "fse2-problem-identity");
+        await AddGrantAsync(fixture, identity, connectorId);
+
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/create:invoke",
+            InvokeRequest(Payload()));
+        string callerProblem = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        string audit = await fixture.SerializeAuditAsync(tenantId);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Contains("BGW-EGRESS-UPSTREAM-REJECTED", callerProblem, StringComparison.Ordinal);
+        Assert.DoesNotContain("syntax", callerProblem, StringComparison.Ordinal);
+        Assert.DoesNotContain(canary, callerProblem, StringComparison.Ordinal);
+        Assert.Contains("UPSTREAM_HTTP_RESPONSE", audit, StringComparison.Ordinal);
+        Assert.Contains("upstreamStatus", audit, StringComparison.Ordinal);
+        Assert.Contains("400", audit, StringComparison.Ordinal);
+        Assert.Contains("safeUpstreamCode", audit, StringComparison.Ordinal);
+        Assert.Contains("syntax", audit, StringComparison.Ordinal);
+        Assert.DoesNotContain(canary, audit, StringComparison.Ordinal);
+        Assert.Equal(1, server.Requests);
+        Assert.True(server.ExactApplicationJsonAcceptObserved);
+    }
+
+    [Fact]
+    public async Task FSE2_TRANSPORT_oversized_problem_body_is_not_retained()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        await using SyntheticFse2OrganizationServer server = await SyntheticFse2OrganizationServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken,
+            responseStatusCode: StatusCodes.Status400BadRequest,
+            responseContentType: "application/problem+json",
+            responseBody: "{\"type\":\"https://fse.example/msg/syntax\",\"detail\":\"" + new string('x', 17 * 1024) + "\"}");
+        SystemRestrictedTransport transport = new(new X509Certificate2Collection(material.RootCertificate));
+        using HttpRequestMessage request = new(HttpMethod.Post, new Uri(server.Endpoint, "documents"));
+
+        ExternalResponse response = await transport.SendProblemDetailsAsync(
+            request,
+            [IPAddress.Loopback],
+            material.ClientCertificateRevision1,
+            TimeSpan.FromSeconds(5),
+            maximumResponseBytes: 32 * 1024,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(StatusCodes.Status400BadRequest, response.StatusCode);
+        Assert.Equal("application/problem+json", response.ContentType);
+        Assert.Empty(response.Body);
+        Assert.Equal(1, server.Requests);
+    }
+
+    [Fact]
+    public async Task FSE2_TRANSPORT_TLS_or_transport_failure_is_distinct_from_HTTP_response()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        using SyntheticAuthenticationMaterial wrongMaterial = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        await using SyntheticFse2OrganizationServer server = await SyntheticFse2OrganizationServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken);
+
+        using HttpRequestMessage tlsRequest = new(HttpMethod.Post, new Uri(server.Endpoint, "documents"));
+        SystemRestrictedTransport wrongTrust = new(new X509Certificate2Collection(wrongMaterial.RootCertificate));
+        RestrictedTransportFailureException tls = await Assert.ThrowsAsync<RestrictedTransportFailureException>(() =>
+            wrongTrust.SendProblemDetailsAsync(
+                tlsRequest,
+                [IPAddress.Loopback],
+                material.ClientCertificateRevision1,
+                TimeSpan.FromSeconds(5),
+                4096,
+                TestContext.Current.CancellationToken));
+
+        using HttpRequestMessage mutualTlsRequest = new(HttpMethod.Post, new Uri(server.Endpoint, "documents"));
+        SystemRestrictedTransport correctTrust = new(new X509Certificate2Collection(material.RootCertificate));
+        RestrictedTransportFailureException mutualTls = await Assert.ThrowsAsync<RestrictedTransportFailureException>(() =>
+            correctTrust.SendProblemDetailsAsync(
+                mutualTlsRequest,
+                [IPAddress.Loopback],
+                wrongMaterial.ClientCertificateRevision1,
+                TimeSpan.FromSeconds(5),
+                4096,
+                TestContext.Current.CancellationToken));
+
+        using TcpListener reservation = new(IPAddress.Loopback, 0);
+        reservation.Start();
+        int unusedPort = ((IPEndPoint)reservation.LocalEndpoint).Port;
+        reservation.Stop();
+        using HttpRequestMessage tcpRequest = new(HttpMethod.Post, $"https://localhost:{unusedPort}/documents");
+        RestrictedTransportFailureException tcp = await Assert.ThrowsAsync<RestrictedTransportFailureException>(() =>
+            correctTrust.SendProblemDetailsAsync(
+                tcpRequest,
+                [IPAddress.Loopback],
+                material.ClientCertificateRevision1,
+                TimeSpan.FromSeconds(5),
+                4096,
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(RestrictedTransportFailurePhase.TlsServerValidationFailure, tls.Phase);
+        Assert.Equal(RestrictedTransportFailurePhase.MutualTlsClientAuthenticationFailure, mutualTls.Phase);
+        Assert.Equal(RestrictedTransportFailurePhase.TcpConnectFailure, tcp.Phase);
+        Assert.Equal(0, server.Requests);
+    }
 
     [Fact]
     public async Task FSE2_IT_PRODUCTION_HOST_PostgreSQL18_Published_Organization_dual_JWT_mTLS_exact_bytes()
@@ -486,6 +637,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
                 server.Observations, value => value.Operation == operation.Operation);
             Assert.Equal(operation.Method.Method, observed.Method);
             Assert.Equal(ExpectedPath(operation), observed.RawTarget);
+            Assert.True(observed.ExactApplicationJsonAcceptObserved);
             Assert.True(observed.ClientCertificateObserved);
             Assert.True(observed.DualDistinctTokensObserved);
             Assert.True(observed.ExactJwtPolicyObserved);
@@ -938,6 +1090,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Assert.Equal(1, server.Requests);
         Assert.True(server.ExpectedClientCertificateObserved);
         Assert.True(server.ExpectedMethodPathAndContentTypeObserved);
+        Assert.True(server.ExactApplicationJsonAcceptObserved);
         Assert.True(server.DualTokensObserved);
         Assert.True(server.DistinctTokensAndJtiObserved);
         Assert.True(server.ValidRs256X5cObserved);
@@ -1343,6 +1496,8 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         bool hasHttpContent = context.Request.ContentLength.HasValue ||
             context.Request.Headers.ContainsKey("Content-Type") ||
             context.Request.Headers.ContainsKey("Transfer-Encoding");
+        bool exactApplicationJsonAccept = context.Request.Headers.Accept.Count == 1 &&
+            string.Equals(context.Request.Headers.Accept.ToString(), "application/json", StringComparison.Ordinal);
         lock (observationGate)
         {
             observations.Add(new(
@@ -1352,6 +1507,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
                 context.Request.ContentType,
                 body,
                 hasHttpContent,
+                exactApplicationJsonAccept,
                 clientObserved,
                 dualDistinct,
                 exactJwtPolicy,
@@ -1457,6 +1613,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         string? ContentType,
         byte[] Body,
         bool HasHttpContent,
+        bool ExactApplicationJsonAcceptObserved,
         bool ClientCertificateObserved,
         bool DualDistinctTokensObserved,
         bool ExactJwtPolicyObserved,
@@ -1482,9 +1639,13 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
     private readonly string expectedClientFingerprint;
     private readonly string expectedSigningFingerprint;
     private readonly byte[] expectedRoot;
+    private readonly int responseStatusCode;
+    private readonly string responseContentType;
+    private readonly string responseBody;
     private int requests;
     private int expectedClientCertificateObserved;
     private int expectedMethodPathAndContentTypeObserved;
+    private int exactApplicationJsonAcceptObserved;
     private int dualTokensObserved;
     private int distinctTokensAndJtiObserved;
     private int validRs256X5cObserved;
@@ -1502,19 +1663,26 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
         Uri endpoint,
         string expectedClientFingerprint,
         string expectedSigningFingerprint,
-        byte[] expectedRoot)
+        byte[] expectedRoot,
+        int responseStatusCode,
+        string responseContentType,
+        string responseBody)
     {
         this.application = application;
         Endpoint = endpoint;
         this.expectedClientFingerprint = expectedClientFingerprint;
         this.expectedSigningFingerprint = expectedSigningFingerprint;
         this.expectedRoot = expectedRoot;
+        this.responseStatusCode = responseStatusCode;
+        this.responseContentType = responseContentType;
+        this.responseBody = responseBody;
     }
 
     internal Uri Endpoint { get; }
     internal int Requests => Volatile.Read(ref requests);
     internal bool ExpectedClientCertificateObserved => Volatile.Read(ref expectedClientCertificateObserved) == 1;
     internal bool ExpectedMethodPathAndContentTypeObserved => Volatile.Read(ref expectedMethodPathAndContentTypeObserved) == 1;
+    internal bool ExactApplicationJsonAcceptObserved => Volatile.Read(ref exactApplicationJsonAcceptObserved) == 1;
     internal bool DualTokensObserved => Volatile.Read(ref dualTokensObserved) == 1;
     internal bool DistinctTokensAndJtiObserved => Volatile.Read(ref distinctTokensAndJtiObserved) == 1;
     internal bool ValidRs256X5cObserved => Volatile.Read(ref validRs256X5cObserved) == 1;
@@ -1532,7 +1700,10 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
         X509Certificate2 expectedClientCertificate,
         X509Certificate2 expectedSigningCertificate,
         X509Certificate2 trustedRootCertificate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int responseStatusCode = StatusCodes.Status202Accepted,
+        string responseContentType = "application/json",
+        string responseBody = "{\"workflowInstanceId\":\"workflow-fse2-1\",\"traceID\":\"trace-fse2-1\",\"spanID\":\"span-fse2-1\"}")
     {
         WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0, listen => listen.UseHttps(https =>
@@ -1553,7 +1724,10 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
             new Uri($"https://localhost:{listening.Port}/", UriKind.Absolute),
             Convert.ToHexString(SHA256.HashData(expectedClientCertificate.RawData)),
             Convert.ToHexString(SHA256.HashData(expectedSigningCertificate.RawData)),
-            trustedRootCertificate.RawData.ToArray());
+            trustedRootCertificate.RawData.ToArray(),
+            responseStatusCode,
+            responseContentType,
+            responseBody);
         return server;
     }
 
@@ -1567,6 +1741,9 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
         if (HttpMethods.IsPost(context.Request.Method) && context.Request.Path == "/documents" &&
             string.Equals(context.Request.ContentType, $"multipart/form-data; boundary={Fse2OrganizationHostedIntegrationTests.Boundary}", StringComparison.Ordinal))
             Interlocked.Exchange(ref expectedMethodPathAndContentTypeObserved, 1);
+        if (context.Request.Headers.Accept.Count == 1 &&
+            string.Equals(context.Request.Headers.Accept.ToString(), "application/json", StringComparison.Ordinal))
+            Interlocked.Exchange(ref exactApplicationJsonAcceptObserved, 1);
 
         using MemoryStream bodyBuffer = new();
         await context.Request.Body.CopyToAsync(bodyBuffer, context.RequestAborted);
@@ -1614,11 +1791,9 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
             }
         }
 
-        context.Response.StatusCode = StatusCodes.Status202Accepted;
-        context.Response.ContentType = "application/json";
-        await context.Response.WriteAsync(
-            "{\"workflowInstanceId\":\"workflow-fse2-1\",\"traceID\":\"trace-fse2-1\",\"spanID\":\"span-fse2-1\"}",
-            context.RequestAborted);
+        context.Response.StatusCode = responseStatusCode;
+        context.Response.ContentType = responseContentType;
+        await context.Response.WriteAsync(responseBody, context.RequestAborted);
     }
 
     private TokenObservation? ValidateToken(string compactToken, string expectedIssuer)

@@ -48,6 +48,15 @@ public enum AuthorizedSigningCertificateKeyUsageMode
     ContentCommitment
 }
 
+/// <summary>Closed server-owned response handling for one qualified restricted transport.</summary>
+public enum AuthorizedRestrictedTransportResponseMode
+{
+    /// <summary>Preserve the existing success-only restricted-transport semantics.</summary>
+    SuccessOnly,
+    /// <summary>Return one bounded non-success response for sanitized RFC 7807 mapping.</summary>
+    BoundedProblemDetails
+}
+
 /// <summary>Closed issuer comparison supported by the Core-owned policy preflight.</summary>
 public enum AuthorizedSigningIssuerExpectationKind
 {
@@ -228,9 +237,11 @@ public sealed class AuthorizedPublishedOperationExpectations
         bool restrictedTransportRequired,
         IReadOnlyCollection<AuthorizedSigningSlotExpectation> signingSlots,
         IReadOnlyCollection<ConnectorSigningSlotKey>? sameSigningIdentitySlots = null,
-        IReadOnlyCollection<ConnectorSigningSlotKey>? signingIdentityDistinctFromMutualTlsSlots = null)
+        IReadOnlyCollection<ConnectorSigningSlotKey>? signingIdentityDistinctFromMutualTlsSlots = null,
+        AuthorizedRestrictedTransportResponseMode restrictedTransportResponseMode = AuthorizedRestrictedTransportResponseMode.SuccessOnly)
     {
         if (!Enum.IsDefined(authenticationKind)) throw new ArgumentOutOfRangeException(nameof(authenticationKind));
+        if (!Enum.IsDefined(restrictedTransportResponseMode)) throw new ArgumentOutOfRangeException(nameof(restrictedTransportResponseMode));
         ArgumentNullException.ThrowIfNull(signingSlots);
         Dictionary<ConnectorSigningSlotKey, AuthorizedSigningSlotExpectation> slots = [];
         int count = 0;
@@ -241,6 +252,8 @@ public sealed class AuthorizedPublishedOperationExpectations
         }
         if (!restrictedTransportRequired && slots.Count != 0)
             throw new ArgumentException("Signing-slot expectations require restricted transport.", nameof(signingSlots));
+        if (!restrictedTransportRequired && restrictedTransportResponseMode != AuthorizedRestrictedTransportResponseMode.SuccessOnly)
+            throw new ArgumentException("Bounded response handling requires restricted transport.", nameof(restrictedTransportResponseMode));
 
         this.signingSlots = slots.ToFrozenDictionary();
         this.sameSigningIdentitySlots = IdentitySet(sameSigningIdentitySlots, slots, minimumCount: 2,
@@ -250,12 +263,15 @@ public sealed class AuthorizedPublishedOperationExpectations
             nameof(signingIdentityDistinctFromMutualTlsSlots));
         AuthenticationKind = authenticationKind;
         RestrictedTransportRequired = restrictedTransportRequired;
+        RestrictedTransportResponseMode = restrictedTransportResponseMode;
     }
 
     /// <summary>Exact outbound authentication kind expected by the module.</summary>
     public GatewayAuthenticationKind AuthenticationKind { get; }
     /// <summary>Exact expected restricted-transport presence; false requires verified absence and is not an opt-out.</summary>
     public bool RestrictedTransportRequired { get; }
+    /// <summary>Closed server-owned response handling enabled only after the exact Published preflight.</summary>
+    public AuthorizedRestrictedTransportResponseMode RestrictedTransportResponseMode { get; }
     /// <summary>Exact immutable signing-slot set; empty requires verified absence of legacy signing and signing slots.</summary>
     public IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedSigningSlotExpectation> SigningSlots => signingSlots;
     /// <summary>Slots whose verified signing-certificate identities must all be equal.</summary>

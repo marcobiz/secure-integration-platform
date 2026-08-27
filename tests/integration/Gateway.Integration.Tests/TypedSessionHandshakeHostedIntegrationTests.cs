@@ -802,7 +802,7 @@ public sealed class HostedTypedSessionFixture : IAsyncDisposable
             Guid.NewGuid(), TestContext.Current.CancellationToken);
     }
 
-    internal async Task<string> SerializeAuditAsync(Guid tenantId)
+    public async Task<string> SerializeAuditAsync(Guid tenantId)
     {
         if (Factory.Services.GetRequiredService<IGatewayRegistry>() is InMemoryGatewayRegistry inMemory)
             return JsonSerializer.Serialize(inMemory.SnapshotAuditEvents());
@@ -1057,6 +1057,13 @@ internal sealed class CountingRestrictedTransport(IRestrictedTransport inner) : 
     {
         Interlocked.Increment(ref genericRequests);
         return inner.SendAsync(request, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, cancellationToken);
+    }
+
+    public Task<ExternalResponse> SendProblemDetailsAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate,
+        TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref genericRequests);
+        return inner.SendProblemDetailsAsync(request, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, cancellationToken);
     }
 
     public Task<ExternalResponse> SendSoapAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, TimeSpan timeout,

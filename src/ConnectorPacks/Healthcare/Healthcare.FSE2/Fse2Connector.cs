@@ -82,7 +82,8 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
             restrictedTransportRequired: true,
             [authorizationExpectation, integrityExpectation],
             [authorization, integrity],
-            [authorization, integrity]);
+            [authorization, integrity],
+            AuthorizedRestrictedTransportResponseMode.BoundedProblemDetails);
     }
 }
 
@@ -147,6 +148,12 @@ public sealed class Fse2OrganizationExecutionStrategy(
                 : new AuthorizedConnectorRestrictedTransportRequest(pathParameters);
         QualifiedGatewayExecutionResult upstream = await execution.Capabilities.ExecuteRestrictedTransportAsync(
             restrictedRequest, cancellationToken).ConfigureAwait(false);
+        if (!profile.Operation.SuccessStatusCodes.Contains(upstream.StatusCode))
+        {
+            Fse2ConnectorException problem = Fse2ResponseMapper.MapProblem(upstream, profile.Operation.RetryClass);
+            execution.Capabilities.RejectRestrictedTransportResponse(upstream, problem.SafeCode);
+            throw problem;
+        }
         Fse2Response normalized = Fse2ResponseMapper.Map(upstream, execution.CorrelationId, profile.Operation);
         if (profile.Operation.Operation is not (Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace) &&
             (normalized.WorkflowInstanceId is not null || normalized.TraceId is not null))
@@ -413,6 +420,17 @@ internal static class Fse2ExactBodyComposer
 /// <summary>RFC7807 and success response mapper retaining technical allowlisted metadata only.</summary>
 public static class Fse2ResponseMapper
 {
+    private const int MaximumProblemBytes = 16 * 1024;
+    private static readonly FrozenSet<string> OfficialProblemCodes = new[]
+    {
+        "cda-element", "cda-extraction", "cda-match", "cda-validation", "document-hash",
+        "document-type", "eds-document-missing", "eds-error", "empty-file", "fhir-element",
+        "fhir-extraction", "fhir-mapping-type", "generic-error", "generic-timeout", "ini-error",
+        "invalid-format", "jwt-validation", "mandatory-element", "mandatory-element-token",
+        "max-day-limit-exceed", "missing-token", "record-not-found", "semantic", "service-error",
+        "syntax", "vocabulary", "workflow-id-error-extraction"
+    }.ToFrozenSet(StringComparer.Ordinal);
+
     public static Fse2Response Map(QualifiedGatewayExecutionResult response, Guid correlationId, Fse2OperationDescriptor operation)
     {
         ArgumentNullException.ThrowIfNull(response);
@@ -435,18 +453,22 @@ public static class Fse2ResponseMapper
     public static Fse2ConnectorException MapProblem(QualifiedGatewayExecutionResult response, Fse2RetryClass retryClass)
     {
         string safeCode = "FSE2_UPSTREAM_REJECTED";
-        if (response.ContentType.StartsWith("application/problem+json", StringComparison.OrdinalIgnoreCase))
+        if (response.Body.Length <= MaximumProblemBytes && IsProblemJson(response.ContentType))
         {
             try
             {
                 using JsonDocument document = JsonDocument.Parse(response.Body, new JsonDocumentOptions { MaxDepth = 12 });
                 JsonElement root = document.RootElement;
-                string? candidate = SafeProblemValue(root, "type") ?? SafeProblemValue(root, "code");
-                if (candidate is not null)
+                if (root.ValueKind != JsonValueKind.Object) throw new JsonException();
+                foreach (string propertyName in new[] { "type", "code" })
                 {
+                    string? candidate = SafeProblemValue(root, propertyName);
+                    if (candidate is null) continue;
                     int slash = candidate.LastIndexOf('/');
                     candidate = slash >= 0 ? candidate[(slash + 1)..] : candidate;
-                    if (Fse2Validation.IsSafeCode(candidate)) safeCode = candidate;
+                    if (!OfficialProblemCodes.Contains(candidate)) continue;
+                    safeCode = candidate;
+                    break;
                 }
             }
             catch (Exception) { safeCode = "FSE2_UPSTREAM_REJECTED"; }
@@ -458,9 +480,25 @@ public static class Fse2ResponseMapper
         return new(category, safeCode, retryable);
     }
 
+    private static bool IsProblemJson(string contentType)
+    {
+        int parameter = contentType.IndexOf(';');
+        string mediaType = parameter < 0 ? contentType : contentType[..parameter];
+        return string.Equals(mediaType.Trim(), "application/problem+json", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string? SafeProblemValue(JsonElement root, string name)
     {
-        if (!root.TryGetProperty(name, out JsonElement value) || value.ValueKind == JsonValueKind.Null) return null;
+        JsonElement value = default;
+        int matches = 0;
+        foreach (JsonProperty property in root.EnumerateObject())
+        {
+            if (!string.Equals(property.Name, name, StringComparison.Ordinal)) continue;
+            value = property.Value;
+            matches++;
+        }
+        if (matches == 0 || value.ValueKind == JsonValueKind.Null) return null;
+        if (matches != 1) throw new JsonException();
         if (value.ValueKind != JsonValueKind.String) throw new JsonException();
         string text = value.GetString()!;
         if (string.IsNullOrWhiteSpace(text) || text.Length > 512 || text != text.Trim() || text.Any(char.IsControl)) throw new JsonException();

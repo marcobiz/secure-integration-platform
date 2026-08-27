@@ -108,6 +108,7 @@ public sealed class AuthorizedConnectorExecution
 {
     private readonly byte[] payload;
     private readonly AuthorizedConnectorCapabilityBridge capabilities;
+    private AuthorizedRestrictedTransportResponseMode restrictedTransportResponseMode;
 
     internal AuthorizedConnectorExecution(
         AuthorizedGatewayInvocation invocation,
@@ -169,6 +170,7 @@ public sealed class AuthorizedConnectorExecution
     internal AuthorizedGatewayInvocation Invocation { get; }
     internal GatewayOperationDefinition Operation { get; }
     internal ReadOnlyMemory<byte> Payload => payload;
+    internal AuthorizedRestrictedTransportResponseMode RestrictedTransportResponseMode => restrictedTransportResponseMode;
     internal AuthorizedPublishedExecutionStamp PublishedAuthority => publishedAuthority ??
         throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-STALE", 503, true);
 
@@ -180,6 +182,13 @@ public sealed class AuthorizedConnectorExecution
 
     internal bool Owns(AuthorizedConnectorCapabilityFailureException exception) =>
         ReferenceEquals(capabilities, exception.Authority);
+
+    internal void AuthorizeRestrictedTransportResponseMode(AuthorizedRestrictedTransportResponseMode mode)
+    {
+        if (!Enum.IsDefined(mode) || restrictedTransportResponseMode != AuthorizedRestrictedTransportResponseMode.SuccessOnly)
+            throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
+        restrictedTransportResponseMode = mode;
+    }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable",
         Justification = "The private bridge is externally retained for denial tests; its host-owned scope deterministically cancels, drains and disposes all owned sources without exposing IDisposable authority.")]
@@ -197,6 +206,7 @@ public sealed class AuthorizedConnectorExecution
         private int state;
         private int consumedCapabilities;
         private int signingAttempts;
+        private QualifiedGatewayExecutionResult? restrictedTransportResult;
 
         private const int TypedSessionHandshakeCapability = 1;
         private const int ComposedSoapCapability = 2;
@@ -240,10 +250,11 @@ public sealed class AuthorizedConnectorExecution
             }, cancellationToken);
         }
 
-        public Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
+        public async Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
             AuthorizedConnectorRestrictedTransportRequest request,
             CancellationToken cancellationToken)
-            => StartOperation(RestrictedTransportCapability, (value, handoff, token) =>
+        {
+            QualifiedGatewayExecutionResult result = await StartOperation(RestrictedTransportCapability, (value, handoff, token) =>
             {
                 ArgumentNullException.ThrowIfNull(request);
                 IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> snapshot;
@@ -257,7 +268,30 @@ public sealed class AuthorizedConnectorExecution
                     snapshot = signedTokens.ToDictionary(value => value.Key, value => value.Value);
                 }
                 return value.ExecuteRestrictedTransportAsync(handoff, request, snapshot, token);
-            }, cancellationToken);
+            }, cancellationToken).ConfigureAwait(false);
+            lock (synchronization) restrictedTransportResult = result;
+            return result;
+        }
+
+        public void RejectRestrictedTransportResponse(QualifiedGatewayExecutionResult response, string safeProblemCode)
+        {
+            bool validCode = safeProblemCode is { Length: >= 1 and <= 96 } &&
+                safeProblemCode.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
+            lock (synchronization)
+            {
+                if (state != 1 || !ReferenceEquals(Current.Value, this) ||
+                    execution.RestrictedTransportResponseMode != AuthorizedRestrictedTransportResponseMode.BoundedProblemDetails ||
+                    !ReferenceEquals(restrictedTransportResult, response) || response.StatusCode is >= 200 and < 300 || !validCode)
+                    throw Failure(new GatewayException("BGW-EGRESS-AUTHENTICATION", 409));
+            }
+            bool retryable = execution.Operation.Idempotent && execution.Operation.MaximumRetries > 0 &&
+                response.StatusCode is 429 or 502 or 503 or 504;
+            throw Failure(new GatewayException(
+                "BGW-EGRESS-UPSTREAM-REJECTED",
+                502,
+                retryable,
+                SafeUpstreamFailureDiagnostics.HttpResponse(response.StatusCode, safeProblemCode)));
+        }
 
         internal AuthorizedConnectorCapabilityScope EnterExecutionScope(CancellationToken actualInvocationCancellation)
         {
@@ -498,6 +532,11 @@ public interface IAuthorizedConnectorCapabilityBridge
     Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
         AuthorizedConnectorRestrictedTransportRequest request,
         CancellationToken cancellationToken);
+    /// <summary>
+    /// Rejects the exact non-success result returned by this invocation after connector-local safe
+    /// problem mapping. No body, title, detail, endpoint or arbitrary metadata can be supplied.
+    /// </summary>
+    void RejectRestrictedTransportResponse(QualifiedGatewayExecutionResult response, string safeProblemCode);
 }
 
 /// <summary>One exact deployment-registered execution strategy.</summary>

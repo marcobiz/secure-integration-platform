@@ -109,6 +109,13 @@ public interface IRestrictedTransport
     Task<ExternalResponse> SendAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Sends a qualified request while preserving one bounded non-success RFC 7807 response.
+    /// Redirects, proxy use and unbounded bodies remain prohibited.
+    /// </summary>
+    Task<ExternalResponse> SendProblemDetailsAsync(HttpRequestMessage request, IReadOnlyList<IPAddress> approvedAddresses, X509Certificate2? clientCertificate, TimeSpan timeout, long maximumResponseBytes, CancellationToken cancellationToken) =>
+        SendAsync(request, approvedAddresses, clientCertificate, timeout, maximumResponseBytes, cancellationToken);
+
+    /// <summary>
     /// Sends a bounded SOAP request while preserving a non-success response for hardened SOAP Fault parsing.
     /// Redirects, proxy use and unbounded bodies remain prohibited.
     /// </summary>

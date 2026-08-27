@@ -76,7 +76,10 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
                 expectations.SigningSlots.Keys.Any(key => !actualPresence.SigningSlots.Contains(key)))
                 throw PolicyMismatch();
             if (!actualPresence.RestrictedTransportPresent && actualPresence.SigningSlots.Count == 0)
+            {
+                execution.AuthorizeRestrictedTransportResponseMode(expectations.RestrictedTransportResponseMode);
                 return;
+            }
 
             CurrentPublished current = await authority.ResolveCurrentAsync(cancellationToken).ConfigureAwait(false);
             VerticalProfile profile = current.Profile;
@@ -151,6 +154,7 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
                     if (FixedHexEquals(identities[key].SubjectPublicKeyInfoSha256, mutualTls.SubjectPublicKeyInfoSha256))
                         throw PolicyMismatch();
             }
+            execution.AuthorizeRestrictedTransportResponseMode(expectations.RestrictedTransportResponseMode);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -250,14 +254,18 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
                 }
             }
             outbound.Headers.TryAddWithoutValidation("X-Correlation-ID", execution.CorrelationId.ToString("D"));
+            bool boundedProblemDetails = execution.RestrictedTransportResponseMode ==
+                AuthorizedRestrictedTransportResponseMode.BoundedProblemDetails;
+            if (boundedProblemDetails)
+                outbound.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
             PurposeBoundMutualTlsSender sender = new(
                 authority,
                 authority,
                 certificates,
                 certificateMetadata,
-                new AuthenticationHostResolverAdapter(hostResolver),
-                new PurposeBoundMutualTlsTransportAdapter(transport),
+                new AuthenticationHostResolverAdapter(hostResolver, boundedProblemDetails),
+                new PurposeBoundMutualTlsTransportAdapter(transport, boundedProblemDetails),
                 clock,
                 privateDestinationAllowance);
             MutualTlsAuthenticatedResponse response = await sender.SendAsync(
@@ -274,6 +282,16 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
         catch (AuthenticationPrimitiveException exception)
         {
             throw Map(exception);
+        }
+        catch (RestrictedTransportFailureException exception)
+        {
+            bool retryable = execution.Operation.Idempotent && execution.Operation.MaximumRetries > 0 &&
+                exception.Phase == RestrictedTransportFailurePhase.Timeout;
+            throw new GatewayException(
+                "BGW-EGRESS-UPSTREAM-REJECTED",
+                502,
+                retryable,
+                SafeUpstreamFailureDiagnostics.Transport(exception.Phase));
         }
     }
 

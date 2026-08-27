@@ -17,12 +17,69 @@ public sealed class GatewayException : Exception
         Retryable = retryable;
     }
 
+    internal GatewayException(string code, int statusCode, bool retryable, SafeUpstreamFailureDiagnostics diagnostics)
+        : this(code, statusCode, retryable) => Diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
+
     /// <summary>Stable non-secret error code.</summary>
     public string Code { get; }
     /// <summary>HTTP status associated with the failure.</summary>
     public int StatusCode { get; }
     /// <summary>Whether a caller may retry safely.</summary>
     public bool Retryable { get; }
+    internal SafeUpstreamFailureDiagnostics? Diagnostics { get; }
+}
+
+/// <summary>Closed phase emitted by the qualified restricted transport without raw exception data.</summary>
+public enum RestrictedTransportFailurePhase
+{
+    /// <summary>DNS resolution did not produce a usable result.</summary>
+    DnsFailure,
+    /// <summary>No approved address accepted a TCP connection.</summary>
+    TcpConnectFailure,
+    /// <summary>The upstream server certificate failed validation.</summary>
+    TlsServerValidationFailure,
+    /// <summary>The TLS peer rejected or could not complete client-certificate authentication.</summary>
+    MutualTlsClientAuthenticationFailure,
+    /// <summary>The bounded operation deadline elapsed.</summary>
+    Timeout,
+    /// <summary>A different transport failure occurred without safe lower-level detail.</summary>
+    TransportFailureOther
+}
+
+/// <summary>Metadata-only qualified transport failure; it never retains an inner exception.</summary>
+public sealed class RestrictedTransportFailureException : Exception
+{
+    /// <summary>Creates one bounded failure classification.</summary>
+    public RestrictedTransportFailureException(RestrictedTransportFailurePhase phase)
+        : base("Qualified restricted transport failed.")
+    {
+        if (!Enum.IsDefined(phase)) throw new ArgumentOutOfRangeException(nameof(phase));
+        Phase = phase;
+    }
+
+    /// <summary>Safe closed failure phase.</summary>
+    public RestrictedTransportFailurePhase Phase { get; }
+}
+
+internal sealed record SafeUpstreamFailureDiagnostics(
+    string FailurePhase,
+    int? UpstreamStatus,
+    string? SafeUpstreamCode)
+{
+    internal static SafeUpstreamFailureDiagnostics HttpResponse(int statusCode, string safeCode) =>
+        new("UPSTREAM_HTTP_RESPONSE", statusCode, safeCode);
+
+    internal static SafeUpstreamFailureDiagnostics Transport(RestrictedTransportFailurePhase phase) =>
+        new(phase switch
+        {
+            RestrictedTransportFailurePhase.DnsFailure => "DNS_FAILURE",
+            RestrictedTransportFailurePhase.TcpConnectFailure => "TCP_CONNECT_FAILURE",
+            RestrictedTransportFailurePhase.TlsServerValidationFailure => "TLS_SERVER_VALIDATION_FAILURE",
+            RestrictedTransportFailurePhase.MutualTlsClientAuthenticationFailure => "MTLS_CLIENT_AUTH_FAILURE",
+            RestrictedTransportFailurePhase.Timeout => "TIMEOUT",
+            RestrictedTransportFailurePhase.TransportFailureOther => "TRANSPORT_FAILURE_OTHER",
+            _ => throw new ArgumentOutOfRangeException(nameof(phase))
+        }, null, null);
 }
 
 /// <summary>Enrollment challenge request.</summary>
