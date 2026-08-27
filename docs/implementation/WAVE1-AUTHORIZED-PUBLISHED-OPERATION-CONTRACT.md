@@ -143,3 +143,24 @@ accessibility tests, `FULLSTACK-01` with zero residual Compose resources, docume
 validation, vulnerability inventory, and the complete container SBOM. Core export and the repeated
 local gate on the final documentation commit precede the normal push. Exact-head CI and independent
 micro-rereview remain separate post-push gates. Merge is not authorized by this exception.
+
+## FSE2 live-contract follow-up
+
+ADR-0030 adds one closed response-mode expectation after the same exact-A mandatory preflight. The
+historical default remains `SuccessOnly`; only the qualified FSE2 provider selects
+`BoundedProblemDetails`. Core then owns one `Accept: application/json` projection and permits the
+vertical mapper to inspect only a bounded non-success status/content-type/body result. Caller input
+still cannot select a header, response mode, endpoint, method, retry, redirect or transport policy.
+
+The follow-up introduces one narrow bridge operation that rejects only the exact non-success
+response object previously returned by the current invocation's single bounded transport call and
+accepts only a bounded safe code. It does not expose response bytes, policy, URI, transport or a
+second send. This supersedes the earlier statement that no public bridge method was added only for
+this exact-result failure-reporting case; all policy-inspection and generic validation alternatives
+remain rejected.
+
+Legacy `IRestrictedTransport.SendAsync` callers retain the previous non-success collapse. The FSE2
+path records only `UPSTREAM_HTTP_RESPONSE`, `DNS_FAILURE`, `TCP_CONNECT_FAILURE`,
+`TLS_SERVER_VALIDATION_FAILURE`, `MTLS_CLIENT_AUTH_FAILURE`, `TIMEOUT` or
+`TRANSPORT_FAILURE_OTHER`, plus bounded status/category and an optional official allowlisted code.
+Caller Problems remain unchanged and raw upstream content is neither audited nor evidenced.

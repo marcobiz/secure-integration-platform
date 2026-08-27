@@ -112,6 +112,34 @@ transport effects. Generic signing-slot, provider,
 cancellation, timeout, restricted-egress and binding-substitution matrices remain regression evidence
 from the qualified Core foundation; they are not reimplemented in the vertical.
 
+## Live-contract and safe-diagnostics correction
+
+The frozen guide requires `Accept: application/json`. The qualified FSE2 path now projects that
+value exactly once as server-owned authority; neither the caller nor the BGW1 payload can replace it
+or inject another header. The existing endpoint, POST method, multipart content type, retry zero,
+redirect zero, mTLS identity and dual signing-slot policies are unchanged.
+
+Only this preflight-qualified FSE2 path can receive a bounded HTTP non-success result for mapping.
+The mapper retains at most the status/category and a code/type from the frozen official allowlist;
+malformed, duplicate, unknown or oversized problems collapse without preserving body, title or
+detail. DNS, TCP connect, TLS server validation, mutual-TLS client authentication, timeout and other
+transport failures are distinct closed phases. Audit is metadata-only and the external caller still
+receives the historical generic sanitized Gateway Problem.
+
+The offline case 476 contract pins official documentation commit
+`430e6b5d9dde8a35b04ae635c11303db787a977e`, dataset commit
+`d937255fd7e9c079c5641c537da17fe98a2f2259`, dataset SHA-256
+`7B54299D5AD7E87CA7D5569E98ADAC2D687D3E9432FD4D015194E733A2ADAABD`,
+`POST /documents/validation`, activity `VERIFICA`, `healthDataFormat=CDA`,
+`mode=ATTACHMENT`, multipart parts `requestBody` and `file`, and absence of `attachment_hash`.
+It performs no DNS resolution or network dispatch.
+
+The historical live evidence at
+`fse2-configuration-authority-reconciliation-20260827T083259Z-7edddfe` remains immutable. Its one
+request is classified only as `UPSTREAM_OR_TRANSPORT_FAILURE_UNCLASSIFIED`; no HTTP rejection,
+status or OfficialTest problem code is retroactively claimed. This correction authorizes and
+performs zero OfficialTest calls.
+
 ## Current remediation qualification ledger
 
 Preliminary failures remain visible and are not PASS evidence:
