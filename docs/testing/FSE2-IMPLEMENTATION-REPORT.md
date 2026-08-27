@@ -137,6 +137,17 @@ Audit is metadata-only, every representative failure (including redirect) produc
 failure audit and zero success, and the external caller still receives the historical generic
 sanitized Gateway Problem.
 
+The earlier evidence that named the T03 gate before that test existed on its attested source commit
+remains immutable and is explicitly invalidated:
+`PREVIOUS_T03_NAMED_GATE_ATTESTATION = INVALIDATED_TEST_NOT_PRESENT_ON_ATTESTED_HEAD`.
+The replacement gate is the versioned test
+`SecureIntegration.ConnectorPacks.Healthcare.FSE2.Integration.Tests.Fse2OrganizationHostedIntegrationTests.FSE2_T03_case_476_reads_frozen_git_objects_and_preserves_exact_official_PDF_in_multipart`
+in `Healthcare.FSE2.Integration.Tests.dll`, sourced from
+`tests/integration/Healthcare.FSE2.Integration.Tests/Fse2OrganizationHostedIntegrationTests.cs`.
+`eng/Acquire-Fse2T03FrozenDataset.ps1` separately acquires and verifies a task-owned object-only
+detached clone; the test requires its explicit path, rejects repository/remote/commit drift, disables
+Git network protocols while reading, and fails rather than skips when the frozen source is absent.
+
 The offline case 476 contract pins official documentation commit
 `430e6b5d9dde8a35b04ae635c11303db787a977e` and dataset commit
 `d937255fd7e9c079c5641c537da17fe98a2f2259`. The canonical XML is

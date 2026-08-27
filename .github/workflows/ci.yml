@@ -56,9 +56,51 @@ jobs:
       - name: Build
         shell: pwsh
         run: ./eng/build.ps1
+      - name: Acquire frozen FSE2 T03 dataset objects
+        shell: pwsh
+        run: |
+          $datasetPath = Join-Path $env:RUNNER_TEMP 'fse2-t03-dataset-d937255f'
+          ./eng/Acquire-Fse2T03FrozenDataset.ps1 -DestinationPath $datasetPath
+          "FSE2_T03_DATASET_REPOSITORY_PATH=$datasetPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Test
         shell: pwsh
         run: ./eng/test.ps1
+      - name: Execute exact frozen FSE2 T03 named gate
+        shell: pwsh
+        run: |
+          $project = 'tests/integration/Healthcare.FSE2.Integration.Tests/Healthcare.FSE2.Integration.Tests.csproj'
+          $fullyQualifiedName = 'SecureIntegration.ConnectorPacks.Healthcare.FSE2.Integration.Tests.Fse2OrganizationHostedIntegrationTests.FSE2_T03_case_476_reads_frozen_git_objects_and_preserves_exact_official_PDF_in_multipart'
+          $results = '.artifacts/test-results/fse2-t03-frozen-dataset'
+          New-Item -ItemType Directory -Path $results -Force | Out-Null
+          $listOutput = & dotnet test $project -c Release --no-build --no-restore --list-tests
+          if ($LASTEXITCODE -ne 0) { throw 'FSE2_T03_LIST_TESTS_FAILED' }
+          $listOutput | Set-Content -LiteralPath (Join-Path $results 'list-tests.txt') -Encoding utf8
+          $matches = @($listOutput | Where-Object { $_.Trim() -ceq $fullyQualifiedName })
+          if ($matches.Count -ne 1) { throw "FSE2_T03_NAMED_TEST_MATCH_COUNT=$($matches.Count)" }
+          $env:FSE2_T03_SOURCE_SHA = $env:CANDIDATE_COMMIT_SHA
+          $env:FSE2_T03_REDACTED_RESULT_PATH = Join-Path $results 't03-redacted-result.json'
+          & dotnet test $project -c Release --no-build --no-restore `
+            --filter "FullyQualifiedName=$fullyQualifiedName" `
+            --logger "trx;LogFileName=fse2-t03-named-gate.trx" `
+            --results-directory $results
+          if ($LASTEXITCODE -ne 0) { throw 'FSE2_T03_NAMED_GATE_FAILED' }
+          [xml]$trx = Get-Content -LiteralPath (Join-Path $results 'fse2-t03-named-gate.trx') -Raw
+          $counters = $trx.TestRun.ResultSummary.Counters
+          if ([int]$counters.total -ne 1 -or [int]$counters.executed -ne 1 -or
+              [int]$counters.passed -ne 1 -or [int]$counters.failed -ne 0 -or
+              [int]$counters.notExecuted -ne 0) {
+            throw "FSE2_T03_TRX_COUNTERS_INVALID total=$($counters.total) executed=$($counters.executed) passed=$($counters.passed) failed=$($counters.failed) notExecuted=$($counters.notExecuted)"
+          }
+      - name: Remove task-owned frozen FSE2 T03 dataset
+        if: always()
+        shell: pwsh
+        run: |
+          $datasetPath = [System.IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP 'fse2-t03-dataset-d937255f'))
+          $runnerTemp = [System.IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+          if (-not $datasetPath.StartsWith($runnerTemp, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "FSE2_T03_DATASET_CLEANUP_PATH_REJECTED: $datasetPath"
+          }
+          if (Test-Path -LiteralPath $datasetPath) { Remove-Item -LiteralPath $datasetPath -Recurse -Force }
       - name: Build and test optional local PKCS12 provider pack
         shell: pwsh
         run: |

@@ -470,18 +470,6 @@ public sealed class Fse2FoundationTests
     }
 
     [Fact]
-    public void FSE2_T03_frozen_fixture_records_distinct_XML_and_PDF_identities()
-    {
-        const string xmlIdentity = "6b654344431a21e02b979ab4907bc53b38cb4143/58712/7B54299D5AD7E87CA7D5569E98ADAC2D687D3E9432FD4D015194E733A2ADAABD";
-        const string pdfIdentity = "a4bf835cbf08661a6c530f95bdea1770e0ca4ad0/60148/129BE437228376B897B8D176DE099CA165714901DA3CB7B78EE2F9B68F4A252E";
-        const string selectedPdfPath = "GATEWAY/A1#111#DAVINCI.CARE/DaVinci Healthcare/DaVinci/3.3/FILES/PSS476.pdf";
-
-        Assert.EndsWith(".pdf", selectedPdfPath, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("PSS476.xml", selectedPdfPath, StringComparison.Ordinal);
-        Assert.NotEqual(xmlIdentity, pdfIdentity);
-    }
-
-    [Fact]
     public void FSE2_RESPONSE_official_exact_maximum_trace_span_and_workflow_identifiers_are_accepted()
     {
         string traceId = new('t', 100);

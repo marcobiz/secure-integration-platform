@@ -13,7 +13,9 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Https;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Net.Http.Headers;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
@@ -964,6 +966,124 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     }
 
     [Fact]
+    public async Task FSE2_T03_case_476_reads_frozen_git_objects_and_preserves_exact_official_PDF_in_multipart()
+    {
+        string repositoryPath = Environment.GetEnvironmentVariable("FSE2_T03_DATASET_REPOSITORY_PATH")
+            ?? throw new InvalidOperationException("FSE2_T03_DATASET_REPOSITORY_PATH_REQUIRED");
+        Fse2T03FrozenDataset.Snapshot dataset = await Fse2T03FrozenDataset.ReadAsync(
+            repositoryPath,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(64, dataset.RawId476Rows);
+        Assert.Equal(17, dataset.ExecutedRecords.Count);
+        Assert.Equal(16, dataset.Candidates.Count);
+        Assert.Equal(1, dataset.Candidates.Count(candidate => candidate.EmbeddedCdaMatch));
+        Fse2T03FrozenDataset.PdfCandidate unparseable = Assert.Single(dataset.Candidates, candidate => !candidate.Parseable);
+        Assert.Equal(
+            "GATEWAY/A1#111#YOOMULTIMEDIAX1/YOO-Multimedia-SRL/YOOMULTIMEDIA-FSE-GATEWAY/1.1.0/FILES/T3_VALIDATION.pdf",
+            unparseable.Path);
+        Assert.False(unparseable.EmbeddedCdaMatch);
+
+        Fse2T03FrozenDataset.ExecutedRecord daVinci = Assert.Single(dataset.ExecutedRecords, record =>
+            record.WorkbookPath.Equals(
+                "GATEWAY/A1#111#DAVINCI.CARE/DaVinci Healthcare/DaVinci/3.3/report-checklist.xlsx",
+                StringComparison.Ordinal));
+        Assert.Equal("VALIDAZIONE_CDA2_PSS_CT23", daVinci.TestCode);
+        Fse2T03FrozenDataset.PdfCandidate selected = Assert.Single(dataset.Candidates, candidate =>
+            candidate.Path.Equals(Fse2T03FrozenDataset.SelectedPdfPath, StringComparison.Ordinal));
+        Assert.Equal(Fse2T03FrozenDataset.SelectedPdfBlob, selected.Blob);
+        Assert.Equal(Fse2T03FrozenDataset.SelectedPdfBytes, selected.Bytes);
+        Assert.Equal(Fse2T03FrozenDataset.SelectedPdfSha256, selected.Sha256);
+        Assert.True(selected.Parseable);
+        Assert.True(selected.EmbeddedCdaMatch);
+        Assert.StartsWith(
+            daVinci.WorkbookPath[..daVinci.WorkbookPath.LastIndexOf('/')],
+            selected.Path,
+            StringComparison.Ordinal);
+
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        await using SyntheticFse2OperationMatrixServer server = await SyntheticFse2OperationMatrixServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-t03-frozen-dataset",
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
+
+        Fse2OperationDescriptor operation = Fse2OperationCatalog.Get(Fse2Operation.ValidateCda);
+        string connectorId = "fse2-t03-frozen-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-t03-frozen-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-t03-frozen-application");
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId,
+            "1.0.0",
+            environmentId,
+            server.Endpoint,
+            DefinitionForOperations(
+                connectorId,
+                "1.0.0",
+                SpkiSha256(material.SigningKeyRevision1),
+                SpkiSha256(material.ClientCertificateRevision1),
+                "1.0.0",
+                [operation]),
+            provider,
+            "sign-r1",
+            "mtls-r1",
+            operationId: operation.OperationId,
+            expectedOperationCount: 1);
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "fse2-t03-frozen-identity");
+        await fixture.AddOperationGrantAsync(identity, connectorId, operation.OperationId);
+
+        const string requestBody = "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}";
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{operation.OperationId}:invoke",
+            InvokeRequest(PayloadFor(operation, requestBody, dataset.SelectedPdfContent)));
+        string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.True(response.StatusCode == HttpStatusCode.OK, responseBody);
+
+        SyntheticFse2OperationMatrixServer.Observation observation = Assert.Single(server.Observations);
+        Assert.Equal(Fse2Operation.ValidateCda, observation.Operation);
+        Assert.Equal("POST", observation.Method);
+        Assert.Equal("/documents/validation", observation.RawTarget);
+        Assert.Equal($"multipart/form-data; boundary={Boundary}", observation.ContentType);
+        Assert.False(observation.AttachmentHashPresent);
+        Assert.True(observation.HasHttpContent);
+        Assert.True(observation.ExactApplicationJsonAcceptObserved);
+        Assert.True(observation.ClientCertificateObserved);
+        Assert.True(observation.DualDistinctTokensObserved);
+        Assert.True(observation.ExactJwtPolicyObserved);
+        Assert.True(observation.ExactClaimsObserved);
+
+        MultipartCapture multipart = await ReadMultipartCaptureAsync(observation, TestContext.Current.CancellationToken);
+        Assert.Equal(1, multipart.FilePartCount);
+        Assert.Equal(1, multipart.RequestBodyPartCount);
+        Assert.Equal("document.pdf", multipart.FileName);
+        Assert.Equal("application/pdf", multipart.FileMediaType);
+        Assert.Equal(Fse2T03FrozenDataset.SelectedPdfBytes, multipart.FileBytes.Length);
+        Assert.Equal(Fse2T03FrozenDataset.SelectedPdfSha256, Convert.ToHexString(SHA256.HashData(multipart.FileBytes)));
+        Assert.Equal(dataset.SelectedPdfContent, multipart.FileBytes);
+        using JsonDocument capturedRequestBody = JsonDocument.Parse(multipart.RequestBodyBytes);
+        Assert.Equal("VERIFICA", capturedRequestBody.RootElement.GetProperty("activity").GetString());
+        Assert.Equal("CDA", capturedRequestBody.RootElement.GetProperty("healthDataFormat").GetString());
+        Assert.Equal("ATTACHMENT", capturedRequestBody.RootElement.GetProperty("mode").GetString());
+        Assert.False(capturedRequestBody.RootElement.TryGetProperty("attachment_hash", out _));
+        Assert.Equal(
+            ["activity", "healthDataFormat", "mode"],
+            capturedRequestBody.RootElement.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal).ToArray());
+
+        await WriteT03ResultIfConfiguredAsync(dataset, observation, multipart, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public Task FSE2_REQUEST_create_and_replace_workflowInstanceId_256_are_accepted_and_exact_wire_bytes_are_preserved()
     {
         string exactMaximum = new('w', 256);
@@ -1569,7 +1689,8 @@ public sealed class Fse2OrganizationHostedIntegrationTests
 
     private static string PayloadFor(
         Fse2OperationDescriptor operation,
-        string requestBodyJson = "{\"metadata\":\"published-exact\"}")
+        string requestBodyJson = "{\"metadata\":\"published-exact\"}",
+        byte[]? documentBytes = null)
     {
         string? resourceIdentifier = operation.Operation switch
         {
@@ -1586,7 +1707,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         };
         if (operation.HasDocument)
         {
-            payload["documentBase64"] = Convert.ToBase64String(DocumentBytes());
+            payload["documentBase64"] = Convert.ToBase64String(documentBytes ?? DocumentBytes());
             payload["documentContentType"] = operation.Operation == Fse2Operation.ValidateFhir
                 ? "application/json"
                 : "application/pdf";
@@ -1596,6 +1717,132 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         if (resourceIdentifier is not null) payload["resourceIdentifier"] = resourceIdentifier;
         return JsonSerializer.Serialize(payload, WebJson);
     }
+
+    private static async Task<MultipartCapture> ReadMultipartCaptureAsync(
+        SyntheticFse2OperationMatrixServer.Observation observation,
+        CancellationToken cancellationToken)
+    {
+        Assert.NotNull(observation.ContentType);
+        Assert.True(MediaTypeHeaderValue.TryParse(observation.ContentType, out MediaTypeHeaderValue? contentType));
+        NameValueHeaderValue boundaryParameter = Assert.Single(
+            contentType.Parameters,
+            parameter => parameter.Name.Equals("boundary", StringComparison.OrdinalIgnoreCase));
+        string boundary = HeaderUtilities.RemoveQuotes(boundaryParameter.Value).Value
+            ?? throw new InvalidOperationException("FSE2_T03_MULTIPART_BOUNDARY_MISSING");
+        Assert.Equal(Boundary, boundary);
+
+        using MemoryStream body = new(observation.Body, writable: false);
+        MultipartReader reader = new(boundary, body);
+        int filePartCount = 0;
+        int requestBodyPartCount = 0;
+        string? fileName = null;
+        string? fileMediaType = null;
+        byte[] fileBytes = [];
+        byte[] requestBodyBytes = [];
+        MultipartSection? section;
+        while ((section = await reader.ReadNextSectionAsync(cancellationToken)) is not null)
+        {
+            Assert.True(ContentDispositionHeaderValue.TryParse(
+                section.ContentDisposition,
+                out ContentDispositionHeaderValue? disposition));
+            string name = HeaderUtilities.RemoveQuotes(disposition.Name).Value ?? string.Empty;
+            using MemoryStream sectionBody = new();
+            await section.Body.CopyToAsync(sectionBody, cancellationToken);
+            if (name.Equals("file", StringComparison.Ordinal))
+            {
+                filePartCount++;
+                fileName = HeaderUtilities.RemoveQuotes(disposition.FileName).Value;
+                fileMediaType = section.ContentType;
+                fileBytes = sectionBody.ToArray();
+            }
+            else if (name.Equals("requestBody", StringComparison.Ordinal))
+            {
+                requestBodyPartCount++;
+                Assert.Equal("application/json", section.ContentType);
+                requestBodyBytes = sectionBody.ToArray();
+            }
+            else
+            {
+                throw new InvalidOperationException("FSE2_T03_MULTIPART_UNEXPECTED_PART");
+            }
+        }
+        return new(filePartCount, requestBodyPartCount, fileName, fileMediaType, fileBytes, requestBodyBytes);
+    }
+
+    private static async Task WriteT03ResultIfConfiguredAsync(
+        Fse2T03FrozenDataset.Snapshot dataset,
+        SyntheticFse2OperationMatrixServer.Observation observation,
+        MultipartCapture multipart,
+        CancellationToken cancellationToken)
+    {
+        string? resultPath = Environment.GetEnvironmentVariable("FSE2_T03_REDACTED_RESULT_PATH");
+        if (string.IsNullOrWhiteSpace(resultPath)) return;
+        string fullPath = Path.GetFullPath(resultPath);
+        string? directory = Path.GetDirectoryName(fullPath);
+        if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+            throw new InvalidOperationException("FSE2_T03_REDACTED_RESULT_DIRECTORY_MISSING");
+        string sourceSha = Environment.GetEnvironmentVariable("FSE2_T03_SOURCE_SHA")
+            ?? throw new InvalidOperationException("FSE2_T03_SOURCE_SHA_REQUIRED_FOR_RESULT");
+        byte[] redacted = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            schemaVersion = 1,
+            sourceSha,
+            datasetRepository = Fse2T03FrozenDataset.RepositoryUrl,
+            datasetCommit = Fse2T03FrozenDataset.Commit,
+            rawId476Rows = dataset.RawId476Rows,
+            executedRecords = dataset.ExecutedRecords.Count,
+            pdfCandidateCount = dataset.Candidates.Count,
+            candidates = dataset.Candidates.Select(candidate => new
+            {
+                candidate.Path,
+                candidate.Blob,
+                candidate.Bytes,
+                candidate.Sha256,
+                candidate.Parseable,
+                match = candidate.EmbeddedCdaMatch,
+                candidate.EmbeddedCdaSha256
+            }),
+            xml = new
+            {
+                path = Fse2T03FrozenDataset.XmlPath,
+                blob = Fse2T03FrozenDataset.XmlBlob,
+                bytes = Fse2T03FrozenDataset.XmlBytes,
+                sha256 = Fse2T03FrozenDataset.XmlSha256
+            },
+            selectedPdf = new
+            {
+                path = Fse2T03FrozenDataset.SelectedPdfPath,
+                blob = Fse2T03FrozenDataset.SelectedPdfBlob,
+                bytes = Fse2T03FrozenDataset.SelectedPdfBytes,
+                sha256 = Fse2T03FrozenDataset.SelectedPdfSha256
+            },
+            embeddedCdaMatchCount = dataset.Candidates.Count(candidate => candidate.EmbeddedCdaMatch),
+            multipart = new
+            {
+                operation = "validate-cda",
+                method = observation.Method,
+                path = observation.RawTarget,
+                contentType = observation.ContentType,
+                attachmentHashAbsent = !observation.AttachmentHashPresent,
+                filePartCount = multipart.FilePartCount,
+                requestBodyPartCount = multipart.RequestBodyPartCount,
+                fileName = multipart.FileName,
+                fileMediaType = multipart.FileMediaType,
+                fileBytes = multipart.FileBytes.Length,
+                fileSha256 = Convert.ToHexString(SHA256.HashData(multipart.FileBytes)),
+                exactByteIdentity = multipart.FileBytes.AsSpan().SequenceEqual(dataset.SelectedPdfContent)
+            }
+        }, WebJson);
+        await File.WriteAllBytesAsync(fullPath, redacted, cancellationToken);
+    }
+
+    private sealed record MultipartCapture(
+        int FilePartCount,
+        int RequestBodyPartCount,
+        string? FileName,
+        string? FileMediaType,
+        byte[] FileBytes,
+        byte[] RequestBodyBytes);
 
     private static string ExpectedPath(Fse2OperationDescriptor operation) => operation.PathTemplate switch
     {
