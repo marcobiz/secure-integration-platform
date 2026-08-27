@@ -70,7 +70,7 @@ jobs:
         run: |
           $project = 'tests/integration/Healthcare.FSE2.Integration.Tests/Healthcare.FSE2.Integration.Tests.csproj'
           $fullyQualifiedName = 'SecureIntegration.ConnectorPacks.Healthcare.FSE2.Integration.Tests.Fse2OrganizationHostedIntegrationTests.FSE2_T03_case_476_reads_frozen_git_objects_and_preserves_exact_official_PDF_in_multipart'
-          $results = '.artifacts/test-results/fse2-t03-frozen-dataset'
+          $results = [IO.Path]::GetFullPath('.artifacts/test-results/fse2-t03-frozen-dataset')
           New-Item -ItemType Directory -Path $results -Force | Out-Null
           $listOutput = & dotnet test $project -c Release --no-build --no-restore --list-tests
           if ($LASTEXITCODE -ne 0) { throw 'FSE2_T03_LIST_TESTS_FAILED' }
