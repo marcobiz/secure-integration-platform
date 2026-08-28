@@ -87,6 +87,9 @@ New-DotNetSbom broker 'SecureIntegration.Broker.Service' 'MPL-2.0' @(
     'src/Broker/Broker.Core/packages.lock.json')
 New-DotNetSbom sdk-dotnet 'SecureIntegration.Broker.Sdk' 'Apache-2.0' @('sdk/dotnet/Broker.Sdk/packages.lock.json')
 New-DotNetSbom connector-cli 'SecureIntegration.Connector.Cli' 'MPL-2.0' @('tools/connector-cli/packages.lock.json')
+New-DotNetSbom fse2-officialtest-provisioner 'SecureIntegration.Tools.Fse2.OfficialTestProvisioner' 'MPL-2.0' @(
+    'tools/fse2/OfficialTestProvisioner/packages.lock.json',
+    'src/ConnectorPacks/Healthcare/Healthcare.FSE2/packages.lock.json')
 New-DotNetSbom auth-certificate-signing 'SecureIntegration.Authentication.CertificateSigning' 'MPL-2.0' @(
     'src/Authentication/CertificateSigning/packages.lock.json',
     'src/Providers/Abstractions/packages.lock.json')

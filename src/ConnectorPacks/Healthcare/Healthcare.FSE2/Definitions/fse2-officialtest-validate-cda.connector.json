@@ -1,0 +1,139 @@
+{
+  "schemaVersion": "1.0",
+  "connectorId": "fse2-officialtest-validate-cda",
+  "version": "1.0.0",
+  "displayName": "FSE2 OfficialTest validate-cda",
+  "bindings": {
+    "endpoints": [
+      {
+        "name": "officialtest-gateway"
+      }
+    ],
+    "secrets": [
+      {
+        "name": "a1-mtls-certificate",
+        "kind": "clientCertificate"
+      },
+      {
+        "name": "s1-signing-certificate",
+        "kind": "clientCertificate"
+      }
+    ]
+  },
+  "operations": [
+    {
+      "operationId": "validate-cda",
+      "endpointBinding": "officialtest-gateway",
+      "method": "POST",
+      "path": "/documents/validation",
+      "request": {
+        "contentType": "multipart/form-data; boundary=broker-gateway-fse2-officialtest-v1",
+        "maximumBytes": 2097152
+      },
+      "response": {
+        "maximumBytes": 4096
+      },
+      "authentication": {
+        "kind": "mtls",
+        "certificateBinding": "a1-mtls-certificate"
+      },
+      "executionStrategy": "healthcare-fse2-organization",
+      "extensionConfiguration": {
+        "profile": "fse2-organization-v1",
+        "environmentClass": "officialTest",
+        "activity": "VERIFICA",
+        "acceptMediaType": "application/json",
+        "organizationIdentifier": "00000000000",
+        "organizationAssigningAuthorityOid": "0.0",
+        "organizationDescription": "OPERATIONAL_VALUE_REQUIRED",
+        "organizationDomainId": "operational-value-required",
+        "localityName": "OPERATIONAL_VALUE_REQUIRED",
+        "localityAssigningAuthorityOid": "0.0",
+        "localityCode": "OPERATIONAL_VALUE_REQUIRED",
+        "subjectRole": "DAP",
+        "applicationId": "broker-gateway",
+        "applicationVendor": "Secure Integration",
+        "applicationVersion": "1.0.0",
+        "maximumDocumentBytes": 1048576
+      },
+      "authorizedCapabilities": {
+        "signingSlots": [
+          {
+            "slot": "authorization",
+            "required": true,
+            "signing": {
+              "profileId": "fse2-authorization",
+              "revision": 1,
+              "keyBinding": "s1-signing-certificate",
+              "publicKeySpkiSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+              "issuer": "auth:OPERATIONAL_COMMON_NAME_REQUIRED",
+              "audience": "OPERATIONAL_AUDIENCE_REQUIRED",
+              "subject": "fixed",
+              "fixedSubject": "OPERATIONAL_SUBJECT_REQUIRED",
+              "allowedClaims": [],
+              "tokenLifetimeSeconds": 300,
+              "clockSkewSeconds": 30,
+              "certificateKeyUsage": "contentCommitment",
+              "certificateHeader": "chain",
+              "temporalClaims": "iat-exp",
+              "minimumRsaKeySize": 2048
+            },
+            "projection": {
+              "kind": "authorizationBearer"
+            }
+          },
+          {
+            "slot": "integrity",
+            "required": true,
+            "signing": {
+              "profileId": "fse2-integrity",
+              "revision": 1,
+              "keyBinding": "s1-signing-certificate",
+              "publicKeySpkiSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+              "issuer": "integrity:OPERATIONAL_COMMON_NAME_REQUIRED",
+              "audience": "OPERATIONAL_AUDIENCE_REQUIRED",
+              "subject": "fixed",
+              "fixedSubject": "OPERATIONAL_SUBJECT_REQUIRED",
+              "allowedClaims": [
+                "subject_role",
+                "purpose_of_use",
+                "subject_organization",
+                "subject_organization_id",
+                "locality",
+                "person_id",
+                "patient_consent",
+                "resource_hl7_type",
+                "action_id",
+                "subject_application_id",
+                "subject_application_vendor",
+                "subject_application_version"
+              ],
+              "tokenLifetimeSeconds": 300,
+              "clockSkewSeconds": 30,
+              "certificateKeyUsage": "contentCommitment",
+              "certificateHeader": "chain",
+              "temporalClaims": "iat-exp",
+              "minimumRsaKeySize": 2048
+            },
+            "projection": {
+              "kind": "signedTokenHeader",
+              "headerName": "FSE-JWT-Signature"
+            }
+          }
+        ],
+        "restrictedTransport": {
+          "profileId": "fse2-transport",
+          "revision": 1,
+          "clientCertificateSpkiSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "nearExpirySeconds": 30,
+          "bodyMode": "required"
+        }
+      },
+      "timeoutMs": 5000,
+      "redirectPolicy": "deny",
+      "allowedClientHeaders": [],
+      "idempotent": false,
+      "maximumRetries": 0
+    }
+  ]
+}

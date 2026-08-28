@@ -231,7 +231,7 @@ public sealed class Fse2Request
     {
         ArgumentNullException.ThrowIfNull(claims);
         if (document.IsEmpty) throw new ArgumentException("FSE2_DOCUMENT_REQUIRED", nameof(document));
-        Fse2Validation.ValidateJsonObject(requestBody);
+        Fse2Validation.ValidateJsonObject(requestBody, operation);
         if (contentType is not ("application/pdf" or "application/json")) throw new ArgumentException("FSE2_DOCUMENT_CONTENT_TYPE_DENIED", nameof(contentType));
         return new(operation, document, requestBody, contentType, id, claims);
     }

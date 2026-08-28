@@ -193,6 +193,8 @@ public static partial class Fse2Validation
                 property.Name.Equals("attachment_hash_input", StringComparison.OrdinalIgnoreCase) ||
                 property.Name.Equals("attachmentHashInput", StringComparison.OrdinalIgnoreCase)))
                 throw new JsonException();
+            if (operation == Fse2Operation.ValidateCda)
+                ValidateCdaRequestBody(document.RootElement);
             if (operation is Fse2Operation.Create or Fse2Operation.Replace)
                 ValidatePublicationWorkflowInstanceId(value.Span);
         }
@@ -200,6 +202,18 @@ public static partial class Fse2Validation
         {
             throw new ArgumentException("FSE2_REQUEST_BODY_INVALID", nameof(value));
         }
+    }
+
+    private static void ValidateCdaRequestBody(JsonElement root)
+    {
+        JsonProperty[] properties = root.EnumerateObject().ToArray();
+        if (properties.Length != 3 ||
+            properties.Select(value => value.Name).Distinct(StringComparer.Ordinal).Count() != 3 ||
+            !string.Equals(root.GetProperty("activity").GetString(), Fse2PublishedOrganizationProfile.ValidateCdaActivity, StringComparison.Ordinal) ||
+            !string.Equals(root.GetProperty("healthDataFormat").GetString(), "CDA", StringComparison.Ordinal) ||
+            !string.Equals(root.GetProperty("mode").GetString(), "ATTACHMENT", StringComparison.Ordinal) ||
+            properties.Any(value => value.Value.ValueKind != JsonValueKind.String || value.Name is not ("activity" or "healthDataFormat" or "mode")))
+            throw new JsonException();
     }
 
     private static void ValidatePublicationWorkflowInstanceId(ReadOnlySpan<byte> value)

@@ -34,6 +34,9 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
         "person_id", "patient_consent", "resource_hl7_type", "action_id", "attachment_hash",
         "subject_application_id", "subject_application_vendor", "subject_application_version"
     ];
+    private static readonly string[] ValidateCdaOfficialTestIntegrityClaims = IntegrityClaims
+        .Where(value => !string.Equals(value, "attachment_hash", StringComparison.Ordinal))
+        .ToArray();
 
     public IReadOnlySet<ConnectorExecutionStrategyKey> SupportedExecutionStrategies => StrategyKeys;
 
@@ -47,6 +50,12 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
 
         Fse2PublishedOrganizationProfile profile = Fse2PublishedOrganizationProfile.Parse(
             context.OpenPublishedExtensionConfiguration(), context.OperationId);
+        bool officialTestValidateCda = profile.EnvironmentClass == Fse2EnvironmentClass.OfficialTest &&
+            profile.Operation.Operation == Fse2Operation.ValidateCda;
+        if (officialTestValidateCda &&
+            (!string.Equals(profile.Activity, Fse2PublishedOrganizationProfile.ValidateCdaActivity, StringComparison.Ordinal) ||
+             !string.Equals(profile.AcceptMediaType, Fse2PublishedOrganizationProfile.OfficialAcceptMediaType, StringComparison.Ordinal)))
+            throw new Fse2ConnectorException(Fse2ErrorCategory.PolicyDenied, "FSE2_OFFICIALTEST_PROFILE_DENIED");
         ConnectorSigningSlotKey authorization = profile.AuthorizationSigningSlot;
         ConnectorSigningSlotKey integrity = profile.IntegritySigningSlot;
         AuthorizedSigningSlotExpectation authorizationExpectation = new(
@@ -70,7 +79,7 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
             AuthorizedSigningTokenProjectionExpectation.SignedTokenHeader(Fse2PublishedOrganizationProfile.IntegrityHeaderName),
             profile.Audience,
             profile.SubjectCx,
-            IntegrityClaims,
+            officialTestValidateCda ? ValidateCdaOfficialTestIntegrityClaims : IntegrityClaims,
             Fse2PublishedOrganizationProfile.TokenLifetimeSeconds,
             AuthorizedSigningTemporalMode.IssuedAtExpiration,
             jtiRequired: true,

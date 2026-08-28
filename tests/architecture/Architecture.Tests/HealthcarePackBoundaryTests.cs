@@ -170,6 +170,35 @@ public sealed class HealthcarePackBoundaryTests
         Assert.DoesNotContain("new HttpClient", connector, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void HC_W1_ARCH_FSE2_OfficialTest_provisioner_is_vertical_only_and_absent_from_Core_export()
+    {
+        string projectPath = Path.Combine(Root, "tools", "fse2", "OfficialTestProvisioner", "OfficialTestProvisioner.csproj");
+        XDocument project = XDocument.Load(projectPath);
+        string reference = Assert.Single(project.Descendants("ProjectReference"))
+            .Attribute("Include")?.Value ?? string.Empty;
+        Assert.EndsWith("Healthcare.FSE2.csproj", reference, StringComparison.Ordinal);
+
+        string fullSolution = File.ReadAllText(Path.Combine(Root, "BrokerGateway.slnx"));
+        string coreSolution = File.ReadAllText(Path.Combine(Root, "BrokerGateway.Core.slnx"));
+        string coreExportAllowlist = File.ReadAllText(Path.Combine(Root, "eng", "open-source-core.allowlist"));
+        Assert.Contains("OfficialTestProvisioner", fullSolution, StringComparison.Ordinal);
+        Assert.DoesNotContain("OfficialTestProvisioner", coreSolution, StringComparison.Ordinal);
+        Assert.DoesNotContain("OfficialTestProvisioner", coreExportAllowlist, StringComparison.Ordinal);
+
+        string source = File.ReadAllText(Path.Combine(Path.GetDirectoryName(projectPath)!, "Program.cs"));
+        Assert.Contains("FSE2_GATEWAY_URL", source, StringComparison.Ordinal);
+        Assert.Contains("gateway.Scheme != Uri.UriSchemeHttps", source, StringComparison.Ordinal);
+        Assert.Contains("if (args[0] == \"plan\" && args.Length == 2)", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("OfficialTestEndpoint", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("CreateSignedToken", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetSecret", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("GetRSAPrivateKey", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExportPkcs8PrivateKey", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("LoadPkcs12", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("IRestrictedTransport", source, StringComparison.Ordinal);
+    }
+
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? current = new(AppContext.BaseDirectory);

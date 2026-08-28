@@ -8,4 +8,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\Gateway\Gateway.Application\Gateway.Application.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Definitions\fse2-officialtest-validate-cda.connector.json"
+                      LogicalName="SecureIntegration.ConnectorPacks.Healthcare.FSE2.Definitions.fse2-officialtest-validate-cda.connector.json" />
+  </ItemGroup>
 </Project>

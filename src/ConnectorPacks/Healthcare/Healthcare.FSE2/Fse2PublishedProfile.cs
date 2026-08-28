@@ -15,14 +15,19 @@ public sealed class Fse2PublishedOrganizationProfile
     public const string AuthorizationSigningSlotName = "authorization";
     public const string IntegritySigningSlotName = "integrity";
     public const string IntegrityHeaderName = "FSE-JWT-Signature";
+    public const string ValidateCdaActivity = "VERIFICA";
+    public const string OfficialAcceptMediaType = "application/json";
 
     private static readonly HashSet<string> AllowedProperties = new(StringComparer.Ordinal)
     {
         "profile", "environmentClass", "organizationIdentifier", "organizationAssigningAuthorityOid",
         "organizationDescription", "organizationDomainId", "localityName", "localityAssigningAuthorityOid",
         "localityCode", "subjectRole", "applicationId", "applicationVendor", "applicationVersion",
-        "maximumDocumentBytes"
+        "maximumDocumentBytes", "activity", "acceptMediaType"
     };
+    private static readonly HashSet<string> RequiredProperties = AllowedProperties
+        .Where(value => value is not ("activity" or "acceptMediaType"))
+        .ToHashSet(StringComparer.Ordinal);
 
     private Fse2PublishedOrganizationProfile() { }
 
@@ -40,6 +45,8 @@ public sealed class Fse2PublishedOrganizationProfile
     public required string ApplicationId { get; init; }
     public required string ApplicationVendor { get; init; }
     public required string ApplicationVersion { get; init; }
+    public string? Activity { get; init; }
+    public string? AcceptMediaType { get; init; }
     public required Fse2OperationDescriptor Operation { get; init; }
     public ConnectorSigningSlotKey AuthorizationSigningSlot { get; } = ConnectorSigningSlotKey.Parse(AuthorizationSigningSlotName);
     public ConnectorSigningSlotKey IntegritySigningSlot { get; } = ConnectorSigningSlotKey.Parse(IntegritySigningSlotName);
@@ -108,6 +115,11 @@ public sealed class Fse2PublishedOrganizationProfile
             if (!string.Equals(role, "DAP", StringComparison.Ordinal)) throw new JsonException();
             int maximumDocumentBytes = root.GetProperty("maximumDocumentBytes").GetInt32();
             if (maximumDocumentBytes is < 1 or > 15 * 1024 * 1024) throw new JsonException();
+            string? activity = OptionalString(root, "activity", 32);
+            string? acceptMediaType = OptionalString(root, "acceptMediaType", 128);
+            if (activity is not null && !string.Equals(activity, ValidateCdaActivity, StringComparison.Ordinal) ||
+                acceptMediaType is not null && !string.Equals(acceptMediaType, OfficialAcceptMediaType, StringComparison.Ordinal))
+                throw new JsonException();
 
             Fse2PublishedOrganizationProfile profile = new()
             {
@@ -125,6 +137,8 @@ public sealed class Fse2PublishedOrganizationProfile
                 ApplicationId = SafeApplicationValue(RequiredString(root, "applicationId", 128)),
                 ApplicationVendor = SafeApplicationValue(RequiredString(root, "applicationVendor", 128)),
                 ApplicationVersion = SafeApplicationValue(RequiredString(root, "applicationVersion", 128)),
+                Activity = activity,
+                AcceptMediaType = acceptMediaType,
                 Operation = operation,
                 MaximumDocumentBytes = maximumDocumentBytes,
                 SharedOrganizationProfileChecksumSha256 = string.Empty,
@@ -147,10 +161,12 @@ public sealed class Fse2PublishedOrganizationProfile
                 ApplicationId = profile.ApplicationId,
                 ApplicationVendor = profile.ApplicationVendor,
                 ApplicationVersion = profile.ApplicationVersion,
+                Activity = profile.Activity,
+                AcceptMediaType = profile.AcceptMediaType,
                 Operation = operation,
                 MaximumDocumentBytes = profile.MaximumDocumentBytes,
                 SharedOrganizationProfileChecksumSha256 = sharedChecksum,
-                OperationProfileChecksumSha256 = Hash(writer => WriteOperationProfile(writer, sharedChecksum, operation))
+                OperationProfileChecksumSha256 = Hash(writer => profile.WriteOperationProfile(writer, sharedChecksum, operation))
             };
         }
         catch (Fse2ConnectorException) { throw; }
@@ -182,11 +198,13 @@ public sealed class Fse2PublishedOrganizationProfile
         writer.WriteString("applicationId", ApplicationId);
         writer.WriteString("applicationVendor", ApplicationVendor);
         writer.WriteString("applicationVersion", ApplicationVersion);
+        if (Activity is not null) writer.WriteString("activity", Activity);
+        if (AcceptMediaType is not null) writer.WriteString("acceptMediaType", AcceptMediaType);
         writer.WriteNumber("maximumDocumentBytes", MaximumDocumentBytes);
         writer.WriteEndObject();
     }
 
-    private static void WriteOperationProfile(Utf8JsonWriter writer, string sharedChecksum, Fse2OperationDescriptor operation)
+    private void WriteOperationProfile(Utf8JsonWriter writer, string sharedChecksum, Fse2OperationDescriptor operation)
     {
         writer.WriteStartObject();
         writer.WriteString("sharedOrganizationProfileChecksumSha256", sharedChecksum);
@@ -197,6 +215,8 @@ public sealed class Fse2PublishedOrganizationProfile
         writer.WriteString("pathParameterName", operation.PathParameterName);
         writer.WriteString("availability", operation.Availability.ToString());
         writer.WriteBoolean("requiresAttachmentHash", operation.RequiresAttachmentHash);
+        writer.WriteString("activity", Activity);
+        writer.WriteString("acceptMediaType", AcceptMediaType);
         writer.WriteEndObject();
     }
 
@@ -212,7 +232,7 @@ public sealed class Fse2PublishedOrganizationProfile
         HashSet<string> observed = new(StringComparer.Ordinal);
         foreach (JsonProperty property in root.EnumerateObject())
             if (!AllowedProperties.Contains(property.Name) || !observed.Add(property.Name)) throw new JsonException();
-        if (AllowedProperties.Any(value => !observed.Contains(value))) throw new JsonException();
+        if (RequiredProperties.Any(value => !observed.Contains(value))) throw new JsonException();
     }
 
     private static string RequiredString(JsonElement root, string name, int maximumLength)
@@ -225,6 +245,9 @@ public sealed class Fse2PublishedOrganizationProfile
             throw new JsonException();
         return value;
     }
+
+    private static string? OptionalString(JsonElement root, string name, int maximumLength) =>
+        root.TryGetProperty(name, out JsonElement value) ? RequiredString(root, name, maximumLength) : null;
 
     private static string SafeIdentifier(string value) => Fse2Validation.IsSafeIdentifier(value) ? value : throw new JsonException();
 

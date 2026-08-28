@@ -1689,7 +1689,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
 
     private static string PayloadFor(
         Fse2OperationDescriptor operation,
-        string requestBodyJson = "{\"metadata\":\"published-exact\"}",
+        string? requestBodyJson = null,
         byte[]? documentBytes = null)
     {
         string? resourceIdentifier = operation.Operation switch
@@ -1713,7 +1713,12 @@ public sealed class Fse2OrganizationHostedIntegrationTests
                 : "application/pdf";
         }
         if (operation.HasJsonBody)
+        {
+            requestBodyJson ??= operation.Operation == Fse2Operation.ValidateCda
+                ? "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}"
+                : "{\"metadata\":\"published-exact\"}";
             payload["requestBodyBase64"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(requestBodyJson));
+        }
         if (resourceIdentifier is not null) payload["resourceIdentifier"] = resourceIdentifier;
         return JsonSerializer.Serialize(payload, WebJson);
     }
@@ -2060,8 +2065,11 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
             attachmentHash.GetString(), exactInputFileDigest, StringComparison.Ordinal));
         bool multipartEnvelopeDigestRejected = exactClaims && (!operation.RequiresAttachmentHash || !string.Equals(
             attachmentHash.GetString(), multipartEnvelopeDigest, StringComparison.Ordinal));
+        ReadOnlySpan<byte> expectedRequestBody = operation.Operation == Fse2Operation.ValidateCda
+            ? "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}"u8
+            : "{\"metadata\":\"published-exact\"}"u8;
         bool exactDocumentAndJson = body.AsSpan().IndexOf(Fse2OrganizationHostedIntegrationTests.DocumentBytes()) >= 0 &&
-            body.AsSpan().IndexOf("{\"metadata\":\"published-exact\"}"u8) >= 0;
+            body.AsSpan().IndexOf(expectedRequestBody) >= 0;
         bool hasHttpContent = context.Request.ContentLength.HasValue ||
             context.Request.Headers.ContainsKey("Content-Type") ||
             context.Request.Headers.ContainsKey("Transfer-Encoding");

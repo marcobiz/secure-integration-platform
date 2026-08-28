@@ -39,6 +39,7 @@
     <Project Path="tests/integration/Healthcare.FSE2.Integration.Tests/Healthcare.FSE2.Integration.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <Project Path="tools/fse2/OfficialTestProvisioner/OfficialTestProvisioner.csproj" />
     <Project Path="tools/m6/SyntheticOAuthServer/SyntheticOAuthServer.csproj" />
     <Project Path="tools/connector-cli/Connector.Cli.csproj" />
     <Project Path="tools/live-matrix/probe/LiveMatrix.Probe.csproj" />
