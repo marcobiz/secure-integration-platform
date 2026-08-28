@@ -593,8 +593,9 @@ public static class SyntheticCapabilityLifetimeProbe
     /// <summary>Records the deliberately abandoned task so the test can prove host drainage.</summary>
     public static void Retain(Task operation) => Volatile.Write(ref retained, operation);
 
-    /// <summary>Returns whether the deliberately abandoned task was completed by host scope closure.</summary>
-    public static bool RetainedOperationCompleted => Volatile.Read(ref retained)?.IsCompleted == true;
+    /// <summary>Returns the deliberately abandoned task for completion and failure observation after host drainage.</summary>
+    public static Task RetainedOperation => Volatile.Read(ref retained) ??
+        throw new InvalidOperationException("No capability operation was retained.");
 
     private static TaskCompletionSource<bool> NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 }

@@ -37,7 +37,11 @@ public sealed class CapabilityLifetimeRemediationTests
         Assert.Equal(0, dispatcher.PrivilegedEffects);
         Assert.Equal(0, fixture.Transport.Calls);
         Assert.True(dispatcher.LifetimeCancellationObserved);
-        Assert.True(SyntheticCapabilityLifetimeProbe.RetainedOperationCompleted);
+        Task retainedOperation = SyntheticCapabilityLifetimeProbe.RetainedOperation;
+        Assert.True(retainedOperation.IsCompleted);
+        Exception retainedFailure = await Assert.ThrowsAnyAsync<Exception>(() => retainedOperation);
+        Assert.Equal("Authorized Connector capability failed.", retainedFailure.Message);
+        Assert.Null(retainedFailure.InnerException);
         Assert.DoesNotContain(fixture.Registry.SnapshotAuditEvents(), value =>
             value.Action == "operation.invoke" && value.Outcome == "success");
     }

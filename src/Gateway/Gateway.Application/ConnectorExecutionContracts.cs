@@ -250,11 +250,10 @@ public sealed class AuthorizedConnectorExecution
             }, cancellationToken);
         }
 
-        public async Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
+        public Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(
             AuthorizedConnectorRestrictedTransportRequest request,
-            CancellationToken cancellationToken)
-        {
-            QualifiedGatewayExecutionResult result = await StartOperation(RestrictedTransportCapability, (value, handoff, token) =>
+            CancellationToken cancellationToken) =>
+            StartOperation(RestrictedTransportCapability, async (value, handoff, token) =>
             {
                 ArgumentNullException.ThrowIfNull(request);
                 IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> snapshot;
@@ -267,11 +266,11 @@ public sealed class AuthorizedConnectorExecution
                         throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409);
                     snapshot = signedTokens.ToDictionary(value => value.Key, value => value.Value);
                 }
-                return value.ExecuteRestrictedTransportAsync(handoff, request, snapshot, token);
-            }, cancellationToken).ConfigureAwait(false);
-            lock (synchronization) restrictedTransportResult = result;
-            return result;
-        }
+                QualifiedGatewayExecutionResult result = await value.ExecuteRestrictedTransportAsync(
+                    handoff, request, snapshot, token).ConfigureAwait(false);
+                lock (synchronization) restrictedTransportResult = result;
+                return result;
+            }, cancellationToken);
 
         public void RejectRestrictedTransportResponse(QualifiedGatewayExecutionResult response, string safeProblemCode)
         {
