@@ -8,8 +8,8 @@ namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2.Tests;
 
 public sealed class Fse2OfficialTestOperationalizationTests
 {
-    private const string ExpectedCanonicalSourceSha256 = "C972CB2BED0D5E074FD6640C68B8547D25CD90EB9674AC67756EA6950E65CE84";
-    private const string ExpectedCompiledCanonicalDefinitionSha256 = "C757B71F52D08931766887600F16724C78111E9D4C7E52ABD8CE96699B061156";
+    private const string ExpectedCanonicalSourceSha256 = "AC6A1EBA9E04CFED9B7E365A04865636243BEA1211D5540BFFF1416DF60F1408";
+    private const string ExpectedCompiledCanonicalDefinitionSha256 = "7E69C57D9F7AC50252CDB28D4DE5195367C6E2E16ADF6514CC537B828035BF58";
 
     [Fact]
     public void FSE2_OFFICIALTEST_canonical_definition_bytes_checksum_and_single_operation_are_frozen()
@@ -25,6 +25,7 @@ public sealed class Fse2OfficialTestOperationalizationTests
         Assert.Equal("validate-cda", operation.GetProperty("operationId").GetString());
         Assert.Equal("POST", operation.GetProperty("method").GetString());
         Assert.Equal("/documents/validation", operation.GetProperty("path").GetString());
+        Assert.Equal("appendToBasePath", operation.GetProperty("pathResolution").GetString());
         Assert.Equal("multipart/form-data; boundary=broker-gateway-fse2-officialtest-v1", operation.GetProperty("request").GetProperty("contentType").GetString());
         Assert.Equal(0, operation.GetProperty("maximumRetries").GetInt32());
         Assert.Equal("deny", operation.GetProperty("redirectPolicy").GetString());
@@ -109,6 +110,11 @@ public sealed class Fse2OfficialTestOperationalizationTests
     [InlineData("https://attacker.invalid/gateway/v1/")]
     [InlineData("https://127.0.0.1/gateway/v1/")]
     [InlineData("http://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1/")]
+    [InlineData("https://modipa-val.fse.salute.gov.it:444/govway/rest/in/FSE/gateway/v1/")]
+    [InlineData("https://caller@modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1/")]
+    [InlineData("https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v2/")]
+    [InlineData("https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1/?caller=true")]
+    [InlineData("https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1/#caller")]
     public void FSE2_OFFICIALTEST_endpoint_is_server_owned_and_noncanonical_selection_is_denied(string endpoint)
     {
         Fse2OfficialTestOperationalizationException error = Assert.Throws<Fse2OfficialTestOperationalizationException>(() =>
@@ -119,7 +125,7 @@ public sealed class Fse2OfficialTestOperationalizationTests
     [Fact]
     public void FSE2_OFFICIALTEST_plan_rejects_caller_endpoint_provider_secret_certificate_and_principal_selectors()
     {
-        string text = PlanJson().Replace("\"expectedBindingRevision\":null", "\"expectedBindingRevision\":null,\"principal\":\"caller\",\"certificateBinding\":\"caller\"", StringComparison.Ordinal);
+        string text = PlanJson().Replace("\"expectedBindingRevision\":null", "\"expectedBindingRevision\":null,\"principal\":\"caller\",\"certificateBinding\":\"caller\",\"path\":\"/caller\",\"headers\":{\"Host\":\"caller\"}", StringComparison.Ordinal);
         Fse2OfficialTestOperationalizationException error = Assert.Throws<Fse2OfficialTestOperationalizationException>(() =>
             Fse2OfficialTestOperationalization.ParsePlan(Encoding.UTF8.GetBytes(text)));
         Assert.Equal("FSE2_OFFICIALTEST_PLAN_PROPERTY_DENIED", error.SafeCode);
@@ -171,9 +177,16 @@ public sealed class Fse2OfficialTestOperationalizationTests
         AssertAuthorityFailure(plan, [a1, a1, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_AUTHORITY_AMBIGUOUS");
         AssertAuthorityFailure(plan, [a1 with { Status = "Disabled" }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_AUTHORITY_INACTIVE");
         AssertAuthorityFailure(plan, [a1 with { EnvironmentId = Guid.NewGuid() }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_AUTHORITY_MISMATCH");
+        AssertAuthorityFailure(plan, [a1 with { ResourceType = "Secret" }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_AUTHORITY_MISMATCH");
+        AssertAuthorityFailure(plan, [a1 with { Version = "wrong" }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_AUTHORITY_MISMATCH");
         AssertAuthorityFailure(plan, [a1 with { CatalogRevision = a1.CatalogRevision + 1 }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_AUTHORITY_MISMATCH");
+        AssertAuthorityFailure(plan, [a1 with { PublicMetadataRevision = a1.PublicMetadataRevision + 1 }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_AUTHORITY_MISMATCH");
         AssertAuthorityFailure(plan, [a1 with { ConnectorScope = "foreign" }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_AUTHORITY_MISMATCH");
         AssertAuthorityFailure(plan, [a1 with { SubjectPublicKeyInfoSha256 = null }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_PUBLIC_METADATA_INVALID");
+        AssertAuthorityFailure(plan, [a1 with { CatalogChecksumSha256 = new string('0', 64) }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_PUBLIC_METADATA_INVALID");
+        AssertAuthorityFailure(plan, [a1 with { SubjectPublicKeyInfoSha256 = new string('0', 64) }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_PUBLIC_METADATA_INVALID");
+        AssertAuthorityFailure(plan, [a1 with { SubjectCommonName = "wrong^common-name" }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_PUBLIC_METADATA_INVALID");
+        Assert.Equal(Fse2OfficialTestSideEffectCounters.Zero, Fse2OfficialTestOperationalization.Plan(plan).Counters);
     }
 
     [Fact]
@@ -183,7 +196,9 @@ public sealed class Fse2OfficialTestOperationalizationTests
         string source = File.ReadAllText(Path.Combine(root, "tools", "fse2", "OfficialTestProvisioner", "Program.cs"));
         string api = File.ReadAllText(Path.Combine(root, "src", "Gateway", "Gateway.Api", "Program.cs"));
 
-        Assert.Contains("admin/api/v1/provider-resources?environmentId=", source, StringComparison.Ordinal);
+        Assert.Contains("admin/api/v1/provider-resources:resolve?environmentId=", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("admin/api/v1/provider-resources?environmentId=", source, StringComparison.Ordinal);
+        Assert.Contains("FindExactProviderResourcesAsync", api, StringComparison.Ordinal);
         Assert.Contains("ResolveProviderAuthority", source, StringComparison.Ordinal);
         Assert.Contains("RequirePublicAuthorityCurrentAsync", source, StringComparison.Ordinal);
         Assert.DoesNotContain("server-public-metadata.json", source, StringComparison.Ordinal);

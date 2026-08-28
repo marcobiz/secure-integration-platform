@@ -26,6 +26,7 @@
       "endpointBinding": "officialtest-gateway",
       "method": "POST",
       "path": "/documents/validation",
+      "pathResolution": "appendToBasePath",
       "request": {
         "contentType": "multipart/form-data; boundary=broker-gateway-fse2-officialtest-v1",
         "maximumBytes": 2097152

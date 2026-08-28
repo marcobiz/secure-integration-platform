@@ -936,6 +936,18 @@ adminApi.MapGet("/provider-resources", async (Guid? environmentId, ProviderResou
     return Results.Ok(new AdminPage<ProviderResourceCatalogResource>(page.Items.Select(ProviderResource).ToArray(), page.Offset, page.Limit, page.Total));
 });
 
+adminApi.MapGet("/provider-resources:resolve", async (Guid environmentId, ProviderResourceType resourceType, string providerId, string resourceId, string? version, long revision, long? publicMetadataRevision, HttpContext context, AdminAccessService access, IConnectorConfigurationStore store, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.Viewer, AdminRole.ConnectorEditor, AdminRole.ConnectorApprover, AdminRole.SecurityAdministrator);
+    ProviderResourceReference reference = new(providerId, resourceId, resourceType, version, publicMetadataRevision);
+    ProviderResourceReferenceValidator.Validate(reference);
+    IReadOnlyList<ProviderResourceCatalogRecord> matches = await store.FindExactProviderResourcesAsync(environmentId, reference, revision, cancellationToken).ConfigureAwait(false);
+    if (matches.Count == 0) throw new GatewayException("BGW-PROVIDER-RESOURCE-NOT-FOUND", 404);
+    if (matches.Count != 1) throw new GatewayException("BGW-PROVIDER-RESOURCE-AMBIGUOUS", 409);
+    return Results.Ok(ProviderResource(matches[0]));
+});
+
 adminApi.MapGet("/role-assignments", async (Guid? principalId, Guid? tenantId, int? offset, int? limit, HttpContext context, AdminAccessService access, IAdminSecurityStore security, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);

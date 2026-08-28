@@ -392,7 +392,9 @@ public static class ConnectorApprovalArtifacts
         string path = operation.TryGetProperty("pathTemplate", out JsonElement pathTemplate)
             ? pathTemplate.GetString()!
             : operation.GetProperty("path").GetString()!;
-        Uri effective = new(baseUri, path);
+        Uri effective = operation.TryGetProperty("pathTemplate", out _)
+            ? new Uri(baseUri, path)
+            : PublishedEndpointUri.Compose(baseUri, path, PublishedEndpointUri.AppendToBasePath(operation));
         string method = operation.GetProperty("method").GetString()!;
         string redirect = operation.TryGetProperty("redirectPolicy", out JsonElement redirectElement) ? redirectElement.GetString() ?? "deny" : "deny";
         ApprovalEndpointReview endpoint = ReviewEndpoint(endpointName, binding, effective, [method], redirect);
@@ -414,7 +416,7 @@ public static class ConnectorApprovalArtifacts
         {
             string logical = admission.GetProperty("endpointBinding").GetString()!;
             if (!binding.Endpoints.TryGetValue(logical, out Uri? admissionBase)) throw new GatewayException("BGW-CONNECTOR-ENDPOINT-BINDING-MISSING", 503);
-            Uri admissionEndpoint = new(admissionBase, admission.GetProperty("path").GetString()!);
+            Uri admissionEndpoint = PublishedEndpointUri.Compose(admissionBase, admission.GetProperty("path").GetString()!, appendToBasePath: false);
             authorityEndpoints.Add(new("session-admission-validation", ReviewEndpoint(logical, binding, admissionEndpoint, ["POST"], "deny")));
         }
         List<ApprovalSecretReview> secrets = [];
@@ -1133,7 +1135,7 @@ public sealed class PublishedConnectorCatalog(
             if (!snapshot.Bindings.Endpoints.TryGetValue(endpointName, out Uri? baseUri)) throw new GatewayException("BGW-CONNECTOR-ENDPOINT-BINDING-MISSING", 503);
             Uri endpoint = operation.TryGetProperty("pathTemplate", out JsonElement pathTemplate)
                 ? ValidateTemplateBase(baseUri, pathTemplate.GetString()!)
-                : new Uri(baseUri, operation.GetProperty("path").GetString()!);
+                : PublishedEndpointUri.Compose(baseUri, operation.GetProperty("path").GetString()!, PublishedEndpointUri.AppendToBasePath(operation));
             JsonElement auth = operation.GetProperty("authentication");
             GatewayAuthenticationKind authKind = ParseAuthentication(auth.GetProperty("kind").GetString()!);
             string? Resolve(string property) => auth.TryGetProperty(property, out JsonElement logical) && (property == "certificateBinding" ? snapshot.CertificateProviderReferences : snapshot.SecretProviderReferences).TryGetValue(logical.GetString()!, out string? reference)
@@ -1187,4 +1189,47 @@ public sealed class PublishedConnectorCatalog(
     }
 
     private sealed record CacheEntry(PublishedConnectorStamp Stamp, DateTimeOffset ExpiresAt, IReadOnlyDictionary<string, AuthorizedPublishedOperation> Operations);
+}
+
+/// <summary>Fail-closed composition of a server-owned HTTPS endpoint prefix and a published operation path.</summary>
+internal static class PublishedEndpointUri
+{
+    public static bool AppendToBasePath(JsonElement operation) =>
+        operation.TryGetProperty("pathResolution", out JsonElement resolution) &&
+        string.Equals(resolution.GetString(), "appendToBasePath", StringComparison.Ordinal);
+
+    public static Uri Compose(Uri baseUri, string operationPath, bool appendToBasePath)
+    {
+        ArgumentNullException.ThrowIfNull(baseUri);
+        if (!baseUri.IsAbsoluteUri || !string.Equals(baseUri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(baseUri.DnsSafeHost) || !string.IsNullOrEmpty(baseUri.UserInfo) ||
+            !string.IsNullOrEmpty(baseUri.Query) || !string.IsNullOrEmpty(baseUri.Fragment))
+            throw Corrupt();
+        ValidatePath(baseUri.AbsolutePath, allowRoot: true);
+        ValidatePath(operationPath, allowRoot: false);
+
+        string prefix = appendToBasePath ? baseUri.AbsolutePath.TrimEnd('/') : string.Empty;
+        string suffix = operationPath.TrimStart('/');
+        string combined = (prefix.Length == 0 ? string.Empty : prefix) + "/" + suffix;
+        UriBuilder builder = new(baseUri) { Path = combined, Query = string.Empty, Fragment = string.Empty };
+        Uri result = builder.Uri;
+        if (!string.Equals(result.Scheme, baseUri.Scheme, StringComparison.Ordinal) ||
+            !string.Equals(result.DnsSafeHost, baseUri.DnsSafeHost, StringComparison.OrdinalIgnoreCase) ||
+            result.Port != baseUri.Port || !string.Equals(result.AbsolutePath, combined, StringComparison.Ordinal) ||
+            !string.IsNullOrEmpty(result.UserInfo) || !string.IsNullOrEmpty(result.Query) || !string.IsNullOrEmpty(result.Fragment))
+            throw Corrupt();
+        return result;
+    }
+
+    private static void ValidatePath(string path, bool allowRoot)
+    {
+        if (string.IsNullOrEmpty(path) || (!allowRoot && path.Trim('/').Length == 0) ||
+            path.Contains('\\') || path.Contains('%') || path.Contains('?') || path.Contains('#') ||
+            path.Contains("//", StringComparison.Ordinal))
+            throw Corrupt();
+        string[] segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Any(segment => segment is "." or ".." || segment.Any(char.IsControl))) throw Corrupt();
+    }
+
+    private static GatewayException Corrupt() => new("BGW-CONNECTOR-CONFIGURATION-CORRUPT", 503);
 }

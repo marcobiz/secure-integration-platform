@@ -119,6 +119,8 @@ La slice `FSE2-OFFICIALTEST-OPERATIONALIZATION`, ancora soggetta a exact-head ga
 la source canonica del solo `validate-cda`, il piano esterno chiuso, A1 mTLS/S1 authorization+integrity,
 il dry-run a zero effetti e il workflow Admin configure/propose/approve/publish/read-back. Non
 importa materiale operativo, non aggiunge primitive Core e non esegue una chiamata live. La sua
+autorità usa lookup A1/S1 esatti server-side, publisher autenticato uguale all'exact approver e
+composizione URI che conserva il prefisso OfficialTest senza accettare override del caller. La
 integrazione chiude soltanto il tooling software del punto 6; i punti 1-5 e 7-8 restano gate
 operativi separati.
 

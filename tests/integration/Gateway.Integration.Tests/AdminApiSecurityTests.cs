@@ -61,7 +61,21 @@ public sealed class AdminApiSecurityTests
         await adminRegistry.AddGrantAsync(new(Guid.NewGuid(), installationId, tenantId, version.ConnectorId, "submit", true, DateTimeOffset.UtcNow.AddMinutes(-1)), TestContext.Current.CancellationToken);
         IConnectorConfigurationStore store = factory.Services.GetRequiredService<IConnectorConfigurationStore>();
         ProviderResourceCatalogRecord secret = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "instrumented", "Instrumented provider", "synthetic", "api-key", ProviderResourceType.Secret, "Vendor API key", environmentId, version.ConnectorId, "submit", "instrumented://api-key", ProviderResourceStatus.Active, "api-v1", 0, null, null, string.Empty, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
-        _ = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "instrumented", "Instrumented provider", "synthetic", "certificate", ProviderResourceType.ClientCertificate, "Vendor certificate", environmentId, version.ConnectorId, "submit", "instrumented://certificate", ProviderResourceStatus.Active, "cert-resource-v1", 0, 1, publicMetadata, string.Empty, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+        ProviderResourceCatalogRecord certificateResource = await store.RegisterProviderResourceAsync(new(Guid.NewGuid(), "instrumented", "Instrumented provider", "synthetic", "certificate", ProviderResourceType.ClientCertificate, "Vendor certificate", environmentId, version.ConnectorId, "submit", "instrumented://certificate", ProviderResourceStatus.Active, "cert-resource-v1", 0, 1, publicMetadata, string.Empty, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+        string exactProviderPath = $"/admin/api/v1/provider-resources:resolve?environmentId={environmentId:D}&resourceType=ClientCertificate&providerId=instrumented&resourceId=certificate&version=cert-resource-v1&revision={certificateResource.Revision}&publicMetadataRevision=1";
+        using (HttpResponseMessage exactProvider = await editor.GetAsync(exactProviderPath, TestContext.Current.CancellationToken))
+        {
+            exactProvider.EnsureSuccessStatusCode();
+            JsonElement exact = await exactProvider.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(certificateResource.Id, exact.GetProperty("id").GetGuid());
+            Assert.False(exact.TryGetProperty("providerReference", out _));
+        }
+        using (HttpResponseMessage wrongProviderType = await editor.GetAsync(exactProviderPath.Replace("ClientCertificate", "Secret", StringComparison.Ordinal), TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, wrongProviderType.StatusCode);
+            JsonElement problem = await wrongProviderType.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal("BGW-PROVIDER-RESOURCE-NOT-FOUND", problem.GetProperty("code").GetString());
+        }
         string syntheticPassword = "synthetic-password-" + Convert.ToHexString(RandomNumberGenerator.GetBytes(18));
         string[] hostileResourceIds = [canary, syntheticPassword, privatePem, pfxBase64, syntheticConnectionString, "https://attacker.example/credential", "missing-resource"];
         foreach (string hostileResourceId in hostileResourceIds)
@@ -122,6 +136,23 @@ public sealed class AdminApiSecurityTests
         using (HttpResponseMessage approved = await approver.SendAsync(approve, TestContext.Current.CancellationToken)) approved.EnsureSuccessStatusCode();
         await Assert.ThrowsAsync<GatewayException>(() => runtime.InvokeAsync(new(identity, invocation.CorrelationId), version.ConnectorId, "submit", invocation, TestContext.Current.CancellationToken));
         Assert.Equal(0, provider.SecretInvocations); Assert.Equal(0, transport.Invocations); Assert.Equal(0, vendor.Requests); Assert.Equal(0, attackerVendor.Requests);
+
+        ConnectorVersionRecord beforeWrongPublisher = (await store.GetVersionAsync(version.ConnectorId, version.Version, TestContext.Current.CancellationToken))!;
+        ConnectorSummary summaryBeforeWrongPublisher = Assert.Single(await store.ListConnectorsAsync(TestContext.Current.CancellationToken), value => value.ConnectorId == version.ConnectorId);
+        using HttpRequestMessage wrongPublisher = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}:publish") { Content = JsonContent.Create(new { expectedRowVersion = version.RowVersion, expectedPublicationRevision = 0 }) };
+        wrongPublisher.Headers.Add("X-CSRF-TOKEN", editorCsrf); wrongPublisher.Headers.TryAddWithoutValidation("If-Match", $"\"{version.RowVersion}\"");
+        using (HttpResponseMessage denied = await editor.SendAsync(wrongPublisher, TestContext.Current.CancellationToken))
+        {
+            Assert.Equal(HttpStatusCode.Conflict, denied.StatusCode);
+            JsonElement problem = await denied.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal("BGW-ADMIN-APPROVAL-REQUIRED", problem.GetProperty("code").GetString());
+        }
+        ConnectorVersionRecord afterWrongPublisher = (await store.GetVersionAsync(version.ConnectorId, version.Version, TestContext.Current.CancellationToken))!;
+        ConnectorSummary summaryAfterWrongPublisher = Assert.Single(await store.ListConnectorsAsync(TestContext.Current.CancellationToken), value => value.ConnectorId == version.ConnectorId);
+        Assert.Equal(beforeWrongPublisher.State, afterWrongPublisher.State);
+        Assert.Equal(beforeWrongPublisher.RowVersion, afterWrongPublisher.RowVersion);
+        Assert.Equal(summaryBeforeWrongPublisher.PublicationRevision, summaryAfterWrongPublisher.PublicationRevision);
+        Assert.Equal(summaryBeforeWrongPublisher.PublishedVersion, summaryAfterWrongPublisher.PublishedVersion);
 
         using HttpRequestMessage publish = new(HttpMethod.Post, $"/admin/api/v1/connectors/{version.ConnectorId}/versions/{version.Version}:publish") { Content = JsonContent.Create(new { expectedRowVersion = version.RowVersion, expectedPublicationRevision = 0 }) };
         publish.Headers.Add("X-CSRF-TOKEN", approverCsrf); publish.Headers.TryAddWithoutValidation("If-Match", $"\"{version.RowVersion}\"");

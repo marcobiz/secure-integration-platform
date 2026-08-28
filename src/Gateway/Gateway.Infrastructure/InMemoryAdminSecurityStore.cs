@@ -151,7 +151,8 @@ public sealed class InMemoryAdminSecurityStore(IGatewayRegistry? auditRegistry =
     public Task<bool> HasValidApprovalAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string actor, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (sync) return Task.FromResult(approvals.Any(value => value.ConnectorVersionId == connectorVersionId && value.Status == ConnectorApprovalStatus.Approved && value.ApprovedBy != value.RequestedBy && FixedChecksum(value.ChecksumSha256, checksumSha256) && FixedChecksum(value.BindingDigestSha256, bindingDigestSha256)));
+        if (!Guid.TryParseExact(actor, "D", out Guid publisher)) return Task.FromResult(false);
+        lock (sync) return Task.FromResult(approvals.Any(value => value.ConnectorVersionId == connectorVersionId && value.Status == ConnectorApprovalStatus.Approved && value.ApprovedBy == publisher && value.ApprovedBy != value.RequestedBy && FixedChecksum(value.ChecksumSha256, checksumSha256) && FixedChecksum(value.BindingDigestSha256, bindingDigestSha256)));
     }
 
     /// <inheritdoc />

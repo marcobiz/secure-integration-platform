@@ -74,6 +74,10 @@
           "maxLength": 1024,
           "not": { "pattern": "(^|/)\\.\\.(/|$)|[?#]" }
         },
+        "pathResolution": {
+          "enum": ["authorityRoot", "appendToBasePath"],
+          "default": "authorityRoot"
+        },
         "pathTemplate": {
           "type": "string",
           "pattern": "^/(?!/)",

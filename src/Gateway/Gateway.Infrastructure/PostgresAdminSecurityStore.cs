@@ -184,10 +184,11 @@ public sealed class PostgresAdminSecurityStore(AdminPostgresDataSource adminData
     /// <inheritdoc />
     public async Task<bool> HasValidApprovalAsync(Guid connectorVersionId, byte[] checksumSha256, byte[] bindingDigestSha256, string actor, CancellationToken cancellationToken)
     {
+        if (!Guid.TryParseExact(actor, "D", out Guid publisher)) return false;
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        const string sql = "SELECT EXISTS(SELECT 1 FROM gateway.connector_approval a JOIN gateway.connector_version v ON v.id=a.connector_version_id WHERE a.connector_version_id=$1 AND a.checksum_sha256=$2 AND a.binding_digest_sha256=$3 AND a.status='approved' AND a.approved_by<>a.requested_by AND a.approved_by::text<>v.created_by AND NOT EXISTS(SELECT 1 FROM gateway.connector_binding_bundle_version b WHERE b.connector_version_id=v.id AND b.created_by=a.approved_by::text))";
+        const string sql = "SELECT EXISTS(SELECT 1 FROM gateway.connector_approval a JOIN gateway.connector_version v ON v.id=a.connector_version_id WHERE a.connector_version_id=$1 AND a.checksum_sha256=$2 AND a.binding_digest_sha256=$3 AND a.approved_by=$4 AND a.status='approved' AND a.approved_by<>a.requested_by AND a.approved_by::text<>v.created_by AND NOT EXISTS(SELECT 1 FROM gateway.connector_binding_bundle_version b WHERE b.connector_version_id=v.id AND b.created_by=a.approved_by::text))";
         await using NpgsqlCommand command = new(sql, connection);
-        Add(command, connectorVersionId, checksumSha256, bindingDigestSha256);
+        Add(command, connectorVersionId, checksumSha256, bindingDigestSha256, publisher);
         return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
     }
 

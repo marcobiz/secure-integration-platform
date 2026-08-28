@@ -13,6 +13,99 @@ namespace SecureIntegration.Gateway.Unit.Tests;
 
 public sealed class ConnectorConfigurationTests
 {
+    [Theory]
+    [InlineData("https://vendor.example.test/govway/rest/in/FSE/gateway/v1")]
+    [InlineData("https://vendor.example.test/govway/rest/in/FSE/gateway/v1/")]
+    public async Task FSE2_OFFICIALTEST_UT_rooted_operation_path_preserves_the_complete_server_owned_base_prefix_without_network(string baseEndpoint)
+    {
+        Fixture fixture = new();
+        using JsonDocument original = Sample();
+        using JsonDocument sample = JsonDocument.Parse(original.RootElement.GetRawText().Replace(
+            "\"path\": \"/vendor/orders\"",
+            "\"path\": \"/vendor/orders\", \"pathResolution\": \"appendToBasePath\"",
+            StringComparison.Ordinal));
+        ConnectorVersionResource version = await fixture.ImportAsync(sample);
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PutBindingsAsync(version.ConnectorId, BindingRequest(fixture.EnvironmentId, baseEndpoint), "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "approver", Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        GatewayOperationDefinition operation = await fixture.Catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken);
+
+        Assert.Equal("https://vendor.example.test/govway/rest/in/FSE/gateway/v1/vendor/orders", operation.Endpoint.AbsoluteUri);
+    }
+
+    [Theory]
+    [InlineData("http://vendor.example.test/govway/rest/in/FSE/gateway/v1/")]
+    [InlineData("https://caller@vendor.example.test/govway/rest/in/FSE/gateway/v1/")]
+    [InlineData("https://vendor.example.test/govway/rest/in/FSE/gateway/v1/?caller=true")]
+    [InlineData("https://vendor.example.test/govway/rest/in/FSE/gateway/v1/#caller")]
+    public async Task FSE2_OFFICIALTEST_UT_endpoint_scheme_userinfo_query_and_fragment_overrides_are_denied_before_publication(string baseEndpoint)
+    {
+        Fixture fixture = new();
+        using JsonDocument sample = Sample();
+        ConnectorVersionResource version = await fixture.ImportAsync(sample);
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => fixture.Admin.PutBindingsAsync(
+            version.ConnectorId, BindingRequest(fixture.EnvironmentId, baseEndpoint), "editor", Guid.NewGuid(), TestContext.Current.CancellationToken));
+
+        Assert.Equal("BGW-CONNECTOR-ENDPOINT-BINDING", denied.Code);
+    }
+
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_UT_exact_provider_lookup_is_bounded_current_and_independent_of_page_size_or_concurrent_catalog_mutation()
+    {
+        InMemoryConnectorConfigurationStore store = new();
+        Guid environmentId = Guid.NewGuid();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        CertificatePublicMetadata metadata = new(new string('A', 64), "CN=synthetic", "CN=synthetic-ca", now.AddDays(-1), now.AddDays(30), "RSA", 2048, "1", new string('B', 64), "Synthetic Authority");
+        List<ProviderResourceCatalogRecord> registered = [];
+        for (int index = 0; index < 105; index++)
+        {
+            string version = $"v{index:D3}";
+            registered.Add(await store.RegisterProviderResourceAsync(new(
+                Guid.NewGuid(), "synthetic-provider", "Synthetic provider", "synthetic", "officialtest-a1", ProviderResourceType.ClientCertificate,
+                $"Synthetic A1 {index:D3}", environmentId, "fse2-officialtest-validate-cda", "validate-cda", $"synthetic://a1/{index:D3}",
+                ProviderResourceStatus.Active, version, 0, index + 1, metadata, string.Empty, now.AddSeconds(index)), TestContext.Current.CancellationToken));
+        }
+
+        AdminPage<ProviderResourceCatalogRecord> firstPage = await store.ListProviderResourcesPageAsync(0, 100, environmentId, ProviderResourceType.ClientCertificate, TestContext.Current.CancellationToken);
+        Assert.Equal(105, firstPage.Total);
+        Assert.Equal(100, firstPage.Items.Count);
+
+        ProviderResourceCatalogRecord target = registered[104];
+        ProviderResourceReference exactReference = new(target.ProviderId, target.ResourceId, target.ResourceType, target.Version, target.PublicMetadataRevision);
+        Assert.Equal(target.Id, Assert.Single(await store.FindExactProviderResourcesAsync(environmentId, exactReference, target.Revision, TestContext.Current.CancellationToken)).Id);
+        Assert.Empty(await store.FindExactProviderResourcesAsync(Guid.NewGuid(), exactReference, target.Revision, TestContext.Current.CancellationToken));
+        Assert.Empty(await store.FindExactProviderResourcesAsync(environmentId, exactReference with { ResourceType = ProviderResourceType.Secret }, target.Revision, TestContext.Current.CancellationToken));
+        Assert.Empty(await store.FindExactProviderResourcesAsync(environmentId, exactReference with { Version = "wrong" }, target.Revision, TestContext.Current.CancellationToken));
+        Assert.Empty(await store.FindExactProviderResourcesAsync(environmentId, exactReference, target.Revision + 1, TestContext.Current.CancellationToken));
+        Assert.Empty(await store.FindExactProviderResourcesAsync(environmentId, exactReference with { PublicMetadataRevision = target.PublicMetadataRevision + 1 }, target.Revision, TestContext.Current.CancellationToken));
+
+        Task<IReadOnlyList<ProviderResourceCatalogRecord>> concurrentLookup = store.FindExactProviderResourcesAsync(environmentId, exactReference, target.Revision, TestContext.Current.CancellationToken);
+        Task<ProviderResourceCatalogRecord> concurrentMutation = store.RegisterProviderResourceAsync(target with
+        {
+            Id = Guid.NewGuid(),
+            DisplayName = "Synthetic A1 rotated",
+            ProviderReference = "synthetic://a1/rotated",
+            Revision = 0,
+            ChecksumSha256 = string.Empty,
+            CreatedAt = now.AddMinutes(5)
+        }, TestContext.Current.CancellationToken);
+        await Task.WhenAll(concurrentLookup, concurrentMutation);
+        Assert.InRange((await concurrentLookup).Count, 0, 1);
+        Assert.Empty(await store.FindExactProviderResourcesAsync(environmentId, exactReference, target.Revision, TestContext.Current.CancellationToken));
+        ProviderResourceCatalogRecord rotated = await concurrentMutation;
+        Assert.Equal(rotated.Id, Assert.Single(await store.FindExactProviderResourcesAsync(environmentId, exactReference, rotated.Revision, TestContext.Current.CancellationToken)).Id);
+
+        ProviderResourceCatalogRecord inactive = await store.RegisterProviderResourceAsync(new(
+            Guid.NewGuid(), "synthetic-provider", "Synthetic provider", "synthetic", "officialtest-disabled", ProviderResourceType.ClientCertificate,
+            "Synthetic disabled", environmentId, "fse2-officialtest-validate-cda", "validate-cda", "synthetic://disabled",
+            ProviderResourceStatus.Disabled, "v1", 0, 1, metadata, string.Empty, now), TestContext.Current.CancellationToken);
+        ProviderResourceReference inactiveReference = new(inactive.ProviderId, inactive.ResourceId, inactive.ResourceType, inactive.Version, inactive.PublicMetadataRevision);
+        Assert.Equal(ProviderResourceStatus.Disabled, Assert.Single(await store.FindExactProviderResourcesAsync(environmentId, inactiveReference, inactive.Revision, TestContext.Current.CancellationToken)).Status);
+    }
+
     [Fact]
     public void AlphaGoldenPath_Provisioner_publishes_and_uses_exact_canonical_sample_connector()
     {

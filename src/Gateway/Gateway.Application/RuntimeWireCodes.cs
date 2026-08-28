@@ -250,6 +250,8 @@ public static class BackendRuntimeWireCodes
         new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-CERTIFICATE-METADATA-REQUIRED"),
         new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-LOCATOR-DENIED"),
         new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-PUBLIC-MATERIAL-INVALID"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-RESOURCE-AMBIGUOUS"),
+        new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-RESOURCE-INTEGRITY"),
         new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-RESOURCE-LEGACY-REFERENCE"),
         new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-RESOURCE-NOT-FOUND"),
         new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-RESOURCE-REFERENCE-DENIED"),

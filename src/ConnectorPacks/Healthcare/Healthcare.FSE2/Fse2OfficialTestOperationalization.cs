@@ -431,8 +431,8 @@ public static class Fse2OfficialTestOperationalization
             throw Denied($"FSE2_OFFICIALTEST_{role}_PROVIDER_AUTHORITY_MISMATCH");
         if (!string.Equals(selected.Status, "Active", StringComparison.Ordinal))
             throw Denied($"FSE2_OFFICIALTEST_{role}_PROVIDER_AUTHORITY_INACTIVE");
-        if (!IsSha256(selected.CatalogChecksumSha256) ||
-            selected.SubjectPublicKeyInfoSha256 is null || !IsSha256(selected.SubjectPublicKeyInfoSha256) ||
+        if (!IsSha256(selected.CatalogChecksumSha256) || selected.CatalogChecksumSha256.All(character => character == '0') ||
+            selected.SubjectPublicKeyInfoSha256 is null || !IsSha256(selected.SubjectPublicKeyInfoSha256) || selected.SubjectPublicKeyInfoSha256.All(character => character == '0') ||
             string.IsNullOrWhiteSpace(selected.SubjectCommonName) || selected.SubjectCommonName.Length > 128 ||
             selected.SubjectCommonName != selected.SubjectCommonName.Trim() ||
             selected.SubjectCommonName.Any(character => char.IsControl(character) || character is '^' or '&'))
@@ -455,6 +455,7 @@ public static class Fse2OfficialTestOperationalization
         JsonElement[] slots = capabilities.GetProperty("signingSlots").EnumerateArray().ToArray();
         if (slots.Length != 2 || slots.Any(slot => !string.Equals(slot.GetProperty("signing").GetProperty("keyBinding").GetString(), Fse2OfficialTestCanonicalDefinition.SigningBinding, StringComparison.Ordinal)) ||
             !string.Equals(operation.GetProperty("authentication").GetProperty("certificateBinding").GetString(), Fse2OfficialTestCanonicalDefinition.MutualTlsBinding, StringComparison.Ordinal) ||
+            !string.Equals(operation.GetProperty("pathResolution").GetString(), "appendToBasePath", StringComparison.Ordinal) ||
             operation.GetProperty("maximumRetries").GetInt32() != 0 || operation.GetProperty("redirectPolicy").GetString() != "deny" ||
             operation.GetProperty("allowedClientHeaders").GetArrayLength() != 0 || profile.Operation.RequiresAttachmentHash)
             throw Denied("FSE2_OFFICIALTEST_ACTIVATION_COMPOSITION_DRIFT");

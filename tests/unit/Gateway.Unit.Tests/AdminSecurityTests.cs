@@ -54,7 +54,9 @@ public sealed class AdminSecurityTests
         Assert.Contains("BGW-CONNECTOR-PATH-TEMPLATE-INVALID", catalog.Reason);
         Assert.Contains("BGW-CONNECTOR-RESTRICTED-BODY-NONE-METHOD", catalog.Reason);
         Assert.Contains("BGW-PROVIDER-PUBLIC-MATERIAL-INVALID", catalog.Reason);
-        Assert.Equal(173, catalog.Reason.Count);
+        Assert.Contains("BGW-PROVIDER-RESOURCE-AMBIGUOUS", catalog.Reason);
+        Assert.Contains("BGW-PROVIDER-RESOURCE-INTEGRITY", catalog.Reason);
+        Assert.Equal(175, catalog.Reason.Count);
         Assert.DoesNotContain("grant.revoke", catalog.AuditAction);
         Assert.DoesNotContain("BGW-GRANT-REVOKED", catalog.Reason);
         Assert.Contains(BackendRuntimeWireCodes.Reserved, value => value == new RuntimeWireCode(RuntimeWireCodeKind.AuditAction, "grant.revoke"));
@@ -124,7 +126,7 @@ public sealed class AdminSecurityTests
     }
 
     [Fact]
-    public async Task M5_UT_Distinct_approval_is_checksum_specific_and_enables_policy()
+    public async Task M5_UT_Distinct_approval_is_checksum_binding_and_exact_publisher_specific()
     {
         InMemoryAdminSecurityStore store = new();
         AdminPrincipalRecord editor = await PrincipalAsync(store, "editor");
@@ -134,8 +136,12 @@ public sealed class AdminSecurityTests
         ConnectorApprovalRecord approval = await store.ApproveAsync(request.Id, version.Id, version.ChecksumSha256, BindingDigest, version.CreatedBy, approver.Id, null, Guid.NewGuid(), Now.AddMinutes(1), TestContext.Current.CancellationToken);
 
         Assert.Equal(ConnectorApprovalStatus.Approved, approval.Status);
-        Assert.True(await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, BindingDigest, editor.Id.ToString("D"), TestContext.Current.CancellationToken));
-        Assert.False(await store.HasValidApprovalAsync(version.Id, SHA256.HashData("other"u8), BindingDigest, editor.Id.ToString("D"), TestContext.Current.CancellationToken));
+        Assert.True(await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, BindingDigest, approver.Id.ToString("D"), TestContext.Current.CancellationToken));
+        Assert.False(await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, BindingDigest, editor.Id.ToString("D"), TestContext.Current.CancellationToken));
+        Assert.False(await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, BindingDigest, Guid.NewGuid().ToString("D"), TestContext.Current.CancellationToken));
+        Assert.False(await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, BindingDigest, "not-a-guid", TestContext.Current.CancellationToken));
+        Assert.False(await store.HasValidApprovalAsync(version.Id, SHA256.HashData("other"u8), BindingDigest, approver.Id.ToString("D"), TestContext.Current.CancellationToken));
+        Assert.False(await store.HasValidApprovalAsync(version.Id, version.ChecksumSha256, SHA256.HashData("other-binding"u8), approver.Id.ToString("D"), TestContext.Current.CancellationToken));
     }
 
     [Fact]

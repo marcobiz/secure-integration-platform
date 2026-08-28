@@ -35,6 +35,8 @@ public sealed class RoutingConnectorConfigurationStore : IConnectorConfiguration
     /// <inheritdoc />
     public Task<ProviderResourceCatalogRecord> ResolveProviderResourceAsync(ProviderResourceReference reference, Guid environmentId, string connectorId, IReadOnlyCollection<string> operationIds, CancellationToken cancellationToken) => admin.ResolveProviderResourceAsync(reference, environmentId, connectorId, operationIds, cancellationToken);
     /// <inheritdoc />
+    public Task<IReadOnlyList<ProviderResourceCatalogRecord>> FindExactProviderResourcesAsync(Guid environmentId, ProviderResourceReference reference, long catalogRevision, CancellationToken cancellationToken) => admin.FindExactProviderResourcesAsync(environmentId, reference, catalogRevision, cancellationToken);
+    /// <inheritdoc />
     public Task<AdminPage<ProviderResourceCatalogRecord>> ListProviderResourcesPageAsync(int offset, int limit, Guid? environmentId, ProviderResourceType? resourceType, CancellationToken cancellationToken) => admin.ListProviderResourcesPageAsync(offset, limit, environmentId, resourceType, cancellationToken);
     /// <inheritdoc />
     public Task ValidateBindingResourcesAsync(Guid connectorVersionId, CancellationToken cancellationToken) => admin.ValidateBindingResourcesAsync(connectorVersionId, cancellationToken);

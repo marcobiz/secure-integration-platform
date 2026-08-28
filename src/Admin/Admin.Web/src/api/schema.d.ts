@@ -852,6 +852,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/api/v1/provider-resources:resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Resolves one exact current non-secret provider-catalog identity without offset pagination; missing and ambiguous authority fail closed. */
+        get: operations["resolveExactProviderResource"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/api/v1/connectors/{connectorId}/versions/{version}/approval-requests": {
         parameters: {
             query?: never;
@@ -3153,6 +3170,37 @@ export interface operations {
                     "application/json": components["schemas"]["ProviderResourceCatalogPage"];
                 };
             };
+            default: components["responses"]["Problem"];
+        };
+    };
+    resolveExactProviderResource: {
+        parameters: {
+            query: {
+                environmentId: string;
+                resourceType: components["schemas"]["ProviderResourceType"];
+                providerId: string;
+                resourceId: string;
+                version?: string;
+                revision: number;
+                publicMetadataRevision?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Exact public provider resource. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderResourceCatalog"];
+                };
+            };
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
             default: components["responses"]["Problem"];
         };
     };

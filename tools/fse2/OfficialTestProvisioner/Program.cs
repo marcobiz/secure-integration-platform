@@ -300,28 +300,11 @@ internal static class Program
         AdminApi api,
         Fse2OfficialTestOperationalPlan plan)
     {
-        List<Fse2OfficialTestProviderCatalogResource> resources = [];
-        const int limit = 100;
-        int offset = 0;
-        int? expectedTotal = null;
-        do
-        {
-            JsonElement page = await api.GetAsync(
-                $"admin/api/v1/provider-resources?environmentId={plan.EnvironmentId:D}&resourceType=ClientCertificate&offset={offset}&limit={limit}").ConfigureAwait(false);
-            int total = page.GetProperty("total").GetInt32();
-            if (total < 0 || total > 1000 || (expectedTotal is not null && total != expectedTotal.Value))
-                throw Failure("FSE2_OFFICIALTEST_PROVIDER_CATALOG_RESPONSE_INVALID");
-            expectedTotal = total;
-            JsonElement[] items = page.GetProperty("items").EnumerateArray().ToArray();
-            if (items.Length > limit || offset + items.Length > total)
-                throw Failure("FSE2_OFFICIALTEST_PROVIDER_CATALOG_RESPONSE_INVALID");
-            resources.AddRange(items.Select(ProviderCatalogResource));
-            offset += items.Length;
-            if (items.Length == 0 && offset < total)
-                throw Failure("FSE2_OFFICIALTEST_PROVIDER_CATALOG_RESPONSE_INVALID");
-        }
-        while (offset < expectedTotal!.Value);
-        return Fse2OfficialTestOperationalization.ResolveProviderAuthority(plan, resources);
+        Fse2OfficialTestProviderCatalogResource a1 = ProviderCatalogResource(
+            await api.GetAsync(ExactProviderResourcePath(plan.EnvironmentId, plan.A1)).ConfigureAwait(false));
+        Fse2OfficialTestProviderCatalogResource s1 = ProviderCatalogResource(
+            await api.GetAsync(ExactProviderResourcePath(plan.EnvironmentId, plan.S1)).ConfigureAwait(false));
+        return Fse2OfficialTestOperationalization.ResolveProviderAuthority(plan, [a1, s1]);
     }
 
     private static async Task RequirePublicAuthorityCurrentAsync(
@@ -358,6 +341,12 @@ internal static class Program
             value.GetProperty("checksumSha256").GetString() ?? string.Empty,
             subjectPublicKeyInfoSha256,
             subjectCommonName);
+    }
+
+    private static string ExactProviderResourcePath(Guid environmentId, Fse2OfficialTestProviderReference reference)
+    {
+        string version = reference.Version is null ? string.Empty : $"&version={Segment(reference.Version)}";
+        return $"admin/api/v1/provider-resources:resolve?environmentId={environmentId:D}&resourceType=ClientCertificate&providerId={Segment(reference.ProviderId)}&resourceId={Segment(reference.ResourceId)}{version}&revision={reference.CatalogRevision}&publicMetadataRevision={reference.PublicMetadataRevision}";
     }
 
     private static byte[] ReadBounded(string path, long maximumBytes, string error)

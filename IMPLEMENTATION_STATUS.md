@@ -53,7 +53,9 @@ un pack verticale opzionale e non amplia le dipendenze del Core.
 
 Candidate non ancora integrato `FSE2-OFFICIALTEST-OPERATIONALIZATION`: source canonica per il solo
 `validate-cda`, compilatore di piano protetto, composizione A1 mTLS/S1 dual-signing e provisioner
-verticale sulle superfici Admin esistenti. Il candidate non contiene configurazione reale e non
+verticale sulle superfici Admin esistenti. Il candidate usa lookup provider esatti non paginati,
+compone il path runtime preservando l'intero prefisso OfficialTest e vincola il publish server-side
+alla sessione dell'exact `approved_by`. Il candidate non contiene configurazione reale e non
 esegue rete OfficialTest. Stato gate dichiarabile: T01/T02/T03 PASS software/offline,
 T04 `BLOCKED_PENDING_OPERATIONAL_CONFIGURATION_AND_LIVE_CALL`, T06 PARTIAL.
 

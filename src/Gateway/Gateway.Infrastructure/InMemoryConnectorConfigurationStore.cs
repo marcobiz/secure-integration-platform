@@ -56,6 +56,25 @@ public sealed class InMemoryConnectorConfigurationStore(
     }
 
     /// <inheritdoc />
+    public Task<IReadOnlyList<ProviderResourceCatalogRecord>> FindExactProviderResourcesAsync(Guid environmentId, ProviderResourceReference reference, long catalogRevision, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ProviderResourceReferenceValidator.Validate(reference);
+        if (environmentId == Guid.Empty || catalogRevision < 1) throw new GatewayException("BGW-PROVIDER-RESOURCE-REFERENCE-DENIED", 400);
+        lock (gate)
+        {
+            string key = ResourceKey(reference.ProviderId, reference.ResourceId, reference.ResourceType, reference.Version);
+            if (!providerResources.TryGetValue(key, out List<ProviderResourceCatalogRecord>? revisions) || revisions.Count == 0)
+                return Task.FromResult<IReadOnlyList<ProviderResourceCatalogRecord>>([]);
+            ProviderResourceCatalogRecord current = revisions[^1];
+            if (current.EnvironmentId != environmentId || current.Revision != catalogRevision || current.PublicMetadataRevision != reference.PublicMetadataRevision)
+                return Task.FromResult<IReadOnlyList<ProviderResourceCatalogRecord>>([]);
+            EnsureResourceIntegrity(current);
+            return Task.FromResult<IReadOnlyList<ProviderResourceCatalogRecord>>([current]);
+        }
+    }
+
+    /// <inheritdoc />
     public Task<AdminPage<ProviderResourceCatalogRecord>> ListProviderResourcesPageAsync(int offset, int limit, Guid? environmentId, ProviderResourceType? resourceType, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -63,7 +82,9 @@ public sealed class InMemoryConnectorConfigurationStore(
         {
             ProviderResourceCatalogRecord[] values = providerResources.Values.Select(value => value[^1])
                 .Where(value => (environmentId is null || value.EnvironmentId == environmentId) && (resourceType is null || value.ResourceType == resourceType))
-                .OrderBy(value => value.ProviderId, StringComparer.Ordinal).ThenBy(value => value.ResourceId, StringComparer.Ordinal).ToArray();
+                .OrderBy(value => value.ProviderId, StringComparer.Ordinal).ThenBy(value => value.ResourceId, StringComparer.Ordinal)
+                .ThenBy(value => value.Version, StringComparer.Ordinal).ThenBy(value => value.Revision)
+                .ThenBy(value => value.PublicMetadataRevision).ThenBy(value => value.Id).ToArray();
             return Task.FromResult(new AdminPage<ProviderResourceCatalogRecord>(values.Skip(offset).Take(limit).ToArray(), offset, limit, values.Length));
         }
     }
@@ -426,6 +447,13 @@ public sealed class InMemoryConnectorConfigurationStore(
     {
         var canonical = new { resource.ProviderId, resource.ProviderDisplayName, resource.ProviderType, resource.ResourceId, resource.ResourceType, resource.DisplayName, resource.EnvironmentId, resource.ConnectorScope, resource.OperationScope, resource.Status, resource.Version, resource.Revision, resource.PublicMetadataRevision, resource.CertificateMetadata };
         return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(canonical)));
+    }
+
+    private static void EnsureResourceIntegrity(ProviderResourceCatalogRecord resource)
+    {
+        string expected = ResourceChecksum(resource);
+        if (!string.Equals(expected, resource.ChecksumSha256, StringComparison.Ordinal))
+            throw new GatewayException("BGW-PROVIDER-RESOURCE-INTEGRITY", 503);
     }
 
     private static bool SameRegistration(ProviderResourceCatalogRecord current, ProviderResourceCatalogRecord candidate) =>

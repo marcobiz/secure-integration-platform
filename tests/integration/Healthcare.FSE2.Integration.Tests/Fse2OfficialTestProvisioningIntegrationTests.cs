@@ -1,5 +1,7 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Npgsql;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
@@ -39,6 +41,13 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
         Fse2OfficialTestProviderReference s1Reference = new("synthetic-provider", "officialtest-s1", "1", 1, 5);
         ProviderResourceCatalogRecord a1 = await RegisterAsync(store, environmentId, a1Reference, "A1 Synthetic Client", 'E', cancellationToken);
         ProviderResourceCatalogRecord s1 = await RegisterAsync(store, environmentId, s1Reference, "S1 Synthetic Signing", 'F', cancellationToken);
+        ProviderResourceReference a1GatewayReference = GatewayReference(a1Reference);
+        Assert.Equal(a1.Id, Assert.Single(await store.FindExactProviderResourcesAsync(environmentId, a1GatewayReference, a1Reference.CatalogRevision, cancellationToken)).Id);
+        Assert.Empty(await store.FindExactProviderResourcesAsync(Guid.NewGuid(), a1GatewayReference, a1Reference.CatalogRevision, cancellationToken));
+        Assert.Empty(await store.FindExactProviderResourcesAsync(environmentId, a1GatewayReference with { ResourceType = ProviderResourceType.Secret }, a1Reference.CatalogRevision, cancellationToken));
+        Assert.Empty(await store.FindExactProviderResourcesAsync(environmentId, a1GatewayReference with { Version = "wrong" }, a1Reference.CatalogRevision, cancellationToken));
+        Assert.Empty(await store.FindExactProviderResourcesAsync(environmentId, a1GatewayReference, a1Reference.CatalogRevision + 1, cancellationToken));
+        Assert.Empty(await store.FindExactProviderResourcesAsync(environmentId, a1GatewayReference with { PublicMetadataRevision = a1Reference.PublicMetadataRevision + 1 }, a1Reference.CatalogRevision, cancellationToken));
         Fse2OfficialTestOperationalPlan plan = Plan(environmentId, a1Reference, s1Reference);
         Fse2OfficialTestCompiledConfiguration compiled = Fse2OfficialTestOperationalization.Compile(
             plan,
@@ -98,9 +107,10 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
     public async Task FSE2_OFFICIALTEST_PostgreSQL18_D1_approval_is_invalidated_before_D2_distinct_approver_publication_and_replay_is_denied()
     {
         string adminConnection = RequiredPostgresOrSkip("GATEWAY_POSTGRES_ADMIN_CONNECTION");
-        _ = RequiredPostgresOrSkip("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
+        string migrationConnection = RequiredPostgresOrSkip("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
         await HostedPostgresTestSupport.ApplyMigrationAsync();
         await using AdminPostgresDataSource adminPool = new(adminConnection);
+        await using NpgsqlDataSource integrityPool = NpgsqlDataSource.Create(migrationConnection);
         PostgresConnectorConfigurationStore store = new(adminPool.Value);
         PostgresGatewayRegistry registry = new(adminPool.Value);
         PostgresAdminSecurityStore security = new(adminPool);
@@ -131,6 +141,16 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
         Fse2OfficialTestProviderReference s1Reference = new("synthetic-provider", "officialtest-s1", "1", 1, 5);
         ProviderResourceCatalogRecord a1 = await RegisterAsync(store, environmentId, a1Reference, "A1 Synthetic Client", 'E', cancellationToken);
         ProviderResourceCatalogRecord s1 = await RegisterAsync(store, environmentId, s1Reference, "S1 Synthetic Signing", 'F', cancellationToken);
+        ProviderResourceReference a1GatewayReference = GatewayReference(a1Reference);
+        Assert.Equal(a1.Id, Assert.Single(await store.FindExactProviderResourcesAsync(environmentId, a1GatewayReference, a1Reference.CatalogRevision, cancellationToken)).Id);
+        Assert.Empty(await store.FindExactProviderResourcesAsync(Guid.NewGuid(), a1GatewayReference, a1Reference.CatalogRevision, cancellationToken));
+        Assert.Empty(await store.FindExactProviderResourcesAsync(environmentId, a1GatewayReference with { ResourceType = ProviderResourceType.Secret }, a1Reference.CatalogRevision, cancellationToken));
+        Assert.Empty(await store.FindExactProviderResourcesAsync(environmentId, a1GatewayReference with { Version = "wrong" }, a1Reference.CatalogRevision, cancellationToken));
+        Assert.Empty(await store.FindExactProviderResourcesAsync(environmentId, a1GatewayReference, a1Reference.CatalogRevision + 1, cancellationToken));
+        Assert.Empty(await store.FindExactProviderResourcesAsync(environmentId, a1GatewayReference with { PublicMetadataRevision = a1Reference.PublicMetadataRevision + 1 }, a1Reference.CatalogRevision, cancellationToken));
+        await AssertCatalogIntegrityTamperDeniedAsync(integrityPool, store, a1, a1GatewayReference, null, null, cancellationToken);
+        await AssertCatalogIntegrityTamperDeniedAsync(integrityPool, store, a1, a1GatewayReference, "SubjectPublicKeyInfoSha256", new string('C', 64), cancellationToken);
+        await AssertCatalogIntegrityTamperDeniedAsync(integrityPool, store, a1, a1GatewayReference, "SubjectCommonName", "Wrong Synthetic Common Name", cancellationToken);
         Fse2OfficialTestOperationalPlan plan = Plan(environmentId, a1Reference, s1Reference);
         Fse2OfficialTestCompiledConfiguration compiled = Fse2OfficialTestOperationalization.Compile(
             plan,
@@ -158,6 +178,8 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
         ProviderResourceCatalogRecord s1D2 = await RegisterAsync(
             store, environmentId, s1D2Reference, "S1 Synthetic Signing", 'F', cancellationToken);
         Assert.Equal(2, s1D2.Revision);
+        Assert.Empty(await store.FindExactProviderResourcesAsync(environmentId, GatewayReference(s1Reference), s1Reference.CatalogRevision, cancellationToken));
+        Assert.Equal(s1D2.Id, Assert.Single(await store.FindExactProviderResourcesAsync(environmentId, GatewayReference(s1D2Reference), s1D2Reference.CatalogRevision, cancellationToken)).Id);
         GatewayException providerDrift = await Assert.ThrowsAsync<GatewayException>(() => administration.PublishAsync(
             imported.ConnectorId, imported.Version, validated.RowVersion, 0, approverA.Id.ToString("D"), Guid.NewGuid(), cancellationToken));
         Assert.Equal("BGW-PROVIDER-RESOURCE-REVISION-STALE", providerDrift.Code);
@@ -199,12 +221,17 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
             approverB.Id, new string('0', 64), currentApprovals.Select(ApprovalAuthority)));
 
         ConnectorVersionRecord beforeDeniedA = (await store.GetVersionAsync(imported.ConnectorId, imported.Version, cancellationToken))!;
+        ConnectorSummary summaryBeforeDeniedA = Assert.Single(await store.ListConnectorsAsync(cancellationToken), value => value.ConnectorId == imported.ConnectorId);
         int approvalCountBeforeDeniedA = currentApprovals.Length;
-        Assert.False(Fse2OfficialTestOperationalization.IsCurrentPublisher(
-            approverA.Id, compiled.CanonicalDefinitionSha256, currentApprovals.Select(ApprovalAuthority)));
+        GatewayException deniedA = await Assert.ThrowsAsync<GatewayException>(() => administration.PublishAsync(
+            imported.ConnectorId, imported.Version, validated.RowVersion, 0, approverA.Id.ToString("D"), Guid.NewGuid(), cancellationToken));
+        Assert.Equal("BGW-ADMIN-APPROVAL-REQUIRED", deniedA.Code);
         ConnectorVersionRecord afterDeniedA = (await store.GetVersionAsync(imported.ConnectorId, imported.Version, cancellationToken))!;
+        ConnectorSummary summaryAfterDeniedA = Assert.Single(await store.ListConnectorsAsync(cancellationToken), value => value.ConnectorId == imported.ConnectorId);
         Assert.Equal(beforeDeniedA.State, afterDeniedA.State);
         Assert.Equal(beforeDeniedA.RowVersion, afterDeniedA.RowVersion);
+        Assert.Equal(summaryBeforeDeniedA.PublicationRevision, summaryAfterDeniedA.PublicationRevision);
+        Assert.Equal(summaryBeforeDeniedA.PublishedVersion, summaryAfterDeniedA.PublishedVersion);
         Assert.Equal(approvalCountBeforeDeniedA, (await security.ListApprovalsAsync(approvedD2.ConnectorVersionId, cancellationToken)).Count);
 
         GatewayException concurrentMismatch = await Assert.ThrowsAsync<GatewayException>(() => administration.PublishAsync(
@@ -223,6 +250,11 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
         Assert.Equal(ConnectorBindingState.Active, snapshot.Bindings.State);
         Assert.Equal(Fse2OfficialTestCanonicalDefinition.OperationId,
             Assert.Single(ConnectorOperationBindings.All(snapshot.Version.CanonicalJson)).OperationId);
+        GatewayOperationDefinition effectiveOperation = await catalog.GetRequiredAsync(
+            imported.ConnectorId, Fse2OfficialTestCanonicalDefinition.OperationId, environmentId, cancellationToken);
+        Assert.Equal(
+            "https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1/documents/validation",
+            effectiveOperation.Endpoint.AbsoluteUri);
 
         GatewayException immutable = await Assert.ThrowsAsync<GatewayException>(() => administration.PutBindingsAsync(
             imported.ConnectorId, compiled.BindingRequest with { ExpectedRevision = d2Revision }, approverB.Id.ToString("D"), Guid.NewGuid(), cancellationToken));
@@ -266,6 +298,63 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
                 DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30), "RSA", 2048, reference.Version!,
                 reference.ResourceId.EndsWith("a1", StringComparison.Ordinal) ? new string('A', 64) : new string('B', 64), commonName),
             string.Empty, DateTimeOffset.UtcNow), cancellationToken);
+
+    private static ProviderResourceReference GatewayReference(Fse2OfficialTestProviderReference value) =>
+        new(value.ProviderId, value.ResourceId, ProviderResourceType.ClientCertificate, value.Version, value.PublicMetadataRevision);
+
+    private static async Task AssertCatalogIntegrityTamperDeniedAsync(
+        NpgsqlDataSource dataSource,
+        PostgresConnectorConfigurationStore store,
+        ProviderResourceCatalogRecord resource,
+        ProviderResourceReference reference,
+        string? metadataProperty,
+        string? replacement,
+        CancellationToken cancellationToken)
+    {
+        await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        string originalMetadata;
+        byte[] originalChecksum;
+        await using (NpgsqlCommand read = new("SELECT certificate_metadata_json::text,checksum_sha256 FROM gateway.provider_resource_catalog_version WHERE id=$1", connection))
+        {
+            read.Parameters.AddWithValue(resource.Id);
+            await using NpgsqlDataReader reader = await read.ExecuteReaderAsync(cancellationToken);
+            Assert.True(await reader.ReadAsync(cancellationToken));
+            originalMetadata = reader.GetString(0);
+            originalChecksum = reader.GetFieldValue<byte[]>(1);
+        }
+
+        try
+        {
+            if (metadataProperty is null)
+            {
+                await using NpgsqlCommand tamperChecksum = new("UPDATE gateway.provider_resource_catalog_version SET checksum_sha256=$2 WHERE id=$1", connection);
+                tamperChecksum.Parameters.AddWithValue(resource.Id);
+                tamperChecksum.Parameters.AddWithValue(new byte[32]);
+                Assert.Equal(1, await tamperChecksum.ExecuteNonQueryAsync(cancellationToken));
+            }
+            else
+            {
+                JsonObject metadata = JsonNode.Parse(originalMetadata)?.AsObject() ?? throw new InvalidOperationException("Synthetic certificate metadata missing.");
+                metadata[metadataProperty] = replacement;
+                await using NpgsqlCommand tamperMetadata = new("UPDATE gateway.provider_resource_catalog_version SET certificate_metadata_json=$2::jsonb WHERE id=$1", connection);
+                tamperMetadata.Parameters.AddWithValue(resource.Id);
+                tamperMetadata.Parameters.AddWithValue(metadata.ToJsonString());
+                Assert.Equal(1, await tamperMetadata.ExecuteNonQueryAsync(cancellationToken));
+            }
+
+            GatewayException integrity = await Assert.ThrowsAsync<GatewayException>(() => store.FindExactProviderResourcesAsync(
+                resource.EnvironmentId, reference, resource.Revision, cancellationToken));
+            Assert.Equal("BGW-PROVIDER-RESOURCE-INTEGRITY", integrity.Code);
+        }
+        finally
+        {
+            await using NpgsqlCommand restore = new("UPDATE gateway.provider_resource_catalog_version SET certificate_metadata_json=$2::jsonb,checksum_sha256=$3 WHERE id=$1", connection);
+            restore.Parameters.AddWithValue(resource.Id);
+            restore.Parameters.AddWithValue(originalMetadata);
+            restore.Parameters.AddWithValue(originalChecksum);
+            Assert.Equal(1, await restore.ExecuteNonQueryAsync(cancellationToken));
+        }
+    }
 
     private static Fse2OfficialTestOperationalPlan Plan(
         Guid environmentId,

@@ -142,6 +142,8 @@ public interface IConnectorConfigurationStore
     Task<ProviderResourceCatalogRecord> RegisterProviderResourceAsync(ProviderResourceCatalogRecord resource, CancellationToken cancellationToken);
     /// <summary>Resolves and authorizes one structured logical resource reference against the server-owned catalog.</summary>
     Task<ProviderResourceCatalogRecord> ResolveProviderResourceAsync(ProviderResourceReference reference, Guid environmentId, string connectorId, IReadOnlyCollection<string> operationIds, CancellationToken cancellationToken);
+    /// <summary>Returns at most two records for one exact, current, non-secret catalog identity so callers can fail closed on missing or ambiguous authority.</summary>
+    Task<IReadOnlyList<ProviderResourceCatalogRecord>> FindExactProviderResourcesAsync(Guid environmentId, ProviderResourceReference reference, long catalogRevision, CancellationToken cancellationToken);
     /// <summary>Lists only non-secret catalog metadata for administration selectors.</summary>
     Task<AdminPage<ProviderResourceCatalogRecord>> ListProviderResourcesPageAsync(int offset, int limit, Guid? environmentId, ProviderResourceType? resourceType, CancellationToken cancellationToken);
     /// <summary>Fails closed when a binding references a catalog revision that is no longer current and active.</summary>

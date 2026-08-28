@@ -529,6 +529,25 @@ paths:
       security: [{ AdminSession: [] }]
       parameters: [{ $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }, { name: environmentId, in: query, schema: { type: string, format: uuid } }, { name: resourceType, in: query, schema: { $ref: '#/components/schemas/ProviderResourceType' } }]
       responses: { '200': { description: Read-only server-owned logical resource catalog; physical references and values are absent., content: { application/json: { schema: { $ref: '#/components/schemas/ProviderResourceCatalogPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/provider-resources:resolve:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: resolveExactProviderResource
+      description: Resolves one exact current non-secret provider-catalog identity without offset pagination; missing and ambiguous authority fail closed.
+      security: [{ AdminSession: [] }]
+      parameters:
+        - { name: environmentId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: resourceType, in: query, required: true, schema: { $ref: '#/components/schemas/ProviderResourceType' } }
+        - { name: providerId, in: query, required: true, schema: { type: string, maxLength: 128 } }
+        - { name: resourceId, in: query, required: true, schema: { type: string, maxLength: 128 } }
+        - { name: version, in: query, schema: { type: string, maxLength: 128 } }
+        - { name: revision, in: query, required: true, schema: { type: integer, format: int64, minimum: 1 } }
+        - { name: publicMetadataRevision, in: query, schema: { type: integer, format: int64, minimum: 1 } }
+      responses:
+        '200': { description: Exact public provider resource., content: { application/json: { schema: { $ref: '#/components/schemas/ProviderResourceCatalog' } } } }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        default: { $ref: '#/components/responses/Problem' }
   /admin/api/v1/connectors/{connectorId}/versions/{version}/approval-requests:
     post:
       tags: [ConnectorsAdmin]
