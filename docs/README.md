@@ -40,7 +40,7 @@ stato corrente.
 24. [Architettura implementata M2](architecture/m2-gateway-architecture.md)
 25. [Piano M2](implementation/M2-IMPLEMENTATION-PLAN.md), [runbook M2](operations/M2-GATEWAY-RUNBOOK.md), [report M2](testing/M2-IMPLEMENTATION-REPORT.md) e [Gate Review M2](reviews/M2-GATE-REVIEW.md)
 26. [Wave 1 typed composed SOAP authenticated dispatch](implementation/WAVE1-TYPED-COMPOSED-SOAP-DISPATCH.md)
-27. [FSE2 Wave 1 - source freeze](implementation/FSE2-WAVE1-SPEC-FREEZE.md), [profilo organizzativo](connectors/healthcare/fse2/README.md) e [report di implementazione](testing/FSE2-IMPLEMENTATION-REPORT.md); la copertura è sintetica e l'OfficialTest resta aperto
+27. [FSE2 Wave 1 - source freeze](implementation/FSE2-WAVE1-SPEC-FREEZE.md), [profilo organizzativo](connectors/healthcare/fse2/README.md), [runbook OfficialTest validate-cda](connectors/healthcare/fse2/OFFICIALTEST-VALIDATE-CDA-RUNBOOK.md) e [report di implementazione](testing/FSE2-IMPLEMENTATION-REPORT.md); la copertura è sintetica e la chiamata OfficialTest resta aperta
 28. [Wave 1 authorized typed composed-SOAP request composition](implementation/WAVE1-AUTHORIZED-TYPED-COMPOSED-SOAP-REQUEST.md)
 29. [FSE2 local PKCS#12 provider runbook](operations/FSE2-LOCAL-PROVIDER-RUNBOOK.md)
 
@@ -64,6 +64,7 @@ stato corrente.
 | Gateway minimo M2 | `architecture/m2-gateway-architecture.md`, `implementation/M2-IMPLEMENTATION-PLAN.md`, `operations/M2-GATEWAY-RUNBOOK.md`, `testing/M2-IMPLEMENTATION-REPORT.md`, `reviews/M2-GATE-REVIEW.md` |
 | FSE2 Wave 1 | `implementation/FSE2-WAVE1-SPEC-FREEZE.md`, `connectors/healthcare/fse2/README.md`, `testing/FSE2-IMPLEMENTATION-REPORT.md` (profilo Organization coperto sinteticamente; Human Actor differito; nessuna call OfficialTest o qualifica production dichiarata) |
 | FSE2 local provider lab | `adr/0029-local-pkcs12-provider-for-offline-labs.md`, `operations/FSE2-LOCAL-PROVIDER-RUNBOOK.md`, `../packs/deployment/local-pkcs12/` (materiale operativo sempre esterno a Git; nessuna call live implicita) |
+| FSE2 OfficialTest operationalization | `adr/0031-fse2-officialtest-operational-source-and-provisioner.md`, `connectors/healthcare/fse2/OFFICIALTEST-VALIDATE-CDA-RUNBOOK.md`, `../tools/fse2/OfficialTestProvisioner/` (solo configure/four-eyes/read-back; nessuna call live) |
 
 ## Regole di manutenzione
 

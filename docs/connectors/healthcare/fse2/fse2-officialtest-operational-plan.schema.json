@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.secure-integration.example/fse2/officialtest-operational-plan/v1/schema.json",
+  "title": "FSE2 OfficialTest validate-cda protected operational plan",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "environmentId",
+    "officialTestEndpoint",
+    "organization",
+    "locality",
+    "a1",
+    "s1",
+    "expectedBindingRevision"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "environmentId": { "type": "string", "format": "uuid" },
+    "officialTestEndpoint": {
+      "const": "https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1/"
+    },
+    "organization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identifier", "assigningAuthorityOid", "description", "domainId"],
+      "properties": {
+        "identifier": { "type": "string", "pattern": "^[0-9]{11}$" },
+        "assigningAuthorityOid": { "type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)+$", "maxLength": 128 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "domainId": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "maxLength": 128 }
+      }
+    },
+    "locality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "assigningAuthorityOid", "code"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "assigningAuthorityOid": { "type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)+$", "maxLength": 128 },
+        "code": { "type": "string", "minLength": 1, "maxLength": 32 }
+      }
+    },
+    "a1": { "$ref": "#/$defs/providerResource" },
+    "s1": { "$ref": "#/$defs/providerResource" },
+    "expectedBindingRevision": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "integer", "minimum": 1 }
+      ]
+    }
+  },
+  "$defs": {
+    "providerResource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerId", "resourceId", "version", "catalogRevision", "publicMetadataRevision"],
+      "properties": {
+        "providerId": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "maxLength": 128 },
+        "resourceId": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "maxLength": 128 },
+        "version": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "maxLength": 128 }
+          ]
+        },
+        "catalogRevision": { "type": "integer", "minimum": 1 },
+        "publicMetadataRevision": { "type": "integer", "minimum": 1, "maximum": 2147483647 }
+      }
+    }
+  }
+}

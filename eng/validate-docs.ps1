@@ -3,6 +3,7 @@ $root = Split-Path -Parent $PSScriptRoot
 
 $jsonFiles = @(
     'docs/connectors/connector-definition.schema.json',
+    'docs/connectors/healthcare/fse2/fse2-officialtest-operational-plan.schema.json',
     'docs/connectors/examples/secure-layer.example.json',
     'docs/connectors/examples/managed-connector.example.json',
     'docs/connectors/examples/sample-secure-service.connector.json'

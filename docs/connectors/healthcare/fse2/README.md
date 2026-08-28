@@ -23,6 +23,27 @@ P.IVA plus assigning-authority OID produce the exact fixed-subject CX. `person_i
 separate validated business CX and is never promoted to authenticated actor.
 `use_subject_as_author` is absent.
 
+## OfficialTest `validate-cda` operational source
+
+The candidate operational slice freezes one public-safe source definition at
+`Definitions/fse2-officialtest-validate-cda.connector.json`. It contains exactly one operation,
+`validate-cda`, and only logical endpoint/A1/S1 bindings. It contains no concrete endpoint,
+organization/locality value, provider resource ID, principal, certificate, P12, password or token.
+Repository bytes and their SHA-256 are regression-tested before the deployment compiler overlays
+the protected organization/locality values and exact public A1/S1 revision metadata.
+
+`tools/fse2/OfficialTestProvisioner` is the supported vertical administrative path. Its `plan`
+command runs before construction of an Admin client and reports explicit zero workflow-store,
+signing, DNS, HTTPS, transport and network counters. The remaining commands reuse only the existing
+authenticated Admin validate/import/bind/approval/publish/read-back endpoints. The runtime caller
+cannot choose this driver, endpoint, provider, secret or certificate. The full operator procedure
+and closed external-plan schema are in
+[`OFFICIALTEST-VALIDATE-CDA-RUNBOOK.md`](OFFICIALTEST-VALIDATE-CDA-RUNBOOK.md) and
+[`fse2-officialtest-operational-plan.schema.json`](fse2-officialtest-operational-plan.schema.json).
+
+This source and provisioner do not perform a live invocation. Official operational configuration,
+two preauthorized human sessions and a later single-live handoff remain external gates.
+
 ## Frozen operation and wire matrix
 
 | Operation ID | Availability | Method and Published `pathTemplate` | Body mode |
@@ -101,6 +122,6 @@ Production permits only the nine Production operations and uses audience
 `https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1`. The synthetic audience and
 HTTPS origin are test-only.
 
-`HUMAN_ACTOR_PROFILE = DEFERRED`. Official provisioning, production certificate custody,
+`HUMAN_ACTOR_PROFILE = DEFERRED`. Operational provider material, production certificate custody,
 conformance, accreditation, monitoring, and live evidence remain outside this PR. Tests use only
-ephemeral synthetic certificates.
+ephemeral synthetic certificates and `OFFICIALTEST_NETWORK_COUNT=0`.

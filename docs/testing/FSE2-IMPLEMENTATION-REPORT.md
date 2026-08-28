@@ -15,6 +15,47 @@ Official public freeze: guide 2.23 and OpenAPI 1.0.0 at
 
 ## Implemented result
 
+### OfficialTest `validate-cda` operationalization candidate (2026-08-28)
+
+Starting from exact main `977175138c1dc89de43ce1cf5eaa8f5d953adc16`, the candidate adds a
+vertical-only operational source and provisioner for one operation. The embedded Connector source
+contains exactly `validate-cda`, logical endpoint/A1/S1 bindings, `VERIFICA`, deterministic
+multipart bytes, server-owned JSON Accept, zero retry, redirect deny and no `attachment_hash`.
+Deployment compilation accepts a strict protected organization/locality plan and exact public
+provider revisions; the stable application identity remains source-owned. No P12, password,
+private key, token, session principal or reusable secret is accepted by the compiler.
+
+The supported provisioner uses the existing Admin API for validate/import/validate-stored,
+bindings, checksum-specific approval review/request/acceptance, publication and read-back. `plan`
+is evaluated before Admin client construction and exposes only fixed IDs/digests plus explicit zero
+workflow-store, signing, DNS, HTTPS, transport and network counters. Configure/propose and
+approve/publish are deliberately separate session phases. The publish phase additionally verifies
+that the current server-derived principal is the distinct approver of the exact definition; the
+server remains authoritative for RBAC, CSRF, approval digest, binding/resource revision freshness,
+PostgreSQL atomic publication and Published immutability.
+
+The new source changes no Core project and adds no Core primitive, IVT, generic secret retrieval,
+client API or direct OfficialTest transport. The FSE2 pack still references only
+`Gateway.Application`; full schema validation remains on the normal Admin surface. Test material is
+synthetic and all local network coverage is loopback-only.
+
+Current gate classification is intentionally bounded:
+
+```text
+FSE2_T01 = PASS
+FSE2_T02 = PASS
+FSE2_T03 = PASS
+FSE2_T04 = BLOCKED_PENDING_OPERATIONAL_CONFIGURATION_AND_LIVE_CALL
+FSE2_T06 = PARTIAL
+```
+
+T01/T02 mean the software-side protected-plan, authority, composition and two-operator workflow are
+implemented and negatively covered; they do not claim that operational certificates were opened or
+imported by this change. T03 remains the existing exact offline named gate. T04 cannot pass until
+real protected configuration is applied by authorized operators and the separately authorized
+single live call occurs. T06 remains partial because there is no OfficialTest response in this
+slice.
+
 The Organization profile now runs as the external module `healthcare-fse2` and strategy
 `healthcare-fse2-organization`. Its only declared outbound authentication kind is `mtls`.
 The pack consumes the public `AuthorizedConnectorExecution` surface and has one project dependency:

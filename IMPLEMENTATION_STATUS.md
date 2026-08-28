@@ -51,6 +51,12 @@ autorizzato e evidence redatta. Solo dopo si affrontano `attachment_hash` sugli 
 file bytes, create/replace, status e gli ulteriori workflow autorizzati. Questa track usa
 un pack verticale opzionale e non amplia le dipendenze del Core.
 
+Candidate non ancora integrato `FSE2-OFFICIALTEST-OPERATIONALIZATION`: source canonica per il solo
+`validate-cda`, compilatore di piano protetto, composizione A1 mTLS/S1 dual-signing e provisioner
+verticale sulle superfici Admin esistenti. Il candidate non contiene configurazione reale e non
+esegue rete OfficialTest. Stato gate dichiarabile: T01/T02/T03 PASS software/offline,
+T04 `BLOCKED_PENDING_OPERATIONAL_CONFIGURATION_AND_LIVE_CALL`, T06 PARTIAL.
+
 ## Candidate ALPHA-GOV-REL
 
 | Slice | Stato candidate | Limite |

@@ -113,6 +113,15 @@ status seguono; non sono prerequisiti di `validate-cda` senza nuova evidenza uff
 - exact OfficialTest image/configuration e driver operativo redatto;
 - qualunque chiamata FSE2, `validate-cda`, create/replace o status live.
 
+### Candidate operationalization slice
+
+La slice `FSE2-OFFICIALTEST-OPERATIONALIZATION`, ancora soggetta a exact-head gate e review, fissa
+la source canonica del solo `validate-cda`, il piano esterno chiuso, A1 mTLS/S1 authorization+integrity,
+il dry-run a zero effetti e il workflow Admin configure/propose/approve/publish/read-back. Non
+importa materiale operativo, non aggiunge primitive Core e non esegue una chiamata live. La sua
+integrazione chiude soltanto il tooling software del punto 6; i punti 1-5 e 7-8 restano gate
+operativi separati.
+
 ### Sequenza
 
 1. intake esterno: distinguere accesso test e accreditamento software;
