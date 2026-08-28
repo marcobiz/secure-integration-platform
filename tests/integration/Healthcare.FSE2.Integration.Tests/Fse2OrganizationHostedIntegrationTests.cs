@@ -49,6 +49,85 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         RunSuccessAsync(runtimeConnection: null, adminConnection: null, requirePostgres: false, includeNegatives: false);
 
     [Fact]
+    public async Task FSE2_OFFICIALTEST_real_composition_dual_JWT_projects_exact_source_owned_application_claims()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        await using SyntheticFse2OperationMatrixServer server = await SyntheticFse2OperationMatrixServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken,
+            Fse2OfficialTestCanonicalDefinition.OfficialTestAudience,
+            Fse2OfficialTestCanonicalDefinition.ApplicationId,
+            Fse2OfficialTestCanonicalDefinition.ApplicationVendor,
+            Fse2OfficialTestCanonicalDefinition.ApplicationVersion);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-officialtest-application-identity",
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
+
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Fse2OfficialTestProviderReference a1 = new("synthetic-capability", "officialtest-a1", "1", 1, 1);
+        Fse2OfficialTestProviderReference s1 = new("synthetic-capability", "officialtest-s1", "1", 1, 1);
+        string planJson = $$"""
+            {
+              "schemaVersion":"1.0",
+              "environmentId":"{{environmentId:D}}",
+              "officialTestEndpoint":"{{Fse2OfficialTestCanonicalDefinition.OfficialTestEndpoint}}",
+              "organization":{"identifier":"12345678903","assigningAuthorityOid":"2.16.840.1.113883.2.9.4.1.2","description":"ASL Roma 1","domainId":"asl-roma-1"},
+              "locality":{"name":"ASL Roma 1","assigningAuthorityOid":"2.16.840.1.113883.2.9.4.1.2","code":"ASLROMA1"},
+              "a1":{"providerId":"{{a1.ProviderId}}","resourceId":"{{a1.ResourceId}}","version":"{{a1.Version}}","catalogRevision":1,"publicMetadataRevision":1},
+              "s1":{"providerId":"{{s1.ProviderId}}","resourceId":"{{s1.ResourceId}}","version":"{{s1.Version}}","catalogRevision":1,"publicMetadataRevision":1},
+              "expectedBindingRevision":null
+            }
+            """;
+        Fse2OfficialTestOperationalPlan plan = Fse2OfficialTestOperationalization.ParsePlan(Encoding.UTF8.GetBytes(planJson));
+        Fse2OfficialTestCompiledConfiguration compiled = Fse2OfficialTestOperationalization.Compile(
+            plan,
+            new(a1, SpkiSha256(material.ClientCertificateRevision1), material.ClientCertificateRevision1.GetNameInfo(X509NameType.SimpleName, false), new string('C', 64)),
+            new(s1, SpkiSha256(material.SigningKeyRevision1), material.SigningKeyRevision1.GetNameInfo(X509NameType.SimpleName, false), new string('D', 64)));
+
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-officialtest-identity-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-officialtest-identity-application");
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            Fse2OfficialTestCanonicalDefinition.ConnectorId,
+            Fse2OfficialTestCanonicalDefinition.ConnectorVersion,
+            environmentId,
+            server.Endpoint,
+            compiled.CanonicalDefinition,
+            provider,
+            "sign-r1",
+            "mtls-r1",
+            operationId: Fse2OfficialTestCanonicalDefinition.OperationId,
+            endpointBinding: Fse2OfficialTestCanonicalDefinition.EndpointBinding,
+            signingCertificateBinding: Fse2OfficialTestCanonicalDefinition.SigningBinding,
+            clientCertificateBinding: Fse2OfficialTestCanonicalDefinition.MutualTlsBinding);
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "fse2-officialtest-identity");
+        await fixture.AddOperationGrantAsync(identity, authority.ConnectorId, Fse2OfficialTestCanonicalDefinition.OperationId);
+
+        Fse2OperationDescriptor operation = Fse2OperationCatalog.Get(Fse2Operation.ValidateCda);
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{authority.ConnectorId}/operations/{operation.OperationId}:invoke",
+            InvokeRequest(PayloadFor(operation,
+                "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}",
+                DocumentBytes())));
+        string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.True(response.IsSuccessStatusCode, responseBody);
+        SyntheticFse2OperationMatrixServer.Observation observation = Assert.Single(server.Observations);
+        Assert.True(observation.DualDistinctTokensObserved);
+        Assert.True(observation.ExactJwtPolicyObserved);
+        Assert.True(observation.ExactClaimsObserved);
+        Assert.Equal("multipart/form-data; boundary=broker-gateway-fse2-officialtest-v1", observation.ContentType);
+        Assert.False(observation.AttachmentHashPresent);
+    }
+
+    [Fact]
     public async Task FSE2_AUDIT_failure_emits_exactly_one_failure_and_zero_success()
     {
         const string canary = "upstream-problem-raw-canary";
@@ -1965,6 +2044,10 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
     private readonly string expectedClientFingerprint;
     private readonly string expectedSigningFingerprint;
     private readonly byte[] expectedRoot;
+    private readonly string expectedAudience;
+    private readonly string expectedApplicationId;
+    private readonly string expectedApplicationVendor;
+    private readonly string expectedApplicationVersion;
     private readonly List<Observation> observations = [];
     private readonly object observationGate = new();
     private int requests;
@@ -1974,13 +2057,21 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         Uri endpoint,
         string expectedClientFingerprint,
         string expectedSigningFingerprint,
-        byte[] expectedRoot)
+        byte[] expectedRoot,
+        string expectedAudience,
+        string expectedApplicationId,
+        string expectedApplicationVendor,
+        string expectedApplicationVersion)
     {
         this.application = application;
         Endpoint = endpoint;
         this.expectedClientFingerprint = expectedClientFingerprint;
         this.expectedSigningFingerprint = expectedSigningFingerprint;
         this.expectedRoot = expectedRoot;
+        this.expectedAudience = expectedAudience;
+        this.expectedApplicationId = expectedApplicationId;
+        this.expectedApplicationVendor = expectedApplicationVendor;
+        this.expectedApplicationVersion = expectedApplicationVersion;
     }
 
     internal Uri Endpoint { get; }
@@ -1995,7 +2086,11 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         X509Certificate2 expectedClientCertificate,
         X509Certificate2 expectedSigningCertificate,
         X509Certificate2 trustedRootCertificate,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string expectedAudience = Fse2OrganizationHostedIntegrationTests.Audience,
+        string expectedApplicationId = "broker-gateway",
+        string expectedApplicationVendor = "Secure Integration",
+        string expectedApplicationVersion = "1.0.0")
     {
         WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0, listen => listen.UseHttps(https =>
@@ -2018,7 +2113,11 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
             new Uri($"https://localhost:{listening.Port}/", UriKind.Absolute),
             Convert.ToHexString(SHA256.HashData(expectedClientCertificate.RawData)),
             Convert.ToHexString(SHA256.HashData(expectedSigningCertificate.RawData)),
-            trustedRootCertificate.RawData.ToArray());
+            trustedRootCertificate.RawData.ToArray(),
+            expectedAudience,
+            expectedApplicationId,
+            expectedApplicationVendor,
+            expectedApplicationVersion);
         return server;
     }
 
@@ -2126,7 +2225,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
                 !rsa.VerifyData(Encoding.ASCII.GetBytes(parts[0] + "." + parts[1]), Decode(parts[2]),
                     HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1) ||
                 !string.Equals(payload.RootElement.GetProperty("iss").GetString(), expectedIssuer, StringComparison.Ordinal) ||
-                !string.Equals(payload.RootElement.GetProperty("aud").GetString(), Fse2OrganizationHostedIntegrationTests.Audience, StringComparison.Ordinal) ||
+                !string.Equals(payload.RootElement.GetProperty("aud").GetString(), expectedAudience, StringComparison.Ordinal) ||
                 !string.Equals(payload.RootElement.GetProperty("sub").GetString(), Fse2OrganizationHostedIntegrationTests.Subject, StringComparison.Ordinal))
                 return null;
             return new(payload.RootElement.Clone());
@@ -2141,7 +2240,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         payload.EnumerateObject().Select(value => value.Name).ToHashSet(StringComparer.Ordinal)
             .SetEquals(["iss", "aud", "sub", "iat", "exp", "jti"]);
 
-    private static bool IntegrityClaimsAreExact(JsonElement payload, Fse2OperationDescriptor operation)
+    private bool IntegrityClaimsAreExact(JsonElement payload, Fse2OperationDescriptor operation)
     {
         HashSet<string> expected =
         [
@@ -2161,9 +2260,9 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
             string.Equals(payload.GetProperty("subject_organization_id").GetString(), "asl-roma-1", StringComparison.Ordinal) &&
             string.Equals(payload.GetProperty("person_id").GetString(), Fse2OrganizationHostedIntegrationTests.PersonId, StringComparison.Ordinal) &&
             payload.GetProperty("patient_consent").GetBoolean() &&
-            string.Equals(payload.GetProperty("subject_application_id").GetString(), "broker-gateway", StringComparison.Ordinal) &&
-            string.Equals(payload.GetProperty("subject_application_vendor").GetString(), "Secure Integration", StringComparison.Ordinal) &&
-            string.Equals(payload.GetProperty("subject_application_version").GetString(), "1.0.0", StringComparison.Ordinal);
+            string.Equals(payload.GetProperty("subject_application_id").GetString(), expectedApplicationId, StringComparison.Ordinal) &&
+            string.Equals(payload.GetProperty("subject_application_vendor").GetString(), expectedApplicationVendor, StringComparison.Ordinal) &&
+            string.Equals(payload.GetProperty("subject_application_version").GetString(), expectedApplicationVersion, StringComparison.Ordinal);
     }
 
     private static byte[] Decode(string value)

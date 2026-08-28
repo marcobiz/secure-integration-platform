@@ -1352,6 +1352,8 @@ export interface components {
             keyAlgorithm: string;
             publicKeySize: number;
             version: string;
+            subjectPublicKeyInfoSha256?: string | null;
+            subjectCommonName?: string | null;
         };
         ProviderResourceCatalog: {
             /** Format: uuid */

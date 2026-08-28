@@ -836,7 +836,7 @@ components:
       type: object
       additionalProperties: false
       required: [fingerprintSha256, subject, issuer, notBefore, notAfter, keyAlgorithm, publicKeySize, version]
-      properties: { fingerprintSha256: { type: string, pattern: '^[A-F0-9]{64}$' }, subject: { type: string }, issuer: { type: string }, notBefore: { type: string, format: date-time }, notAfter: { type: string, format: date-time }, keyAlgorithm: { type: string }, publicKeySize: { type: integer, minimum: 1 }, version: { type: string } }
+      properties: { fingerprintSha256: { type: string, pattern: '^[A-F0-9]{64}$' }, subject: { type: string }, issuer: { type: string }, notBefore: { type: string, format: date-time }, notAfter: { type: string, format: date-time }, keyAlgorithm: { type: string }, publicKeySize: { type: integer, minimum: 1 }, version: { type: string }, subjectPublicKeyInfoSha256: { type: [string, 'null'], pattern: '^[A-F0-9]{64}$' }, subjectCommonName: { type: [string, 'null'], maxLength: 256 } }
     ProviderResourceCatalog:
       type: object
       additionalProperties: false

@@ -95,7 +95,7 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
     }
 
     [Fact]
-    public async Task FSE2_OFFICIALTEST_PostgreSQL18_four_eyes_publication_readback_immutability_and_second_migration_noop()
+    public async Task FSE2_OFFICIALTEST_PostgreSQL18_D1_approval_is_invalidated_before_D2_distinct_approver_publication_and_replay_is_denied()
     {
         string adminConnection = RequiredPostgresOrSkip("GATEWAY_POSTGRES_ADMIN_CONNECTION");
         _ = RequiredPostgresOrSkip("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
@@ -113,13 +113,17 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
 
         AdminPrincipalRecord editor = await security.EnsurePrincipalAsync(new(
             "https://synthetic-officialtest.invalid", "postgres-editor", "Synthetic PostgreSQL Editor", null), cancellationToken);
-        AdminPrincipalRecord approver = await security.EnsurePrincipalAsync(new(
-            "https://synthetic-officialtest.invalid", "postgres-approver", "Synthetic PostgreSQL Approver", null), cancellationToken);
+        AdminPrincipalRecord approverA = await security.EnsurePrincipalAsync(new(
+            "https://synthetic-officialtest.invalid", "postgres-approver-a", "Synthetic PostgreSQL Approver A", null), cancellationToken);
+        AdminPrincipalRecord approverB = await security.EnsurePrincipalAsync(new(
+            "https://synthetic-officialtest.invalid", "postgres-approver-b", "Synthetic PostgreSQL Approver B", null), cancellationToken);
         await security.AssignRoleAsync(editor.Id, AdminRole.ConnectorEditor, null, editor.Id, Guid.NewGuid(), clock.UtcNow, cancellationToken);
         await security.AssignRoleAsync(editor.Id, AdminRole.ConnectorApprover, null, editor.Id, Guid.NewGuid(), clock.UtcNow, cancellationToken);
-        await security.AssignRoleAsync(approver.Id, AdminRole.ConnectorApprover, null, approver.Id, Guid.NewGuid(), clock.UtcNow, cancellationToken);
+        await security.AssignRoleAsync(approverA.Id, AdminRole.ConnectorApprover, null, approverA.Id, Guid.NewGuid(), clock.UtcNow, cancellationToken);
+        await security.AssignRoleAsync(approverB.Id, AdminRole.ConnectorApprover, null, approverB.Id, Guid.NewGuid(), clock.UtcNow, cancellationToken);
         AdminAccessContext editorContext = new(editor, await security.GetAssignmentsAsync(editor.Id, cancellationToken));
-        AdminAccessContext approverContext = new(approver, await security.GetAssignmentsAsync(approver.Id, cancellationToken));
+        AdminAccessContext approverAContext = new(approverA, await security.GetAssignmentsAsync(approverA.Id, cancellationToken));
+        AdminAccessContext approverBContext = new(approverB, await security.GetAssignmentsAsync(approverB.Id, cancellationToken));
 
         Guid environmentId = Guid.NewGuid();
         await registry.AddEnvironmentAsync(new(environmentId, "fse2-officialtest", "FSE2 OfficialTest", false), cancellationToken);
@@ -145,12 +149,74 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
         GatewayException selfApproval = await Assert.ThrowsAsync<GatewayException>(() => approvals.ApproveAsync(
             imported.ConnectorId, imported.Version, new(request.Id, review.DigestSha256), editorContext, Guid.NewGuid(), cancellationToken));
         Assert.Equal("BGW-ADMIN-FOUR-EYES", selfApproval.Code);
-        _ = await approvals.ApproveAsync(
-            imported.ConnectorId, imported.Version, new(request.Id, review.DigestSha256), approverContext, Guid.NewGuid(), cancellationToken);
+        ConnectorApprovalRecord approvedD1 = await approvals.ApproveAsync(
+            imported.ConnectorId, imported.Version, new(request.Id, review.DigestSha256), approverAContext, Guid.NewGuid(), cancellationToken);
+        Assert.True(Fse2OfficialTestOperationalization.IsCurrentPublisher(
+            approverA.Id, compiled.CanonicalDefinitionSha256, [ApprovalAuthority(approvedD1)]));
+
+        Fse2OfficialTestProviderReference s1D2Reference = s1Reference with { CatalogRevision = 2 };
+        ProviderResourceCatalogRecord s1D2 = await RegisterAsync(
+            store, environmentId, s1D2Reference, "S1 Synthetic Signing", 'F', cancellationToken);
+        Assert.Equal(2, s1D2.Revision);
+        GatewayException providerDrift = await Assert.ThrowsAsync<GatewayException>(() => administration.PublishAsync(
+            imported.ConnectorId, imported.Version, validated.RowVersion, 0, approverA.Id.ToString("D"), Guid.NewGuid(), cancellationToken));
+        Assert.Equal("BGW-PROVIDER-RESOURCE-REVISION-STALE", providerDrift.Code);
+        Assert.Equal(ConnectorVersionState.Validated, (await store.GetVersionAsync(imported.ConnectorId, imported.Version, cancellationToken))!.State);
+        Fse2OfficialTestOperationalPlan d2Plan = plan with { S1 = s1D2Reference };
+        Fse2OfficialTestCompiledConfiguration compiledD2 = Fse2OfficialTestOperationalization.Compile(
+            d2Plan,
+            new(a1Reference, new string('A', 64), "A1 Synthetic Client", a1.ChecksumSha256),
+            new(s1D2Reference, new string('B', 64), "S1 Synthetic Signing", s1D2.ChecksumSha256));
+        Assert.Equal(compiled.CanonicalDefinitionSha256, compiledD2.CanonicalDefinitionSha256);
+        Assert.NotEqual(compiled.BindingConfigurationDigestSha256, compiledD2.BindingConfigurationDigestSha256);
+
+        long d2Revision = await administration.PutBindingsAsync(
+            imported.ConnectorId,
+            compiledD2.BindingRequest with { ExpectedRevision = bindingRevision },
+            editor.Id.ToString("D"),
+            Guid.NewGuid(),
+            cancellationToken);
+        Assert.Equal(2, d2Revision);
+        ConnectorApprovalRecord[] afterD2 = (await security.ListApprovalsAsync(
+            approvedD1.ConnectorVersionId, cancellationToken)).ToArray();
+        Assert.Equal(ConnectorApprovalStatus.Invalidated, Assert.Single(afterD2, value => value.Id == approvedD1.Id).Status);
+        Assert.False(Fse2OfficialTestOperationalization.IsCurrentPublisher(
+            approverA.Id, compiled.CanonicalDefinitionSha256, afterD2.Select(ApprovalAuthority)));
+
+        ApprovalReviewResult d2Review = await approvals.ReviewAsync(imported.ConnectorId, imported.Version, editorContext, cancellationToken);
+        ConnectorApprovalRecord d2Request = await approvals.RequestAsync(
+            imported.ConnectorId, imported.Version, editorContext, Guid.NewGuid(), cancellationToken);
+        ConnectorApprovalRecord approvedD2 = await approvals.ApproveAsync(
+            imported.ConnectorId, imported.Version, new(d2Request.Id, d2Review.DigestSha256), approverBContext, Guid.NewGuid(), cancellationToken);
+        ConnectorApprovalRecord[] currentApprovals = (await security.ListApprovalsAsync(
+            approvedD2.ConnectorVersionId, cancellationToken)).ToArray();
+        Assert.False(Fse2OfficialTestOperationalization.IsCurrentPublisher(
+            approverA.Id, compiled.CanonicalDefinitionSha256, currentApprovals.Select(ApprovalAuthority)));
+        Assert.True(Fse2OfficialTestOperationalization.IsCurrentPublisher(
+            approverB.Id, compiled.CanonicalDefinitionSha256, currentApprovals.Select(ApprovalAuthority)));
+        Assert.Equal(Convert.ToHexString(await store.GetBindingBundleDigestAsync(approvedD2.ConnectorVersionId, cancellationToken)), approvedD2.BindingDigestSha256);
+        Assert.False(Fse2OfficialTestOperationalization.IsCurrentPublisher(
+            approverB.Id, new string('0', 64), currentApprovals.Select(ApprovalAuthority)));
+
+        ConnectorVersionRecord beforeDeniedA = (await store.GetVersionAsync(imported.ConnectorId, imported.Version, cancellationToken))!;
+        int approvalCountBeforeDeniedA = currentApprovals.Length;
+        Assert.False(Fse2OfficialTestOperationalization.IsCurrentPublisher(
+            approverA.Id, compiled.CanonicalDefinitionSha256, currentApprovals.Select(ApprovalAuthority)));
+        ConnectorVersionRecord afterDeniedA = (await store.GetVersionAsync(imported.ConnectorId, imported.Version, cancellationToken))!;
+        Assert.Equal(beforeDeniedA.State, afterDeniedA.State);
+        Assert.Equal(beforeDeniedA.RowVersion, afterDeniedA.RowVersion);
+        Assert.Equal(approvalCountBeforeDeniedA, (await security.ListApprovalsAsync(approvedD2.ConnectorVersionId, cancellationToken)).Count);
+
+        GatewayException concurrentMismatch = await Assert.ThrowsAsync<GatewayException>(() => administration.PublishAsync(
+            imported.ConnectorId, imported.Version, validated.RowVersion, 1, approverB.Id.ToString("D"), Guid.NewGuid(), cancellationToken));
+        Assert.Equal("BGW-CONCURRENCY-CONFLICT", concurrentMismatch.Code);
+        Assert.Equal(ConnectorVersionState.Validated, (await store.GetVersionAsync(imported.ConnectorId, imported.Version, cancellationToken))!.State);
 
         ConnectorVersionResource published = await administration.PublishAsync(
-            imported.ConnectorId, imported.Version, validated.RowVersion, 0, approver.Id.ToString("D"), Guid.NewGuid(), cancellationToken);
+            imported.ConnectorId, imported.Version, validated.RowVersion, 0, approverB.Id.ToString("D"), Guid.NewGuid(), cancellationToken);
         Assert.Equal(ConnectorVersionState.Published, published.State);
+        _ = await Assert.ThrowsAsync<GatewayException>(() => administration.PublishAsync(
+            imported.ConnectorId, imported.Version, published.RowVersion, 1, approverB.Id.ToString("D"), Guid.NewGuid(), cancellationToken));
         PublishedConnectorSnapshot snapshot = await store.GetPublishedSnapshotAsync(imported.ConnectorId, environmentId, null, cancellationToken)
             ?? throw new InvalidOperationException("Synthetic OfficialTest Published snapshot missing.");
         Assert.Equal(compiled.CanonicalDefinitionSha256, Convert.ToHexString(snapshot.Version.ChecksumSha256));
@@ -159,13 +225,19 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
             Assert.Single(ConnectorOperationBindings.All(snapshot.Version.CanonicalJson)).OperationId);
 
         GatewayException immutable = await Assert.ThrowsAsync<GatewayException>(() => administration.PutBindingsAsync(
-            imported.ConnectorId, compiled.BindingRequest with { ExpectedRevision = bindingRevision }, approver.Id.ToString("D"), Guid.NewGuid(), cancellationToken));
+            imported.ConnectorId, compiled.BindingRequest with { ExpectedRevision = d2Revision }, approverB.Id.ToString("D"), Guid.NewGuid(), cancellationToken));
         Assert.Equal("BGW-CONNECTOR-BINDING-REQUIRES-VALIDATED-VERSION", immutable.Code);
         GatewayException definitionImmutable = await Assert.ThrowsAsync<GatewayException>(() => administration.ImportAsync(
-            definition.RootElement, compiled.CanonicalDefinitionSha256, approver.Id.ToString("D"), Guid.NewGuid(), cancellationToken));
+            definition.RootElement, compiled.CanonicalDefinitionSha256, approverB.Id.ToString("D"), Guid.NewGuid(), cancellationToken));
         Assert.Equal("BGW-CONNECTOR-VERSION-DUPLICATE", definitionImmutable.Code);
         await HostedPostgresTestSupport.ApplyMigrationAsync();
     }
+
+    private static Fse2OfficialTestApprovalAuthority ApprovalAuthority(ConnectorApprovalRecord value) => new(
+        value.Status.ToString(),
+        value.ChecksumSha256,
+        value.RequestedBy,
+        value.ApprovedBy);
 
     private static string RequiredPostgresOrSkip(string name)
     {
@@ -191,7 +263,8 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
             $"synthetic://{reference.ResourceId}", ProviderResourceStatus.Active, reference.Version, 0,
             reference.PublicMetadataRevision,
             new(new string(fingerprint, 64), $"CN={commonName}", "CN=Synthetic Root",
-                DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30), "RSA", 2048, reference.Version!),
+                DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(30), "RSA", 2048, reference.Version!,
+                reference.ResourceId.EndsWith("a1", StringComparison.Ordinal) ? new string('A', 64) : new string('B', 64), commonName),
             string.Empty, DateTimeOffset.UtcNow), cancellationToken);
 
     private static Fse2OfficialTestOperationalPlan Plan(

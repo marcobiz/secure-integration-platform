@@ -628,7 +628,10 @@ public sealed class HostedTypedSessionFixture : IAsyncDisposable
         string clientCertificateProviderReference,
         int expectedCertificateBindingCount = 2,
         string operationId = "signed-submit",
-        int expectedOperationCount = 1)
+        int expectedOperationCount = 1,
+        string endpointBinding = "service",
+        string signingCertificateBinding = "signing-certificate",
+        string clientCertificateBinding = "mtls-certificate")
     {
         ProviderResourceCatalogRecord signing = await RegisterCertificateAsync(
             "capability-signing-" + Guid.NewGuid().ToString("N"), "Synthetic signing certificate", signingProviderReference);
@@ -653,13 +656,13 @@ public sealed class HostedTypedSessionFixture : IAsyncDisposable
         ConnectorVersionResource validated = await administration.ValidateStoredAsync(connectorId, version, imported.RowVersion, editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
         Dictionary<string, ProviderResourceReference> certificateBindings = new(StringComparer.Ordinal)
         {
-            ["mtls-certificate"] = new(clientCertificate.ProviderId, clientCertificate.ResourceId, clientCertificate.ResourceType, clientCertificate.Version, clientCertificate.PublicMetadataRevision)
+            [clientCertificateBinding] = new(clientCertificate.ProviderId, clientCertificate.ResourceId, clientCertificate.ResourceType, clientCertificate.Version, clientCertificate.PublicMetadataRevision)
         };
         if (expectedCertificateBindingCount == 2)
-            certificateBindings.Add("signing-certificate", new(signing.ProviderId, signing.ResourceId, signing.ResourceType, signing.Version, signing.PublicMetadataRevision));
+            certificateBindings.Add(signingCertificateBinding, new(signing.ProviderId, signing.ResourceId, signing.ResourceType, signing.Version, signing.PublicMetadataRevision));
         _ = await administration.PutBindingsAsync(connectorId, new(
             environmentId,
-            new Dictionary<string, string> { ["service"] = endpoint.AbsoluteUri },
+            new Dictionary<string, string> { [endpointBinding] = endpoint.AbsoluteUri },
             new Dictionary<string, ProviderResourceReference>(),
             CertificateResources: certificateBindings,
             ConnectorVersion: version), editor.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);

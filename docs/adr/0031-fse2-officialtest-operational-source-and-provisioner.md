@@ -15,14 +15,23 @@ hydration API would reverse the dependency boundary.
 
 The Healthcare/FSE2 pack owns a public-safe canonical source definition containing only
 `validate-cda`, logical binding names and non-operational placeholders. A vertical compiler overlays
-only a strictly parsed protected plan and server-resolved public certificate metadata. It emits the
+only a strictly parsed protected plan and public certificate metadata resolved from the authenticated
+Admin API provider catalog. It emits the
 exact canonical definition checksum, operation-profile checksum and binding-configuration digest.
+The source-owned application identity is `secure-integration-platform` / `ApoCert S.r.l.` /
+`0.1.0-alpha.1`; no plan or caller field can override it.
 
 The supported edge is `tools/fse2/OfficialTestProvisioner`. It uses the existing authenticated Admin
 API for validate/import/bind/request/approve/publish/read-back. Dry-run is completed before Admin
 client construction. Operational commands use the server-derived Admin session principal; the plan
 cannot declare principal, Tenant or Installation authority. Publication through this workflow is
 sent only by the distinct approver of the exact request.
+
+`server-public-metadata.json` is not an authority and is not accepted by operational commands.
+Before compilation and again before every mutation/read-back, the provisioner selects exactly one
+active `ClientCertificate` catalog revision for A1 and S1 by Environment, provider/resource/version,
+catalog/public-metadata revision, Connector/operation scope, catalog checksum, SPKI SHA-256 and
+subject CN. Missing, ambiguous, inactive, cross-Environment or drifted selection fails closed.
 
 The runtime remains unchanged structurally: A1 is the existing Published mTLS certificate binding,
 S1 is the existing key binding for both authorization and integrity signing slots, and restricted
@@ -31,12 +40,12 @@ signing oracle or Healthcare dependency in Core.
 
 ## Consequences
 
-- real configuration and public provider metadata remain outside Git;
+- real configuration remains outside Git; public provider metadata remains server-owned;
 - four-eyes continues to bind the server-computed approval artefact, while the vertical handoff also
   exposes the operation-profile and binding-configuration digests;
 - any definition, binding or provider-revision mutation makes the old handoff stale;
 - PostgreSQL is required for atomic approved publication; the in-memory store intentionally refuses
   that production path;
-- public metadata input is a trusted deployment artefact and must be generated from the deployed
-  provider/catalog, ACL-protected and checksum-verified;
+- the Admin API exposes only public certificate identity (including SPKI SHA-256 and subject CN),
+  never a provider locator, private key, P12, password or generic secret value;
 - no live network call is part of provisioning or qualification.

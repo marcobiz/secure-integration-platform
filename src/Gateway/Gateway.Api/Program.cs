@@ -233,7 +233,21 @@ if (hostOptions.Provider.Resources.Count > 0)
         {
             ICertificateMetadataProvider metadataProvider = providerServices.CertificateMetadata ?? throw new InvalidOperationException("Configured client certificate resources require public metadata capability.");
             ProviderCertificatePublicMetadata metadata = await metadataProvider.GetPublicMetadataAsync(configured.ProviderReference, CancellationToken.None).ConfigureAwait(false);
-            certificateMetadata = new(metadata.FingerprintSha256, metadata.Subject, metadata.Issuer, metadata.NotBefore, metadata.NotAfter, metadata.KeyAlgorithm, metadata.PublicKeySize, metadata.Version);
+            string? subjectPublicKeyInfoSha256 = null;
+            string? subjectCommonName = null;
+            if (providerServices.CertificatePublicMaterial is not null)
+            {
+                ProviderCertificatePublicMaterial material = await providerServices.CertificatePublicMaterial.GetPublicMaterialAsync(configured.ProviderReference, CancellationToken.None).ConfigureAwait(false);
+                if (!SameCertificateMetadata(metadata, material.Metadata))
+                    throw new InvalidOperationException("Configured certificate public metadata and material do not identify the same revision.");
+                using X509Certificate2 leaf = X509CertificateLoader.LoadCertificate(material.LeafCertificateDer.Span);
+                if (!string.Equals(metadata.FingerprintSha256, Convert.ToHexString(SHA256.HashData(leaf.RawData)), StringComparison.Ordinal))
+                    throw new InvalidOperationException("Configured certificate public metadata does not identify the returned leaf certificate.");
+                subjectPublicKeyInfoSha256 = material.SubjectPublicKeyInfoSha256;
+                subjectCommonName = CertificateSubjectCommonName(leaf);
+            }
+            certificateMetadata = new(metadata.FingerprintSha256, metadata.Subject, metadata.Issuer, metadata.NotBefore, metadata.NotAfter, metadata.KeyAlgorithm, metadata.PublicKeySize, metadata.Version,
+                subjectPublicKeyInfoSha256, subjectCommonName);
         }
         await catalog.RegisterProviderResourceAsync(new(Guid.NewGuid(), configured.ProviderId, configured.ProviderDisplayName, configured.ProviderType, configured.ResourceId, configured.ResourceType, configured.DisplayName,
             configured.EnvironmentId, configured.ConnectorScope, configured.OperationScope, configured.ProviderReference, ProviderResourceStatus.Active, configured.Version, 0,
@@ -946,6 +960,32 @@ if (File.Exists(adminIndexPath))
 }
 
 app.Run();
+
+static bool SameCertificateMetadata(ProviderCertificatePublicMetadata left, ProviderCertificatePublicMetadata right) =>
+    string.Equals(left.FingerprintSha256, right.FingerprintSha256, StringComparison.Ordinal) &&
+    string.Equals(left.Subject, right.Subject, StringComparison.Ordinal) &&
+    string.Equals(left.Issuer, right.Issuer, StringComparison.Ordinal) &&
+    left.NotBefore == right.NotBefore && left.NotAfter == right.NotAfter &&
+    string.Equals(left.KeyAlgorithm, right.KeyAlgorithm, StringComparison.Ordinal) &&
+    left.PublicKeySize == right.PublicKeySize &&
+    string.Equals(left.Version, right.Version, StringComparison.Ordinal);
+
+static string? CertificateSubjectCommonName(X509Certificate2 certificate)
+{
+    const string commonNameObjectIdentifier = "2.5.4.3";
+    string? commonName = null;
+    foreach (X500RelativeDistinguishedName relativeName in certificate.SubjectName.EnumerateRelativeDistinguishedNames())
+    {
+        if (relativeName.HasMultipleElements) return null;
+        if (!string.Equals(relativeName.GetSingleElementType().Value, commonNameObjectIdentifier, StringComparison.Ordinal)) continue;
+        string? value = relativeName.GetSingleElementValue();
+        if (commonName is not null || string.IsNullOrWhiteSpace(value) || value.Length > 256 ||
+            !value.IsNormalized(NormalizationForm.FormC) || value.Any(char.IsControl))
+            return null;
+        commonName = value;
+    }
+    return commonName;
+}
 
 static ProviderServices CreateProviderServices(GatewayProviderOptions options, IHostEnvironment environment)
 {

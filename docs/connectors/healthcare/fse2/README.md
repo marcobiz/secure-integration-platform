@@ -30,13 +30,17 @@ The candidate operational slice freezes one public-safe source definition at
 `validate-cda`, and only logical endpoint/A1/S1 bindings. It contains no concrete endpoint,
 organization/locality value, provider resource ID, principal, certificate, P12, password or token.
 Repository bytes and their SHA-256 are regression-tested before the deployment compiler overlays
-the protected organization/locality values and exact public A1/S1 revision metadata.
+the protected organization/locality values and exact public A1/S1 revision metadata. The application
+identity is source-owned as `secure-integration-platform` / `ApoCert S.r.l.` /
+`0.1.0-alpha.1` and cannot be selected by a plan or runtime caller.
 
 `tools/fse2/OfficialTestProvisioner` is the supported vertical administrative path. Its `plan`
 command runs before construction of an Admin client and reports explicit zero workflow-store,
 signing, DNS, HTTPS, transport and network counters. The remaining commands reuse only the existing
 authenticated Admin validate/import/bind/approval/publish/read-back endpoints. The runtime caller
-cannot choose this driver, endpoint, provider, secret or certificate. The full operator procedure
+cannot choose this driver, endpoint, provider, secret or certificate. Operational commands resolve
+public A1/S1 authority from the exact unique active `/provider-resources` Admin API entries; an
+external public-metadata file is neither required nor accepted. The full operator procedure
 and closed external-plan schema are in
 [`OFFICIALTEST-VALIDATE-CDA-RUNBOOK.md`](OFFICIALTEST-VALIDATE-CDA-RUNBOOK.md) and
 [`fse2-officialtest-operational-plan.schema.json`](fse2-officialtest-operational-plan.schema.json).

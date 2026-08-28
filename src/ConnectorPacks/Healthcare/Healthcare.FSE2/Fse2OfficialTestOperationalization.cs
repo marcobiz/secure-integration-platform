@@ -22,6 +22,9 @@ public static class Fse2OfficialTestCanonicalDefinition
     public const string EndpointBinding = "officialtest-gateway";
     public const string MutualTlsBinding = "a1-mtls-certificate";
     public const string SigningBinding = "s1-signing-certificate";
+    public const string ApplicationId = "secure-integration-platform";
+    public const string ApplicationVendor = "ApoCert S.r.l.";
+    public const string ApplicationVersion = "0.1.0-alpha.1";
     public const string OfficialTestAudience =
         "https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1";
     public const string OfficialTestEndpoint = OfficialTestAudience + "/";
@@ -83,6 +86,34 @@ public sealed record Fse2OfficialTestResolvedCertificate(
     string SubjectPublicKeyInfoSha256,
     string SubjectCommonName,
     string CatalogChecksumSha256);
+
+/// <summary>Public-only provider-catalog projection returned by the authenticated Admin API.</summary>
+public sealed record Fse2OfficialTestProviderCatalogResource(
+    string ProviderId,
+    string ResourceId,
+    string? Version,
+    long CatalogRevision,
+    long? PublicMetadataRevision,
+    Guid EnvironmentId,
+    string ResourceType,
+    string Status,
+    string ConnectorScope,
+    string OperationScope,
+    string CatalogChecksumSha256,
+    string? SubjectPublicKeyInfoSha256,
+    string? SubjectCommonName);
+
+/// <summary>Exact, unique A1/S1 public authority resolved from the server catalog.</summary>
+public sealed record Fse2OfficialTestResolvedProviderAuthority(
+    Fse2OfficialTestResolvedCertificate A1,
+    Fse2OfficialTestResolvedCertificate S1);
+
+/// <summary>Redacted approval fields used by the supported provisioner's publisher gate.</summary>
+public sealed record Fse2OfficialTestApprovalAuthority(
+    string Status,
+    string ChecksumSha256,
+    Guid RequestedBy,
+    Guid? ApprovedBy);
 
 /// <summary>Explicit side-effect counters used by plan and negative qualification.</summary>
 public sealed record Fse2OfficialTestSideEffectCounters(
@@ -273,6 +304,42 @@ public static class Fse2OfficialTestOperationalization
         return new(canonical, ConnectorCanonicalJson.Checksum(canonical), profile.OperationProfileChecksumSha256, bindingDigest, binding);
     }
 
+    /// <summary>
+    /// Resolves the exact A1/S1 public identities from an authenticated Admin API catalog page.
+    /// External files are not accepted as authority and no private material is represented here.
+    /// </summary>
+    public static Fse2OfficialTestResolvedProviderAuthority ResolveProviderAuthority(
+        Fse2OfficialTestOperationalPlan value,
+        IEnumerable<Fse2OfficialTestProviderCatalogResource> resources)
+    {
+        value = Validate(value);
+        ArgumentNullException.ThrowIfNull(resources);
+        Fse2OfficialTestProviderCatalogResource[] snapshot = resources.Take(1001).ToArray();
+        if (snapshot.Length > 1000) throw Denied("FSE2_OFFICIALTEST_PROVIDER_CATALOG_TOO_LARGE");
+        return new(
+            ResolveProviderCertificate("A1", value, value.A1, snapshot),
+            ResolveProviderCertificate("S1", value, value.S1, snapshot));
+    }
+
+    /// <summary>
+    /// Requires the caller to be the distinct approver of an approval that remains current.
+    /// Binding changes are atomically represented by the server as Invalidated approval status;
+    /// this predicate deliberately consumes that single server-owned state machine.
+    /// </summary>
+    public static bool IsCurrentPublisher(
+        Guid principalId,
+        string canonicalDefinitionSha256,
+        IEnumerable<Fse2OfficialTestApprovalAuthority> approvals)
+    {
+        if (principalId == Guid.Empty || !IsSha256(canonicalDefinitionSha256)) return false;
+        ArgumentNullException.ThrowIfNull(approvals);
+        return approvals.Any(value =>
+            string.Equals(value.Status, "Approved", StringComparison.Ordinal) &&
+            FixedEquals(value.ChecksumSha256, canonicalDefinitionSha256) &&
+            value.ApprovedBy == principalId &&
+            value.RequestedBy != principalId);
+    }
+
     /// <summary>Verifies an Admin read-back against the exact locally compiled authority.</summary>
     public static void VerifyDefinitionReadback(
         ReadOnlyMemory<byte> utf8Json,
@@ -332,11 +399,46 @@ public static class Fse2OfficialTestOperationalization
         ["localityAssigningAuthorityOid"] = value.Locality.AssigningAuthorityOid,
         ["localityCode"] = value.Locality.Code,
         ["subjectRole"] = "DAP",
-        ["applicationId"] = "broker-gateway",
-        ["applicationVendor"] = "Secure Integration",
-        ["applicationVersion"] = "1.0.0",
+        ["applicationId"] = Fse2OfficialTestCanonicalDefinition.ApplicationId,
+        ["applicationVendor"] = Fse2OfficialTestCanonicalDefinition.ApplicationVendor,
+        ["applicationVersion"] = Fse2OfficialTestCanonicalDefinition.ApplicationVersion,
         ["maximumDocumentBytes"] = 1048576
     };
+
+    private static Fse2OfficialTestResolvedCertificate ResolveProviderCertificate(
+        string role,
+        Fse2OfficialTestOperationalPlan plan,
+        Fse2OfficialTestProviderReference expected,
+        IReadOnlyList<Fse2OfficialTestProviderCatalogResource> snapshot)
+    {
+        Fse2OfficialTestProviderCatalogResource[] logical = snapshot.Where(value =>
+            string.Equals(value.ProviderId, expected.ProviderId, StringComparison.Ordinal) &&
+            string.Equals(value.ResourceId, expected.ResourceId, StringComparison.Ordinal)).ToArray();
+        if (logical.Length == 0) throw Denied($"FSE2_OFFICIALTEST_{role}_PROVIDER_AUTHORITY_MISSING");
+
+        Fse2OfficialTestProviderCatalogResource[] exact = logical.Where(value =>
+            string.Equals(value.Version, expected.Version, StringComparison.Ordinal) &&
+            value.CatalogRevision == expected.CatalogRevision &&
+            value.PublicMetadataRevision == expected.PublicMetadataRevision &&
+            value.EnvironmentId == plan.EnvironmentId).ToArray();
+        if (exact.Length == 0) throw Denied($"FSE2_OFFICIALTEST_{role}_PROVIDER_AUTHORITY_MISMATCH");
+        if (exact.Length != 1) throw Denied($"FSE2_OFFICIALTEST_{role}_PROVIDER_AUTHORITY_AMBIGUOUS");
+
+        Fse2OfficialTestProviderCatalogResource selected = exact[0];
+        if (!string.Equals(selected.ResourceType, "ClientCertificate", StringComparison.Ordinal) ||
+            !string.Equals(selected.ConnectorScope, Fse2OfficialTestCanonicalDefinition.ConnectorId, StringComparison.Ordinal) ||
+            !string.Equals(selected.OperationScope, Fse2OfficialTestCanonicalDefinition.OperationId, StringComparison.Ordinal))
+            throw Denied($"FSE2_OFFICIALTEST_{role}_PROVIDER_AUTHORITY_MISMATCH");
+        if (!string.Equals(selected.Status, "Active", StringComparison.Ordinal))
+            throw Denied($"FSE2_OFFICIALTEST_{role}_PROVIDER_AUTHORITY_INACTIVE");
+        if (!IsSha256(selected.CatalogChecksumSha256) ||
+            selected.SubjectPublicKeyInfoSha256 is null || !IsSha256(selected.SubjectPublicKeyInfoSha256) ||
+            string.IsNullOrWhiteSpace(selected.SubjectCommonName) || selected.SubjectCommonName.Length > 128 ||
+            selected.SubjectCommonName != selected.SubjectCommonName.Trim() ||
+            selected.SubjectCommonName.Any(character => char.IsControl(character) || character is '^' or '&'))
+            throw Denied($"FSE2_OFFICIALTEST_{role}_PROVIDER_PUBLIC_METADATA_INVALID");
+        return new(expected, selected.SubjectPublicKeyInfoSha256, selected.SubjectCommonName, selected.CatalogChecksumSha256);
+    }
 
     private static void ValidateCompiledDefinition(string canonical, Fse2PublishedOrganizationProfile profile)
     {

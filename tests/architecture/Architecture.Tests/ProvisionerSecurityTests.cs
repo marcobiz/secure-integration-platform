@@ -28,6 +28,22 @@ public sealed class ProvisionerSecurityTests
         Assert.Contains("COPY docs/api/runtime-wire-codes.json docs/api/runtime-wire-codes.json", dockerfile, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void FSE2_OFFICIALTEST_ARCH_external_metadata_file_or_mismatch_cannot_be_authority_and_Admin_API_catalog_is_required()
+    {
+        string source = File.ReadAllText(Path.Combine(Root, "tools", "fse2", "OfficialTestProvisioner", "Program.cs"));
+        string api = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "Program.cs"));
+
+        Assert.Contains("admin/api/v1/provider-resources?environmentId=", source, StringComparison.Ordinal);
+        Assert.Contains("ResolveProviderAuthority", source, StringComparison.Ordinal);
+        Assert.Contains("RequirePublicAuthorityCurrentAsync", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("server-public-metadata.json", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReadPublicMetadata", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("PublicMetadataPath", source, StringComparison.Ordinal);
+        Assert.Contains("SubjectPublicKeyInfoSha256", api, StringComparison.Ordinal);
+        Assert.Contains("CertificateSubjectCommonName", api, StringComparison.Ordinal);
+    }
+
     private static string FindRepositoryRoot()
     {
         DirectoryInfo? directory = new(AppContext.BaseDirectory);

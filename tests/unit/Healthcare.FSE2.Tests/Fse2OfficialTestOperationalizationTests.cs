@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
 using SecureIntegration.Gateway.Application;
 using Xunit;
 
@@ -7,7 +8,8 @@ namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2.Tests;
 
 public sealed class Fse2OfficialTestOperationalizationTests
 {
-    private const string ExpectedCanonicalSourceSha256 = "51CFAE64FB7CA2F32336ED09EB6351CAA286A660D0D97E0EEE4489B7D01E741F";
+    private const string ExpectedCanonicalSourceSha256 = "C972CB2BED0D5E074FD6640C68B8547D25CD90EB9674AC67756EA6950E65CE84";
+    private const string ExpectedCompiledCanonicalDefinitionSha256 = "C757B71F52D08931766887600F16724C78111E9D4C7E52ABD8CE96699B061156";
 
     [Fact]
     public void FSE2_OFFICIALTEST_canonical_definition_bytes_checksum_and_single_operation_are_frozen()
@@ -80,6 +82,7 @@ public sealed class Fse2OfficialTestOperationalizationTests
         Fse2OfficialTestCompiledConfiguration second = Compile();
         Assert.Equal(first.CanonicalDefinition, second.CanonicalDefinition);
         Assert.Equal(first.CanonicalDefinitionSha256, second.CanonicalDefinitionSha256);
+        Assert.Equal(ExpectedCompiledCanonicalDefinitionSha256, first.CanonicalDefinitionSha256);
         Assert.Equal(first.OperationProfileChecksumSha256, second.OperationProfileChecksumSha256);
         Assert.Equal(first.BindingConfigurationDigestSha256, second.BindingConfigurationDigestSha256);
         Assert.Equal(first.BindingRequest.Endpoints, second.BindingRequest.Endpoints);
@@ -120,6 +123,57 @@ public sealed class Fse2OfficialTestOperationalizationTests
         Fse2OfficialTestOperationalizationException error = Assert.Throws<Fse2OfficialTestOperationalizationException>(() =>
             Fse2OfficialTestOperationalization.ParsePlan(Encoding.UTF8.GetBytes(text)));
         Assert.Equal("FSE2_OFFICIALTEST_PLAN_PROPERTY_DENIED", error.SafeCode);
+    }
+
+    [Fact]
+    public void FSE2_OFFICIALTEST_application_identity_is_source_owned_and_matches_product_company_and_version()
+    {
+        Fse2OfficialTestCompiledConfiguration compiled = Compile();
+        using JsonDocument definition = JsonDocument.Parse(compiled.CanonicalDefinition);
+        JsonElement extension = Assert.Single(definition.RootElement.GetProperty("operations").EnumerateArray())
+            .GetProperty("extensionConfiguration");
+        Assert.Equal("secure-integration-platform", extension.GetProperty("applicationId").GetString());
+        Assert.Equal("ApoCert S.r.l.", extension.GetProperty("applicationVendor").GetString());
+        Assert.Equal("0.1.0-alpha.1", extension.GetProperty("applicationVersion").GetString());
+        Assert.Equal(Fse2OfficialTestCanonicalDefinition.ApplicationId, extension.GetProperty("applicationId").GetString());
+
+        XDocument properties = XDocument.Load(Path.Combine(FindRepositoryRoot(), "Directory.Build.props"));
+        Assert.Equal(Fse2OfficialTestCanonicalDefinition.ApplicationVendor,
+            properties.Descendants("Company").Single().Value);
+        Assert.Equal(Fse2OfficialTestCanonicalDefinition.ApplicationVersion,
+            properties.Descendants("ProductVersion").Single().Value);
+    }
+
+    [Fact]
+    public void FSE2_OFFICIALTEST_caller_cannot_override_server_owned_application_identity()
+    {
+        string text = PlanJson().Replace(
+            "\"expectedBindingRevision\":null",
+            "\"expectedBindingRevision\":null,\"applicationId\":\"caller\",\"applicationVendor\":\"caller\",\"applicationVersion\":\"9.9.9\"",
+            StringComparison.Ordinal);
+        Fse2OfficialTestOperationalizationException error = Assert.Throws<Fse2OfficialTestOperationalizationException>(() =>
+            Fse2OfficialTestOperationalization.ParsePlan(Encoding.UTF8.GetBytes(text)));
+        Assert.Equal("FSE2_OFFICIALTEST_PLAN_PROPERTY_DENIED", error.SafeCode);
+    }
+
+    [Fact]
+    public void FSE2_OFFICIALTEST_Admin_API_provider_authority_requires_exact_unique_active_same_environment_public_identity()
+    {
+        Fse2OfficialTestOperationalPlan plan = Plan();
+        Fse2OfficialTestProviderCatalogResource a1 = Catalog(plan.EnvironmentId, plan.A1, 'A', "A1 Synthetic Client", 'C');
+        Fse2OfficialTestProviderCatalogResource s1 = Catalog(plan.EnvironmentId, plan.S1, 'B', "S1 Synthetic Signing", 'D');
+        Fse2OfficialTestResolvedProviderAuthority authority =
+            Fse2OfficialTestOperationalization.ResolveProviderAuthority(plan, [a1, s1]);
+        Assert.Equal(a1.SubjectPublicKeyInfoSha256, authority.A1.SubjectPublicKeyInfoSha256);
+        Assert.Equal(s1.CatalogChecksumSha256, authority.S1.CatalogChecksumSha256);
+
+        AssertAuthorityFailure(plan, [s1], "FSE2_OFFICIALTEST_A1_PROVIDER_AUTHORITY_MISSING");
+        AssertAuthorityFailure(plan, [a1, a1, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_AUTHORITY_AMBIGUOUS");
+        AssertAuthorityFailure(plan, [a1 with { Status = "Disabled" }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_AUTHORITY_INACTIVE");
+        AssertAuthorityFailure(plan, [a1 with { EnvironmentId = Guid.NewGuid() }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_AUTHORITY_MISMATCH");
+        AssertAuthorityFailure(plan, [a1 with { CatalogRevision = a1.CatalogRevision + 1 }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_AUTHORITY_MISMATCH");
+        AssertAuthorityFailure(plan, [a1 with { ConnectorScope = "foreign" }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_AUTHORITY_MISMATCH");
+        AssertAuthorityFailure(plan, [a1 with { SubjectPublicKeyInfoSha256 = null }, s1], "FSE2_OFFICIALTEST_A1_PROVIDER_PUBLIC_METADATA_INVALID");
     }
 
     [Fact]
@@ -176,6 +230,47 @@ public sealed class Fse2OfficialTestOperationalizationTests
         char spki,
         string commonName,
         char checksum) => new(reference, new string(spki, 64), commonName, new string(checksum, 64));
+
+    private static Fse2OfficialTestProviderCatalogResource Catalog(
+        Guid environmentId,
+        Fse2OfficialTestProviderReference reference,
+        char spki,
+        string commonName,
+        char checksum) => new(
+            reference.ProviderId,
+            reference.ResourceId,
+            reference.Version,
+            reference.CatalogRevision,
+            reference.PublicMetadataRevision,
+            environmentId,
+            "ClientCertificate",
+            "Active",
+            Fse2OfficialTestCanonicalDefinition.ConnectorId,
+            Fse2OfficialTestCanonicalDefinition.OperationId,
+            new string(checksum, 64),
+            new string(spki, 64),
+            commonName);
+
+    private static void AssertAuthorityFailure(
+        Fse2OfficialTestOperationalPlan plan,
+        IEnumerable<Fse2OfficialTestProviderCatalogResource> resources,
+        string expectedCode)
+    {
+        Fse2OfficialTestOperationalizationException error = Assert.Throws<Fse2OfficialTestOperationalizationException>(() =>
+            Fse2OfficialTestOperationalization.ResolveProviderAuthority(plan, resources));
+        Assert.Equal(expectedCode, error.SafeCode);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        DirectoryInfo? current = new(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "Directory.Build.props"))) return current.FullName;
+            current = current.Parent;
+        }
+        throw new InvalidOperationException("Repository root was not found.");
+    }
 
     private static Fse2OfficialTestOperationalPlan Plan() =>
         Fse2OfficialTestOperationalization.ParsePlan(Encoding.UTF8.GetBytes(PlanJson()));

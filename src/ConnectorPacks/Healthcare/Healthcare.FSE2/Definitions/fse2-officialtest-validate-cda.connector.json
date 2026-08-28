@@ -51,9 +51,9 @@
         "localityAssigningAuthorityOid": "0.0",
         "localityCode": "OPERATIONAL_VALUE_REQUIRED",
         "subjectRole": "DAP",
-        "applicationId": "broker-gateway",
-        "applicationVendor": "Secure Integration",
-        "applicationVersion": "1.0.0",
+        "applicationId": "secure-integration-platform",
+        "applicationVendor": "ApoCert S.r.l.",
+        "applicationVersion": "0.1.0-alpha.1",
         "maximumDocumentBytes": 1048576
       },
       "authorizedCapabilities": {

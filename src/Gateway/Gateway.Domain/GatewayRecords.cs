@@ -246,7 +246,9 @@ public sealed record CertificatePublicMetadata(
     DateTimeOffset NotAfter,
     string KeyAlgorithm,
     int PublicKeySize,
-    string Version);
+    string Version,
+    string? SubjectPublicKeyInfoSha256 = null,
+    string? SubjectCommonName = null);
 
 /// <summary>Immutable server-owned provider catalog revision. ProviderReference is internal and never returned by Admin APIs.</summary>
 public sealed record ProviderResourceCatalogRecord(

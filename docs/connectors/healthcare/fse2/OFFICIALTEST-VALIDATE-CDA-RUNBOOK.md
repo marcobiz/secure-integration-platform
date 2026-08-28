@@ -25,17 +25,10 @@ This runbook does not create principals, accounts or role assignments.
   environment variable;
 - PostgreSQL 18 migrations are current and a second migration application is a no-op.
 
-The provisioner consumes two files outside Git:
-
-1. a protected operational plan conforming to
-   `fse2-officialtest-operational-plan.schema.json`;
-2. a protected server-public-metadata file containing only schema version plus, for A1 and S1,
-   `subjectPublicKeyInfoSha256`, `subjectCommonName` and `catalogChecksumSha256`.
-
-The second file must be produced from the deployed provider's public-material capability and the
-current server catalog. It is not a substitute for provider resolution. Do not derive it by opening
-a P12 with this provisioner. Keep both files outside the repository with operator-only ACLs and
-delete them under the deployment evidence-retention policy.
+The provisioner consumes one protected operational plan outside Git, conforming to
+`fse2-officialtest-operational-plan.schema.json`. Operational commands obtain exact public A1/S1
+metadata only from the authenticated Admin API `/provider-resources` catalog. An external
+`server-public-metadata.json` is not accepted and cannot authorize configuration.
 
 The operational plan may contain only the exact Environment ID, the fixed OfficialTest endpoint,
 organization/locality identity, logical A1/S1 provider resource references and expected
@@ -65,7 +58,8 @@ a private key. Never pass cookies on
 the command line or write them into the plan.
 
 Run `configure` once. It compiles the repository source definition with the protected organization
-profile and exact public A1/S1 metadata, then uses only the existing Admin validate, import,
+profile, the source-owned application identity `secure-integration-platform` / `ApoCert S.r.l.` /
+`0.1.0-alpha.1`, and exact server-catalog A1/S1 metadata, then uses only the existing Admin validate, import,
 validate-stored and binding endpoints. Read-back must match:
 
 - canonical Connector Definition checksum;
@@ -76,7 +70,7 @@ validate-stored and binding endpoints. Read-back must match:
 - A1 on mTLS and the same S1 on both signing slots;
 - zero ordinary secret bindings.
 
-Run `propose` once with the same two protected files. Preserve only its redacted approval request ID,
+Run `propose` once with the same protected plan. Preserve only its redacted approval request ID,
 approval digest and three exact checksums in the handoff. Do not preserve the compiled definition or
 Admin responses in ordinary logs.
 
@@ -90,11 +84,15 @@ The server recomputes the approval artefact. Self-approval, a wrong request, a w
 checksum, operation-profile drift, binding drift or provider revision drift fails closed. The second
 operator then runs `publish` with the current expected publication revision. The vertical provisioner
 additionally requires the current authenticated principal to be the distinct approver of the exact
-checksum before it sends the publish request.
+checksum before it sends the publish request. A binding change atomically invalidates every requested
+or approved prior digest in PostgreSQL; the provisioner consumes that server-owned status rather than
+maintaining a second approval state machine.
 
 Run `verify` in the second session. Success requires Published/Active read-back, exact canonical and
 operation-profile checksums, exact logical resource revisions, no generic secret binding and only
-the fixed OfficialTest endpoint component checksum. The provisioner never prints the endpoint.
+the fixed OfficialTest endpoint component checksum. Every operational phase re-resolves the exact
+unique active provider-catalog identities before mutation or read-back. The provisioner never prints
+the endpoint.
 
 ## Handoff to the single-live runner
 

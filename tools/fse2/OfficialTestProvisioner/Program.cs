@@ -35,29 +35,29 @@ internal static class Program
 
             Command command = ParseCommand(args);
             Fse2OfficialTestOperationalPlan operationalPlan = ReadPlan(command.PlanPath);
-            ResolvedBundle publicMetadata = ReadPublicMetadata(command.PublicMetadataPath);
+            using AdminApi api = await AdminApi.CreateAsync().ConfigureAwait(false);
+            Fse2OfficialTestResolvedProviderAuthority publicAuthority = await ResolvePublicAuthorityAsync(api, operationalPlan).ConfigureAwait(false);
             Fse2OfficialTestCompiledConfiguration compiled = Fse2OfficialTestOperationalization.Compile(
                 operationalPlan,
-                new(operationalPlan.A1, publicMetadata.A1.SubjectPublicKeyInfoSha256, publicMetadata.A1.SubjectCommonName, publicMetadata.A1.CatalogChecksumSha256),
-                new(operationalPlan.S1, publicMetadata.S1.SubjectPublicKeyInfoSha256, publicMetadata.S1.SubjectCommonName, publicMetadata.S1.CatalogChecksumSha256));
+                publicAuthority.A1,
+                publicAuthority.S1);
 
-            using AdminApi api = await AdminApi.CreateAsync().ConfigureAwait(false);
             switch (command.Name)
             {
                 case "configure":
-                    await ConfigureAsync(api, operationalPlan, compiled).ConfigureAwait(false);
+                    await ConfigureAsync(api, operationalPlan, publicAuthority, compiled).ConfigureAwait(false);
                     break;
                 case "propose":
-                    await ProposeAsync(api, operationalPlan, compiled).ConfigureAwait(false);
+                    await ProposeAsync(api, operationalPlan, publicAuthority, compiled).ConfigureAwait(false);
                     break;
                 case "approve":
-                    await ApproveAsync(api, operationalPlan, compiled, command.ApprovalRequestId!.Value, command.ExpectedApprovalDigest!).ConfigureAwait(false);
+                    await ApproveAsync(api, operationalPlan, publicAuthority, compiled, command.ApprovalRequestId!.Value, command.ExpectedApprovalDigest!).ConfigureAwait(false);
                     break;
                 case "publish":
-                    await PublishAsync(api, operationalPlan, compiled, command.ExpectedPublicationRevision!.Value).ConfigureAwait(false);
+                    await PublishAsync(api, operationalPlan, publicAuthority, compiled, command.ExpectedPublicationRevision!.Value).ConfigureAwait(false);
                     break;
                 case "verify":
-                    await VerifyAndPrintAsync(api, operationalPlan, compiled, "Published", "Active").ConfigureAwait(false);
+                    await VerifyAndPrintAsync(api, operationalPlan, publicAuthority, compiled, "Published", "Active").ConfigureAwait(false);
                     break;
                 default:
                     throw Failure("FSE2_OFFICIALTEST_COMMAND_INVALID");
@@ -84,8 +84,10 @@ internal static class Program
     private static async Task ConfigureAsync(
         AdminApi api,
         Fse2OfficialTestOperationalPlan plan,
+        Fse2OfficialTestResolvedProviderAuthority publicAuthority,
         Fse2OfficialTestCompiledConfiguration compiled)
     {
+        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         using JsonDocument definition = JsonDocument.Parse(compiled.CanonicalDefinition);
         JsonElement validated = await api.MutateAsync(HttpMethod.Post, "admin/api/v1/connectors:validate",
             new ConnectorImportRequest(definition.RootElement.Clone())).ConfigureAwait(false);
@@ -93,9 +95,11 @@ internal static class Program
             !string.Equals(validated.GetProperty("checksumSha256").GetString(), compiled.CanonicalDefinitionSha256, StringComparison.Ordinal))
             throw Failure("FSE2_OFFICIALTEST_SERVER_VALIDATION_DRIFT");
 
+        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         JsonElement imported = await api.MutateAsync(HttpMethod.Post, "admin/api/v1/connectors:import",
             new ConnectorImportRequest(definition.RootElement.Clone(), compiled.CanonicalDefinitionSha256)).ConfigureAwait(false);
         long importedRowVersion = PositiveLong(imported, "rowVersion");
+        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         JsonElement stored = await api.MutateAsync(HttpMethod.Post,
             $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/versions/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorVersion)}:validate",
             body: null,
@@ -103,21 +107,24 @@ internal static class Program
         if (!string.Equals(stored.GetProperty("state").GetString(), "Validated", StringComparison.Ordinal))
             throw Failure("FSE2_OFFICIALTEST_VALIDATE_STORED_FAILED");
 
+        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         _ = await api.MutateAsync(HttpMethod.Put,
             $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/bindings",
             compiled.BindingRequest,
             plan.ExpectedBindingRevision).ConfigureAwait(false);
-        ServerVerification verified = await VerifyServerAsync(api, plan, compiled, "Validated", "Draft").ConfigureAwait(false);
+        ServerVerification verified = await VerifyServerAsync(api, plan, publicAuthority, compiled, "Validated", "Draft").ConfigureAwait(false);
         Print(Result("configured", compiled, verified));
     }
 
     private static async Task ProposeAsync(
         AdminApi api,
         Fse2OfficialTestOperationalPlan plan,
+        Fse2OfficialTestResolvedProviderAuthority publicAuthority,
         Fse2OfficialTestCompiledConfiguration compiled)
     {
-        ServerVerification verified = await VerifyServerAsync(api, plan, compiled, "Validated", "Draft").ConfigureAwait(false);
+        ServerVerification verified = await VerifyServerAsync(api, plan, publicAuthority, compiled, "Validated", "Draft").ConfigureAwait(false);
         ApprovalReviewResult review = await ReadReviewAsync(api).ConfigureAwait(false);
+        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         JsonElement requested = await api.MutateAsync(HttpMethod.Post,
             $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/versions/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorVersion)}/approval-requests",
             body: null).ConfigureAwait(false);
@@ -139,14 +146,16 @@ internal static class Program
     private static async Task ApproveAsync(
         AdminApi api,
         Fse2OfficialTestOperationalPlan plan,
+        Fse2OfficialTestResolvedProviderAuthority publicAuthority,
         Fse2OfficialTestCompiledConfiguration compiled,
         Guid approvalRequestId,
         string expectedApprovalDigest)
     {
-        _ = await VerifyServerAsync(api, plan, compiled, "Validated", "Draft").ConfigureAwait(false);
+        _ = await VerifyServerAsync(api, plan, publicAuthority, compiled, "Validated", "Draft").ConfigureAwait(false);
         ApprovalReviewResult review = await ReadReviewAsync(api).ConfigureAwait(false);
         if (!IsSha256(expectedApprovalDigest) || !string.Equals(review.DigestSha256, expectedApprovalDigest, StringComparison.Ordinal))
             throw Failure("FSE2_OFFICIALTEST_APPROVAL_DIGEST_STALE", inputFailure: true);
+        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         JsonElement approved = await api.MutateAsync(HttpMethod.Post,
             $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/versions/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorVersion)}/approvals",
             new ConnectorApprovalAcceptanceRequest(approvalRequestId, expectedApprovalDigest)).ConfigureAwait(false);
@@ -166,30 +175,33 @@ internal static class Program
     private static async Task PublishAsync(
         AdminApi api,
         Fse2OfficialTestOperationalPlan plan,
+        Fse2OfficialTestResolvedProviderAuthority publicAuthority,
         Fse2OfficialTestCompiledConfiguration compiled,
         long expectedPublicationRevision)
     {
         if (expectedPublicationRevision < 0) throw Failure("FSE2_OFFICIALTEST_PUBLICATION_REVISION_INVALID", inputFailure: true);
-        _ = await VerifyServerAsync(api, plan, compiled, "Validated", "Draft").ConfigureAwait(false);
+        _ = await VerifyServerAsync(api, plan, publicAuthority, compiled, "Validated", "Draft").ConfigureAwait(false);
         await RequireCurrentApproverAsync(api, compiled).ConfigureAwait(false);
+        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         JsonElement current = await api.GetAsync(VersionPath()).ConfigureAwait(false);
         long rowVersion = PositiveLong(current, "rowVersion");
         JsonElement published = await api.MutateAsync(HttpMethod.Post, VersionPath() + ":publish",
             new ConnectorVersionActionRequest(rowVersion, expectedPublicationRevision), rowVersion).ConfigureAwait(false);
         if (!string.Equals(published.GetProperty("state").GetString(), "Published", StringComparison.Ordinal))
             throw Failure("FSE2_OFFICIALTEST_PUBLICATION_FAILED");
-        ServerVerification verified = await VerifyServerAsync(api, plan, compiled, "Published", "Active").ConfigureAwait(false);
+        ServerVerification verified = await VerifyServerAsync(api, plan, publicAuthority, compiled, "Published", "Active").ConfigureAwait(false);
         Print(Result("published", compiled, verified));
     }
 
     private static async Task VerifyAndPrintAsync(
         AdminApi api,
         Fse2OfficialTestOperationalPlan plan,
+        Fse2OfficialTestResolvedProviderAuthority publicAuthority,
         Fse2OfficialTestCompiledConfiguration compiled,
         string expectedVersionState,
         string expectedBindingState)
     {
-        ServerVerification verified = await VerifyServerAsync(api, plan, compiled, expectedVersionState, expectedBindingState).ConfigureAwait(false);
+        ServerVerification verified = await VerifyServerAsync(api, plan, publicAuthority, compiled, expectedVersionState, expectedBindingState).ConfigureAwait(false);
         Print(Result("verified", compiled, verified));
     }
 
@@ -210,10 +222,12 @@ internal static class Program
     private static async Task<ServerVerification> VerifyServerAsync(
         AdminApi api,
         Fse2OfficialTestOperationalPlan plan,
+        Fse2OfficialTestResolvedProviderAuthority publicAuthority,
         Fse2OfficialTestCompiledConfiguration compiled,
         string expectedVersionState,
         string expectedBindingState)
     {
+        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         JsonElement current = await api.GetAsync(VersionPath()).ConfigureAwait(false);
         if (!string.Equals(current.GetProperty("state").GetString(), expectedVersionState, StringComparison.Ordinal) ||
             !string.Equals(current.GetProperty("checksumSha256").GetString(), compiled.CanonicalDefinitionSha256, StringComparison.Ordinal))
@@ -269,35 +283,81 @@ internal static class Program
     private static async Task RequireCurrentApproverAsync(AdminApi api, Fse2OfficialTestCompiledConfiguration compiled)
     {
         JsonElement page = await api.GetAsync(VersionPath() + "/approvals?offset=0&limit=100").ConfigureAwait(false);
-        bool authorizedPublisher = page.GetProperty("items").EnumerateArray().Any(value =>
-            string.Equals(value.GetProperty("status").GetString(), "Approved", StringComparison.Ordinal) &&
-            string.Equals(value.GetProperty("checksumSha256").GetString(), compiled.CanonicalDefinitionSha256, StringComparison.Ordinal) &&
-            value.GetProperty("approvedBy").ValueKind == JsonValueKind.String &&
-            value.GetProperty("approvedBy").GetGuid() == api.PrincipalId &&
-            value.GetProperty("requestedBy").GetGuid() != api.PrincipalId);
+        Fse2OfficialTestApprovalAuthority[] approvals = page.GetProperty("items").EnumerateArray().Select(value => new Fse2OfficialTestApprovalAuthority(
+            value.GetProperty("status").GetString() ?? string.Empty,
+            value.GetProperty("checksumSha256").GetString() ?? string.Empty,
+            value.GetProperty("requestedBy").GetGuid(),
+            value.GetProperty("approvedBy").ValueKind == JsonValueKind.String ? value.GetProperty("approvedBy").GetGuid() : null)).ToArray();
+        bool authorizedPublisher = Fse2OfficialTestOperationalization.IsCurrentPublisher(
+            api.PrincipalId, compiled.CanonicalDefinitionSha256, approvals);
         if (!authorizedPublisher) throw Failure("FSE2_OFFICIALTEST_PUBLISHER_MUST_BE_DISTINCT_APPROVER");
     }
 
     private static Fse2OfficialTestOperationalPlan ReadPlan(string path) =>
         Fse2OfficialTestOperationalization.ParsePlan(ReadBounded(path, 64 * 1024, "FSE2_OFFICIALTEST_PLAN_FILE_INVALID"));
 
-    private static ResolvedBundle ReadPublicMetadata(string path)
+    private static async Task<Fse2OfficialTestResolvedProviderAuthority> ResolvePublicAuthorityAsync(
+        AdminApi api,
+        Fse2OfficialTestOperationalPlan plan)
     {
-        byte[] bytes = ReadBounded(path, 32 * 1024, "FSE2_OFFICIALTEST_PUBLIC_METADATA_FILE_INVALID");
-        using JsonDocument document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 4 });
-        JsonElement root = document.RootElement;
-        ExactProperties(root, ["schemaVersion", "a1", "s1"]);
-        if (root.GetProperty("schemaVersion").GetString() != "1.0") throw Failure("FSE2_OFFICIALTEST_PUBLIC_METADATA_SCHEMA_UNSUPPORTED", true);
-        return new(ReadCertificate(root.GetProperty("a1")), ReadCertificate(root.GetProperty("s1")));
+        List<Fse2OfficialTestProviderCatalogResource> resources = [];
+        const int limit = 100;
+        int offset = 0;
+        int? expectedTotal = null;
+        do
+        {
+            JsonElement page = await api.GetAsync(
+                $"admin/api/v1/provider-resources?environmentId={plan.EnvironmentId:D}&resourceType=ClientCertificate&offset={offset}&limit={limit}").ConfigureAwait(false);
+            int total = page.GetProperty("total").GetInt32();
+            if (total < 0 || total > 1000 || (expectedTotal is not null && total != expectedTotal.Value))
+                throw Failure("FSE2_OFFICIALTEST_PROVIDER_CATALOG_RESPONSE_INVALID");
+            expectedTotal = total;
+            JsonElement[] items = page.GetProperty("items").EnumerateArray().ToArray();
+            if (items.Length > limit || offset + items.Length > total)
+                throw Failure("FSE2_OFFICIALTEST_PROVIDER_CATALOG_RESPONSE_INVALID");
+            resources.AddRange(items.Select(ProviderCatalogResource));
+            offset += items.Length;
+            if (items.Length == 0 && offset < total)
+                throw Failure("FSE2_OFFICIALTEST_PROVIDER_CATALOG_RESPONSE_INVALID");
+        }
+        while (offset < expectedTotal!.Value);
+        return Fse2OfficialTestOperationalization.ResolveProviderAuthority(plan, resources);
     }
 
-    private static ResolvedPublicCertificate ReadCertificate(JsonElement value)
+    private static async Task RequirePublicAuthorityCurrentAsync(
+        AdminApi api,
+        Fse2OfficialTestOperationalPlan plan,
+        Fse2OfficialTestResolvedProviderAuthority expected)
     {
-        ExactProperties(value, ["subjectPublicKeyInfoSha256", "subjectCommonName", "catalogChecksumSha256"]);
+        Fse2OfficialTestResolvedProviderAuthority current = await ResolvePublicAuthorityAsync(api, plan).ConfigureAwait(false);
+        if (current != expected) throw Failure("FSE2_OFFICIALTEST_PROVIDER_AUTHORITY_DRIFT");
+    }
+
+    private static Fse2OfficialTestProviderCatalogResource ProviderCatalogResource(JsonElement value)
+    {
+        JsonElement metadata = value.GetProperty("certificateMetadata");
+        string? subjectPublicKeyInfoSha256 = metadata.ValueKind == JsonValueKind.Object &&
+            metadata.TryGetProperty("subjectPublicKeyInfoSha256", out JsonElement spki) && spki.ValueKind == JsonValueKind.String
+                ? spki.GetString()
+                : null;
+        string? subjectCommonName = metadata.ValueKind == JsonValueKind.Object &&
+            metadata.TryGetProperty("subjectCommonName", out JsonElement commonName) && commonName.ValueKind == JsonValueKind.String
+                ? commonName.GetString()
+                : null;
         return new(
-            RequiredString(value, "subjectPublicKeyInfoSha256", 64),
-            RequiredString(value, "subjectCommonName", 128),
-            RequiredString(value, "catalogChecksumSha256", 64));
+            value.GetProperty("providerId").GetString() ?? string.Empty,
+            value.GetProperty("resourceId").GetString() ?? string.Empty,
+            value.GetProperty("version").ValueKind == JsonValueKind.Null ? null : value.GetProperty("version").GetString(),
+            value.GetProperty("revision").GetInt64(),
+            value.GetProperty("publicMetadataRevision").ValueKind == JsonValueKind.Null ? null : value.GetProperty("publicMetadataRevision").GetInt64(),
+            value.GetProperty("environmentId").GetGuid(),
+            value.GetProperty("resourceType").GetString() ?? string.Empty,
+            value.GetProperty("status").GetString() ?? string.Empty,
+            value.GetProperty("connectorScope").GetString() ?? string.Empty,
+            value.GetProperty("operationScope").GetString() ?? string.Empty,
+            value.GetProperty("checksumSha256").GetString() ?? string.Empty,
+            subjectPublicKeyInfoSha256,
+            subjectCommonName);
     }
 
     private static byte[] ReadBounded(string path, long maximumBytes, string error)
@@ -308,35 +368,17 @@ internal static class Program
         return File.ReadAllBytes(file.FullName);
     }
 
-    private static void ExactProperties(JsonElement value, string[] expected)
-    {
-        if (value.ValueKind != JsonValueKind.Object) throw Failure("FSE2_OFFICIALTEST_PUBLIC_METADATA_INVALID", true);
-        string[] actual = value.EnumerateObject().Select(property => property.Name).ToArray();
-        if (actual.Distinct(StringComparer.Ordinal).Count() != actual.Length || !actual.ToHashSet(StringComparer.Ordinal).SetEquals(expected))
-            throw Failure("FSE2_OFFICIALTEST_PUBLIC_METADATA_PROPERTY_DENIED", true);
-    }
-
-    private static string RequiredString(JsonElement value, string name, int maximumLength)
-    {
-        JsonElement property = value.GetProperty(name);
-        if (property.ValueKind != JsonValueKind.String) throw Failure("FSE2_OFFICIALTEST_PUBLIC_METADATA_INVALID", true);
-        string result = property.GetString()!;
-        if (string.IsNullOrWhiteSpace(result) || result.Length > maximumLength || result != result.Trim() || result.Any(char.IsControl))
-            throw Failure("FSE2_OFFICIALTEST_PUBLIC_METADATA_INVALID", true);
-        return result;
-    }
-
     private static Command ParseCommand(string[] args) => args switch
     {
-        ["configure", string plan, string metadata] => new("configure", plan, metadata),
-        ["propose", string plan, string metadata] => new("propose", plan, metadata),
-        ["verify", string plan, string metadata] => new("verify", plan, metadata),
-        ["approve", string plan, string metadata, string requestId, string digest]
+        ["configure", string plan] => new("configure", plan),
+        ["propose", string plan] => new("propose", plan),
+        ["verify", string plan] => new("verify", plan),
+        ["approve", string plan, string requestId, string digest]
             when Guid.TryParseExact(requestId, "D", out Guid parsed) && parsed != Guid.Empty && IsSha256(digest) =>
-            new("approve", plan, metadata, parsed, digest),
-        ["publish", string plan, string metadata, string revision]
+            new("approve", plan, parsed, digest),
+        ["publish", string plan, string revision]
             when long.TryParse(revision, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out long parsed) && parsed >= 0 =>
-            new("publish", plan, metadata, ExpectedPublicationRevision: parsed),
+            new("publish", plan, ExpectedPublicationRevision: parsed),
         _ => throw Failure("FSE2_OFFICIALTEST_COMMAND_INVALID", true)
     };
 
@@ -369,14 +411,15 @@ internal static class Program
 
     private static void Usage() => Console.WriteLine("""
         fse2-officialtest plan <operational-plan.json>
-        fse2-officialtest configure <operational-plan.json> <server-public-metadata.json>
-        fse2-officialtest propose <operational-plan.json> <server-public-metadata.json>
-        fse2-officialtest approve <operational-plan.json> <server-public-metadata.json> <approval-request-id> <approval-digest-sha256>
-        fse2-officialtest publish <operational-plan.json> <server-public-metadata.json> <expected-publication-revision>
-        fse2-officialtest verify <operational-plan.json> <server-public-metadata.json>
+        fse2-officialtest configure <operational-plan.json>
+        fse2-officialtest propose <operational-plan.json>
+        fse2-officialtest approve <operational-plan.json> <approval-request-id> <approval-digest-sha256>
+        fse2-officialtest publish <operational-plan.json> <expected-publication-revision>
+        fse2-officialtest verify <operational-plan.json>
 
         Operational commands require FSE2_GATEWAY_URL, FSE2_ADMIN_SESSION_COOKIE and optionally
-        FSE2_GATEWAY_CA_FILE. Plan performs no write, certificate access, signing, DNS or HTTP.
+        FSE2_GATEWAY_CA_FILE. Public A1/S1 authority is read only from the authenticated Admin API.
+        Plan performs no write, certificate access, signing, DNS or HTTP.
         """);
 
     private sealed class AdminApi(
@@ -532,12 +575,9 @@ internal static class Program
     private sealed record Command(
         string Name,
         string PlanPath,
-        string PublicMetadataPath,
         Guid? ApprovalRequestId = null,
         string? ExpectedApprovalDigest = null,
         long? ExpectedPublicationRevision = null);
-    private sealed record ResolvedPublicCertificate(string SubjectPublicKeyInfoSha256, string SubjectCommonName, string CatalogChecksumSha256);
-    private sealed record ResolvedBundle(ResolvedPublicCertificate A1, ResolvedPublicCertificate S1);
     private sealed record ServerVerification(string VersionState, string BindingState, string BindingChecksumSha256);
     private sealed class ProvisioningException(string code, bool inputFailure) : Exception(code)
     {
