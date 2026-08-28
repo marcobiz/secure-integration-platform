@@ -810,6 +810,115 @@ public sealed class AuthorizedVerticalCapabilityHostedIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_RUNTIME_stale_base_or_operation_path_denies_before_signing_DNS_HTTPS_and_transport()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);
+        InMemoryProvider provider = new(
+            new Dictionary<string, string>(),
+            certificateHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                ["mtls-r1"] = material.ClientCertificateRevision1
+            },
+            signingKeyHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
+            {
+                ["sign-r1"] = material.SigningKeyRevision1
+            },
+            certificateChains: new Dictionary<string, IReadOnlyList<X509Certificate2>>(StringComparer.Ordinal)
+            {
+                ["sign-r1"] = [material.RootCertificate]
+            });
+        TrackingCapabilityProvider trackingProvider = new(provider);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-officialtest-stale-uri",
+            executionModule: Module(),
+            capabilityProvider: new(trackingProvider, trackingProvider, trackingProvider, trackingProvider, material.RootCertificate));
+        string connectorId = "synthetic-officialtest-stale-uri-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("officialtest-stale-uri-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("officialtest-stale-uri-application");
+        Uri baseEndpoint = new(
+            "https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1/",
+            UriKind.Absolute);
+        string signingSpki = SpkiSha256(material.SigningKeyRevision1);
+        string clientSpki = SpkiSha256(material.ClientCertificateRevision1);
+        string subjectCn = material.SigningKeyRevision1.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId,
+            "1.0.0",
+            environmentId,
+            baseEndpoint,
+            AuthorizedOperationDefinition(
+                connectorId,
+                "1.0.0",
+                signingSpki,
+                clientSpki,
+                subjectCn,
+                "POST",
+                "\"path\":\"/documents/validation\",\"pathResolution\":\"appendToBasePath\"",
+                "required",
+                "[]"),
+            trackingProvider,
+            "sign-r1",
+            "mtls-r1");
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "officialtest-stale-uri-identity");
+        await fixture.AddOperationGrantAsync(identity, connectorId, "signed-submit");
+
+        PublishedConnectorAccessContext access = new(
+            identity.Identity.InstallationId,
+            identity.Identity.TenantId,
+            identity.Identity.ApplicationId,
+            "signed-submit");
+        IAuthorizedPublishedOperationCatalog catalog = (IAuthorizedPublishedOperationCatalog)
+            fixture.Factory.Services.GetRequiredService<IGatewayOperationCatalog>();
+        AuthorizedPublishedOperation published = await catalog.GetRequiredAuthorizedAsync(
+            connectorId, "signed-submit", environmentId, access, TestContext.Current.CancellationToken);
+        IAuthorizedVerticalCapabilityRuntime runtime =
+            fixture.Factory.Services.GetRequiredService<IAuthorizedVerticalCapabilityRuntime>();
+        AuthorizedPublishedOperationExpectations expectations = new(
+            GatewayAuthenticationKind.MutualTls,
+            restrictedTransportRequired: false,
+            []);
+        GatewayClientPrincipal principal = new(identity.Identity, Guid.NewGuid());
+        AuthorizedGatewayInvocation invocation = new(principal, connectorId, "signed-submit");
+        (string Name, Uri Endpoint)[] cases =
+        [
+            ("base-path", new Uri("https://modipa-val.fse.salute.gov.it/changed/base/documents/validation")),
+            ("operation-path", new Uri("https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1/documents/changed")),
+            ("host-root-fallback", new Uri("https://modipa-val.fse.salute.gov.it/documents/validation"))
+        ];
+
+        foreach ((string name, Uri endpoint) in cases)
+        {
+            int providerBefore = trackingProvider.TotalCalls;
+            int signingBefore = trackingProvider.SignDigestCalls;
+            int dnsBefore = fixture.HostResolutionCount;
+            int transportBefore = fixture.Transport.GenericRequests;
+            AuthorizedConnectorExecution staleExecution = new(
+                invocation,
+                published.Operation with { Endpoint = endpoint },
+                ConnectorExecutionStrategyKeys.Resolve(published.Operation),
+                "synthetic-payload"u8,
+                publishedAuthority: published.Authority,
+                extensionConfiguration: published.ExtensionConfiguration);
+
+            GatewayException stale = await Assert.ThrowsAsync<GatewayException>(() =>
+                runtime.ValidatePublishedOperationExpectationsAsync(
+                    staleExecution,
+                    expectations,
+                    TestContext.Current.CancellationToken));
+
+            Assert.Equal("BGW-CONNECTOR-CONFIGURATION-STALE", stale.Code);
+            Assert.Equal(providerBefore, trackingProvider.TotalCalls);
+            Assert.Equal(signingBefore, trackingProvider.SignDigestCalls);
+            Assert.Equal(dnsBefore, fixture.HostResolutionCount);
+            Assert.Equal(transportBefore, fixture.Transport.GenericRequests);
+            Assert.DoesNotContain(name, stale.ToString(), StringComparison.Ordinal);
+        }
+    }
+
     private static async Task RunAsync(string? runtimeConnection, string? adminConnection, bool requirePostgres)
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(DateTimeOffset.UtcNow);

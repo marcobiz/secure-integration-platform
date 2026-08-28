@@ -128,6 +128,87 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     }
 
     [Fact]
+    public async Task FSE2_OFFICIALTEST_HOSTED_authoritative_runtime_recheck_preserves_effective_URI_and_dispatches_once_to_local_mock()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        Uri publishedBase = new(Fse2OfficialTestCanonicalDefinition.OfficialTestEndpoint, UriKind.Absolute);
+        Uri expectedEffective = new(
+            "https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1/documents/validation",
+            UriKind.Absolute);
+        OfficialTestInMemoryTransport localMock = new(
+            expectedEffective,
+            Convert.ToHexString(SHA256.HashData(material.ClientCertificateRevision1.RawData)));
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-officialtest-runtime-uri",
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate),
+            restrictedTransport: localMock,
+            privateDestinationHosts: new HashSet<string>([publishedBase.DnsSafeHost], StringComparer.OrdinalIgnoreCase));
+
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Fse2OfficialTestProviderReference a1 = new("synthetic-capability", "officialtest-a1", "1", 1, 1);
+        Fse2OfficialTestProviderReference s1 = new("synthetic-capability", "officialtest-s1", "1", 1, 1);
+        string planJson = $$"""
+            {
+              "schemaVersion":"1.0",
+              "environmentId":"{{environmentId:D}}",
+              "officialTestEndpoint":"{{publishedBase}}",
+              "organization":{"identifier":"12345678903","assigningAuthorityOid":"2.16.840.1.113883.2.9.4.1.2","description":"ASL Roma 1","domainId":"asl-roma-1"},
+              "locality":{"name":"ASL Roma 1","assigningAuthorityOid":"2.16.840.1.113883.2.9.4.1.2","code":"ASLROMA1"},
+              "a1":{"providerId":"{{a1.ProviderId}}","resourceId":"{{a1.ResourceId}}","version":"{{a1.Version}}","catalogRevision":1,"publicMetadataRevision":1},
+              "s1":{"providerId":"{{s1.ProviderId}}","resourceId":"{{s1.ResourceId}}","version":"{{s1.Version}}","catalogRevision":1,"publicMetadataRevision":1},
+              "expectedBindingRevision":null
+            }
+            """;
+        Fse2OfficialTestOperationalPlan plan = Fse2OfficialTestOperationalization.ParsePlan(Encoding.UTF8.GetBytes(planJson));
+        Fse2OfficialTestCompiledConfiguration compiled = Fse2OfficialTestOperationalization.Compile(
+            plan,
+            new(a1, SpkiSha256(material.ClientCertificateRevision1), material.ClientCertificateRevision1.GetNameInfo(X509NameType.SimpleName, false), new string('C', 64)),
+            new(s1, SpkiSha256(material.SigningKeyRevision1), material.SigningKeyRevision1.GetNameInfo(X509NameType.SimpleName, false), new string('D', 64)));
+
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-officialtest-runtime-uri-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-officialtest-runtime-uri-application");
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            Fse2OfficialTestCanonicalDefinition.ConnectorId,
+            Fse2OfficialTestCanonicalDefinition.ConnectorVersion,
+            environmentId,
+            publishedBase,
+            compiled.CanonicalDefinition,
+            provider,
+            "sign-r1",
+            "mtls-r1",
+            operationId: Fse2OfficialTestCanonicalDefinition.OperationId,
+            endpointBinding: Fse2OfficialTestCanonicalDefinition.EndpointBinding,
+            signingCertificateBinding: Fse2OfficialTestCanonicalDefinition.SigningBinding,
+            clientCertificateBinding: Fse2OfficialTestCanonicalDefinition.MutualTlsBinding);
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "fse2-officialtest-runtime-uri-identity");
+        await fixture.AddOperationGrantAsync(identity, authority.ConnectorId, Fse2OfficialTestCanonicalDefinition.OperationId);
+
+        Fse2OperationDescriptor operation = Fse2OperationCatalog.Get(Fse2Operation.ValidateCda);
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{authority.ConnectorId}/operations/{operation.OperationId}:invoke",
+            InvokeRequest(PayloadFor(operation,
+                "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}",
+                DocumentBytes())));
+        string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(response.IsSuccessStatusCode, responseBody);
+        Assert.Equal(1, localMock.Requests);
+        Assert.Equal(expectedEffective, localMock.RequestUri);
+        Assert.True(localMock.A1MutualTlsObserved);
+        Assert.True(localMock.DualDistinctJwtObserved);
+        Assert.True(localMock.AttachmentHashAbsent);
+        Assert.Equal(1, fixture.HostResolutionCount);
+        Assert.Equal(1, fixture.GenericTransportRequests);
+        Assert.Equal(2, provider.SignDigestCalls);
+    }
+
+    [Fact]
     public async Task FSE2_AUDIT_failure_emits_exactly_one_failure_and_zero_success()
     {
         const string canary = "upstream-problem-raw-canary";
@@ -1927,6 +2008,69 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         string? FileMediaType,
         byte[] FileBytes,
         byte[] RequestBodyBytes);
+
+    private sealed class OfficialTestInMemoryTransport(Uri expectedUri, string expectedClientFingerprint) : IRestrictedTransport
+    {
+        private int requests;
+        private int a1MutualTlsObserved;
+        private int dualDistinctJwtObserved;
+        private int attachmentHashAbsent;
+
+        internal int Requests => Volatile.Read(ref requests);
+        internal Uri? RequestUri { get; private set; }
+        internal bool A1MutualTlsObserved => Volatile.Read(ref a1MutualTlsObserved) == 1;
+        internal bool DualDistinctJwtObserved => Volatile.Read(ref dualDistinctJwtObserved) == 1;
+        internal bool AttachmentHashAbsent => Volatile.Read(ref attachmentHashAbsent) == 1;
+
+        public async Task<ExternalResponse> SendAsync(
+            HttpRequestMessage request,
+            IReadOnlyList<IPAddress> approvedAddresses,
+            X509Certificate2? clientCertificate,
+            TimeSpan timeout,
+            long maximumResponseBytes,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Assert.Equal(1, Interlocked.Increment(ref requests));
+            RequestUri = request.RequestUri;
+            Assert.Equal(expectedUri, request.RequestUri);
+            Assert.Equal([IPAddress.Loopback], approvedAddresses);
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("multipart/form-data; boundary=broker-gateway-fse2-officialtest-v1", request.Content?.Headers.ContentType?.ToString());
+            Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
+
+            if (clientCertificate is not null && string.Equals(
+                Convert.ToHexString(SHA256.HashData(clientCertificate.RawData)),
+                expectedClientFingerprint,
+                StringComparison.Ordinal))
+                Interlocked.Exchange(ref a1MutualTlsObserved, 1);
+
+            string? authorization = request.Headers.Authorization?.Parameter;
+            string integrity = Assert.Single(request.Headers.GetValues("FSE-JWT-Signature"));
+            if (!string.IsNullOrWhiteSpace(authorization) &&
+                !string.Equals(authorization, integrity, StringComparison.Ordinal))
+                Interlocked.Exchange(ref dualDistinctJwtObserved, 1);
+            if (!string.IsNullOrWhiteSpace(integrity))
+            {
+                string[] parts = integrity.Split('.');
+                Assert.Equal(3, parts.Length);
+                using JsonDocument payload = JsonDocument.Parse(DecodeBase64Url(parts[1]));
+                if (!payload.RootElement.TryGetProperty("attachment_hash", out _))
+                    Interlocked.Exchange(ref attachmentHashAbsent, 1);
+            }
+
+            byte[] body = await request.Content!.ReadAsByteArrayAsync(cancellationToken);
+            Assert.True(body.AsSpan().IndexOf(DocumentBytes()) >= 0);
+            return new ExternalResponse(200, "application/json", "{}"u8.ToArray());
+        }
+
+        private static byte[] DecodeBase64Url(string value)
+        {
+            string padded = value.Replace('-', '+').Replace('_', '/');
+            padded += new string('=', (4 - padded.Length % 4) % 4);
+            return Convert.FromBase64String(padded);
+        }
+    }
 
     private static string ExpectedPath(Fse2OperationDescriptor operation) => operation.PathTemplate switch
     {

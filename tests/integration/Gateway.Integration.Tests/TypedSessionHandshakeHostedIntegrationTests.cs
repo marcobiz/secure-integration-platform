@@ -398,6 +398,8 @@ public sealed class HostedTypedSessionFixture : IAsyncDisposable
         Func<CancellationToken, Task>? beforeHandshakeFinalAuthorization = null,
         Func<CancellationToken, Task>? beforeComposedFinalAuthorization = null,
         HostedCapabilityProvider? capabilityProvider = null,
+        IRestrictedTransport? restrictedTransport = null,
+        IReadOnlySet<string>? privateDestinationHosts = null,
         string? serverOwnedOrganizationCode = null)
     {
         string organizationCode = serverOwnedOrganizationCode ?? SyntheticOrganizationCode;
@@ -415,7 +417,8 @@ public sealed class HostedTypedSessionFixture : IAsyncDisposable
             try
             {
                 TypedSessionHostFactory factory = new(certificates.Root, certificates.Server, SyntheticHost, beforePromotion, runtimeConnection, adminConnection,
-                    executionModule, beforeHandshakeFinalAuthorization, beforeComposedFinalAuthorization, capabilityProvider, organizationCode);
+                    executionModule, beforeHandshakeFinalAuthorization, beforeComposedFinalAuthorization, capabilityProvider,
+                    restrictedTransport, privateDestinationHosts, organizationCode);
                 return new(certificates, server, factory);
             }
             catch
@@ -847,6 +850,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
     private readonly Func<CancellationToken, Task>? beforeHandshakeFinalAuthorization;
     private readonly Func<CancellationToken, Task>? beforeComposedFinalAuthorization;
     private readonly HostedCapabilityProvider? capabilityProvider;
+    private readonly IReadOnlySet<string> privateDestinationHosts;
     private readonly RecordingLoggerProvider logger = new();
     private readonly TestClientCertificateStartupFilter certificateFilter = new();
     private readonly FixedSecrets secrets;
@@ -862,6 +866,8 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
         Func<CancellationToken, Task>? beforeHandshakeFinalAuthorization,
         Func<CancellationToken, Task>? beforeComposedFinalAuthorization,
         HostedCapabilityProvider? capabilityProvider,
+        IRestrictedTransport? restrictedTransport,
+        IReadOnlySet<string>? privateDestinationHosts,
         string organizationCode)
     {
         this.syntheticHost = syntheticHost;
@@ -872,10 +878,13 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
         this.beforeHandshakeFinalAuthorization = beforeHandshakeFinalAuthorization;
         this.beforeComposedFinalAuthorization = beforeComposedFinalAuthorization;
         this.capabilityProvider = capabilityProvider;
+        this.privateDestinationHosts = privateDestinationHosts ?? (capabilityProvider is null
+            ? new HashSet<string>([syntheticHost], StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>([syntheticHost, "localhost"], StringComparer.OrdinalIgnoreCase));
         secrets = new(organizationCode);
         X509Certificate2Collection trust = new(root);
         if (capabilityProvider is not null) trust.Add(capabilityProvider.RootCertificate);
-        Transport = new(new SystemRestrictedTransport(trust,
+        Transport = new(restrictedTransport ?? new SystemRestrictedTransport(trust,
             capabilityProvider is null ? Convert.ToHexString(SHA256.HashData(server.RawData)) : null));
     }
 
@@ -923,10 +932,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
                 services.RemoveAll<ICertificatePublicMaterialProvider>();
                 services.AddSingleton(capabilityProvider.CertificatePublicMaterial);
             }
-            services.AddSingleton<IPrivateDestinationAllowance>(new LoopbackAllowance(
-                capabilityProvider is null
-                    ? new HashSet<string>([syntheticHost], StringComparer.OrdinalIgnoreCase)
-                    : new HashSet<string>([syntheticHost, "localhost"], StringComparer.OrdinalIgnoreCase)));
+            services.AddSingleton<IPrivateDestinationAllowance>(new LoopbackAllowance(privateDestinationHosts));
             services.AddSingleton<IStartupFilter>(certificateFilter);
             services.AddSingleton<ILoggerProvider>(logger);
             services.RemoveAll<SoapSessionClient>();

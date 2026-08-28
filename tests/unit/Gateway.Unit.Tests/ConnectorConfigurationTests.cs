@@ -52,6 +52,24 @@ public sealed class ConnectorConfigurationTests
         Assert.Equal("BGW-CONNECTOR-ENDPOINT-BINDING", denied.Code);
     }
 
+    [Theory]
+    [InlineData("/documents/validation?caller=true")]
+    [InlineData("/documents/validation#caller")]
+    [InlineData("https://caller@attacker.invalid/documents/validation")]
+    [InlineData("//attacker.invalid/documents/validation")]
+    [InlineData("/documents/../validation")]
+    [InlineData("/documents/%2e%2e/validation")]
+    [InlineData("/documents\\validation")]
+    public void FSE2_OFFICIALTEST_UT_operation_query_fragment_userinfo_authority_and_traversal_are_denied_without_effect(string operationPath)
+    {
+        GatewayException denied = Assert.Throws<GatewayException>(() => PublishedEndpointUri.Compose(
+            new Uri("https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1/"),
+            operationPath,
+            appendToBasePath: true));
+
+        Assert.Equal("BGW-CONNECTOR-CONFIGURATION-CORRUPT", denied.Code);
+    }
+
     [Fact]
     public async Task FSE2_OFFICIALTEST_UT_exact_provider_lookup_is_bounded_current_and_independent_of_page_size_or_concurrent_catalog_mutation()
     {

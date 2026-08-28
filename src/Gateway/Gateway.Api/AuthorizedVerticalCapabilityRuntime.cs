@@ -610,7 +610,10 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
                 bool hasTemplate = operation.TryGetProperty("pathTemplate", out _);
                 Uri authorizedEndpoint = hasTemplate
                     ? baseEndpoint
-                    : new Uri(baseEndpoint, operation.GetProperty("path").GetString()!);
+                    : PublishedEndpointUri.Compose(
+                        baseEndpoint,
+                        operation.GetProperty("path").GetString()!,
+                        PublishedEndpointUri.AppendToBasePath(operation));
                 if (authorizedEndpoint != execution.Operation.Endpoint)
                     throw Stale();
                 if (hasTemplate)
@@ -639,7 +642,10 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
             {
                 if (transportRequest is { PathParameterCount: > 0 })
                     throw new AuthenticationPrimitiveException("BGW-AUTH-RESTRICTED-PATH-DENIED");
-                return new Uri(current.BaseEndpoint, current.Operation.GetProperty("path").GetString()!);
+                return PublishedEndpointUri.Compose(
+                    current.BaseEndpoint,
+                    current.Operation.GetProperty("path").GetString()!,
+                    PublishedEndpointUri.AppendToBasePath(current.Operation));
             }
             if (transportRequest is null) return current.BaseEndpoint;
             try
