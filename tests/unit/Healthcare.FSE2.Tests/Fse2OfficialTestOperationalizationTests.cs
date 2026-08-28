@@ -177,6 +177,23 @@ public sealed class Fse2OfficialTestOperationalizationTests
     }
 
     [Fact]
+    public void FSE2_OFFICIALTEST_ARCH_external_metadata_file_or_mismatch_cannot_be_authority_and_Admin_API_catalog_is_required()
+    {
+        string root = FindRepositoryRoot();
+        string source = File.ReadAllText(Path.Combine(root, "tools", "fse2", "OfficialTestProvisioner", "Program.cs"));
+        string api = File.ReadAllText(Path.Combine(root, "src", "Gateway", "Gateway.Api", "Program.cs"));
+
+        Assert.Contains("admin/api/v1/provider-resources?environmentId=", source, StringComparison.Ordinal);
+        Assert.Contains("ResolveProviderAuthority", source, StringComparison.Ordinal);
+        Assert.Contains("RequirePublicAuthorityCurrentAsync", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("server-public-metadata.json", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReadPublicMetadata", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("PublicMetadataPath", source, StringComparison.Ordinal);
+        Assert.Contains("SubjectPublicKeyInfoSha256", api, StringComparison.Ordinal);
+        Assert.Contains("CertificateSubjectCommonName", api, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void FSE2_OFFICIALTEST_A1_S1_swap_or_reuse_is_denied_before_any_side_effect()
     {
         Fse2OfficialTestOperationalPlan plan = Plan();
