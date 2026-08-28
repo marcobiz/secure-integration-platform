@@ -458,7 +458,7 @@ public sealed class PostgresIsolationTests
             byte[] digest = await store.GetBindingBundleDigestAsync(stored.Id, TestContext.Current.CancellationToken);
             ConnectorApprovalRecord request = await security.RequestApprovalAsync(stored, digest, editor.Id, Guid.NewGuid(), clock.UtcNow, TestContext.Current.CancellationToken);
             _ = await store.ApproveCanonicalAsync(security, request.Id, stored.Id, Convert.ToHexString(digest), stored.CreatedBy, approver.Id, null, Guid.NewGuid(), clock.UtcNow.AddMilliseconds(1), TestContext.Current.CancellationToken);
-            return await admin.PublishAsync(connectorId, version, validated.RowVersion, revision, editor.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
+            return await admin.PublishAsync(connectorId, version, validated.RowVersion, revision, approver.Id.ToString("D"), Guid.NewGuid(), TestContext.Current.CancellationToken);
         }
 
         ConnectorVersionResource v1 = await ImportPublishAsync("1.0.0", 0);
