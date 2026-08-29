@@ -202,9 +202,14 @@ public sealed class AdminAccessService(IAdminSecurityStore store, IAdminSessionS
     /// <summary>Requires one of the supplied roles, respecting tenant scope.</summary>
     public static void Require(AdminAccessContext context, Guid? tenantId, params AdminRole[] roles)
     {
-        bool allowed = context.Assignments.Any(assignment => roles.Contains(assignment.Role) && (assignment.TenantId is null || assignment.TenantId == tenantId));
+        bool allowed = roles.Any(role => HasRole(context, tenantId, role));
         if (!allowed) throw new GatewayException("BGW-ADMIN-AUTHORIZATION", 403);
     }
+
+    /// <summary>Checks one exact role while preserving global or tenant-scoped assignment semantics.</summary>
+    public static bool HasRole(AdminAccessContext context, Guid? tenantId, AdminRole role) =>
+        context.Assignments.Any(assignment => assignment.Role == role &&
+            (assignment.TenantId is null || assignment.TenantId == tenantId));
 }
 
 /// <summary>Four-eyes request and approval application service.</summary>

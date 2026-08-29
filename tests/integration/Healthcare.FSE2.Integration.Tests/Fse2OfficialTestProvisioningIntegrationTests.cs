@@ -6,6 +6,7 @@ using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
 using SecureIntegration.Gateway.Integration.Tests;
+using SecureIntegration.Tools.Fse2.OfficialTestProvisioner;
 using Xunit;
 
 namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2.Integration.Tests;
@@ -13,6 +14,64 @@ namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2.Integration.Tests;
 public sealed class Fse2OfficialTestProvisioningIntegrationTests
 {
     private const string RequirePostgresGateVariable = "REQUIRE_FSE2_POSTGRES_GATE";
+    private static readonly JsonSerializerOptions EvidenceJson = new(JsonSerializerDefaults.Web);
+
+    [Fact]
+    public void FSE2_EVIDENCE_reducer_retains_only_bounded_failure_diagnostics()
+    {
+        Guid correlationId = Guid.NewGuid();
+        const string rawCanary = "raw-body-header-token-certificate-hostname-stack-canary";
+        using JsonDocument audit = JsonDocument.Parse($$"""
+            {
+              "items":[{
+                "id":"{{Guid.NewGuid():D}}",
+                "action":"operation.invoke",
+                "outcome":"failure",
+                "correlationId":"{{correlationId:D}}",
+                "reasonCode":"BGW-EGRESS-UPSTREAM-REJECTED",
+                "untrustedIgnoredField":"{{rawCanary}}",
+                "failureDiagnostics":{
+                  "failurePhase":"LOCAL_RESPONSE_MAPPING_FAILURE",
+                  "upstreamStatus":200,
+                  "statusCategory":"SUCCESS",
+                  "safeUpstreamCode":null,
+                  "localSafeCode":"FSE2_RESPONSE_INVALID"
+                }
+              }],
+              "offset":0,
+              "limit":50,
+              "total":1
+            }
+            """);
+
+        Fse2FailureDiagnosticsEvidence reduced = Fse2FailureEvidenceReducer.Reduce(audit.RootElement, correlationId);
+        string evidence = JsonSerializer.Serialize(reduced, EvidenceJson);
+
+        Assert.Equal("LOCAL_RESPONSE_MAPPING_FAILURE", reduced.FailurePhase);
+        Assert.Equal(200, reduced.UpstreamStatus);
+        Assert.Equal("SUCCESS", reduced.StatusCategory);
+        Assert.Null(reduced.SafeUpstreamCode);
+        Assert.Equal("FSE2_RESPONSE_INVALID", reduced.LocalSafeCode);
+        Assert.DoesNotContain(rawCanary, evidence, StringComparison.Ordinal);
+        Assert.Equal(5, JsonDocument.Parse(evidence).RootElement.EnumerateObject().Count());
+
+        foreach (string arbitraryCode in new[] { "arbitrary-upstream", "FSE2_NOT_ALLOWLISTED" })
+        {
+            string tampered = audit.RootElement.GetRawText().Replace(
+                "\"safeUpstreamCode\":null",
+                $"\"safeUpstreamCode\":\"{arbitraryCode}\"",
+                StringComparison.Ordinal);
+            using JsonDocument invalid = JsonDocument.Parse(tampered);
+            Assert.Throws<InvalidDataException>(() => Fse2FailureEvidenceReducer.Reduce(invalid.RootElement, correlationId));
+        }
+
+        string withRawDiagnostic = audit.RootElement.GetRawText().Replace(
+            "\"localSafeCode\":\"FSE2_RESPONSE_INVALID\"",
+            "\"localSafeCode\":\"FSE2_RESPONSE_INVALID\",\"rawBody\":\"forbidden\"",
+            StringComparison.Ordinal);
+        using JsonDocument raw = JsonDocument.Parse(withRawDiagnostic);
+        Assert.Throws<InvalidDataException>(() => Fse2FailureEvidenceReducer.Reduce(raw.RootElement, correlationId));
+    }
 
     [Fact]
     public async Task FSE2_OFFICIALTEST_supported_provisioner_configures_proposes_approves_and_reads_back_exact_configuration()

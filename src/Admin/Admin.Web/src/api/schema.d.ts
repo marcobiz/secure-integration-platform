@@ -1251,6 +1251,19 @@ export interface components {
             correlationId: string;
             outcome: string;
             reasonCode: string;
+            /** @description Present only for an authenticated SecurityAdministrator with access to the audit tenant. */
+            failureDiagnostics?: components["schemas"]["SafeFailureDiagnostics"];
+        };
+        SafeFailureDiagnostics: {
+            /** @enum {string} */
+            failurePhase: "DNS_FAILURE" | "TCP_CONNECT_FAILURE" | "TLS_SERVER_VALIDATION_FAILURE" | "MTLS_CLIENT_AUTH_FAILURE" | "TIMEOUT" | "TRANSPORT_FAILURE_OTHER" | "UPSTREAM_HTTP_RESPONSE" | "LOCAL_RESPONSE_MAPPING_FAILURE";
+            upstreamStatus: number | null;
+            /** @enum {string} */
+            statusCategory: "NO_UPSTREAM_RESPONSE" | "INFORMATIONAL" | "SUCCESS" | "REDIRECTION" | "CLIENT_ERROR" | "SERVER_ERROR";
+            /** @enum {string|null} */
+            safeUpstreamCode: null | "cda-element" | "cda-extraction" | "cda-match" | "cda-validation" | "document-hash" | "document-type" | "eds-document-missing" | "eds-error" | "empty-file" | "fhir-element" | "fhir-extraction" | "fhir-mapping-type" | "generic-error" | "generic-timeout" | "ini-error" | "invalid-format" | "jwt-validation" | "mandatory-element" | "mandatory-element-token" | "max-day-limit-exceed" | "missing-token" | "record-not-found" | "semantic" | "service-error" | "syntax" | "vocabulary" | "workflow-id-error-extraction";
+            /** @enum {string|null} */
+            localSafeCode: null | "FSE2_RESPONSE_INVALID";
         };
         AuditPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["AuditEvent"][];

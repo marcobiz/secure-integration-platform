@@ -1,7 +1,7 @@
 # Implementation dashboard
 
-Aggiornato: 2026-08-24
-Baseline CURRENT: `origin/main` = `97daa565f582d575da5d61665126c50ea52be3ed`
+Aggiornato: 2026-08-29
+Baseline CURRENT: `origin/main` = `1b207fb031313ffbd0940061a0d4f10837c84dec`
 
 Questo file descrive lo stato integrato corrente. I dettagli storici restano nei tag,
 nei report di test e nelle review già versionate; non vengono ricopiati qui. I termini
@@ -60,6 +60,12 @@ della prima mutazione e usa il suo Environment server-owned per catalogo, bindin
 nel piano è soltanto un'asserzione fail-closed. Il candidate non contiene configurazione reale e non
 esegue rete OfficialTest. Stato gate dichiarabile: T01/T02/T03 PASS software/offline,
 T04 `BLOCKED_PENDING_OPERATIONAL_CONFIGURATION_AND_LIVE_CALL`, T06 PARTIAL.
+
+Candidate non ancora integrato `SAFE_DIAGNOSTIC_PROPAGATION`: le sole failure FSE2 bounded sono
+persistite come campi chiusi e proiettate dal server esclusivamente a
+`SecurityAdministrator`; caller runtime e altri ruoli conservano la vista sanificata. Il reducer
+evidence accetta soltanto lo stesso DTO allowlisted. Nessuna chiamata OfficialTest o lettura di
+materiale reale fa parte della qualification di questa slice.
 
 ## Candidate ALPHA-GOV-REL
 

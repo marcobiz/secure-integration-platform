@@ -8,6 +8,56 @@ public sealed partial class AdminOpenApiParityTests
     private static readonly string Root = FindRepositoryRoot();
 
     [Fact]
+    public void FSE2_ADMIN_AUDIT_OpenAPI_generated_client_and_runtime_match()
+    {
+        string yaml = File.ReadAllText(Path.Combine(Root, "docs", "api", "gateway-openapi.yaml"));
+        string generated = File.ReadAllText(Path.Combine(Root, "src", "Admin", "Admin.Web", "src", "api", "schema.d.ts"));
+        string contracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "AdminContracts.cs"));
+        string mapper = File.ReadAllText(Path.Combine(Root, "src", "ConnectorPacks", "Healthcare", "Healthcare.FSE2", "Fse2Connector.cs"));
+        string reducer = File.ReadAllText(Path.Combine(Root, "tools", "fse2", "OfficialTestProvisioner", "Fse2FailureEvidenceReducer.cs"));
+        string[] phases =
+        [
+            "DNS_FAILURE", "TCP_CONNECT_FAILURE", "TLS_SERVER_VALIDATION_FAILURE",
+            "MTLS_CLIENT_AUTH_FAILURE", "TIMEOUT", "TRANSPORT_FAILURE_OTHER",
+            "UPSTREAM_HTTP_RESPONSE", "LOCAL_RESPONSE_MAPPING_FAILURE"
+        ];
+        string[] categories =
+        [
+            "NO_UPSTREAM_RESPONSE", "INFORMATIONAL", "SUCCESS", "REDIRECTION",
+            "CLIENT_ERROR", "SERVER_ERROR"
+        ];
+        string[] upstreamCodes =
+        [
+            "cda-element", "cda-extraction", "cda-match", "cda-validation", "document-hash",
+            "document-type", "eds-document-missing", "eds-error", "empty-file", "fhir-element",
+            "fhir-extraction", "fhir-mapping-type", "generic-error", "generic-timeout", "ini-error",
+            "invalid-format", "jwt-validation", "mandatory-element", "mandatory-element-token",
+            "max-day-limit-exceed", "missing-token", "record-not-found", "semantic", "service-error",
+            "syntax", "vocabulary", "workflow-id-error-extraction"
+        ];
+
+        Assert.Contains("SafeFailureDiagnosticsResource", contracts, StringComparison.Ordinal);
+        Assert.Contains("failureDiagnostics", yaml, StringComparison.Ordinal);
+        Assert.Contains("failureDiagnostics", generated, StringComparison.Ordinal);
+        foreach (string value in phases.Concat(categories))
+        {
+            Assert.Contains(value, yaml, StringComparison.Ordinal);
+            Assert.Contains(value, generated, StringComparison.Ordinal);
+        }
+        Assert.Contains("upstreamStatus: number | null", generated, StringComparison.Ordinal);
+        foreach (string value in upstreamCodes)
+        {
+            Assert.Contains(value, mapper, StringComparison.Ordinal);
+            Assert.Contains(value, reducer, StringComparison.Ordinal);
+            Assert.Contains(value, yaml, StringComparison.Ordinal);
+            Assert.Contains(value, generated, StringComparison.Ordinal);
+        }
+        Assert.Contains("safeUpstreamCode: null |", generated, StringComparison.Ordinal);
+        Assert.Contains("localSafeCode: null | \"FSE2_RESPONSE_INVALID\"", generated, StringComparison.Ordinal);
+        Assert.Contains("FSE2_RESPONSE_INVALID", reducer, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Every_admin_route_is_declared_once_in_OpenAPI_and_no_documented_route_is_stale()
     {
         string program = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "Program.cs"));

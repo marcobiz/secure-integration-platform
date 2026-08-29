@@ -41,6 +41,15 @@ internal static class Program
                 return 0;
             }
 
+            if (args[0] == "reduce-failure-evidence" && args.Length == 3)
+            {
+                if (!Guid.TryParseExact(args[2], "D", out Guid correlationId) || correlationId == Guid.Empty)
+                    throw Failure("FSE2_EVIDENCE_CORRELATION_INVALID", inputFailure: true);
+                using JsonDocument audit = JsonDocument.Parse(ReadBounded(args[1], 1024 * 1024, "FSE2_EVIDENCE_AUDIT_INPUT_INVALID"));
+                Print(Fse2FailureEvidenceReducer.Reduce(audit.RootElement, correlationId));
+                return 0;
+            }
+
             Command command = ParseCommand(args);
             Fse2OfficialTestOperationalPlan operationalPlan = ReadPlan(command.PlanPath);
             using AdminApi api = await AdminApi.CreateAsync().ConfigureAwait(false);
@@ -597,10 +606,11 @@ internal static class Program
         fse2-officialtest approve <operational-plan.json> <approval-request-id> <approval-digest-sha256>
         fse2-officialtest publish <operational-plan.json> <expected-publication-revision>
         fse2-officialtest verify <operational-plan.json>
+        fse2-officialtest reduce-failure-evidence <admin-audit-page.json> <correlation-id>
 
         Operational commands require FSE2_GATEWAY_URL, FSE2_ADMIN_SESSION_COOKIE and optionally
         FSE2_GATEWAY_CA_FILE. Public A1/S1 authority is read only from the authenticated Admin API.
-        Plan performs no write, certificate access, signing, DNS or HTTP.
+        Plan and reduce-failure-evidence perform no write, certificate access, signing, DNS or HTTP.
         """);
 
     private sealed class AdminApi(

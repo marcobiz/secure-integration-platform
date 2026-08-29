@@ -29,6 +29,76 @@ public sealed class AdminApiSecurityTests
 {
     private static readonly JsonSerializerOptions WireJson = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
 
+    [Fact]
+    public async Task FSE2_ADMIN_AUDIT_SecurityAdministrator_reads_bounded_failure_diagnostics()
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        _ = await LoginAsync(client, "security-admin", TestContext.Current.CancellationToken);
+        Guid tenantId = await SeedFailureAuditAsync(factory, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.GetAsync($"/admin/api/v1/audit?tenantId={tenantId:D}", TestContext.Current.CancellationToken);
+        response.EnsureSuccessStatusCode();
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        using JsonDocument document = JsonDocument.Parse(body);
+        JsonElement audit = Assert.Single(document.RootElement.GetProperty("items").EnumerateArray());
+        JsonElement diagnostics = audit.GetProperty("failureDiagnostics");
+
+        Assert.Equal("UPSTREAM_HTTP_RESPONSE", diagnostics.GetProperty("failurePhase").GetString());
+        Assert.Equal(400, diagnostics.GetProperty("upstreamStatus").GetInt32());
+        Assert.Equal("CLIENT_ERROR", diagnostics.GetProperty("statusCategory").GetString());
+        Assert.Equal("syntax", diagnostics.GetProperty("safeUpstreamCode").GetString());
+        Assert.Equal(JsonValueKind.Null, diagnostics.GetProperty("localSafeCode").ValueKind);
+        Assert.Equal(5, diagnostics.EnumerateObject().Count());
+        foreach (string forbidden in new[] { "metadata", "actorId", "raw", "header", "authorization", "jwt", "cookie", "certificate", "exception", "stack", "hostname" })
+            Assert.DoesNotContain(forbidden, body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("viewer")]
+    [InlineData("operator")]
+    [InlineData("editor")]
+    [InlineData("approver")]
+    public async Task FSE2_ADMIN_AUDIT_non_security_roles_cannot_read_failure_diagnostics(string user)
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient administrator = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        _ = await LoginAsync(administrator, "security-admin", TestContext.Current.CancellationToken);
+        Guid tenantId = await SeedFailureAuditAsync(factory, TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        _ = await LoginAsync(client, user, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.GetAsync($"/admin/api/v1/audit?tenantId={tenantId:D}", TestContext.Current.CancellationToken);
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.DoesNotContain("failureDiagnostics", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("UPSTREAM_HTTP_RESPONSE", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("syntax", body, StringComparison.Ordinal);
+    }
+
+    private static async Task<Guid> SeedFailureAuditAsync(AdminDevelopmentFactory factory, CancellationToken cancellationToken)
+    {
+        Guid tenantId = Guid.NewGuid();
+        IAdminGatewayRegistry registry = factory.Services.GetRequiredService<IAdminGatewayRegistry>();
+        await registry.AddTenantAsync(new(tenantId, "diag-" + tenantId.ToString("N"), "Diagnostics tenant", TenantStatus.Active, DateTimeOffset.UtcNow), cancellationToken);
+        await registry.AppendAuditAsync(new(
+            Guid.NewGuid(), DateTimeOffset.UtcNow, tenantId, "installation", Guid.NewGuid().ToString("D"),
+            "operation.invoke", "operation", "fse2/create", Guid.NewGuid(), "failure",
+            "BGW-EGRESS-UPSTREAM-REJECTED", new Dictionary<string, string>
+            {
+                ["connectorVersion"] = "1.0.0",
+                ["callerKind"] = "Direct"
+            },
+            GatewayAuditFailureDiagnostics.Create(
+                GatewayAuditFailurePhase.UpstreamHttpResponse,
+                400,
+                GatewayAuditStatusCategory.ClientError,
+                "syntax",
+                null)), cancellationToken);
+        return tenantId;
+    }
+
     internal static async Task RunPostgreSqlApprovalPublishAntiExfiltrationAsync()
     {
         string? adminConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");

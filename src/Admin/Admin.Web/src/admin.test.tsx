@@ -5,6 +5,7 @@ import { hasRole } from './auth/SessionContext';
 import { DataTable } from './components/DataTable';
 import { ErrorState } from './components/AsyncState';
 import i18n from './i18n';
+import { hasTenantSecurityAdministratorRole, SafeFailureDiagnosticsCell } from './features/operations/TenantDataPage';
 
 const session: AdminSession = { id: '00000000-0000-0000-0000-000000000001', displayName: 'Editor', roles: [{ role: 'ConnectorEditor', tenantId: null }] };
 
@@ -26,4 +27,18 @@ describe('Admin UI security and presentation behavior', () => {
   it('sends ETag preconditions for connector transitions', async () => { const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200, headers: { 'Content-Type': 'application/json' } })); vi.stubGlobal('fetch', fetchMock); await adminApi.retire('sample', { connectorId: 'sample', version: '1.0.0', schemaVersion: '1.0', state: 'Published', checksumSha256: 'A'.repeat(64), rowVersion: 7, createdAt: '2026-08-05T00:00:00Z' }); const headers = fetchMock.mock.calls.at(-1)?.[1].headers as Headers; expect(headers.get('If-Match')).toBe('"7"'); });
   it('controlled test accepts identifiers only and no arbitrary URL', async () => { const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'valid', connectorId: 'sample', operationId: 'submit', connectorVersion: '1.0.0' }), { status: 200, headers: { 'Content-Type': 'application/json' } })); vi.stubGlobal('fetch', fetchMock); await adminApi.testConnector('sample', '00000000-0000-0000-0000-000000000001', 'submit'); expect(String(fetchMock.mock.calls.at(-1)?.[1].body)).not.toContain('url'); });
   it('supports observable retry action', () => { const retry = vi.fn(); render(<ErrorState error={new Error('offline')} retry={retry} />); fireEvent.click(screen.getByRole('button', { name: 'Retry' })); expect(retry).toHaveBeenCalledOnce(); });
+  it('renders only bounded safe failure diagnostics with Gateway and upstream status separated', () => {
+    const { container } = render(<SafeFailureDiagnosticsCell gatewayStatus="BGW-EGRESS-UPSTREAM-REJECTED" diagnostics={{ failurePhase: 'LOCAL_RESPONSE_MAPPING_FAILURE', upstreamStatus: 200, statusCategory: 'SUCCESS', safeUpstreamCode: null, localSafeCode: 'FSE2_RESPONSE_INVALID' }} />);
+    expect(screen.getByRole('region', { name: 'Safe failure diagnostics' })).toBeInTheDocument();
+    expect(screen.getByText(/Gateway status: BGW-EGRESS-UPSTREAM-REJECTED/)).toBeInTheDocument();
+    expect(screen.getByText(/Upstream status: 200/)).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/raw|header|token|certificate|exception|stack|retry|replay/i);
+  });
+  it('shows safe diagnostics only for a SecurityAdministrator authorized for the selected tenant', () => {
+    const tenant = '00000000-0000-0000-0000-000000000042';
+    expect(hasTenantSecurityAdministratorRole({ ...session, roles: [{ role: 'SecurityAdministrator', tenantId: null }] }, tenant)).toBe(true);
+    expect(hasTenantSecurityAdministratorRole({ ...session, roles: [{ role: 'SecurityAdministrator', tenantId: tenant }] }, tenant)).toBe(true);
+    expect(hasTenantSecurityAdministratorRole({ ...session, roles: [{ role: 'SecurityAdministrator', tenantId: '00000000-0000-0000-0000-000000000043' }] }, tenant)).toBe(false);
+    expect(hasTenantSecurityAdministratorRole(session, tenant)).toBe(false);
+  });
 });

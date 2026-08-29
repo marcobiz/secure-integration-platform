@@ -47,6 +47,17 @@ already depend on the existing fail-closed non-success behavior.
   `UPSTREAM_HTTP_RESPONSE` plus the bounded status/category and optional allowlisted FSE2 code.
   Application audit receives only correlation, operation, connector version, caller kind and these
   safe diagnostics. The caller still receives the existing generic sanitized Problem.
+- Safe diagnostics use five explicit, closed audit fields: phase, nullable HTTP status in the
+  `100..599` range, derived closed status category, optional frozen FSE2 upstream code and optional
+  local safe code. A received response that cannot be mapped is recorded distinctly as
+  `LOCAL_RESPONSE_MAPPING_FAILURE`, retains only its status, uses
+  `FSE2_RESPONSE_INVALID`, and never retains response bytes or arbitrary metadata.
+- PostgreSQL persists those fields as constrained columns rather than a diagnostic JSON bag. The
+  Admin audit projection includes them only after server-side authorization confirms the
+  authenticated `SecurityAdministrator` role in the same tenant/installation scope. Every other
+  Admin role and the runtime caller receive the same non-diagnostic projection. The OfficialTest
+  evidence reducer accepts only that projection, revalidates both allowlists and emits only the
+  five-field object before task-owned database cleanup.
 - The public capability bridge gains one narrow exact-result rejection operation. It accepts only
   the same response object returned by the invocation's single bounded transport call, only inside
   the current qualified scope, only for non-success status, and only with the mapper's bounded safe
@@ -66,6 +77,10 @@ HTTP response from transport phases without exposing the response. Existing non-
 the historical transport entry point keep their exact failure semantics. The change remains
 vertical-neutral in Core: Core understands only a closed response mode and safe transport phases,
 not FSE2 codes or healthcare concepts.
+
+The bounded read-back is intentionally not a generic metadata endpoint. It adds no replay or retry
+authority, and it does not expose actor metadata, raw audit JSON, host resolution, headers,
+certificates, tokens or exception text. The existing caller Problem contract is unchanged.
 
 This ADR narrows the alternative rejected by ADR-0027 concerning public bridge validation methods:
 no general validation or policy-inspection surface is added, but one exact-result failure-reporting

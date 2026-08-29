@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using SecureIntegration.Gateway.Domain;
+
 namespace SecureIntegration.Gateway.Api;
 
 /// <summary>Development-only selection of one fixed synthetic user.</summary>
@@ -21,6 +24,26 @@ public sealed record RevokeInstallationRequest(string Reason);
 
 /// <summary>Creates one deny-by-default operation grant.</summary>
 public sealed record CreateGrantRequest(Guid TenantId, Guid InstallationId, string ConnectorId, string OperationId, DateTimeOffset? ValidUntil);
+
+/// <summary>Explicit closed failure diagnostics. No generic metadata or upstream content is present.</summary>
+public sealed record SafeFailureDiagnosticsResource(
+    GatewayAuditFailurePhase FailurePhase,
+    int? UpstreamStatus,
+    GatewayAuditStatusCategory StatusCategory,
+    string? SafeUpstreamCode,
+    string? LocalSafeCode);
+
+/// <summary>Redacted audit projection. Bounded failure diagnostics are omitted unless server-side RBAC authorizes them.</summary>
+public sealed record AdminAuditEventResource(
+    Guid Id,
+    DateTimeOffset OccurredAt,
+    string Action,
+    string TargetType,
+    string TargetId,
+    Guid CorrelationId,
+    string Outcome,
+    string ReasonCode,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] SafeFailureDiagnosticsResource? FailureDiagnostics);
 
 /// <summary>Redacted approval resource with canonical hexadecimal digests.</summary>
 public sealed record ConnectorApprovalResource(Guid Id, Guid ConnectorVersionId, string ChecksumSha256, string BindingDigestSha256, Guid RequestedBy, Guid? ApprovedBy, Guid? RejectedBy, string Status, DateTimeOffset RequestedAt);

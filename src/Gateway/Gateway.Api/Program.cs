@@ -754,7 +754,13 @@ adminApi.MapGet("/audit", async (Guid tenantId, int? offset, int? limit, HttpCon
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
     AdminAccessService.Require(admin, tenantId, AdminRole.Viewer, AdminRole.Operator, AdminRole.SecurityAdministrator);
-    return Results.Ok(await directory.ListAuditAsync(tenantId, offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
+    AdminPage<GatewayAuditEvent> page = await directory.ListAuditAsync(tenantId, offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false);
+    bool includeFailureDiagnostics = AdminAccessService.HasRole(admin, tenantId, AdminRole.SecurityAdministrator);
+    return Results.Ok(new AdminPage<AdminAuditEventResource>(
+        page.Items.Select(value => AuditResource(value, includeFailureDiagnostics)).ToArray(),
+        page.Offset,
+        page.Limit,
+        page.Total));
 });
 
 adminApi.MapPost("/bootstrap", async (HttpContext context, AdminAccessService access, IAdminSecurityStore securityStore, CancellationToken cancellationToken) =>
@@ -1069,6 +1075,20 @@ static Task AppendAdminAuditAsync(IAdminGatewayRegistry registry, HttpContext co
 
 static GatewayAuditEvent AdminAudit(HttpContext context, AdminAccessContext actor, Guid? tenantId, string action, string targetType, string targetId, string outcome, string reasonCode) =>
     new(Guid.NewGuid(), DateTimeOffset.UtcNow, tenantId, "administrator", actor.ActorId, action, targetType, targetId, Correlation(context), outcome, reasonCode, new Dictionary<string, string>());
+
+static AdminAuditEventResource AuditResource(GatewayAuditEvent value, bool includeFailureDiagnostics)
+{
+    SafeFailureDiagnosticsResource? diagnostics = includeFailureDiagnostics && value.FailureDiagnostics is not null
+        ? new(
+            value.FailureDiagnostics.FailurePhase,
+            value.FailureDiagnostics.UpstreamStatus,
+            value.FailureDiagnostics.StatusCategory,
+            value.FailureDiagnostics.SafeUpstreamCode,
+            value.FailureDiagnostics.LocalSafeCode)
+        : null;
+    return new(value.Id, value.OccurredAt, value.Action, value.TargetType, value.TargetId,
+        value.CorrelationId, value.Outcome, value.ReasonCode, diagnostics);
+}
 
 static ConnectorApprovalResource ApprovalResource(ConnectorApprovalRecord value) =>
     new(value.Id, value.ConnectorVersionId, value.ChecksumSha256, value.BindingDigestSha256, value.RequestedBy, value.ApprovedBy, value.RejectedBy, value.Status.ToString(), value.RequestedAt);

@@ -799,8 +799,38 @@ components:
       properties: { tenantId: { type: string, format: uuid }, installationId: { type: string, format: uuid }, connectorId: { type: string }, operationId: { type: string }, validUntil: { type: [string, 'null'], format: date-time } }
     AuditEvent:
       type: object
+      additionalProperties: false
       required: [id, occurredAt, action, targetType, targetId, correlationId, outcome, reasonCode]
-      properties: { id: { type: string, format: uuid }, occurredAt: { type: string, format: date-time }, action: { type: string }, targetType: { type: string }, targetId: { type: string }, correlationId: { type: string, format: uuid }, outcome: { type: string }, reasonCode: { type: string } }
+      properties:
+        id: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+        action: { type: string }
+        targetType: { type: string }
+        targetId: { type: string }
+        correlationId: { type: string, format: uuid }
+        outcome: { type: string }
+        reasonCode: { type: string }
+        failureDiagnostics:
+          description: Present only for an authenticated SecurityAdministrator with access to the audit tenant.
+          $ref: '#/components/schemas/SafeFailureDiagnostics'
+    SafeFailureDiagnostics:
+      type: object
+      additionalProperties: false
+      required: [failurePhase, upstreamStatus, statusCategory, safeUpstreamCode, localSafeCode]
+      properties:
+        failurePhase:
+          type: string
+          enum: [DNS_FAILURE, TCP_CONNECT_FAILURE, TLS_SERVER_VALIDATION_FAILURE, MTLS_CLIENT_AUTH_FAILURE, TIMEOUT, TRANSPORT_FAILURE_OTHER, UPSTREAM_HTTP_RESPONSE, LOCAL_RESPONSE_MAPPING_FAILURE]
+        upstreamStatus: { type: [integer, 'null'], minimum: 100, maximum: 599 }
+        statusCategory:
+          type: string
+          enum: [NO_UPSTREAM_RESPONSE, INFORMATIONAL, SUCCESS, REDIRECTION, CLIENT_ERROR, SERVER_ERROR]
+        safeUpstreamCode:
+          type: [string, 'null']
+          enum: [null, cda-element, cda-extraction, cda-match, cda-validation, document-hash, document-type, eds-document-missing, eds-error, empty-file, fhir-element, fhir-extraction, fhir-mapping-type, generic-error, generic-timeout, ini-error, invalid-format, jwt-validation, mandatory-element, mandatory-element-token, max-day-limit-exceed, missing-token, record-not-found, semantic, service-error, syntax, vocabulary, workflow-id-error-extraction]
+        localSafeCode:
+          type: [string, 'null']
+          enum: [null, FSE2_RESPONSE_INVALID]
     AuditPage:
       allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } } } }]
     ConnectorSummary:
