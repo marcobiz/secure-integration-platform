@@ -9,6 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Gateway.Integration.Tests\Gateway.Integration.Tests.csproj" />
     <ProjectReference Include="..\..\..\src\ConnectorPacks\Healthcare\Healthcare.FSE2\Healthcare.FSE2.csproj" />
+    <ProjectReference Include="..\..\..\tools\fse2\OfficialTestProvisioner\OfficialTestProvisioner.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />

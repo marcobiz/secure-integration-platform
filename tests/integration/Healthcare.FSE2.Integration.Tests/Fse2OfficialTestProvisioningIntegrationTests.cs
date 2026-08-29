@@ -364,6 +364,8 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
         string json = $$"""
             {
               "schemaVersion":"1.0",
+              "tenantId":"22222222-2222-2222-2222-222222222222",
+              "installationId":"33333333-3333-3333-3333-333333333333",
               "environmentId":"{{environmentId:D}}",
               "officialTestEndpoint":"https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1/",
               "organization":{"identifier":"12345678903","assigningAuthorityOid":"2.16.840.1.113883.2.9.4.1.2","description":"Synthetic Organization","domainId":"synthetic-organization"},

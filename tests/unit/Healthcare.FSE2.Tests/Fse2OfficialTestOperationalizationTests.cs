@@ -310,6 +310,8 @@ public sealed class Fse2OfficialTestOperationalizationTests
     private static string PlanJson() => """
         {
           "schemaVersion":"1.0",
+          "tenantId":"22222222-2222-2222-2222-222222222222",
+          "installationId":"33333333-3333-3333-3333-333333333333",
           "environmentId":"11111111-1111-1111-1111-111111111111",
           "officialTestEndpoint":"https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1/",
           "organization":{

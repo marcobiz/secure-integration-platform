@@ -8,4 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\ConnectorPacks\Healthcare\Healthcare.FSE2\Healthcare.FSE2.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Healthcare.FSE2.Integration.Tests" />
+  </ItemGroup>
 </Project>

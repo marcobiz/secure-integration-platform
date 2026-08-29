@@ -72,6 +72,8 @@ public sealed record Fse2OfficialTestLocality(string Name, string AssigningAutho
 /// passwords, private keys, tokens, authorization headers or principal authority.
 /// </summary>
 public sealed record Fse2OfficialTestOperationalPlan(
+    Guid TenantId,
+    Guid InstallationId,
     Guid EnvironmentId,
     Uri Endpoint,
     Fse2OfficialTestOrganization Organization,
@@ -180,9 +182,13 @@ public static class Fse2OfficialTestOperationalization
             });
             JsonElement root = Object(document.RootElement, "FSE2_OFFICIALTEST_PLAN_INVALID");
             ExactProperties(root,
-                ["schemaVersion", "environmentId", "officialTestEndpoint", "organization", "locality", "a1", "s1", "expectedBindingRevision"]);
+                ["schemaVersion", "tenantId", "installationId", "environmentId", "officialTestEndpoint", "organization", "locality", "a1", "s1", "expectedBindingRevision"]);
             if (!string.Equals(String(root, "schemaVersion", 8), SchemaVersion, StringComparison.Ordinal))
                 throw Denied("FSE2_OFFICIALTEST_PLAN_SCHEMA_UNSUPPORTED");
+            if (!Guid.TryParseExact(String(root, "tenantId", 36), "D", out Guid tenantId) || tenantId == Guid.Empty)
+                throw Denied("FSE2_OFFICIALTEST_TENANT_SELECTOR_INVALID");
+            if (!Guid.TryParseExact(String(root, "installationId", 36), "D", out Guid installationId) || installationId == Guid.Empty)
+                throw Denied("FSE2_OFFICIALTEST_INSTALLATION_SELECTOR_INVALID");
             if (!Guid.TryParseExact(String(root, "environmentId", 36), "D", out Guid environmentId) || environmentId == Guid.Empty)
                 throw Denied("FSE2_OFFICIALTEST_ENVIRONMENT_INVALID");
             if (!Uri.TryCreate(String(root, "officialTestEndpoint", 512), UriKind.Absolute, out Uri? endpoint))
@@ -193,6 +199,8 @@ public static class Fse2OfficialTestOperationalization
             JsonElement locality = ChildObject(root, "locality");
             ExactProperties(locality, ["name", "assigningAuthorityOid", "code"]);
             return Validate(new(
+                tenantId,
+                installationId,
                 environmentId,
                 endpoint,
                 new(String(organization, "identifier", 11), String(organization, "assigningAuthorityOid", 128),
@@ -372,6 +380,8 @@ public static class Fse2OfficialTestOperationalization
     private static Fse2OfficialTestOperationalPlan Validate(Fse2OfficialTestOperationalPlan value)
     {
         ArgumentNullException.ThrowIfNull(value);
+        if (value.TenantId == Guid.Empty) throw Denied("FSE2_OFFICIALTEST_TENANT_SELECTOR_INVALID");
+        if (value.InstallationId == Guid.Empty) throw Denied("FSE2_OFFICIALTEST_INSTALLATION_SELECTOR_INVALID");
         if (value.EnvironmentId == Guid.Empty) throw Denied("FSE2_OFFICIALTEST_ENVIRONMENT_INVALID");
         if (!string.Equals(value.Endpoint.AbsoluteUri, Fse2OfficialTestCanonicalDefinition.OfficialTestEndpoint, StringComparison.Ordinal))
             throw Denied("FSE2_OFFICIALTEST_ENDPOINT_DENIED");
@@ -499,6 +509,8 @@ public static class Fse2OfficialTestOperationalization
     private static object PlanAuthority(Fse2OfficialTestOperationalPlan value) => new
     {
         schemaVersion = SchemaVersion,
+        tenantId = value.TenantId.ToString("D"),
+        installationId = value.InstallationId.ToString("D"),
         environmentId = value.EnvironmentId.ToString("D"),
         endpoint = value.Endpoint.AbsoluteUri,
         organization = value.Organization,

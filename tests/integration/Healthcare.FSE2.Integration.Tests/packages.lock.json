@@ -372,6 +372,12 @@
           "SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap": "[1.0.0, )"
         }
       },
+      "SecureIntegration.Tools.Fse2.OfficialTestProvisioner": {
+        "type": "Project",
+        "dependencies": {
+          "SecureIntegration.ConnectorPacks.Healthcare.FSE2": "[1.0.0, )"
+        }
+      },
       "JsonSchema.Net": {
         "type": "CentralTransitive",
         "requested": "[9.4.0, )",

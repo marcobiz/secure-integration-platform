@@ -74,6 +74,8 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         string planJson = $$"""
             {
               "schemaVersion":"1.0",
+              "tenantId":"22222222-2222-2222-2222-222222222222",
+              "installationId":"33333333-3333-3333-3333-333333333333",
               "environmentId":"{{environmentId:D}}",
               "officialTestEndpoint":"{{Fse2OfficialTestCanonicalDefinition.OfficialTestEndpoint}}",
               "organization":{"identifier":"12345678903","assigningAuthorityOid":"2.16.840.1.113883.2.9.4.1.2","description":"ASL Roma 1","domainId":"asl-roma-1"},
@@ -152,6 +154,8 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         string planJson = $$"""
             {
               "schemaVersion":"1.0",
+              "tenantId":"22222222-2222-2222-2222-222222222222",
+              "installationId":"33333333-3333-3333-3333-333333333333",
               "environmentId":"{{environmentId:D}}",
               "officialTestEndpoint":"{{publishedBase}}",
               "organization":{"identifier":"12345678903","assigningAuthorityOid":"2.16.840.1.113883.2.9.4.1.2","description":"ASL Roma 1","domainId":"asl-roma-1"},

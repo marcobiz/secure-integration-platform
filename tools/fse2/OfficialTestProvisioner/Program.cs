@@ -12,6 +12,14 @@ using SecureIntegration.Gateway.Application;
 
 namespace SecureIntegration.Tools.Fse2.OfficialTestProvisioner;
 
+internal interface IOfficialTestAdminApi : IDisposable
+{
+    Guid PrincipalId { get; }
+    Task<JsonElement> GetAsync(string relative);
+    Task<byte[]> GetBytesAsync(string relative);
+    Task<JsonElement> MutateAsync(HttpMethod method, string relative, object? body, long? ifMatch = null);
+}
+
 internal static class Program
 {
     private static readonly JsonSerializerOptions Json = CreateJson();
@@ -36,28 +44,27 @@ internal static class Program
             Command command = ParseCommand(args);
             Fse2OfficialTestOperationalPlan operationalPlan = ReadPlan(command.PlanPath);
             using AdminApi api = await AdminApi.CreateAsync().ConfigureAwait(false);
-            Fse2OfficialTestResolvedProviderAuthority publicAuthority = await ResolvePublicAuthorityAsync(api, operationalPlan).ConfigureAwait(false);
-            Fse2OfficialTestCompiledConfiguration compiled = Fse2OfficialTestOperationalization.Compile(
-                operationalPlan,
-                publicAuthority.A1,
-                publicAuthority.S1);
+            ProvisioningContext context = await PreflightAsync(api, operationalPlan).ConfigureAwait(false);
 
             switch (command.Name)
             {
                 case "configure":
-                    await ConfigureAsync(api, operationalPlan, publicAuthority, compiled).ConfigureAwait(false);
+                    await ConfigureAsync(api, context).ConfigureAwait(false);
+                    break;
+                case "grant":
+                    await GrantAsync(api, context).ConfigureAwait(false);
                     break;
                 case "propose":
-                    await ProposeAsync(api, operationalPlan, publicAuthority, compiled).ConfigureAwait(false);
+                    await ProposeAsync(api, context).ConfigureAwait(false);
                     break;
                 case "approve":
-                    await ApproveAsync(api, operationalPlan, publicAuthority, compiled, command.ApprovalRequestId!.Value, command.ExpectedApprovalDigest!).ConfigureAwait(false);
+                    await ApproveAsync(api, context, command.ApprovalRequestId!.Value, command.ExpectedApprovalDigest!).ConfigureAwait(false);
                     break;
                 case "publish":
-                    await PublishAsync(api, operationalPlan, publicAuthority, compiled, command.ExpectedPublicationRevision!.Value).ConfigureAwait(false);
+                    await PublishAsync(api, context, command.ExpectedPublicationRevision!.Value).ConfigureAwait(false);
                     break;
                 case "verify":
-                    await VerifyAndPrintAsync(api, operationalPlan, publicAuthority, compiled, "Published", "Active").ConfigureAwait(false);
+                    await VerifyAndPrintAsync(api, context, "Published", "Active").ConfigureAwait(false);
                     break;
                 default:
                     throw Failure("FSE2_OFFICIALTEST_COMMAND_INVALID");
@@ -81,12 +88,12 @@ internal static class Program
         }
     }
 
-    private static async Task ConfigureAsync(
-        AdminApi api,
-        Fse2OfficialTestOperationalPlan plan,
-        Fse2OfficialTestResolvedProviderAuthority publicAuthority,
-        Fse2OfficialTestCompiledConfiguration compiled)
+    internal static async Task ConfigureAsync(IOfficialTestAdminApi api, ProvisioningContext context)
     {
+        Fse2OfficialTestOperationalPlan plan = context.EffectivePlan;
+        Fse2OfficialTestResolvedProviderAuthority publicAuthority = context.PublicAuthority;
+        Fse2OfficialTestCompiledConfiguration compiled = context.Compiled;
+        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
         await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         using JsonDocument definition = JsonDocument.Parse(compiled.CanonicalDefinition);
         JsonElement validated = await api.MutateAsync(HttpMethod.Post, "admin/api/v1/connectors:validate",
@@ -95,10 +102,12 @@ internal static class Program
             !string.Equals(validated.GetProperty("checksumSha256").GetString(), compiled.CanonicalDefinitionSha256, StringComparison.Ordinal))
             throw Failure("FSE2_OFFICIALTEST_SERVER_VALIDATION_DRIFT");
 
+        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
         await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         JsonElement imported = await api.MutateAsync(HttpMethod.Post, "admin/api/v1/connectors:import",
             new ConnectorImportRequest(definition.RootElement.Clone(), compiled.CanonicalDefinitionSha256)).ConfigureAwait(false);
         long importedRowVersion = PositiveLong(imported, "rowVersion");
+        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
         await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         JsonElement stored = await api.MutateAsync(HttpMethod.Post,
             $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/versions/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorVersion)}:validate",
@@ -107,23 +116,53 @@ internal static class Program
         if (!string.Equals(stored.GetProperty("state").GetString(), "Validated", StringComparison.Ordinal))
             throw Failure("FSE2_OFFICIALTEST_VALIDATE_STORED_FAILED");
 
+        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
         await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         _ = await api.MutateAsync(HttpMethod.Put,
             $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/bindings",
             compiled.BindingRequest,
             plan.ExpectedBindingRevision).ConfigureAwait(false);
-        ServerVerification verified = await VerifyServerAsync(api, plan, publicAuthority, compiled, "Validated", "Draft").ConfigureAwait(false);
+        ServerVerification verified = await VerifyServerAsync(api, context, "Validated", "Draft").ConfigureAwait(false);
         Print(Result("configured", compiled, verified));
     }
 
-    private static async Task ProposeAsync(
-        AdminApi api,
-        Fse2OfficialTestOperationalPlan plan,
-        Fse2OfficialTestResolvedProviderAuthority publicAuthority,
-        Fse2OfficialTestCompiledConfiguration compiled)
+    internal static async Task GrantAsync(IOfficialTestAdminApi api, ProvisioningContext context)
     {
-        ServerVerification verified = await VerifyServerAsync(api, plan, publicAuthority, compiled, "Validated", "Draft").ConfigureAwait(false);
+        InstallationGrantAuthority[] existing = await ReadExactGrantsAsync(api, context.Installation).ConfigureAwait(false);
+        if (existing.Length > 1) throw Failure("FSE2_OFFICIALTEST_GRANT_AUTHORITY_AMBIGUOUS");
+        if (existing.Length == 1)
+        {
+            RequireGrantCurrent(existing[0], context.Installation);
+            Print(new { status = "grant-verified", installationId = context.Installation.Id, environmentId = context.Installation.EnvironmentId });
+            return;
+        }
+
+        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
+        JsonElement created = await api.MutateAsync(HttpMethod.Post, "admin/api/v1/grants", new
+        {
+            tenantId = context.Installation.TenantId,
+            installationId = context.Installation.Id,
+            connectorId = Fse2OfficialTestCanonicalDefinition.ConnectorId,
+            operationId = Fse2OfficialTestCanonicalDefinition.OperationId,
+            validUntil = (DateTimeOffset?)null
+        }).ConfigureAwait(false);
+        InstallationGrantAuthority grant = GrantAuthority(created);
+        RequireGrantCurrent(grant, context.Installation);
+        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
+        InstallationGrantAuthority[] readback = await ReadExactGrantsAsync(api, context.Installation).ConfigureAwait(false);
+        if (readback.Length != 1 || readback[0].Id != grant.Id) throw Failure("FSE2_OFFICIALTEST_GRANT_READBACK_DRIFT");
+        RequireGrantCurrent(readback[0], context.Installation);
+        Print(new { status = "granted", installationId = context.Installation.Id, environmentId = context.Installation.EnvironmentId });
+    }
+
+    internal static async Task ProposeAsync(IOfficialTestAdminApi api, ProvisioningContext context)
+    {
+        Fse2OfficialTestOperationalPlan plan = context.EffectivePlan;
+        Fse2OfficialTestResolvedProviderAuthority publicAuthority = context.PublicAuthority;
+        Fse2OfficialTestCompiledConfiguration compiled = context.Compiled;
+        ServerVerification verified = await VerifyServerAsync(api, context, "Validated", "Draft").ConfigureAwait(false);
         ApprovalReviewResult review = await ReadReviewAsync(api).ConfigureAwait(false);
+        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
         await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         JsonElement requested = await api.MutateAsync(HttpMethod.Post,
             $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/versions/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorVersion)}/approval-requests",
@@ -143,18 +182,20 @@ internal static class Program
         });
     }
 
-    private static async Task ApproveAsync(
-        AdminApi api,
-        Fse2OfficialTestOperationalPlan plan,
-        Fse2OfficialTestResolvedProviderAuthority publicAuthority,
-        Fse2OfficialTestCompiledConfiguration compiled,
+    internal static async Task ApproveAsync(
+        IOfficialTestAdminApi api,
+        ProvisioningContext context,
         Guid approvalRequestId,
         string expectedApprovalDigest)
     {
-        _ = await VerifyServerAsync(api, plan, publicAuthority, compiled, "Validated", "Draft").ConfigureAwait(false);
+        Fse2OfficialTestOperationalPlan plan = context.EffectivePlan;
+        Fse2OfficialTestResolvedProviderAuthority publicAuthority = context.PublicAuthority;
+        Fse2OfficialTestCompiledConfiguration compiled = context.Compiled;
+        _ = await VerifyServerAsync(api, context, "Validated", "Draft").ConfigureAwait(false);
         ApprovalReviewResult review = await ReadReviewAsync(api).ConfigureAwait(false);
         if (!IsSha256(expectedApprovalDigest) || !string.Equals(review.DigestSha256, expectedApprovalDigest, StringComparison.Ordinal))
             throw Failure("FSE2_OFFICIALTEST_APPROVAL_DIGEST_STALE", inputFailure: true);
+        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
         await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         JsonElement approved = await api.MutateAsync(HttpMethod.Post,
             $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/versions/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorVersion)}/approvals",
@@ -172,16 +213,18 @@ internal static class Program
         });
     }
 
-    private static async Task PublishAsync(
-        AdminApi api,
-        Fse2OfficialTestOperationalPlan plan,
-        Fse2OfficialTestResolvedProviderAuthority publicAuthority,
-        Fse2OfficialTestCompiledConfiguration compiled,
+    internal static async Task PublishAsync(
+        IOfficialTestAdminApi api,
+        ProvisioningContext context,
         long expectedPublicationRevision)
     {
+        Fse2OfficialTestOperationalPlan plan = context.EffectivePlan;
+        Fse2OfficialTestResolvedProviderAuthority publicAuthority = context.PublicAuthority;
+        Fse2OfficialTestCompiledConfiguration compiled = context.Compiled;
         if (expectedPublicationRevision < 0) throw Failure("FSE2_OFFICIALTEST_PUBLICATION_REVISION_INVALID", inputFailure: true);
-        _ = await VerifyServerAsync(api, plan, publicAuthority, compiled, "Validated", "Draft").ConfigureAwait(false);
+        _ = await VerifyServerAsync(api, context, "Validated", "Draft").ConfigureAwait(false);
         await RequireCurrentApproverAsync(api, compiled).ConfigureAwait(false);
+        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
         await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         JsonElement current = await api.GetAsync(VersionPath()).ConfigureAwait(false);
         long rowVersion = PositiveLong(current, "rowVersion");
@@ -189,20 +232,18 @@ internal static class Program
             new ConnectorVersionActionRequest(rowVersion, expectedPublicationRevision), rowVersion).ConfigureAwait(false);
         if (!string.Equals(published.GetProperty("state").GetString(), "Published", StringComparison.Ordinal))
             throw Failure("FSE2_OFFICIALTEST_PUBLICATION_FAILED");
-        ServerVerification verified = await VerifyServerAsync(api, plan, publicAuthority, compiled, "Published", "Active").ConfigureAwait(false);
+        ServerVerification verified = await VerifyServerAsync(api, context, "Published", "Active").ConfigureAwait(false);
         Print(Result("published", compiled, verified));
     }
 
-    private static async Task VerifyAndPrintAsync(
-        AdminApi api,
-        Fse2OfficialTestOperationalPlan plan,
-        Fse2OfficialTestResolvedProviderAuthority publicAuthority,
-        Fse2OfficialTestCompiledConfiguration compiled,
+    internal static async Task VerifyAndPrintAsync(
+        IOfficialTestAdminApi api,
+        ProvisioningContext context,
         string expectedVersionState,
         string expectedBindingState)
     {
-        ServerVerification verified = await VerifyServerAsync(api, plan, publicAuthority, compiled, expectedVersionState, expectedBindingState).ConfigureAwait(false);
-        Print(Result("verified", compiled, verified));
+        ServerVerification verified = await VerifyServerAsync(api, context, expectedVersionState, expectedBindingState).ConfigureAwait(false);
+        Print(Result("verified", context.Compiled, verified));
     }
 
     private static object Result(string status, Fse2OfficialTestCompiledConfiguration compiled, ServerVerification verified) => new
@@ -219,14 +260,16 @@ internal static class Program
         bindingState = verified.BindingState
     };
 
-    private static async Task<ServerVerification> VerifyServerAsync(
-        AdminApi api,
-        Fse2OfficialTestOperationalPlan plan,
-        Fse2OfficialTestResolvedProviderAuthority publicAuthority,
-        Fse2OfficialTestCompiledConfiguration compiled,
+    internal static async Task<ServerVerification> VerifyServerAsync(
+        IOfficialTestAdminApi api,
+        ProvisioningContext context,
         string expectedVersionState,
         string expectedBindingState)
     {
+        Fse2OfficialTestOperationalPlan plan = context.EffectivePlan;
+        Fse2OfficialTestResolvedProviderAuthority publicAuthority = context.PublicAuthority;
+        Fse2OfficialTestCompiledConfiguration compiled = context.Compiled;
+        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
         await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
         JsonElement current = await api.GetAsync(VersionPath()).ConfigureAwait(false);
         if (!string.Equals(current.GetProperty("state").GetString(), expectedVersionState, StringComparison.Ordinal) ||
@@ -269,7 +312,7 @@ internal static class Program
             throw Failure($"FSE2_OFFICIALTEST_{role}_REVISION_DRIFT");
     }
 
-    private static async Task<ApprovalReviewResult> ReadReviewAsync(AdminApi api)
+    private static async Task<ApprovalReviewResult> ReadReviewAsync(IOfficialTestAdminApi api)
     {
         string path = VersionPath() + "/approval-review";
         JsonElement value = await api.GetAsync(path).ConfigureAwait(false);
@@ -280,7 +323,7 @@ internal static class Program
         return review;
     }
 
-    private static async Task RequireCurrentApproverAsync(AdminApi api, Fse2OfficialTestCompiledConfiguration compiled)
+    private static async Task RequireCurrentApproverAsync(IOfficialTestAdminApi api, Fse2OfficialTestCompiledConfiguration compiled)
     {
         JsonElement page = await api.GetAsync(VersionPath() + "/approvals?offset=0&limit=100").ConfigureAwait(false);
         Fse2OfficialTestApprovalAuthority[] approvals = page.GetProperty("items").EnumerateArray().Select(value => new Fse2OfficialTestApprovalAuthority(
@@ -296,8 +339,145 @@ internal static class Program
     private static Fse2OfficialTestOperationalPlan ReadPlan(string path) =>
         Fse2OfficialTestOperationalization.ParsePlan(ReadBounded(path, 64 * 1024, "FSE2_OFFICIALTEST_PLAN_FILE_INVALID"));
 
+    internal static async Task<ProvisioningContext> PreflightAsync(
+        IOfficialTestAdminApi api,
+        Fse2OfficialTestOperationalPlan declaredPlan)
+    {
+        if (api.PrincipalId == Guid.Empty) throw Failure("FSE2_OFFICIALTEST_ADMIN_SESSION_INVALID", inputFailure: true);
+        InstallationAuthority installation = await ResolveInstallationAuthorityAsync(api, declaredPlan).ConfigureAwait(false);
+        await RequireEnvironmentCurrentAsync(api, installation.EnvironmentId).ConfigureAwait(false);
+        Fse2OfficialTestOperationalPlan effectivePlan = declaredPlan with { EnvironmentId = installation.EnvironmentId };
+        Fse2OfficialTestResolvedProviderAuthority publicAuthority = await ResolvePublicAuthorityAsync(api, effectivePlan).ConfigureAwait(false);
+        Fse2OfficialTestCompiledConfiguration compiled = Fse2OfficialTestOperationalization.Compile(
+            effectivePlan,
+            publicAuthority.A1,
+            publicAuthority.S1);
+        return new(declaredPlan, effectivePlan, installation, publicAuthority, compiled);
+    }
+
+    private static async Task<InstallationAuthority> ResolveInstallationAuthorityAsync(
+        IOfficialTestAdminApi api,
+        Fse2OfficialTestOperationalPlan plan) =>
+        await ResolveInstallationAuthorityAsync(
+            api, plan.TenantId, plan.InstallationId, plan.EnvironmentId, initialPreflight: true).ConfigureAwait(false);
+
+    private static async Task<InstallationAuthority> ResolveInstallationAuthorityAsync(
+        IOfficialTestAdminApi api,
+        Guid tenantId,
+        Guid installationId,
+        Guid assertedEnvironmentId,
+        bool initialPreflight)
+    {
+        InstallationAuthority[] exact = (await ReadPagedItemsAsync(
+            api,
+            offset => $"admin/api/v1/installations?tenantId={tenantId:D}&offset={offset}&limit=100",
+            "FSE2_OFFICIALTEST_INSTALLATION_CATALOG_TOO_LARGE").ConfigureAwait(false))
+            .Where(value => value.GetProperty("id").GetGuid() == installationId)
+            .Select(InstallationAuthorityFrom)
+            .ToArray();
+        if (exact.Length == 0) throw Failure("FSE2_OFFICIALTEST_INSTALLATION_NOT_FOUND");
+        if (exact.Length != 1) throw Failure("FSE2_OFFICIALTEST_INSTALLATION_AMBIGUOUS");
+        InstallationAuthority installation = exact[0];
+        if (installation.TenantId != tenantId || installation.Id != installationId)
+            throw Failure("FSE2_OFFICIALTEST_INSTALLATION_AUTHORITY_MISMATCH");
+        if (!string.Equals(installation.Status, "Active", StringComparison.Ordinal))
+            throw Failure("FSE2_OFFICIALTEST_INSTALLATION_INACTIVE");
+        if (installation.EnvironmentId != assertedEnvironmentId)
+            throw Failure(initialPreflight
+                ? "FSE2_OFFICIALTEST_INSTALLATION_ENVIRONMENT_MISMATCH"
+                : "FSE2_OFFICIALTEST_INSTALLATION_AUTHORITY_DRIFT", inputFailure: initialPreflight);
+        return installation;
+    }
+
+    private static async Task RequireInstallationCurrentAsync(
+        IOfficialTestAdminApi api,
+        InstallationAuthority expected)
+    {
+        InstallationAuthority current;
+        try
+        {
+            current = await ResolveInstallationAuthorityAsync(
+                api, expected.TenantId, expected.Id, expected.EnvironmentId, initialPreflight: false).ConfigureAwait(false);
+        }
+        catch (ProvisioningException exception) when (
+            exception.Code.StartsWith("FSE2_OFFICIALTEST_INSTALLATION_", StringComparison.Ordinal) &&
+            !string.Equals(exception.Code, "FSE2_OFFICIALTEST_INSTALLATION_CATALOG_TOO_LARGE", StringComparison.Ordinal))
+        {
+            throw Failure("FSE2_OFFICIALTEST_INSTALLATION_AUTHORITY_DRIFT");
+        }
+        if (current != expected) throw Failure("FSE2_OFFICIALTEST_INSTALLATION_AUTHORITY_DRIFT");
+    }
+
+    private static async Task RequireEnvironmentCurrentAsync(IOfficialTestAdminApi api, Guid environmentId)
+    {
+        JsonElement[] exact = (await ReadPagedItemsAsync(
+            api,
+            offset => $"admin/api/v1/environments?offset={offset}&limit=100",
+            "FSE2_OFFICIALTEST_ENVIRONMENT_CATALOG_TOO_LARGE").ConfigureAwait(false))
+            .Where(value => value.GetProperty("id").GetGuid() == environmentId)
+            .ToArray();
+        if (exact.Length != 1) throw Failure("FSE2_OFFICIALTEST_INSTALLATION_ENVIRONMENT_NOT_FOUND");
+    }
+
+    private static async Task<JsonElement[]> ReadPagedItemsAsync(
+        IOfficialTestAdminApi api,
+        Func<int, string> path,
+        string tooLargeCode)
+    {
+        List<JsonElement> items = [];
+        for (int offset = 0; offset <= 1000; offset += 100)
+        {
+            JsonElement page = await api.GetAsync(path(offset)).ConfigureAwait(false);
+            JsonElement[] batch = page.GetProperty("items").EnumerateArray().Select(value => value.Clone()).ToArray();
+            items.AddRange(batch);
+            if (items.Count > 1000) throw Failure(tooLargeCode);
+            if (batch.Length < 100) return items.ToArray();
+        }
+        throw Failure(tooLargeCode);
+    }
+
+    private static InstallationAuthority InstallationAuthorityFrom(JsonElement value) => new(
+        RequiredGuid(value, "id"),
+        RequiredGuid(value, "tenantId"),
+        RequiredGuid(value, "applicationId"),
+        RequiredGuid(value, "environmentId"),
+        value.GetProperty("status").GetString() ?? string.Empty,
+        value.GetProperty("installationKind").GetString() ?? string.Empty);
+
+    private static async Task<InstallationGrantAuthority[]> ReadExactGrantsAsync(
+        IOfficialTestAdminApi api,
+        InstallationAuthority installation) =>
+        (await ReadPagedItemsAsync(
+            api,
+            offset => $"admin/api/v1/grants?tenantId={installation.TenantId:D}&offset={offset}&limit=100",
+            "FSE2_OFFICIALTEST_GRANT_CATALOG_TOO_LARGE").ConfigureAwait(false))
+        .Select(GrantAuthority)
+        .Where(value => value.InstallationId == installation.Id &&
+            string.Equals(value.ConnectorId, Fse2OfficialTestCanonicalDefinition.ConnectorId, StringComparison.Ordinal) &&
+            string.Equals(value.OperationId, Fse2OfficialTestCanonicalDefinition.OperationId, StringComparison.Ordinal))
+        .ToArray();
+
+    private static InstallationGrantAuthority GrantAuthority(JsonElement value) => new(
+        RequiredGuid(value, "id"),
+        RequiredGuid(value, "installationId"),
+        RequiredGuid(value, "tenantId"),
+        value.GetProperty("connectorId").GetString() ?? string.Empty,
+        value.GetProperty("operationId").GetString() ?? string.Empty,
+        value.GetProperty("enabled").GetBoolean(),
+        value.GetProperty("validFrom").GetDateTimeOffset(),
+        value.GetProperty("validUntil").ValueKind == JsonValueKind.String ? value.GetProperty("validUntil").GetDateTimeOffset() : null);
+
+    private static void RequireGrantCurrent(InstallationGrantAuthority grant, InstallationAuthority installation)
+    {
+        if (grant.InstallationId != installation.Id || grant.TenantId != installation.TenantId || !grant.Enabled ||
+            !string.Equals(grant.ConnectorId, Fse2OfficialTestCanonicalDefinition.ConnectorId, StringComparison.Ordinal) ||
+            !string.Equals(grant.OperationId, Fse2OfficialTestCanonicalDefinition.OperationId, StringComparison.Ordinal) ||
+            grant.ValidUntil is not null && grant.ValidUntil <= DateTimeOffset.UtcNow)
+            throw Failure("FSE2_OFFICIALTEST_GRANT_AUTHORITY_DRIFT");
+    }
+
     private static async Task<Fse2OfficialTestResolvedProviderAuthority> ResolvePublicAuthorityAsync(
-        AdminApi api,
+        IOfficialTestAdminApi api,
         Fse2OfficialTestOperationalPlan plan)
     {
         Fse2OfficialTestProviderCatalogResource a1 = ProviderCatalogResource(
@@ -308,7 +488,7 @@ internal static class Program
     }
 
     private static async Task RequirePublicAuthorityCurrentAsync(
-        AdminApi api,
+        IOfficialTestAdminApi api,
         Fse2OfficialTestOperationalPlan plan,
         Fse2OfficialTestResolvedProviderAuthority expected)
     {
@@ -360,6 +540,7 @@ internal static class Program
     private static Command ParseCommand(string[] args) => args switch
     {
         ["configure", string plan] => new("configure", plan),
+        ["grant", string plan] => new("grant", plan),
         ["propose", string plan] => new("propose", plan),
         ["verify", string plan] => new("verify", plan),
         ["approve", string plan, string requestId, string digest]
@@ -401,6 +582,7 @@ internal static class Program
     private static void Usage() => Console.WriteLine("""
         fse2-officialtest plan <operational-plan.json>
         fse2-officialtest configure <operational-plan.json>
+        fse2-officialtest grant <operational-plan.json>
         fse2-officialtest propose <operational-plan.json>
         fse2-officialtest approve <operational-plan.json> <approval-request-id> <approval-digest-sha256>
         fse2-officialtest publish <operational-plan.json> <expected-publication-revision>
@@ -415,10 +597,10 @@ internal static class Program
         HttpClient client,
         CookieContainer cookies,
         Guid principalId,
-        X509Certificate2? customRoot) : IDisposable
+        X509Certificate2? customRoot) : IOfficialTestAdminApi
     {
         private string? csrf;
-        internal Guid PrincipalId { get; private set; } = principalId;
+        public Guid PrincipalId { get; private set; } = principalId;
 
         internal static async Task<AdminApi> CreateAsync()
         {
@@ -469,9 +651,9 @@ internal static class Program
             }
         }
 
-        internal Task<JsonElement> GetAsync(string relative) => SendAsync(HttpMethod.Get, relative, null, null);
+        public Task<JsonElement> GetAsync(string relative) => SendAsync(HttpMethod.Get, relative, null, null);
 
-        internal async Task<byte[]> GetBytesAsync(string relative)
+        public async Task<byte[]> GetBytesAsync(string relative)
         {
             using HttpRequestMessage request = new(HttpMethod.Get, relative);
             using HttpResponseMessage response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead).ConfigureAwait(false);
@@ -479,7 +661,7 @@ internal static class Program
             return await ReadBoundedResponseAsync(response.Content).ConfigureAwait(false);
         }
 
-        internal Task<JsonElement> MutateAsync(HttpMethod method, string relative, object? body, long? ifMatch = null) =>
+        public Task<JsonElement> MutateAsync(HttpMethod method, string relative, object? body, long? ifMatch = null) =>
             SendAsync(method, relative, body, ifMatch);
 
         private async Task<JsonElement> SendAsync(HttpMethod method, string relative, object? body, long? ifMatch)
@@ -567,8 +749,30 @@ internal static class Program
         Guid? ApprovalRequestId = null,
         string? ExpectedApprovalDigest = null,
         long? ExpectedPublicationRevision = null);
-    private sealed record ServerVerification(string VersionState, string BindingState, string BindingChecksumSha256);
-    private sealed class ProvisioningException(string code, bool inputFailure) : Exception(code)
+    internal sealed record InstallationAuthority(
+        Guid Id,
+        Guid TenantId,
+        Guid ApplicationId,
+        Guid EnvironmentId,
+        string Status,
+        string InstallationKind);
+    internal sealed record InstallationGrantAuthority(
+        Guid Id,
+        Guid InstallationId,
+        Guid TenantId,
+        string ConnectorId,
+        string OperationId,
+        bool Enabled,
+        DateTimeOffset ValidFrom,
+        DateTimeOffset? ValidUntil);
+    internal sealed record ProvisioningContext(
+        Fse2OfficialTestOperationalPlan DeclaredPlan,
+        Fse2OfficialTestOperationalPlan EffectivePlan,
+        InstallationAuthority Installation,
+        Fse2OfficialTestResolvedProviderAuthority PublicAuthority,
+        Fse2OfficialTestCompiledConfiguration Compiled);
+    internal sealed record ServerVerification(string VersionState, string BindingState, string BindingChecksumSha256);
+    internal sealed class ProvisioningException(string code, bool inputFailure) : Exception(code)
     {
         internal string Code { get; } = code;
         internal bool InputFailure { get; } = inputFailure;

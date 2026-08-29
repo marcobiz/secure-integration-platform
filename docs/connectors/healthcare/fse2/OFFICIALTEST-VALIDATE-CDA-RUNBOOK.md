@@ -7,14 +7,17 @@ existing authenticated Admin API. It does not invoke the Connector and does not 
 FSE2 call. Production, accreditation, create/replace/status/delete and provider-material creation
 are outside this procedure.
 
-Stop unless two already-authorized human operators are available in separate authenticated Admin
-sessions. The first needs Connector Editor authority; the second needs Connector Approver authority.
-This runbook does not create principals, accounts or role assignments.
+Stop unless three already-authorized role handoffs are available in separate authenticated Admin
+sessions: Security Administrator for binding and grant, Connector Editor for proposal, and a
+distinct Connector Approver for approval and publication. The same human must not perform both
+proposal and approval. This runbook does not create principals, accounts or role assignments.
 
 ## Prerequisites
 
 - the exact Healthcare/FSE2 execution module is deployed and allowlisted;
 - the OfficialTest Environment already exists;
+- the target Tenant and one active authenticated Installation already exist; the Installation is
+  immutably bound server-side to that Tenant, Application and Environment;
 - A1 and S1 are distinct active client-certificate catalog resources scoped to the exact Connector
   and `validate-cda` operation;
 - A1 is authorized only for client-certificate use and S1 for signing/public-material use;
@@ -30,10 +33,17 @@ The provisioner consumes one protected operational plan outside Git, conforming 
 metadata only from the authenticated Admin API `/provider-resources` catalog. An external
 `server-public-metadata.json` is not accepted and cannot authorize configuration.
 
-The operational plan may contain only the exact Environment ID, the fixed OfficialTest endpoint,
-organization/locality identity, logical A1/S1 provider resource references and expected
-revisions. It must not contain P12 bytes or paths, passwords, private keys, tokens, authorization
-headers, session cookies, principal identities or client-selected runtime authority.
+The operational plan contains Tenant and Installation IDs only as lookup selectors. Its Environment
+ID is a protected assertion, not authority. Before the first Admin mutation, the provisioner
+authenticates the session, resolves exactly one Installation from `/installations` under the selected
+Tenant, requires it to be Active, and compares the assertion with the server-owned
+`InstallationRecord.EnvironmentId`. A mismatch is a hard stop with zero Admin mutations and zero
+provider, signing, DNS, HTTPS, transport or network effects. The server-derived Environment then
+selects the environment catalog, A1/S1 resources, binding and Installation grant.
+
+The plan must not contain P12 bytes or paths, passwords, private keys, tokens, authorization
+headers, session cookies, principal identities or client-selected runtime authority. Tenant,
+Installation and Environment cannot be inferred from repository state or operator convention.
 
 ## Phase 0: local plan with zero side effects
 
@@ -45,19 +55,19 @@ dotnet run --project tools/fse2/OfficialTestProvisioner/OfficialTestProvisioner.
 
 This command is handled before Admin client construction. It has no store/provider dependency and
 must report zero workflow-store, signing, DNS, HTTPS, transport and network counters. Its output
-contains only the fixed Connector identity, Environment ID and digests; endpoint and provider
-identifiers are represented by one-way digests. Any stable `FSE2_OFFICIALTEST_*` error is a hard
-stop.
+contains only the fixed Connector identity, the asserted Environment ID and digests; endpoint and
+provider identifiers are represented by one-way digests. Plan output does not prove the assertion:
+only authenticated Installation read-back does. Any stable `FSE2_OFFICIALTEST_*` error is a hard stop.
 
-## Phase 1: first operator configures and proposes
+## Phase 1: Security Administrator configures and grants
 
 Set `FSE2_GATEWAY_URL`, `FSE2_ADMIN_SESSION_COOKIE` and, only when required, the pinned public DER
-CA certificate path `FSE2_GATEWAY_CA_FILE` in the first operator's protected process environment.
+CA certificate path `FSE2_GATEWAY_CA_FILE` in the Security Administrator's protected process environment.
 The provisioner rejects a reparse point, oversized file, non-CA certificate or any certificate with
 a private key. Never pass cookies on
 the command line or write them into the plan.
 
-Run `configure` once. It compiles the repository source definition with the protected organization
+Run `configure` once. After authenticated Installation and Environment read-back, it compiles the repository source definition with the protected organization
 profile, the source-owned application identity `secure-integration-platform` / `ApoCert S.r.l.` /
 `0.1.0-alpha.1`, and exact server-catalog A1/S1 metadata, then uses only the existing Admin validate, import,
 validate-stored and binding endpoints. Read-back must match:
@@ -70,13 +80,30 @@ validate-stored and binding endpoints. Read-back must match:
 - A1 on mTLS and the same S1 on both signing slots;
 - zero ordinary secret bindings.
 
-Run `propose` once with the same protected plan. Preserve only its redacted approval request ID,
-approval digest and three exact checksums in the handoff. Do not preserve the compiled definition or
-Admin responses in ordinary logs.
+The exact Admin order is: `GET /admin/auth/me`; paged `GET /admin/api/v1/installations` for the
+selected Tenant; `GET /admin/api/v1/environments`; exact A1/S1
+`GET /admin/api/v1/provider-resources:resolve`; `POST /connectors:validate`; `POST
+/connectors:import`; `POST /connectors/{id}/versions/{version}:validate`; Installation and provider
+recheck; then `PUT /connectors/{id}/bindings`. The provisioner repeats Installation authority
+read-back before every Admin mutation and denies any identity or Environment drift before the next
+mutation.
 
-## Phase 2: distinct operator approves and publishes
+Run `grant` once in the same Security Administrator session. It re-resolves the Installation, then
+lists grants for the server-owned Tenant. It verifies one exact enabled grant or creates one for the
+selected Installation, Connector and `validate-cda`, followed by exact read-back. It never accepts
+an Environment in the grant request; Environment authority remains the Installation record.
 
-Clear the first session from the process. Start a separate process with the second operator's
+## Phase 2: Connector Editor proposes
+
+Clear the Security Administrator session. In a Connector Editor session, run `plan`, compare the
+digests, then run `propose` once with the same protected plan. The command rechecks Installation and
+provider authority immediately before `POST /approval-requests`. Preserve only its redacted approval
+request ID, approval digest and three exact checksums in the handoff. Do not preserve the compiled
+definition or Admin responses in ordinary logs.
+
+## Phase 3: distinct Connector Approver approves and publishes
+
+Clear the editor session from the process. Start a separate process with the distinct approver's
 authenticated session. Re-run `plan`, compare its digests with the handoff, then run `approve` with
 the exact request ID and approval digest.
 
@@ -88,7 +115,9 @@ checksum before it sends the publish request. A binding change atomically invali
 or approved prior digest in PostgreSQL; the provisioner consumes that server-owned status rather than
 maintaining a second approval state machine.
 
-Run `verify` in the second session. Success requires Published/Active read-back, exact canonical and
+Installation authority is re-read immediately before both the approval and publication mutations.
+Environment or Installation drift stops before the next Admin write. Run `verify` in the approver
+session. Success requires Published/Active read-back, exact canonical and
 operation-profile checksums, exact logical resource revisions, no generic secret binding and only
 the fixed OfficialTest endpoint component checksum. Every operational phase re-resolves the exact
 unique active provider-catalog identities before mutation or read-back. The provisioner never prints
@@ -111,3 +140,15 @@ Published resource stamp stale before signing, DNS and network.
 
 Evidence must be redacted and stored outside Git. Never retain raw Admin responses, provider
 configuration, JWTs, payloads, certificate chains, P12 material or session cookies.
+
+## Clean-state acceptance and recovery
+
+The release gate starts with a new PostgreSQL database, creates the synthetic Environment, Tenant,
+Application, active Installation and public-only provider catalog, then runs the supported role
+sequence above through Published read-back. Record elapsed time from empty database to Published;
+skipping the PostgreSQL gate is not a PASS.
+
+A Published configuration with the wrong Environment is immutable and must not be updated in place.
+Preserve the historical bad volume/evidence, provision a new clean laboratory volume, bootstrap a new
+valid Installation, and run the supported sequence once against that clean state. Do not edit the
+Published row, restore the bad database into the active store or use direct SQL as recovery.

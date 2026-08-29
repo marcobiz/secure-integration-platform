@@ -22,15 +22,20 @@ The source-owned application identity is `secure-integration-platform` / `ApoCer
 `0.1.0-alpha.1`; no plan or caller field can override it.
 
 The supported edge is `tools/fse2/OfficialTestProvisioner`. It uses the existing authenticated Admin
-API for validate/import/bind/request/approve/publish/read-back. Dry-run is completed before Admin
-client construction. Operational commands use the server-derived Admin session principal; the plan
-cannot declare principal, Tenant or Installation authority. Publication through this workflow is
+API for validate/import/bind/grant/request/approve/publish/read-back. Dry-run is completed before Admin
+client construction. Operational commands use the server-derived Admin session principal. Tenant
+and Installation IDs in the plan are selectors only, and the plan Environment ID is an assertion.
+Before the first Admin mutation the provisioner resolves exactly one active Installation through the
+authenticated Admin API and treats `InstallationRecord.EnvironmentId` as the sole Environment
+authority. Mismatch fails before Admin writes or provider/signing/network effects. Publication through this workflow is
 sent only by the distinct approver of the exact request. This is also an authoritative server-side
 condition: both the approval precheck and the serializable PostgreSQL publication transaction bind
 the authenticated session actor to the current approval's `approved_by`.
 
 `server-public-metadata.json` is not an authority and is not accepted by operational commands.
-Before compilation and again before every mutation/read-back, the provisioner requests exactly one
+The Installation identity is re-read before each mutation, including binding, proposal, approval and
+publication; drift stops before the next mutation. The server-derived Environment selects the
+environment catalog, exact A1/S1 resources, binding and Installation grant. Before compilation and again before every mutation/read-back, the provisioner requests exactly one
 active `ClientCertificate` catalog revision for A1 and S1 through a bounded exact server lookup by Environment, provider/resource/version,
 catalog/public-metadata revision, Connector/operation scope, catalog checksum, SPKI SHA-256 and
 subject CN. The lookup neither scans offset pages nor depends on global catalog order; server-side
@@ -51,6 +56,9 @@ signing oracle or Healthcare dependency in Core.
 ## Consequences
 
 - real configuration remains outside Git; public provider metadata remains server-owned;
+- an Environment in the protected plan cannot redirect provisioning away from the authenticated
+  Installation; a historical Published row with the wrong Environment remains immutable and recovery
+  requires a new clean deployment state;
 - four-eyes continues to bind the server-computed approval artefact, while the vertical handoff also
   exposes the operation-profile and binding-configuration digests;
 - any definition, binding or provider-revision mutation makes the old handoff stale;
