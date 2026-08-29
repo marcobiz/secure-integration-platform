@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Text.Json;
+using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Security;
 
 namespace SecureIntegration.Gateway.Application;
@@ -274,8 +275,7 @@ public sealed class AuthorizedConnectorExecution
 
         public void RejectRestrictedTransportResponse(QualifiedGatewayExecutionResult response, string? safeProblemCode)
         {
-            bool validCode = safeProblemCode is null || safeProblemCode is { Length: >= 1 and <= 96 } &&
-                safeProblemCode.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
+            bool validCode = GatewayAuditFailureDiagnostics.IsAllowedSafeUpstreamCode(safeProblemCode);
             lock (synchronization)
             {
                 if (state != 1 || !ReferenceEquals(Current.Value, this) ||
@@ -297,10 +297,8 @@ public sealed class AuthorizedConnectorExecution
             string localSafeCode,
             string? safeUpstreamCode = null)
         {
-            bool validLocalCode = localSafeCode is { Length: >= 1 and <= 96 } &&
-                localSafeCode.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
-            bool validUpstreamCode = safeUpstreamCode is null || safeUpstreamCode is { Length: >= 1 and <= 96 } &&
-                safeUpstreamCode.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
+            bool validLocalCode = GatewayAuditFailureDiagnostics.IsAllowedLocalSafeCode(localSafeCode);
+            bool validUpstreamCode = GatewayAuditFailureDiagnostics.IsAllowedSafeUpstreamCode(safeUpstreamCode);
             lock (synchronization)
             {
                 if (state != 1 || !ReferenceEquals(Current.Value, this) ||

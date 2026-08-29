@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -16,12 +17,14 @@ using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Net.Http.Headers;
+using Npgsql;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
 using SecureIntegration.Gateway.Integration.Tests;
 using SecureIntegration.Providers.Abstractions;
 using SecureIntegration.Providers.Synthetic;
+using SecureIntegration.Tools.Fse2.OfficialTestProvisioner;
 using Xunit;
 
 namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2.Integration.Tests;
@@ -279,6 +282,61 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Assert.Equal(1, failure);
         Assert.Equal(0, success);
         Assert.Equal(1, observation.Requests);
+    }
+
+    [Fact]
+    public async Task FSE2_IT_DAT_PostgreSQL18_transport_audit_Admin_API_and_evidence_reducer_round_trip()
+    {
+        PostgresFailureRoundTripObservation observation = await RunPostgresFailureRoundTripAsync(
+            StatusCodes.Status400BadRequest,
+            "application/problem+json",
+            "{\"type\":\"https://fse.example/msg/syntax\",\"title\":\"raw-upstream-title-canary\",\"detail\":\"raw-upstream-detail-canary\"}",
+            "upstream-http-failure");
+
+        Assert.StartsWith("18.", observation.PostgresVersion, StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.BadGateway, observation.StatusCode);
+        Assert.Equal("UPSTREAM_HTTP_RESPONSE", observation.Diagnostics.FailurePhase);
+        Assert.Equal(400, observation.Diagnostics.UpstreamStatus);
+        Assert.Equal("CLIENT_ERROR", observation.Diagnostics.StatusCategory);
+        Assert.Equal("syntax", observation.Diagnostics.SafeUpstreamCode);
+        Assert.Null(observation.Diagnostics.LocalSafeCode);
+        Assert.Equal(1, observation.FailureAudits);
+        Assert.Equal(0, observation.SuccessAudits);
+        Assert.Equal(1, observation.Requests);
+        Assert.True(observation.ExpectedClientCertificateObserved);
+        Assert.True(observation.DualTokensObserved);
+        Assert.True(observation.DistinctTokensAndJtiObserved);
+        Assert.DoesNotContain("failureDiagnostics", observation.CallerProblem, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("syntax", observation.CallerProblem, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("raw-upstream", observation.AdminAudit, StringComparison.OrdinalIgnoreCase);
+        Assert.True(observation.ReducedEvidenceVerifiedBeforeCleanup);
+    }
+
+    [Fact]
+    public async Task FSE2_IT_DAT_PostgreSQL18_local_mapping_failure_round_trip_is_bounded()
+    {
+        PostgresFailureRoundTripObservation observation = await RunPostgresFailureRoundTripAsync(
+            StatusCodes.Status202Accepted,
+            "application/json",
+            "{\"workflowInstanceId\":{\"raw\":\"raw-local-mapping-canary\"}}",
+            "local-mapping-failure");
+
+        Assert.StartsWith("18.", observation.PostgresVersion, StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.BadGateway, observation.StatusCode);
+        Assert.Equal("LOCAL_RESPONSE_MAPPING_FAILURE", observation.Diagnostics.FailurePhase);
+        Assert.Equal(202, observation.Diagnostics.UpstreamStatus);
+        Assert.Equal("SUCCESS", observation.Diagnostics.StatusCategory);
+        Assert.Null(observation.Diagnostics.SafeUpstreamCode);
+        Assert.Equal("FSE2_RESPONSE_INVALID", observation.Diagnostics.LocalSafeCode);
+        Assert.Equal(1, observation.FailureAudits);
+        Assert.Equal(0, observation.SuccessAudits);
+        Assert.Equal(1, observation.Requests);
+        Assert.True(observation.ExpectedClientCertificateObserved);
+        Assert.True(observation.DualTokensObserved);
+        Assert.True(observation.DistinctTokensAndJtiObserved);
+        Assert.DoesNotContain("FSE2_RESPONSE_INVALID", observation.CallerProblem, StringComparison.Ordinal);
+        Assert.DoesNotContain("raw-local-mapping-canary", observation.AdminAudit, StringComparison.Ordinal);
+        Assert.True(observation.ReducedEvidenceVerifiedBeforeCleanup);
     }
 
     [Fact]
@@ -1846,12 +1904,190 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         return new(response.StatusCode, callerProblem, audit, server.Requests, server.ExactApplicationJsonAcceptObserved);
     }
 
+    private static async Task<PostgresFailureRoundTripObservation> RunPostgresFailureRoundTripAsync(
+        int responseStatusCode,
+        string responseContentType,
+        string responseBody,
+        string evidenceName)
+    {
+        string adminConnection = GetRequiredPostgresConnectionOrSkip("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        string migrationConnection = GetRequiredPostgresConnectionOrSkip("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
+        await HostedPostgresTestSupport.ApplyMigrationAsync();
+        await HostedPostgresTestSupport.ApplyMigrationAsync();
+        await using NpgsqlConnection versionConnection = new(migrationConnection);
+        await versionConnection.OpenAsync(TestContext.Current.CancellationToken);
+        string postgresVersion = versionConnection.PostgreSqlVersion.ToString();
+        await versionConnection.CloseAsync();
+
+        await using AdminApiSecurityTests.PostgresRuntimeRoleLease runtimeRole =
+            await AdminApiSecurityTests.PostgresRuntimeRoleLease.CreateAsync(
+                adminConnection,
+                migrationConnection,
+                TestContext.Current.CancellationToken);
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        await using SyntheticFse2OrganizationServer server = await SyntheticFse2OrganizationServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken,
+            responseStatusCode,
+            responseContentType,
+            responseBody);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-postgres-failure-round-trip",
+            runtimeConnection: runtimeRole.ConnectionString,
+            adminConnection: adminConnection,
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate),
+            enableDevelopmentAdmin: true);
+        Assert.True(fixture.UsesPostgreSql);
+
+        string suffix = Guid.NewGuid().ToString("N");
+        string connectorId = "fse2-postgres-diagnostics-" + suffix;
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-diag-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-diag-app");
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId,
+            "1.0.0",
+            environmentId,
+            server.Endpoint,
+            Definition(connectorId, "1.0.0", SpkiSha256(material.SigningKeyRevision1),
+                SpkiSha256(material.ClientCertificateRevision1), "1.0.0"),
+            provider,
+            "sign-r1",
+            "mtls-r1",
+            operationId: "create");
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "fse2-diag-identity");
+        await AddGrantAsync(fixture, identity, connectorId);
+
+        Guid correlationId = Guid.NewGuid();
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/create:invoke",
+            InvokeRequest(Payload(), correlationId));
+        string callerProblem = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        using HttpClient administrator = fixture.CreateAdminClient();
+        await LoginSecurityAdministratorAsync(administrator, TestContext.Current.CancellationToken);
+        using HttpResponseMessage auditResponse = await administrator.GetAsync(
+            $"/admin/api/v1/audit?tenantId={tenantId:D}&limit=100",
+            TestContext.Current.CancellationToken);
+        auditResponse.EnsureSuccessStatusCode();
+        string adminAudit = await auditResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        using JsonDocument auditDocument = JsonDocument.Parse(adminAudit);
+        Fse2FailureDiagnosticsEvidence reduced = Fse2FailureEvidenceReducer.Reduce(auditDocument.RootElement, correlationId);
+        (int failure, int success) = CountAdminApiInvokeAuditOutcomes(auditDocument.RootElement, correlationId);
+        bool evidenceVerified = await WriteAndVerifyReducedEvidenceBeforeCleanupAsync(
+            evidenceName,
+            correlationId,
+            reduced,
+            TestContext.Current.CancellationToken);
+
+        return new(
+            response.StatusCode,
+            callerProblem,
+            adminAudit,
+            reduced,
+            failure,
+            success,
+            server.Requests,
+            server.ExpectedClientCertificateObserved,
+            server.DualTokensObserved,
+            server.DistinctTokensAndJtiObserved,
+            postgresVersion,
+            evidenceVerified);
+    }
+
+    private static async Task LoginSecurityAdministratorAsync(HttpClient client, CancellationToken cancellationToken)
+    {
+        string csrf = await GetAdminCsrfAsync(client, cancellationToken);
+        using HttpRequestMessage request = new(HttpMethod.Post, "/admin/auth/development/login")
+        {
+            Content = JsonContent.Create(new { userName = "security-admin" })
+        };
+        request.Headers.Add("X-CSRF-TOKEN", csrf);
+        using HttpResponseMessage response = await client.SendAsync(request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    private static async Task<string> GetAdminCsrfAsync(HttpClient client, CancellationToken cancellationToken)
+    {
+        using HttpResponseMessage response = await client.GetAsync("/admin/auth/csrf", cancellationToken);
+        response.EnsureSuccessStatusCode();
+        using JsonDocument document = await JsonDocument.ParseAsync(
+            await response.Content.ReadAsStreamAsync(cancellationToken),
+            cancellationToken: cancellationToken);
+        return document.RootElement.GetProperty("token").GetString()
+            ?? throw new InvalidOperationException("Synthetic Admin CSRF token missing.");
+    }
+
+    private static (int Failure, int Success) CountAdminApiInvokeAuditOutcomes(JsonElement auditPage, Guid correlationId)
+    {
+        JsonElement[] matching = auditPage.GetProperty("items").EnumerateArray().Where(value =>
+            value.GetProperty("correlationId").GetGuid() == correlationId &&
+            string.Equals(value.GetProperty("action").GetString(), "operation.invoke", StringComparison.Ordinal)).ToArray();
+        return (
+            matching.Count(value => string.Equals(value.GetProperty("outcome").GetString(), "failure", StringComparison.Ordinal)),
+            matching.Count(value => string.Equals(value.GetProperty("outcome").GetString(), "success", StringComparison.Ordinal)));
+    }
+
+    private static async Task<bool> WriteAndVerifyReducedEvidenceBeforeCleanupAsync(
+        string evidenceName,
+        Guid correlationId,
+        Fse2FailureDiagnosticsEvidence diagnostics,
+        CancellationToken cancellationToken)
+    {
+        string? configuredDirectory = Environment.GetEnvironmentVariable("FSE2_DIAGNOSTICS_EVIDENCE_OUTPUT");
+        bool preserve = !string.IsNullOrWhiteSpace(configuredDirectory);
+        string directory = preserve ? Path.GetFullPath(configuredDirectory!) : Path.GetTempPath();
+        if (!Directory.Exists(directory) || File.GetAttributes(directory).HasFlag(FileAttributes.ReparsePoint))
+            throw new InvalidOperationException("FSE2_DIAGNOSTICS_EVIDENCE_DIRECTORY_INVALID");
+        string path = Path.Combine(directory, $"{evidenceName}-{correlationId:N}.json");
+        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(diagnostics, WebJson);
+        await using (FileStream stream = new(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.Asynchronous))
+            await stream.WriteAsync(bytes, cancellationToken);
+        try
+        {
+            byte[] readBack = await File.ReadAllBytesAsync(path, cancellationToken);
+            Assert.True(CryptographicOperations.FixedTimeEquals(SHA256.HashData(bytes), SHA256.HashData(readBack)));
+            using JsonDocument document = JsonDocument.Parse(readBack);
+            Assert.Equal(
+                ["failurePhase", "localSafeCode", "safeUpstreamCode", "statusCategory", "upstreamStatus"],
+                document.RootElement.EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
+            return true;
+        }
+        finally
+        {
+            if (!preserve) File.Delete(path);
+        }
+    }
+
     private sealed record FailureAuditObservation(
         HttpStatusCode StatusCode,
         string CallerProblem,
         string Audit,
         int Requests,
         bool ExactApplicationJsonAcceptObserved);
+
+    private sealed record PostgresFailureRoundTripObservation(
+        HttpStatusCode StatusCode,
+        string CallerProblem,
+        string AdminAudit,
+        Fse2FailureDiagnosticsEvidence Diagnostics,
+        int FailureAudits,
+        int SuccessAudits,
+        int Requests,
+        bool ExpectedClientCertificateObserved,
+        bool DualTokensObserved,
+        bool DistinctTokensAndJtiObserved,
+        string PostgresVersion,
+        bool ReducedEvidenceVerifiedBeforeCleanup);
 
     private static string RemoveIntegritySigningSlot(string definition)
     {
@@ -2152,10 +2388,10 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             StringComparison.Ordinal)
     };
 
-    private static GatewayInvokeRequest Request(string payload) => new(
+    private static GatewayInvokeRequest Request(string payload, Guid? correlationId = null) => new(
         "1.0",
         new("application/vnd.bgw.fse2+json", "utf8", payload),
-        Guid.NewGuid(),
+        correlationId ?? Guid.NewGuid(),
         Metadata: new Dictionary<string, JsonElement>
         {
             ["endpoint"] = JsonSerializer.SerializeToElement("https://attacker.invalid/collect"),
@@ -2169,7 +2405,8 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             ["role"] = JsonSerializer.SerializeToElement("caller-role")
         });
 
-    private static byte[] InvokeRequest(string payload) => JsonSerializer.SerializeToUtf8Bytes(Request(payload), WebJson);
+    private static byte[] InvokeRequest(string payload, Guid? correlationId = null) =>
+        JsonSerializer.SerializeToUtf8Bytes(Request(payload, correlationId), WebJson);
 
     internal static byte[] DocumentBytes() => [0x00, 0x0d, 0x0a, 0xc3, 0xa8, 0xff, 0x42, 0x47, 0x57];
 

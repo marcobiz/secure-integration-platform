@@ -52,6 +52,11 @@ already depend on the existing fail-closed non-success behavior.
   local safe code. A received response that cannot be mapped is recorded distinctly as
   `LOCAL_RESPONSE_MAPPING_FAILURE`, retains only its status, uses
   `FSE2_RESPONSE_INVALID`, and never retains response bytes or arbitrary metadata.
+- The accepted code values are also enforced by one immutable server-owned diagnostic profile at
+  the Core domain boundary and by an additive PostgreSQL constraint. Matching is exact ordinal:
+  unknown, differently-cased, whitespace-padded or escaped values fail closed. There is no runtime,
+  caller or Admin registration surface. Persistence read-back revalidates the same domain profile
+  and collapses a corrupt historical value to a generic local storage failure without returning it.
 - PostgreSQL persists those fields as constrained columns rather than a diagnostic JSON bag. The
   Admin audit projection includes them only after server-side authorization confirms the
   authenticated `SecurityAdministrator` role in the same tenant/installation scope. Every other
@@ -74,9 +79,9 @@ already depend on the existing fail-closed non-success behavior.
 
 FSE2 receives the required server-owned media-type preference and can distinguish a bounded upstream
 HTTP response from transport phases without exposing the response. Existing non-FSE2 callers and
-the historical transport entry point keep their exact failure semantics. The change remains
-vertical-neutral in Core: Core understands only a closed response mode and safe transport phases,
-not FSE2 codes or healthcare concepts.
+the historical transport entry point keep their exact failure semantics. Core has no dependency on
+the Healthcare pack and does not interpret the profile's opaque safe codes; it only enforces the
+immutable values required by the public five-field persistence contract.
 
 The bounded read-back is intentionally not a generic metadata endpoint. It adds no replay or retry
 authority, and it does not expose actor metadata, raw audit JSON, host resolution, headers,

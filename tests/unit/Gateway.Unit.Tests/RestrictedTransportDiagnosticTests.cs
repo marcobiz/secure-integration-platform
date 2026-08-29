@@ -10,6 +10,35 @@ namespace SecureIntegration.Gateway.Unit.Tests;
 public sealed class RestrictedTransportDiagnosticTests
 {
     [Fact]
+    public void FSE2_DIAGNOSTICS_server_owned_profile_matches_frozen_vertical_allowlists()
+    {
+        string[] upstreamCodes =
+        [
+            "cda-element", "cda-extraction", "cda-match", "cda-validation", "document-hash",
+            "document-type", "eds-document-missing", "eds-error", "empty-file", "fhir-element",
+            "fhir-extraction", "fhir-mapping-type", "generic-error", "generic-timeout", "ini-error",
+            "invalid-format", "jwt-validation", "mandatory-element", "mandatory-element-token",
+            "max-day-limit-exceed", "missing-token", "record-not-found", "semantic", "service-error",
+            "syntax", "vocabulary", "workflow-id-error-extraction"
+        ];
+
+        Assert.Equal(27, upstreamCodes.Length);
+        Assert.All(upstreamCodes, code => Assert.True(GatewayAuditFailureDiagnostics.IsAllowedSafeUpstreamCode(code)));
+        Assert.True(GatewayAuditFailureDiagnostics.IsAllowedSafeUpstreamCode(null));
+        Assert.True(GatewayAuditFailureDiagnostics.IsAllowedLocalSafeCode(null));
+        Assert.True(GatewayAuditFailureDiagnostics.IsAllowedLocalSafeCode("FSE2_RESPONSE_INVALID"));
+        foreach (string rejected in new[] { "FSE2_NOT_ALLOWLISTED", "Syntax", " syntax", "syntax ", "syntax%0A" })
+            Assert.False(GatewayAuditFailureDiagnostics.IsAllowedSafeUpstreamCode(rejected));
+        foreach (string rejected in new[] { "FSE2_NOT_ALLOWLISTED", "fse2_response_invalid", " FSE2_RESPONSE_INVALID" })
+            Assert.False(GatewayAuditFailureDiagnostics.IsAllowedLocalSafeCode(rejected));
+
+        Assert.DoesNotContain(typeof(GatewayAuditFailureDiagnostics).GetMethods(), method =>
+            method.Name.Contains("Register", StringComparison.Ordinal) ||
+            method.Name.Contains("Add", StringComparison.Ordinal) ||
+            method.Name.Contains("Configure", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void FSE2_TRANSPORT_all_safe_failure_phases_are_closed_and_metadata_only()
     {
         (GatewayAuditFailurePhase Expected, SafeUpstreamFailureDiagnostics Diagnostics)[] cases =

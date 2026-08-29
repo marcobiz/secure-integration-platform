@@ -71,10 +71,43 @@ public sealed class HealthcarePackBoundaryTests
         Regex forbiddenIdentifier = new(@"\b(FSE2|FSE-JWT-Signature|DualJwt|use_subject_as_author|subject_organization_id)\b", RegexOptions.CultureInvariant);
         foreach (string coreRoot in coreRoots)
         foreach (string sourceFile in Directory.EnumerateFiles(coreRoot, "*.cs", SearchOption.AllDirectories))
-            Assert.DoesNotMatch(forbiddenIdentifier, File.ReadAllText(sourceFile));
+        {
+            string source = File.ReadAllText(sourceFile);
+            if (string.Equals(Path.GetFileName(sourceFile), "GatewayRecords.cs", StringComparison.Ordinal))
+            {
+                int localSafeCodeOccurrences = Regex.Count(source, "\"FSE2_RESPONSE_INVALID\"", RegexOptions.CultureInvariant);
+                Assert.True(localSafeCodeOccurrences == 1, $"Expected one immutable local safe code, found {localSafeCodeOccurrences}.");
+                source = source.Replace("\"FSE2_RESPONSE_INVALID\"", "\"SERVER_OWNED_LOCAL_SAFE_CODE\"", StringComparison.Ordinal);
+            }
+            Assert.DoesNotMatch(forbiddenIdentifier, source);
+        }
 
         string coreSolution = File.ReadAllText(Path.Combine(Root, "BrokerGateway.Core.slnx"));
         Assert.DoesNotContain("Healthcare.FSE2", coreSolution, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void FSE2_DIAGNOSTICS_server_owned_code_profile_is_immutable_and_has_no_registration_surface()
+    {
+        string domain = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Domain", "GatewayRecords.cs"));
+        string application = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"));
+        string migration = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations",
+            "0016_bounded_audit_failure_code_allowlists.sql"));
+
+        Assert.Contains("private static readonly FrozenSet<string> AllowedSafeUpstreamCodes", domain, StringComparison.Ordinal);
+        Assert.Contains("private static readonly FrozenSet<string> AllowedLocalSafeCodes", domain, StringComparison.Ordinal);
+        Assert.Contains("IsAllowedSafeUpstreamCode", application, StringComparison.Ordinal);
+        Assert.Contains("IsAllowedLocalSafeCode", application, StringComparison.Ordinal);
+        Assert.Contains("ck_audit_failure_diagnostic_codes_allowlisted", migration, StringComparison.Ordinal);
+        foreach (string forbidden in new[] { "RegisterDiagnosticCode", "AddDiagnosticCode", "ConfigureDiagnosticCode", "IServiceCollection" })
+            Assert.DoesNotContain(forbidden, domain, StringComparison.Ordinal);
+
+        string infrastructureProject = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Infrastructure", "Gateway.Infrastructure.csproj"));
+        Assert.DoesNotContain("Healthcare.FSE2", infrastructureProject, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

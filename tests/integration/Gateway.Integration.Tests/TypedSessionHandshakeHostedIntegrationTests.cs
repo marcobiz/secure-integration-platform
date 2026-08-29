@@ -389,6 +389,11 @@ public sealed class HostedTypedSessionFixture : IAsyncDisposable
     public bool UsesPostgreSql => Store is RoutingConnectorConfigurationStore;
     public int GenericTransportRequests => Transport.GenericRequests;
 
+    public HttpClient CreateAdminClient() => Factory.CreateClient(new()
+    {
+        BaseAddress = new Uri("https://localhost")
+    });
+
     public static async Task<HostedTypedSessionFixture> CreateAsync(
         string candidate,
         Func<CancellationToken, Task>? beforePromotion = null,
@@ -400,7 +405,8 @@ public sealed class HostedTypedSessionFixture : IAsyncDisposable
         HostedCapabilityProvider? capabilityProvider = null,
         IRestrictedTransport? restrictedTransport = null,
         IReadOnlySet<string>? privateDestinationHosts = null,
-        string? serverOwnedOrganizationCode = null)
+        string? serverOwnedOrganizationCode = null,
+        bool enableDevelopmentAdmin = false)
     {
         string organizationCode = serverOwnedOrganizationCode ?? SyntheticOrganizationCode;
         HostedServerCertificates certificates = HostedServerCertificates.Create(SyntheticHost);
@@ -418,7 +424,7 @@ public sealed class HostedTypedSessionFixture : IAsyncDisposable
             {
                 TypedSessionHostFactory factory = new(certificates.Root, certificates.Server, SyntheticHost, beforePromotion, runtimeConnection, adminConnection,
                     executionModule, beforeHandshakeFinalAuthorization, beforeComposedFinalAuthorization, capabilityProvider,
-                    restrictedTransport, privateDestinationHosts, organizationCode);
+                    restrictedTransport, privateDestinationHosts, organizationCode, enableDevelopmentAdmin);
                 return new(certificates, server, factory);
             }
             catch
@@ -851,6 +857,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
     private readonly Func<CancellationToken, Task>? beforeComposedFinalAuthorization;
     private readonly HostedCapabilityProvider? capabilityProvider;
     private readonly IReadOnlySet<string> privateDestinationHosts;
+    private readonly bool enableDevelopmentAdmin;
     private readonly RecordingLoggerProvider logger = new();
     private readonly TestClientCertificateStartupFilter certificateFilter = new();
     private readonly FixedSecrets secrets;
@@ -868,7 +875,8 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
         HostedCapabilityProvider? capabilityProvider,
         IRestrictedTransport? restrictedTransport,
         IReadOnlySet<string>? privateDestinationHosts,
-        string organizationCode)
+        string organizationCode,
+        bool enableDevelopmentAdmin)
     {
         this.syntheticHost = syntheticHost;
         this.beforePromotion = beforePromotion;
@@ -878,6 +886,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
         this.beforeHandshakeFinalAuthorization = beforeHandshakeFinalAuthorization;
         this.beforeComposedFinalAuthorization = beforeComposedFinalAuthorization;
         this.capabilityProvider = capabilityProvider;
+        this.enableDevelopmentAdmin = enableDevelopmentAdmin;
         this.privateDestinationHosts = privateDestinationHosts ?? (capabilityProvider is null
             ? new HashSet<string>([syntheticHost], StringComparer.OrdinalIgnoreCase)
             : new HashSet<string>([syntheticHost, "localhost"], StringComparer.OrdinalIgnoreCase));
@@ -900,7 +909,7 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
-        builder.UseSetting("Gateway:Admin:Mode", runtimeConnection is null ? "DevelopmentAuth" : "Disabled");
+        builder.UseSetting("Gateway:Admin:Mode", runtimeConnection is null || enableDevelopmentAdmin ? "DevelopmentAuth" : "Disabled");
         builder.UseSetting("Gateway:Admin:RequireFourEyes", runtimeConnection is null ? "false" : "true");
         if (runtimeConnection is not null) builder.UseSetting("ConnectionStrings:GatewayDatabase", runtimeConnection);
         if (adminConnection is not null) builder.UseSetting("ConnectionStrings:GatewayAdminDatabase", adminConnection);

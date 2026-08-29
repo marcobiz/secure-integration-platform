@@ -47,12 +47,19 @@ internal static class GatewayAuditFailureDiagnosticsStorage
             "SERVER_ERROR" => GatewayAuditStatusCategory.ServerError,
             _ => throw new InvalidOperationException("Unknown persisted audit status category.")
         };
-        return GatewayAuditFailureDiagnostics.Create(
-            phase,
-            reader.IsDBNull(offset + 1) ? null : reader.GetInt32(offset + 1),
-            category,
-            reader.IsDBNull(offset + 3) ? null : reader.GetString(offset + 3),
-            reader.IsDBNull(offset + 4) ? null : reader.GetString(offset + 4));
+        try
+        {
+            return GatewayAuditFailureDiagnostics.Create(
+                phase,
+                reader.IsDBNull(offset + 1) ? null : reader.GetInt32(offset + 1),
+                category,
+                reader.IsDBNull(offset + 3) ? null : reader.GetString(offset + 3),
+                reader.IsDBNull(offset + 4) ? null : reader.GetString(offset + 4));
+        }
+        catch (ArgumentException exception)
+        {
+            throw new InvalidOperationException("Persisted audit failure diagnostics are invalid.", exception);
+        }
     }
 
     internal static string Phase(GatewayAuditFailurePhase value) => value switch

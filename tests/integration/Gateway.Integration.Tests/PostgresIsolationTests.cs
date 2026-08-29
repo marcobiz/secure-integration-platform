@@ -18,6 +18,150 @@ namespace SecureIntegration.Gateway.Integration.Tests;
 public sealed class PostgresIsolationTests
 {
     [Fact]
+    public async Task FSE2_DIAGNOSTICS_unknown_upstream_code_is_rejected_at_domain_and_storage_boundaries()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION")
+            ?? Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("The dedicated PostgreSQL 18 gate must provide the migration/admin connection.");
+
+        await ApplyMigrationAsync();
+        (uint oid, string definition) first = await ReadDiagnosticCodeConstraintAsync(connectionString);
+        await ApplyMigrationAsync();
+        Assert.Equal(first, await ReadDiagnosticCodeConstraintAsync(connectionString));
+
+        string[] rejected =
+        [
+            "FSE2_NOT_ALLOWLISTED", "Syntax", " syntax", "syntax ", "syntax/escape", "syntax\\escape", "syntax%0A"
+        ];
+        foreach (string value in rejected)
+        {
+            Assert.Throws<ArgumentException>(() => GatewayAuditFailureDiagnostics.Create(
+                GatewayAuditFailurePhase.UpstreamHttpResponse,
+                400,
+                GatewayAuditStatusCategory.ClientError,
+                value,
+                null));
+            await AssertDiagnosticCodeConstraintRejectsAsync(connectionString, value, local: false);
+        }
+    }
+
+    [Fact]
+    public async Task FSE2_DIAGNOSTICS_unknown_local_code_is_rejected_at_domain_and_storage_boundaries()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION")
+            ?? Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("The dedicated PostgreSQL 18 gate must provide the migration/admin connection.");
+
+        await ApplyMigrationAsync();
+        string[] rejected =
+        [
+            "FSE2_NOT_ALLOWLISTED", "fse2_response_invalid", " FSE2_RESPONSE_INVALID",
+            "FSE2_RESPONSE_INVALID ", "FSE2_RESPONSE_INVALID/escape", "FSE2_RESPONSE_INVALID%0A"
+        ];
+        foreach (string value in rejected)
+        {
+            Assert.Throws<ArgumentException>(() => GatewayAuditFailureDiagnostics.Create(
+                GatewayAuditFailurePhase.LocalResponseMappingFailure,
+                200,
+                GatewayAuditStatusCategory.Success,
+                null,
+                value));
+            await AssertDiagnosticCodeConstraintRejectsAsync(connectionString, value, local: true);
+        }
+    }
+
+    [Fact]
+    public async Task FSE2_DIAGNOSTICS_corrupt_or_non_allowlisted_persisted_code_is_not_exposed()
+    {
+        string? migrationConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION")
+            ?? Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        string? adminConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION")
+            ?? migrationConnection;
+        if (string.IsNullOrWhiteSpace(migrationConnection) || string.IsNullOrWhiteSpace(adminConnection))
+            Assert.Skip("The dedicated PostgreSQL 18 gate must provide the migration/admin connection.");
+
+        await ApplyMigrationAsync();
+        Guid tenantId = Guid.NewGuid();
+        Guid auditId = Guid.NewGuid();
+        await using AdminPostgresDataSource adminPool = new(adminConnection);
+        PostgresGatewayRegistry registry = new(adminPool.Value);
+        await registry.AddTenantAsync(new(
+            tenantId,
+            "corrupt-diag-" + tenantId.ToString("N"),
+            "Corrupt diagnostics read-back",
+            TenantStatus.Active,
+            DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+
+        await using NpgsqlConnection connection = new(migrationConnection);
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        string constraintDefinition;
+        await using (NpgsqlCommand definition = new(
+            "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname='ck_audit_failure_diagnostic_codes_allowlisted' AND conrelid='gateway.audit_event'::regclass",
+            connection))
+            constraintDefinition = Assert.IsType<string>(await definition.ExecuteScalarAsync(TestContext.Current.CancellationToken));
+
+        await using (NpgsqlTransaction transaction = await connection.BeginTransactionAsync(TestContext.Current.CancellationToken))
+        {
+            await using (NpgsqlCommand drop = new(
+                "ALTER TABLE gateway.audit_event DROP CONSTRAINT ck_audit_failure_diagnostic_codes_allowlisted",
+                connection,
+                transaction))
+                await drop.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+            await using (NpgsqlCommand insert = new(
+                "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted,failure_phase,upstream_status,status_category,safe_upstream_code,local_safe_code) VALUES($1,now(),$2,'installation','bounded-test','operation.invoke','operation','fse2/create',$3,'failure','BGW-EGRESS-UPSTREAM-REJECTED','{}'::jsonb,'UPSTREAM_HTTP_RESPONSE',400,'CLIENT_ERROR','FSE2_NOT_ALLOWLISTED',NULL)",
+                connection,
+                transaction))
+            {
+                insert.Parameters.AddWithValue(auditId);
+                insert.Parameters.AddWithValue(tenantId);
+                insert.Parameters.AddWithValue(Guid.NewGuid());
+                await insert.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+            }
+            await using (NpgsqlCommand restore = new(
+                $"ALTER TABLE gateway.audit_event ADD CONSTRAINT ck_audit_failure_diagnostic_codes_allowlisted {constraintDefinition} NOT VALID",
+                connection,
+                transaction))
+                await restore.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+            await transaction.CommitAsync(TestContext.Current.CancellationToken);
+        }
+
+        try
+        {
+            PostgresAdminDirectoryStore directory = new(adminPool);
+            InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                directory.ListAuditAsync(tenantId, 0, 10, TestContext.Current.CancellationToken));
+            Assert.Equal("Persisted audit failure diagnostics are invalid.", failure.Message);
+            Assert.DoesNotContain("FSE2_NOT_ALLOWLISTED", failure.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            await using NpgsqlTransaction cleanup = await connection.BeginTransactionAsync(CancellationToken.None);
+            await using (NpgsqlCommand deleteAudit = new(
+                "DELETE FROM gateway.audit_event WHERE id=$1",
+                connection,
+                cleanup))
+            {
+                deleteAudit.Parameters.AddWithValue(auditId);
+                await deleteAudit.ExecuteNonQueryAsync(CancellationToken.None);
+            }
+            await using (NpgsqlCommand validate = new(
+                "ALTER TABLE gateway.audit_event VALIDATE CONSTRAINT ck_audit_failure_diagnostic_codes_allowlisted",
+                connection,
+                cleanup))
+                await validate.ExecuteNonQueryAsync(CancellationToken.None);
+            await using (NpgsqlCommand deleteTenant = new(
+                "DELETE FROM gateway.tenant WHERE id=$1",
+                connection,
+                cleanup))
+            {
+                deleteTenant.Parameters.AddWithValue(tenantId);
+                await deleteTenant.ExecuteNonQueryAsync(CancellationToken.None);
+            }
+            await cleanup.CommitAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
     public async Task FSE2_IT_DAT_PostgreSQL18_failure_diagnostics_round_trip()
     {
         string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
@@ -1226,6 +1370,41 @@ public sealed class PostgresIsolationTests
         await using NpgsqlCommand command = new(sql, connection);
         foreach (object value in values) command.Parameters.AddWithValue(value);
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<(uint Oid, string Definition)> ReadDiagnosticCodeConstraintAsync(string connectionString)
+    {
+        await using NpgsqlConnection connection = new(connectionString);
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        await using NpgsqlCommand command = new(
+            "SELECT oid,pg_get_constraintdef(oid) FROM pg_constraint WHERE conname='ck_audit_failure_diagnostic_codes_allowlisted' AND conrelid='gateway.audit_event'::regclass",
+            connection);
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+        Assert.True(await reader.ReadAsync(TestContext.Current.CancellationToken));
+        return (reader.GetFieldValue<uint>(0), reader.GetString(1));
+    }
+
+    private static async Task AssertDiagnosticCodeConstraintRejectsAsync(string connectionString, string value, bool local)
+    {
+        await using NpgsqlConnection connection = new(connectionString);
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        string phase = local ? "LOCAL_RESPONSE_MAPPING_FAILURE" : "UPSTREAM_HTTP_RESPONSE";
+        int status = local ? 200 : 400;
+        string category = local ? "SUCCESS" : "CLIENT_ERROR";
+        await using NpgsqlCommand command = new(
+            "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted,failure_phase,upstream_status,status_category,safe_upstream_code,local_safe_code) VALUES($1,now(),NULL,'installation','bounded-test','operation.invoke','operation','fse2/create',$2,'failure','BGW-EGRESS-UPSTREAM-REJECTED','{}'::jsonb,$3,$4,$5,$6,$7)",
+            connection);
+        command.Parameters.AddWithValue(Guid.NewGuid());
+        command.Parameters.AddWithValue(Guid.NewGuid());
+        command.Parameters.AddWithValue(phase);
+        command.Parameters.AddWithValue(status);
+        command.Parameters.AddWithValue(category);
+        command.Parameters.AddWithValue(local ? DBNull.Value : value);
+        command.Parameters.AddWithValue(local ? value : DBNull.Value);
+        PostgresException failure = await Assert.ThrowsAsync<PostgresException>(() =>
+            command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(PostgresErrorCodes.CheckViolation, failure.SqlState);
+        Assert.Equal("ck_audit_failure_diagnostic_codes_allowlisted", failure.ConstraintName);
     }
 
     internal static async Task ApplyMigrationAsync()

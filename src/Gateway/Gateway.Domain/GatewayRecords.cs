@@ -1,3 +1,5 @@
+using System.Collections.Frozen;
+
 namespace SecureIntegration.Gateway.Domain;
 
 /// <summary>Lifecycle state of a Tenant.</summary>
@@ -210,6 +212,21 @@ public enum GatewayAuditStatusCategory
 /// <summary>Closed metadata-only external failure diagnostics persisted with one audit event.</summary>
 public sealed class GatewayAuditFailureDiagnostics
 {
+    private static readonly FrozenSet<string> AllowedSafeUpstreamCodes = new[]
+    {
+        "cda-element", "cda-extraction", "cda-match", "cda-validation", "document-hash",
+        "document-type", "eds-document-missing", "eds-error", "empty-file", "fhir-element",
+        "fhir-extraction", "fhir-mapping-type", "generic-error", "generic-timeout", "ini-error",
+        "invalid-format", "jwt-validation", "mandatory-element", "mandatory-element-token",
+        "max-day-limit-exceed", "missing-token", "record-not-found", "semantic", "service-error",
+        "syntax", "vocabulary", "workflow-id-error-extraction"
+    }.ToFrozenSet(StringComparer.Ordinal);
+
+    private static readonly FrozenSet<string> AllowedLocalSafeCodes = new[]
+    {
+        "FSE2_RESPONSE_INVALID"
+    }.ToFrozenSet(StringComparer.Ordinal);
+
     private GatewayAuditFailureDiagnostics(
         GatewayAuditFailurePhase failurePhase,
         int? upstreamStatus,
@@ -223,8 +240,10 @@ public sealed class GatewayAuditFailureDiagnostics
             throw new ArgumentOutOfRangeException(nameof(upstreamStatus));
         if (statusCategory != Category(upstreamStatus))
             throw new ArgumentException("Audit status category does not match the bounded upstream status.", nameof(statusCategory));
-        if (!IsSafeCode(safeUpstreamCode)) throw new ArgumentException("Safe upstream code is invalid.", nameof(safeUpstreamCode));
-        if (!IsSafeCode(localSafeCode)) throw new ArgumentException("Local safe code is invalid.", nameof(localSafeCode));
+        if (!IsAllowedSafeUpstreamCode(safeUpstreamCode))
+            throw new ArgumentException("Safe upstream code is not allowlisted.", nameof(safeUpstreamCode));
+        if (!IsAllowedLocalSafeCode(localSafeCode))
+            throw new ArgumentException("Local safe code is not allowlisted.", nameof(localSafeCode));
 
         bool transport = failurePhase is GatewayAuditFailurePhase.DnsFailure or
             GatewayAuditFailurePhase.TcpConnectFailure or GatewayAuditFailurePhase.TlsServerValidationFailure or
@@ -278,9 +297,13 @@ public sealed class GatewayAuditFailureDiagnostics
         _ => throw new ArgumentOutOfRangeException(nameof(statusCode))
     };
 
-    private static bool IsSafeCode(string? value) => value is null ||
-        value is { Length: >= 1 and <= 96 } &&
-        value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
+    /// <summary>Checks the immutable server-owned upstream-code profile using exact ordinal identity.</summary>
+    public static bool IsAllowedSafeUpstreamCode(string? value) =>
+        value is null || AllowedSafeUpstreamCodes.Contains(value);
+
+    /// <summary>Checks the immutable server-owned local-code profile using exact ordinal identity.</summary>
+    public static bool IsAllowedLocalSafeCode(string? value) =>
+        value is null || AllowedLocalSafeCodes.Contains(value);
 }
 
 /// <summary>Metadata-only audit event.</summary>
