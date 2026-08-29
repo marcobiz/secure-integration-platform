@@ -216,65 +216,69 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     public async Task FSE2_AUDIT_failure_emits_exactly_one_failure_and_zero_success()
     {
         const string canary = "upstream-problem-raw-canary";
-        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
-        TrackingCapabilityProvider provider = new(Provider(material));
-        await using SyntheticFse2OrganizationServer server = await SyntheticFse2OrganizationServer.StartAsync(
-            material.ServerCertificate,
-            material.ClientCertificateRevision1,
-            material.SigningKeyRevision1,
-            material.RootCertificate,
-            TestContext.Current.CancellationToken,
-            responseStatusCode: StatusCodes.Status400BadRequest,
-            responseContentType: "application/problem+json",
-            responseBody: $$"""{"type":"https://fse.example/msg/syntax","title":"{{canary}}","detail":"{{canary}}"}""");
-        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
-            "unused-fse2-problem",
-            executionModule: Module(),
-            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
+        FailureAuditObservation observation = await RunFailureAuditAsync(
+            StatusCodes.Status400BadRequest,
+            "application/problem+json",
+            $$"""{"type":"https://fse.example/msg/syntax","title":"{{canary}}","detail":"{{canary}}"}""");
 
-        string connectorId = "fse2-problem-" + Guid.NewGuid().ToString("N");
-        Guid environmentId = await fixture.CreateEnvironmentAsync();
-        Guid tenantId = await fixture.CreateTenantAsync("fse2-problem-tenant");
-        Guid applicationId = await fixture.CreateApplicationAsync("fse2-problem-application");
-        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
-            connectorId,
-            "1.0.0",
-            environmentId,
-            server.Endpoint,
-            Definition(connectorId, "1.0.0", SpkiSha256(material.SigningKeyRevision1),
-                SpkiSha256(material.ClientCertificateRevision1), "1.0.0"),
-            provider,
-            "sign-r1",
-            "mtls-r1",
-            operationId: "create");
-        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
-        HostedIdentity identity = await fixture.EnrollIdentityAsync(
-            tenantId, applicationId, environmentId, "fse2-problem-identity");
-        await AddGrantAsync(fixture, identity, connectorId);
-
-        using HttpResponseMessage response = await fixture.SendSignedAsync(
-            identity,
-            HttpMethod.Post,
-            $"/v1/connectors/{connectorId}/operations/create:invoke",
-            InvokeRequest(Payload()));
-        string callerProblem = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        string audit = await fixture.SerializeAuditAsync(tenantId);
-
-        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
-        Assert.Contains("BGW-EGRESS-UPSTREAM-REJECTED", callerProblem, StringComparison.Ordinal);
-        Assert.DoesNotContain("syntax", callerProblem, StringComparison.Ordinal);
-        Assert.DoesNotContain(canary, callerProblem, StringComparison.Ordinal);
-        Assert.Contains("UPSTREAM_HTTP_RESPONSE", audit, StringComparison.Ordinal);
-        Assert.Contains("upstreamStatus", audit, StringComparison.Ordinal);
-        Assert.Contains("400", audit, StringComparison.Ordinal);
-        Assert.Contains("safeUpstreamCode", audit, StringComparison.Ordinal);
-        Assert.Contains("syntax", audit, StringComparison.Ordinal);
-        Assert.DoesNotContain(canary, audit, StringComparison.Ordinal);
-        (int failure, int success) = CountInvokeAuditOutcomes(audit);
+        Assert.Equal(HttpStatusCode.BadGateway, observation.StatusCode);
+        Assert.Contains("BGW-EGRESS-UPSTREAM-REJECTED", observation.CallerProblem, StringComparison.Ordinal);
+        Assert.DoesNotContain("syntax", observation.CallerProblem, StringComparison.Ordinal);
+        Assert.DoesNotContain(canary, observation.CallerProblem, StringComparison.Ordinal);
+        Assert.Contains("UPSTREAM_HTTP_RESPONSE", observation.Audit, StringComparison.Ordinal);
+        Assert.Contains("upstreamStatus", observation.Audit, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("400", observation.Audit, StringComparison.Ordinal);
+        Assert.Contains("safeUpstreamCode", observation.Audit, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("syntax", observation.Audit, StringComparison.Ordinal);
+        Assert.DoesNotContain(canary, observation.Audit, StringComparison.Ordinal);
+        (int failure, int success) = CountInvokeAuditOutcomes(observation.Audit);
         Assert.Equal(1, failure);
         Assert.Equal(0, success);
-        Assert.Equal(1, server.Requests);
-        Assert.True(server.ExactApplicationJsonAcceptObserved);
+        Assert.Equal(1, observation.Requests);
+        Assert.True(observation.ExactApplicationJsonAcceptObserved);
+    }
+
+    [Fact]
+    public async Task FSE2_ADMIN_AUDIT_caller_problem_omits_failure_diagnostics()
+    {
+        FailureAuditObservation observation = await RunFailureAuditAsync(
+            StatusCodes.Status400BadRequest,
+            "application/problem+json",
+            "{\"type\":\"https://fse.example/msg/syntax\"}");
+        using JsonDocument problem = JsonDocument.Parse(observation.CallerProblem);
+
+        Assert.Equal(HttpStatusCode.BadGateway, observation.StatusCode);
+        Assert.Equal(
+            ["code", "correlationId", "retryable", "status", "title", "type"],
+            problem.RootElement.EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
+        Assert.Equal("BGW-EGRESS-UPSTREAM-REJECTED", problem.RootElement.GetProperty("code").GetString());
+        Assert.Equal(502, problem.RootElement.GetProperty("status").GetInt32());
+        Assert.False(problem.RootElement.GetProperty("retryable").GetBoolean());
+        foreach (string forbidden in new[] { "failureDiagnostics", "failurePhase", "upstreamStatus", "statusCategory", "safeUpstreamCode", "localSafeCode", "syntax" })
+            Assert.DoesNotContain(forbidden, observation.CallerProblem, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task FSE2_ADMIN_AUDIT_local_response_mapping_failure_is_distinct_and_metadata_only()
+    {
+        const string rawCanary = "invalid-success-body-raw-canary";
+        FailureAuditObservation observation = await RunFailureAuditAsync(
+            StatusCodes.Status202Accepted,
+            "application/json",
+            "{\"workflowInstanceId\":{\"raw\":\"" + rawCanary + "\"}}");
+
+        Assert.Equal(HttpStatusCode.BadGateway, observation.StatusCode);
+        Assert.Contains("LOCAL_RESPONSE_MAPPING_FAILURE", observation.Audit, StringComparison.Ordinal);
+        Assert.Contains("FSE2_RESPONSE_INVALID", observation.Audit, StringComparison.Ordinal);
+        Assert.Contains("\"upstreamStatus\":202", observation.Audit, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("SUCCESS", observation.Audit, StringComparison.Ordinal);
+        Assert.DoesNotContain(rawCanary, observation.Audit, StringComparison.Ordinal);
+        Assert.DoesNotContain(rawCanary, observation.CallerProblem, StringComparison.Ordinal);
+        Assert.DoesNotContain("FSE2_RESPONSE_INVALID", observation.CallerProblem, StringComparison.Ordinal);
+        (int failure, int success) = CountInvokeAuditOutcomes(observation.Audit);
+        Assert.Equal(1, failure);
+        Assert.Equal(0, success);
+        Assert.Equal(1, observation.Requests);
     }
 
     [Fact]
@@ -1790,6 +1794,64 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             return null;
         }
     }
+
+    private static async Task<FailureAuditObservation> RunFailureAuditAsync(
+        int responseStatusCode,
+        string responseContentType,
+        string responseBody)
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        await using SyntheticFse2OrganizationServer server = await SyntheticFse2OrganizationServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken,
+            responseStatusCode,
+            responseContentType,
+            responseBody);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-safe-failure-diagnostics",
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
+
+        string connectorId = "fse2-diagnostics-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-diagnostics-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-diagnostics-application");
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId,
+            "1.0.0",
+            environmentId,
+            server.Endpoint,
+            Definition(connectorId, "1.0.0", SpkiSha256(material.SigningKeyRevision1),
+                SpkiSha256(material.ClientCertificateRevision1), "1.0.0"),
+            provider,
+            "sign-r1",
+            "mtls-r1",
+            operationId: "create");
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "fse2-diagnostics-identity");
+        await AddGrantAsync(fixture, identity, connectorId);
+
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/create:invoke",
+            InvokeRequest(Payload()));
+        string callerProblem = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        string audit = await fixture.SerializeAuditAsync(tenantId);
+        return new(response.StatusCode, callerProblem, audit, server.Requests, server.ExactApplicationJsonAcceptObserved);
+    }
+
+    private sealed record FailureAuditObservation(
+        HttpStatusCode StatusCode,
+        string CallerProblem,
+        string Audit,
+        int Requests,
+        bool ExactApplicationJsonAcceptObserved);
 
     private static string RemoveIntegritySigningSlot(string definition)
     {

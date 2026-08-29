@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Security.Authentication;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
 using Xunit;
 
@@ -8,23 +9,41 @@ namespace SecureIntegration.Gateway.Unit.Tests;
 
 public sealed class RestrictedTransportDiagnosticTests
 {
-    [Theory]
-    [InlineData(RestrictedTransportFailurePhase.DnsFailure, "DNS_FAILURE")]
-    [InlineData(RestrictedTransportFailurePhase.TcpConnectFailure, "TCP_CONNECT_FAILURE")]
-    [InlineData(RestrictedTransportFailurePhase.TlsServerValidationFailure, "TLS_SERVER_VALIDATION_FAILURE")]
-    [InlineData(RestrictedTransportFailurePhase.MutualTlsClientAuthenticationFailure, "MTLS_CLIENT_AUTH_FAILURE")]
-    [InlineData(RestrictedTransportFailurePhase.Timeout, "TIMEOUT")]
-    [InlineData(RestrictedTransportFailurePhase.TransportFailureOther, "TRANSPORT_FAILURE_OTHER")]
-    public void FSE2_TRANSPORT_all_safe_failure_phases_are_closed_and_metadata_only(
-        RestrictedTransportFailurePhase phase,
-        string expected)
+    [Fact]
+    public void FSE2_TRANSPORT_all_safe_failure_phases_are_closed_and_metadata_only()
     {
-        SafeUpstreamFailureDiagnostics diagnostics = SafeUpstreamFailureDiagnostics.Transport(phase);
+        (GatewayAuditFailurePhase Expected, SafeUpstreamFailureDiagnostics Diagnostics)[] cases =
+        [
+            (GatewayAuditFailurePhase.DnsFailure, SafeUpstreamFailureDiagnostics.Transport(RestrictedTransportFailurePhase.DnsFailure)),
+            (GatewayAuditFailurePhase.TcpConnectFailure, SafeUpstreamFailureDiagnostics.Transport(RestrictedTransportFailurePhase.TcpConnectFailure)),
+            (GatewayAuditFailurePhase.TlsServerValidationFailure, SafeUpstreamFailureDiagnostics.Transport(RestrictedTransportFailurePhase.TlsServerValidationFailure)),
+            (GatewayAuditFailurePhase.MutualTlsClientAuthenticationFailure, SafeUpstreamFailureDiagnostics.Transport(RestrictedTransportFailurePhase.MutualTlsClientAuthenticationFailure)),
+            (GatewayAuditFailurePhase.Timeout, SafeUpstreamFailureDiagnostics.Transport(RestrictedTransportFailurePhase.Timeout)),
+            (GatewayAuditFailurePhase.TransportFailureOther, SafeUpstreamFailureDiagnostics.Transport(RestrictedTransportFailurePhase.TransportFailureOther)),
+            (GatewayAuditFailurePhase.UpstreamHttpResponse, SafeUpstreamFailureDiagnostics.HttpResponse(400, "syntax")),
+            (GatewayAuditFailurePhase.LocalResponseMappingFailure, SafeUpstreamFailureDiagnostics.LocalResponseMapping(200, "FSE2_RESPONSE_INVALID"))
+        ];
 
-        Assert.Equal(expected, diagnostics.FailurePhase);
-        Assert.Null(diagnostics.UpstreamStatus);
-        Assert.Null(diagnostics.SafeUpstreamCode);
-        Assert.Null(new RestrictedTransportFailureException(phase).InnerException);
+        Assert.Equal(Enum.GetValues<GatewayAuditFailurePhase>(), cases.Select(value => value.Expected));
+        foreach ((GatewayAuditFailurePhase expected, SafeUpstreamFailureDiagnostics diagnostics) in cases)
+        {
+            GatewayAuditFailureDiagnostics audit = diagnostics.ToAuditDiagnostics();
+            Assert.Equal(expected, diagnostics.FailurePhase);
+            Assert.Equal(5, typeof(GatewayAuditFailureDiagnostics).GetProperties().Length);
+            string serialized = System.Text.Json.JsonSerializer.Serialize(audit);
+            foreach (string forbidden in new[] { "rawBody", "headers", "Authorization", "JWT", "cookie", "certificate", "P12", "exception", "stack", "hostname", "message" })
+                Assert.DoesNotContain(forbidden, serialized, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.All(cases.Take(6), value =>
+        {
+            Assert.Null(value.Diagnostics.UpstreamStatus);
+            Assert.Null(value.Diagnostics.SafeUpstreamCode);
+            Assert.Null(value.Diagnostics.LocalSafeCode);
+            Assert.Equal(GatewayAuditStatusCategory.NoUpstreamResponse, value.Diagnostics.ToAuditDiagnostics().StatusCategory);
+        });
+        Assert.All(Enum.GetValues<RestrictedTransportFailurePhase>(), phase =>
+            Assert.Null(new RestrictedTransportFailureException(phase).InnerException));
     }
 
     [Fact]
@@ -32,12 +51,28 @@ public sealed class RestrictedTransportDiagnosticTests
     {
         SafeUpstreamFailureDiagnostics diagnostics = SafeUpstreamFailureDiagnostics.HttpResponse(400, "syntax");
 
-        Assert.Equal("UPSTREAM_HTTP_RESPONSE", diagnostics.FailurePhase);
+        Assert.Equal(GatewayAuditFailurePhase.UpstreamHttpResponse, diagnostics.FailurePhase);
         Assert.Equal(400, diagnostics.UpstreamStatus);
         Assert.Equal("syntax", diagnostics.SafeUpstreamCode);
         Assert.Equal(
-            [nameof(SafeUpstreamFailureDiagnostics.FailurePhase), nameof(SafeUpstreamFailureDiagnostics.SafeUpstreamCode), nameof(SafeUpstreamFailureDiagnostics.UpstreamStatus)],
+            [nameof(SafeUpstreamFailureDiagnostics.FailurePhase), nameof(SafeUpstreamFailureDiagnostics.LocalSafeCode), nameof(SafeUpstreamFailureDiagnostics.SafeUpstreamCode), nameof(SafeUpstreamFailureDiagnostics.UpstreamStatus)],
             typeof(SafeUpstreamFailureDiagnostics).GetProperties().Select(value => value.Name).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void FSE2_TRANSPORT_local_mapping_diagnostics_are_closed_and_status_bounded()
+    {
+        GatewayAuditFailureDiagnostics diagnostics = SafeUpstreamFailureDiagnostics
+            .LocalResponseMapping(200, "FSE2_RESPONSE_INVALID")
+            .ToAuditDiagnostics();
+
+        Assert.Equal(GatewayAuditFailurePhase.LocalResponseMappingFailure, diagnostics.FailurePhase);
+        Assert.Equal(200, diagnostics.UpstreamStatus);
+        Assert.Equal(GatewayAuditStatusCategory.Success, diagnostics.StatusCategory);
+        Assert.Null(diagnostics.SafeUpstreamCode);
+        Assert.Equal("FSE2_RESPONSE_INVALID", diagnostics.LocalSafeCode);
+        Assert.Throws<ArgumentOutOfRangeException>(() => GatewayAuditFailureDiagnostics.Create(
+            GatewayAuditFailurePhase.UpstreamHttpResponse, 600, GatewayAuditStatusCategory.ServerError, null, null));
     }
 
     [Fact]

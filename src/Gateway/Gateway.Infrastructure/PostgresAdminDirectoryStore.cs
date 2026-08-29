@@ -57,8 +57,8 @@ public sealed class PostgresAdminDirectoryStore(AdminPostgresDataSource adminDat
 
     /// <inheritdoc />
     public Task<AdminPage<GatewayAuditEvent>> ListAuditAsync(Guid tenantId, int offset, int limit, CancellationToken cancellationToken) => QueryTenantAsync<GatewayAuditEvent>(tenantId,
-        "SELECT id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted::text FROM gateway.audit_event WHERE tenant_id=$1 ORDER BY occurred_at DESC,id DESC OFFSET $2 LIMIT $3", "SELECT count(*) FROM gateway.audit_event WHERE tenant_id=$1",
-        reader => new(reader.GetGuid(0), reader.GetFieldValue<DateTimeOffset>(1), reader.GetGuid(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7), reader.GetGuid(8), reader.GetString(9), reader.GetString(10), JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(11)) ?? new()), offset, limit, cancellationToken);
+        "SELECT id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted::text,failure_phase,upstream_status,status_category,safe_upstream_code,local_safe_code FROM gateway.audit_event WHERE tenant_id=$1 ORDER BY occurred_at DESC,id DESC OFFSET $2 LIMIT $3", "SELECT count(*) FROM gateway.audit_event WHERE tenant_id=$1",
+        reader => new(reader.GetGuid(0), reader.GetFieldValue<DateTimeOffset>(1), reader.GetGuid(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7), reader.GetGuid(8), reader.GetString(9), reader.GetString(10), JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(11)) ?? new(), GatewayAuditFailureDiagnosticsStorage.Read(reader, 12)), offset, limit, cancellationToken);
 
     private async Task<AdminPage<T>> QueryAsync<T>(string sql, string countSql, Func<NpgsqlDataReader, T> read, int offset, int limit, CancellationToken cancellationToken)
     {

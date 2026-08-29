@@ -284,6 +284,7 @@ public sealed class Fse2FoundationTests
         Fse2ConnectorException error = Fse2ResponseMapper.MapProblem(
             new(400, "application/problem+json", problem), Fse2RetryClass.NoAutomaticRetry);
         Assert.Equal("syntax", error.SafeCode);
+        Assert.Equal("syntax", error.SafeUpstreamCode);
         Assert.DoesNotContain(canary, error.ToString(), StringComparison.Ordinal);
     }
 
@@ -395,9 +396,12 @@ public sealed class Fse2FoundationTests
             new(400, "application/problem+json.evil", "{\"type\":\"https://fse.example/msg/syntax\"}"u8.ToArray())
         ];
 
-        Assert.All(responses, response => Assert.Equal(
-            "FSE2_UPSTREAM_REJECTED",
-            Fse2ResponseMapper.MapProblem(response, Fse2RetryClass.NoAutomaticRetry).SafeCode));
+        Assert.All(responses, response =>
+        {
+            Fse2ConnectorException error = Fse2ResponseMapper.MapProblem(response, Fse2RetryClass.NoAutomaticRetry);
+            Assert.Equal("FSE2_UPSTREAM_REJECTED", error.SafeCode);
+            Assert.Null(error.SafeUpstreamCode);
+        });
     }
 
     [Fact]

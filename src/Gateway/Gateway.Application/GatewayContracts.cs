@@ -62,24 +62,35 @@ public sealed class RestrictedTransportFailureException : Exception
 }
 
 internal sealed record SafeUpstreamFailureDiagnostics(
-    string FailurePhase,
+    GatewayAuditFailurePhase FailurePhase,
     int? UpstreamStatus,
-    string? SafeUpstreamCode)
+    string? SafeUpstreamCode,
+    string? LocalSafeCode)
 {
-    internal static SafeUpstreamFailureDiagnostics HttpResponse(int statusCode, string safeCode) =>
-        new("UPSTREAM_HTTP_RESPONSE", statusCode, safeCode);
+    internal GatewayAuditFailureDiagnostics ToAuditDiagnostics() => GatewayAuditFailureDiagnostics.Create(
+        FailurePhase,
+        UpstreamStatus,
+        GatewayAuditFailureDiagnostics.Category(UpstreamStatus),
+        SafeUpstreamCode,
+        LocalSafeCode);
+
+    internal static SafeUpstreamFailureDiagnostics HttpResponse(int statusCode, string? safeCode) =>
+        new(GatewayAuditFailurePhase.UpstreamHttpResponse, statusCode, safeCode, null);
+
+    internal static SafeUpstreamFailureDiagnostics LocalResponseMapping(int statusCode, string localSafeCode, string? safeUpstreamCode = null) =>
+        new(GatewayAuditFailurePhase.LocalResponseMappingFailure, statusCode, safeUpstreamCode, localSafeCode);
 
     internal static SafeUpstreamFailureDiagnostics Transport(RestrictedTransportFailurePhase phase) =>
         new(phase switch
         {
-            RestrictedTransportFailurePhase.DnsFailure => "DNS_FAILURE",
-            RestrictedTransportFailurePhase.TcpConnectFailure => "TCP_CONNECT_FAILURE",
-            RestrictedTransportFailurePhase.TlsServerValidationFailure => "TLS_SERVER_VALIDATION_FAILURE",
-            RestrictedTransportFailurePhase.MutualTlsClientAuthenticationFailure => "MTLS_CLIENT_AUTH_FAILURE",
-            RestrictedTransportFailurePhase.Timeout => "TIMEOUT",
-            RestrictedTransportFailurePhase.TransportFailureOther => "TRANSPORT_FAILURE_OTHER",
+            RestrictedTransportFailurePhase.DnsFailure => GatewayAuditFailurePhase.DnsFailure,
+            RestrictedTransportFailurePhase.TcpConnectFailure => GatewayAuditFailurePhase.TcpConnectFailure,
+            RestrictedTransportFailurePhase.TlsServerValidationFailure => GatewayAuditFailurePhase.TlsServerValidationFailure,
+            RestrictedTransportFailurePhase.MutualTlsClientAuthenticationFailure => GatewayAuditFailurePhase.MutualTlsClientAuthenticationFailure,
+            RestrictedTransportFailurePhase.Timeout => GatewayAuditFailurePhase.Timeout,
+            RestrictedTransportFailurePhase.TransportFailureOther => GatewayAuditFailurePhase.TransportFailureOther,
             _ => throw new ArgumentOutOfRangeException(nameof(phase))
-        }, null, null);
+        }, null, null, null);
 }
 
 /// <summary>Enrollment challenge request.</summary>

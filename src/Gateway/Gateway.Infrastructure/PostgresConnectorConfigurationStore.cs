@@ -550,9 +550,12 @@ public sealed class PostgresConnectorConfigurationStore(
         return result;
     }
 
-    private static Task<int> InsertAuditAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, GatewayAuditEvent auditEvent, CancellationToken cancellationToken) =>
-        ExecuteAsync(connection, transaction, "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)", cancellationToken,
-            auditEvent.Id, auditEvent.OccurredAt, (object?)auditEvent.TenantId ?? DBNull.Value, auditEvent.ActorType, auditEvent.ActorId, auditEvent.Action, auditEvent.TargetType, auditEvent.TargetId, auditEvent.CorrelationId, auditEvent.Outcome, auditEvent.ReasonCode, JsonSerializer.Serialize(auditEvent.Metadata));
+    private static Task<int> InsertAuditAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        (object phase, object status, object category, object upstreamCode, object localCode) = GatewayAuditFailureDiagnosticsStorage.Values(auditEvent.FailureDiagnostics);
+        return ExecuteAsync(connection, transaction, "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted,failure_phase,upstream_status,status_category,safe_upstream_code,local_safe_code) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15,$16,$17)", cancellationToken,
+            auditEvent.Id, auditEvent.OccurredAt, (object?)auditEvent.TenantId ?? DBNull.Value, auditEvent.ActorType, auditEvent.ActorId, auditEvent.Action, auditEvent.TargetType, auditEvent.TargetId, auditEvent.CorrelationId, auditEvent.Outcome, auditEvent.ReasonCode, JsonSerializer.Serialize(auditEvent.Metadata), phase, status, category, upstreamCode, localCode);
+    }
 
     private static async Task<ConnectorVersionRecord> ReadVersionForUpdateAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, Guid id, CancellationToken cancellationToken) =>
         await GetByIdAsync(connection, transaction, id, true, cancellationToken).ConfigureAwait(false);

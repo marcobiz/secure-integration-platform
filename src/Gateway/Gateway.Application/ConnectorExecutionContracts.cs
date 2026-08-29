@@ -272,9 +272,9 @@ public sealed class AuthorizedConnectorExecution
                 return result;
             }, cancellationToken);
 
-        public void RejectRestrictedTransportResponse(QualifiedGatewayExecutionResult response, string safeProblemCode)
+        public void RejectRestrictedTransportResponse(QualifiedGatewayExecutionResult response, string? safeProblemCode)
         {
-            bool validCode = safeProblemCode is { Length: >= 1 and <= 96 } &&
+            bool validCode = safeProblemCode is null || safeProblemCode is { Length: >= 1 and <= 96 } &&
                 safeProblemCode.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
             lock (synchronization)
             {
@@ -290,6 +290,30 @@ public sealed class AuthorizedConnectorExecution
                 502,
                 retryable,
                 SafeUpstreamFailureDiagnostics.HttpResponse(response.StatusCode, safeProblemCode)));
+        }
+
+        public void RejectRestrictedTransportResponseMapping(
+            QualifiedGatewayExecutionResult response,
+            string localSafeCode,
+            string? safeUpstreamCode = null)
+        {
+            bool validLocalCode = localSafeCode is { Length: >= 1 and <= 96 } &&
+                localSafeCode.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
+            bool validUpstreamCode = safeUpstreamCode is null || safeUpstreamCode is { Length: >= 1 and <= 96 } &&
+                safeUpstreamCode.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
+            lock (synchronization)
+            {
+                if (state != 1 || !ReferenceEquals(Current.Value, this) ||
+                    execution.RestrictedTransportResponseMode != AuthorizedRestrictedTransportResponseMode.BoundedProblemDetails ||
+                    !ReferenceEquals(restrictedTransportResult, response) || response.StatusCode is not (>= 200 and < 300) ||
+                    !validLocalCode || !validUpstreamCode)
+                    throw Failure(new GatewayException("BGW-EGRESS-AUTHENTICATION", 409));
+            }
+            throw Failure(new GatewayException(
+                "BGW-EGRESS-UPSTREAM-REJECTED",
+                502,
+                false,
+                SafeUpstreamFailureDiagnostics.LocalResponseMapping(response.StatusCode, localSafeCode, safeUpstreamCode)));
         }
 
         internal AuthorizedConnectorCapabilityScope EnterExecutionScope(CancellationToken actualInvocationCancellation)
@@ -535,7 +559,9 @@ public interface IAuthorizedConnectorCapabilityBridge
     /// Rejects the exact non-success result returned by this invocation after connector-local safe
     /// problem mapping. No body, title, detail, endpoint or arbitrary metadata can be supplied.
     /// </summary>
-    void RejectRestrictedTransportResponse(QualifiedGatewayExecutionResult response, string safeProblemCode);
+    void RejectRestrictedTransportResponse(QualifiedGatewayExecutionResult response, string? safeProblemCode);
+    /// <summary>Rejects only the exact successful bounded response that the current vertical could not map safely.</summary>
+    void RejectRestrictedTransportResponseMapping(QualifiedGatewayExecutionResult response, string localSafeCode, string? safeUpstreamCode = null);
 }
 
 /// <summary>One exact deployment-registered execution strategy.</summary>

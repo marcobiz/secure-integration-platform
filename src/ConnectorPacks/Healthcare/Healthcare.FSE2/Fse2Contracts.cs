@@ -82,18 +82,22 @@ public enum Fse2ErrorCategory
 /// <summary>Metadata-safe FSE2 failure. It never retains provider text, JWTs or clinical bodies.</summary>
 public sealed class Fse2ConnectorException : Exception
 {
-    public Fse2ConnectorException(Fse2ErrorCategory category, string safeCode, bool retryable = false)
+    public Fse2ConnectorException(Fse2ErrorCategory category, string safeCode, bool retryable = false, string? safeUpstreamCode = null)
         : base(safeCode)
     {
         if (!Fse2Validation.IsSafeCode(safeCode)) throw new ArgumentException("FSE2_SAFE_CODE_INVALID", nameof(safeCode));
+        if (safeUpstreamCode is not null && !Fse2Validation.IsSafeCode(safeUpstreamCode))
+            throw new ArgumentException("FSE2_SAFE_UPSTREAM_CODE_INVALID", nameof(safeUpstreamCode));
         Category = category;
         SafeCode = safeCode;
         Retryable = retryable;
+        SafeUpstreamCode = safeUpstreamCode;
     }
 
     public Fse2ErrorCategory Category { get; }
     public string SafeCode { get; }
     public bool Retryable { get; }
+    public string? SafeUpstreamCode { get; }
 }
 
 /// <summary>Validated business/clinical claims that never establish the authenticated actor.</summary>

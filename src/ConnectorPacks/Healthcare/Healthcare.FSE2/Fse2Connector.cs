@@ -160,10 +160,21 @@ public sealed class Fse2OrganizationExecutionStrategy(
         if (!profile.Operation.SuccessStatusCodes.Contains(upstream.StatusCode))
         {
             Fse2ConnectorException problem = Fse2ResponseMapper.MapProblem(upstream, profile.Operation.RetryClass);
-            execution.Capabilities.RejectRestrictedTransportResponse(upstream, problem.SafeCode);
+            execution.Capabilities.RejectRestrictedTransportResponse(upstream, problem.SafeUpstreamCode);
             throw problem;
         }
-        Fse2Response normalized = Fse2ResponseMapper.Map(upstream, execution.CorrelationId, profile.Operation);
+        Fse2Response normalized;
+        try
+        {
+            normalized = Fse2ResponseMapper.Map(upstream, execution.CorrelationId, profile.Operation);
+        }
+        catch (Fse2ConnectorException exception) when (
+            exception.Category == Fse2ErrorCategory.ResponseInvalid &&
+            string.Equals(exception.SafeCode, "FSE2_RESPONSE_INVALID", StringComparison.Ordinal))
+        {
+            execution.Capabilities.RejectRestrictedTransportResponseMapping(upstream, exception.SafeCode);
+            throw;
+        }
         if (profile.Operation.Operation is not (Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace) &&
             (normalized.WorkflowInstanceId is not null || normalized.TraceId is not null))
         {
@@ -462,7 +473,7 @@ public static class Fse2ResponseMapper
 
     public static Fse2ConnectorException MapProblem(QualifiedGatewayExecutionResult response, Fse2RetryClass retryClass)
     {
-        string safeCode = "FSE2_UPSTREAM_REJECTED";
+        string? safeUpstreamCode = null;
         if (response.Body.Length <= MaximumProblemBytes && IsProblemJson(response.ContentType))
         {
             try
@@ -477,17 +488,17 @@ public static class Fse2ResponseMapper
                     int slash = candidate.LastIndexOf('/');
                     candidate = slash >= 0 ? candidate[(slash + 1)..] : candidate;
                     if (!OfficialProblemCodes.Contains(candidate)) continue;
-                    safeCode = candidate;
+                    safeUpstreamCode = candidate;
                     break;
                 }
             }
-            catch (Exception) { safeCode = "FSE2_UPSTREAM_REJECTED"; }
+            catch (Exception) { safeUpstreamCode = null; }
         }
         bool retryable = retryClass == Fse2RetryClass.SafeRetry && response.StatusCode is 429 or 502 or 503 or 504;
         Fse2ErrorCategory category = response.StatusCode is 429 or >= 500
             ? Fse2ErrorCategory.TemporarilyUnavailable
             : Fse2ErrorCategory.UpstreamRejected;
-        return new(category, safeCode, retryable);
+        return new(category, safeUpstreamCode ?? "FSE2_UPSTREAM_REJECTED", retryable, safeUpstreamCode);
     }
 
     private static bool IsProblemJson(string contentType)

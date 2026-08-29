@@ -233,20 +233,12 @@ public sealed class RestrictedEgressService
                 Dictionary<string, string> metadata = new(StringComparer.Ordinal)
                 {
                     ["connectorVersion"] = operation.Version,
-                    ["callerKind"] = identity.InstallationKind.ToString(),
-                    ["failurePhase"] = diagnostics.FailurePhase
+                    ["callerKind"] = identity.InstallationKind.ToString()
                 };
-                if (diagnostics.UpstreamStatus is int upstreamStatus)
-                {
-                    metadata["upstreamStatus"] = upstreamStatus.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                    metadata["statusCategory"] = (upstreamStatus / 100).ToString(System.Globalization.CultureInfo.InvariantCulture) + "xx";
-                }
-                if (diagnostics.SafeUpstreamCode is not null)
-                    metadata["safeUpstreamCode"] = diagnostics.SafeUpstreamCode;
                 await registry.AppendAuditAsync(new GatewayAuditEvent(
                     Guid.NewGuid(), clock.UtcNow, identity.TenantId, "installation", identity.InstallationId.ToString("D"),
                     "operation.invoke", "operation", connectorId + "/" + operationId, request.CorrelationId,
-                    "failure", exception.Failure.Code, metadata), cancellationToken).ConfigureAwait(false);
+                    "failure", exception.Failure.Code, metadata, diagnostics.ToAuditDiagnostics()), cancellationToken).ConfigureAwait(false);
             }
             throw exception.Failure;
         }

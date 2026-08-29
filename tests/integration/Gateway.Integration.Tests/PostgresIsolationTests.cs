@@ -18,6 +18,47 @@ namespace SecureIntegration.Gateway.Integration.Tests;
 public sealed class PostgresIsolationTests
 {
     [Fact]
+    public async Task FSE2_IT_DAT_PostgreSQL18_failure_diagnostics_round_trip()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("The dedicated PostgreSQL 18 gate must provide the admin connection.");
+        await ApplyMigrationAsync();
+        await using AdminPostgresDataSource pool = new(connectionString);
+        PostgresGatewayRegistry registry = new(pool.Value);
+        Guid tenantId = Guid.NewGuid();
+        Guid correlationId = Guid.NewGuid();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        await registry.AddTenantAsync(new(tenantId, "diag-" + tenantId.ToString("N"), "Diagnostics", TenantStatus.Active, now), TestContext.Current.CancellationToken);
+        await registry.AppendAuditAsync(new(
+            Guid.NewGuid(), now, tenantId, "installation", Guid.NewGuid().ToString("D"),
+            "operation.invoke", "operation", "fse2/create", correlationId, "failure",
+            "BGW-EGRESS-UPSTREAM-REJECTED", new Dictionary<string, string>
+            {
+                ["connectorVersion"] = "1.0.0",
+                ["callerKind"] = "Direct"
+            },
+            GatewayAuditFailureDiagnostics.Create(
+                GatewayAuditFailurePhase.LocalResponseMappingFailure,
+                200,
+                GatewayAuditStatusCategory.Success,
+                null,
+                "FSE2_RESPONSE_INVALID")), TestContext.Current.CancellationToken);
+
+        PostgresAdminDirectoryStore directory = new(pool);
+        GatewayAuditEvent read = Assert.Single((await directory.ListAuditAsync(
+            tenantId, 0, 10, TestContext.Current.CancellationToken)).Items,
+            value => value.CorrelationId == correlationId);
+        GatewayAuditFailureDiagnostics diagnostics = Assert.IsType<GatewayAuditFailureDiagnostics>(read.FailureDiagnostics);
+        Assert.Equal(GatewayAuditFailurePhase.LocalResponseMappingFailure, diagnostics.FailurePhase);
+        Assert.Equal(200, diagnostics.UpstreamStatus);
+        Assert.Equal(GatewayAuditStatusCategory.Success, diagnostics.StatusCategory);
+        Assert.Null(diagnostics.SafeUpstreamCode);
+        Assert.Equal("FSE2_RESPONSE_INVALID", diagnostics.LocalSafeCode);
+        Assert.DoesNotContain(read.Metadata.Keys, key => key.Contains("failure", StringComparison.OrdinalIgnoreCase) ||
+            key.Contains("upstream", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task M5_IT_DAT_Tenant_mutations_are_FORCE_RLS_correct_atomic_and_concurrent_when_configured()
     {
         string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");

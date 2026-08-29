@@ -153,6 +153,136 @@ public sealed record RegisteredInstallationIdentity(
     InstallationKind InstallationKind = InstallationKind.Broker,
     string? ClientVersion = null);
 
+/// <summary>Closed phase for one metadata-only external failure.</summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter<GatewayAuditFailurePhase>))]
+public enum GatewayAuditFailurePhase
+{
+    /// <summary>No usable address was resolved.</summary>
+    [System.Text.Json.Serialization.JsonStringEnumMemberName("DNS_FAILURE")]
+    DnsFailure,
+    /// <summary>No approved address accepted a connection.</summary>
+    [System.Text.Json.Serialization.JsonStringEnumMemberName("TCP_CONNECT_FAILURE")]
+    TcpConnectFailure,
+    /// <summary>The upstream server certificate was not accepted.</summary>
+    [System.Text.Json.Serialization.JsonStringEnumMemberName("TLS_SERVER_VALIDATION_FAILURE")]
+    TlsServerValidationFailure,
+    /// <summary>Mutual-TLS client authentication did not complete.</summary>
+    [System.Text.Json.Serialization.JsonStringEnumMemberName("MTLS_CLIENT_AUTH_FAILURE")]
+    MutualTlsClientAuthenticationFailure,
+    /// <summary>The bounded operation deadline elapsed.</summary>
+    [System.Text.Json.Serialization.JsonStringEnumMemberName("TIMEOUT")]
+    Timeout,
+    /// <summary>A different transport failure occurred.</summary>
+    [System.Text.Json.Serialization.JsonStringEnumMemberName("TRANSPORT_FAILURE_OTHER")]
+    TransportFailureOther,
+    /// <summary>A bounded upstream HTTP response was received.</summary>
+    [System.Text.Json.Serialization.JsonStringEnumMemberName("UPSTREAM_HTTP_RESPONSE")]
+    UpstreamHttpResponse,
+    /// <summary>A received upstream response could not be mapped locally.</summary>
+    [System.Text.Json.Serialization.JsonStringEnumMemberName("LOCAL_RESPONSE_MAPPING_FAILURE")]
+    LocalResponseMappingFailure
+}
+
+/// <summary>Closed HTTP category that does not expose an upstream reason phrase.</summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter<GatewayAuditStatusCategory>))]
+public enum GatewayAuditStatusCategory
+{
+    /// <summary>No upstream HTTP response was received.</summary>
+    [System.Text.Json.Serialization.JsonStringEnumMemberName("NO_UPSTREAM_RESPONSE")]
+    NoUpstreamResponse,
+    /// <summary>HTTP 1xx.</summary>
+    [System.Text.Json.Serialization.JsonStringEnumMemberName("INFORMATIONAL")]
+    Informational,
+    /// <summary>HTTP 2xx.</summary>
+    [System.Text.Json.Serialization.JsonStringEnumMemberName("SUCCESS")]
+    Success,
+    /// <summary>HTTP 3xx.</summary>
+    [System.Text.Json.Serialization.JsonStringEnumMemberName("REDIRECTION")]
+    Redirection,
+    /// <summary>HTTP 4xx.</summary>
+    [System.Text.Json.Serialization.JsonStringEnumMemberName("CLIENT_ERROR")]
+    ClientError,
+    /// <summary>HTTP 5xx.</summary>
+    [System.Text.Json.Serialization.JsonStringEnumMemberName("SERVER_ERROR")]
+    ServerError
+}
+
+/// <summary>Closed metadata-only external failure diagnostics persisted with one audit event.</summary>
+public sealed class GatewayAuditFailureDiagnostics
+{
+    private GatewayAuditFailureDiagnostics(
+        GatewayAuditFailurePhase failurePhase,
+        int? upstreamStatus,
+        GatewayAuditStatusCategory statusCategory,
+        string? safeUpstreamCode,
+        string? localSafeCode)
+    {
+        if (!Enum.IsDefined(failurePhase)) throw new ArgumentOutOfRangeException(nameof(failurePhase));
+        if (!Enum.IsDefined(statusCategory)) throw new ArgumentOutOfRangeException(nameof(statusCategory));
+        if (upstreamStatus is not null && upstreamStatus is < 100 or > 599)
+            throw new ArgumentOutOfRangeException(nameof(upstreamStatus));
+        if (statusCategory != Category(upstreamStatus))
+            throw new ArgumentException("Audit status category does not match the bounded upstream status.", nameof(statusCategory));
+        if (!IsSafeCode(safeUpstreamCode)) throw new ArgumentException("Safe upstream code is invalid.", nameof(safeUpstreamCode));
+        if (!IsSafeCode(localSafeCode)) throw new ArgumentException("Local safe code is invalid.", nameof(localSafeCode));
+
+        bool transport = failurePhase is GatewayAuditFailurePhase.DnsFailure or
+            GatewayAuditFailurePhase.TcpConnectFailure or GatewayAuditFailurePhase.TlsServerValidationFailure or
+            GatewayAuditFailurePhase.MutualTlsClientAuthenticationFailure or GatewayAuditFailurePhase.Timeout or
+            GatewayAuditFailurePhase.TransportFailureOther;
+        if (transport && (upstreamStatus is not null || safeUpstreamCode is not null || localSafeCode is not null))
+            throw new ArgumentException("Transport diagnostics cannot contain upstream or local response fields.");
+        if (!transport && upstreamStatus is null)
+            throw new ArgumentException("Response diagnostics require a bounded upstream status.", nameof(upstreamStatus));
+        if (failurePhase == GatewayAuditFailurePhase.UpstreamHttpResponse && localSafeCode is not null)
+            throw new ArgumentException("Upstream HTTP diagnostics cannot contain a local safe code.", nameof(localSafeCode));
+        if (failurePhase == GatewayAuditFailurePhase.LocalResponseMappingFailure && localSafeCode is null)
+            throw new ArgumentException("Local response mapping diagnostics require a local safe code.", nameof(localSafeCode));
+
+        FailurePhase = failurePhase;
+        UpstreamStatus = upstreamStatus;
+        StatusCategory = statusCategory;
+        SafeUpstreamCode = safeUpstreamCode;
+        LocalSafeCode = localSafeCode;
+    }
+
+    /// <summary>Closed failure phase.</summary>
+    public GatewayAuditFailurePhase FailurePhase { get; }
+    /// <summary>Bounded HTTP status, or null when no response arrived.</summary>
+    public int? UpstreamStatus { get; }
+    /// <summary>Closed category derived only from the bounded status.</summary>
+    public GatewayAuditStatusCategory StatusCategory { get; }
+    /// <summary>Optional code selected by the vertical's frozen upstream allowlist.</summary>
+    public string? SafeUpstreamCode { get; }
+    /// <summary>Optional code selected by the vertical's frozen local allowlist.</summary>
+    public string? LocalSafeCode { get; }
+
+    /// <summary>Creates one validated closed diagnostics value, including persistence read-back.</summary>
+    public static GatewayAuditFailureDiagnostics Create(
+        GatewayAuditFailurePhase failurePhase,
+        int? upstreamStatus,
+        GatewayAuditStatusCategory statusCategory,
+        string? safeUpstreamCode,
+        string? localSafeCode) =>
+        new(failurePhase, upstreamStatus, statusCategory, safeUpstreamCode, localSafeCode);
+
+    /// <summary>Derives the closed category from a bounded HTTP status.</summary>
+    public static GatewayAuditStatusCategory Category(int? statusCode) => statusCode switch
+    {
+        null => GatewayAuditStatusCategory.NoUpstreamResponse,
+        >= 100 and <= 199 => GatewayAuditStatusCategory.Informational,
+        >= 200 and <= 299 => GatewayAuditStatusCategory.Success,
+        >= 300 and <= 399 => GatewayAuditStatusCategory.Redirection,
+        >= 400 and <= 499 => GatewayAuditStatusCategory.ClientError,
+        >= 500 and <= 599 => GatewayAuditStatusCategory.ServerError,
+        _ => throw new ArgumentOutOfRangeException(nameof(statusCode))
+    };
+
+    private static bool IsSafeCode(string? value) => value is null ||
+        value is { Length: >= 1 and <= 96 } &&
+        value.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.');
+}
+
 /// <summary>Metadata-only audit event.</summary>
 public sealed record GatewayAuditEvent(
     Guid Id,
@@ -166,7 +296,8 @@ public sealed record GatewayAuditEvent(
     Guid CorrelationId,
     string Outcome,
     string ReasonCode,
-    IReadOnlyDictionary<string, string> Metadata);
+    IReadOnlyDictionary<string, string> Metadata,
+    GatewayAuditFailureDiagnostics? FailureDiagnostics = null);
 
 /// <summary>Lifecycle state of one immutable Connector definition version.</summary>
 public enum ConnectorVersionState
