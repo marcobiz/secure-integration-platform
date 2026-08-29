@@ -368,14 +368,24 @@ internal static class Program
         Guid assertedEnvironmentId,
         bool initialPreflight)
     {
-        InstallationAuthority[] exact = (await ReadPagedItemsAsync(
-            api,
-            offset => $"admin/api/v1/installations?tenantId={tenantId:D}&offset={offset}&limit=100",
-            "FSE2_OFFICIALTEST_INSTALLATION_CATALOG_TOO_LARGE").ConfigureAwait(false))
-            .Where(value => value.GetProperty("id").GetGuid() == installationId)
-            .Select(InstallationAuthorityFrom)
-            .ToArray();
-        if (exact.Length == 0) throw Failure("FSE2_OFFICIALTEST_INSTALLATION_NOT_FOUND");
+        InstallationAuthority[] exact;
+        try
+        {
+            exact = (await ReadPagedItemsAsync(
+                api,
+                offset => $"admin/api/v1/installations?tenantId={tenantId:D}&offset={offset}&limit=100",
+                "FSE2_OFFICIALTEST_INSTALLATION_CATALOG_TOO_LARGE").ConfigureAwait(false))
+                .Where(value => value.GetProperty("id").GetGuid() == installationId)
+                .Select(InstallationAuthorityFrom)
+                .ToArray();
+        }
+        catch (ProvisioningException exception) when (
+            string.Equals(exception.Code, "FSE2_OFFICIALTEST_ADMIN_REJECTED_401", StringComparison.Ordinal) ||
+            string.Equals(exception.Code, "FSE2_OFFICIALTEST_ADMIN_REJECTED_403", StringComparison.Ordinal))
+        {
+            throw Failure("FSE2_OFFICIALTEST_INSTALLATION_UNAVAILABLE");
+        }
+        if (exact.Length == 0) throw Failure("FSE2_OFFICIALTEST_INSTALLATION_UNAVAILABLE");
         if (exact.Length != 1) throw Failure("FSE2_OFFICIALTEST_INSTALLATION_AMBIGUOUS");
         InstallationAuthority installation = exact[0];
         if (installation.TenantId != tenantId || installation.Id != installationId)

@@ -82,6 +82,30 @@ foreach (string operation in securityGrantedOperations)
     await registry.AddGrantAsync(new InstallationGrantRecord(Guid.NewGuid(), securityInstallationId, securityTenantId, "m3-vendor", operation, true, clock.UtcNow), CancellationToken.None).ConfigureAwait(false);
 
 PostgresConnectorConfigurationStore connectorStore = new(dataSource);
+object? fse2OfficialTest = null;
+if (string.Equals(Optional("M3_FSE2_OFFICIALTEST_SYNTHETIC_BOOTSTRAP"), "1", StringComparison.Ordinal))
+{
+    ProviderResourceCatalogRecord a1 = await RegisterFse2OfficialTestResourceAsync(
+        securityEnvironmentId,
+        "fse2-officialtest-a1",
+        "FSE2 OfficialTest synthetic A1",
+        "synthetic-vault://vault.m3.test/fse2-officialtest-a1",
+        vendorCertificate).ConfigureAwait(false);
+    ProviderResourceCatalogRecord s1 = await RegisterFse2OfficialTestResourceAsync(
+        securityEnvironmentId,
+        "fse2-officialtest-s1",
+        "FSE2 OfficialTest synthetic S1",
+        "synthetic-vault://vault.m3.test/fse2-officialtest-s1",
+        wrongVendorCertificate).ConfigureAwait(false);
+    fse2OfficialTest = new
+    {
+        tenantId = securityTenantId,
+        installationId = securityInstallationId,
+        environmentId = securityEnvironmentId,
+        a1 = ProviderAuthority(a1),
+        s1 = ProviderAuthority(s1)
+    };
+}
 await using AdminPostgresDataSource adminDataSource = new(adminConnection);
 PostgresAdminSecurityStore adminSecurity = new(adminDataSource);
 AdminPrincipalRecord provisionerEditor = await adminSecurity.EnsurePrincipalAsync(
@@ -117,7 +141,8 @@ byte[] document = JsonSerializer.SerializeToUtf8Bytes(new
     securityActivationCodeId = securityActivation.ActivationCodeId,
     securityActivationCode = securityActivation.ActivationCode,
     securityExpiresAtUtc = securityActivation.ExpiresAt,
-    sampleConnector
+    sampleConnector,
+    fse2OfficialTest
 }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true });
 await File.WriteAllBytesAsync(outputPath, document).ConfigureAwait(false);
 Console.WriteLine(JsonSerializer.Serialize(new { status = "provisioned", installationId, activationCodeId = activation.ActivationCodeId }));
@@ -234,12 +259,60 @@ async Task<ProviderResourceCatalogRecord> RegisterResourceAsync(Guid environment
     return await connectorStore.RegisterProviderResourceAsync(new(Guid.NewGuid(), "synthetic-vault", "Synthetic vault", "synthetic-vault", resourceId, type, resourceId, environment, connector, "*", providerReference, ProviderResourceStatus.Active, null, 0, metadataRevision, metadata, string.Empty, clock.UtcNow), CancellationToken.None).ConfigureAwait(false);
 }
 
+async Task<ProviderResourceCatalogRecord> RegisterFse2OfficialTestResourceAsync(
+    Guid environment,
+    string resourceId,
+    string displayName,
+    string providerReference,
+    X509Certificate2 certificate) =>
+    await connectorStore.RegisterProviderResourceAsync(new(
+        Guid.NewGuid(),
+        "synthetic-vault",
+        "Synthetic vault",
+        "synthetic-vault",
+        resourceId,
+        ProviderResourceType.ClientCertificate,
+        displayName,
+        environment,
+        "fse2-officialtest-validate-cda",
+        "validate-cda",
+        providerReference,
+        ProviderResourceStatus.Active,
+        "1",
+        0,
+        1,
+        CertificateMetadata(certificate),
+        string.Empty,
+        clock.UtcNow), CancellationToken.None).ConfigureAwait(false);
+
+static object ProviderAuthority(ProviderResourceCatalogRecord resource) => new
+{
+    resource.ProviderId,
+    resource.ResourceId,
+    resource.Version,
+    catalogRevision = resource.Revision,
+    resource.PublicMetadataRevision
+};
+
 static ProviderResourceBinding Binding(ProviderResourceCatalogRecord resource) => new(resource.ProviderId, resource.ProviderDisplayName, resource.ProviderType, resource.ResourceId, resource.ResourceType, resource.DisplayName, resource.EnvironmentId, resource.ConnectorScope, resource.OperationScope, resource.Version, resource.Revision, resource.PublicMetadataRevision, resource.CertificateMetadata, resource.ChecksumSha256);
 
 static CertificatePublicMetadata CertificateMetadata(X509Certificate2 certificate)
 {
     using RSA? rsa = certificate.GetRSAPublicKey(); using ECDsa? ecdsa = certificate.GetECDsaPublicKey();
-    return new(Convert.ToHexString(SHA256.HashData(certificate.RawData)), certificate.Subject, certificate.Issuer, certificate.NotBefore, certificate.NotAfter, rsa is not null ? "RSA" : "ECDSA", rsa?.KeySize ?? ecdsa?.KeySize ?? 0, certificate.SerialNumber);
+    byte[] subjectPublicKeyInfo = rsa?.ExportSubjectPublicKeyInfo() ?? ecdsa?.ExportSubjectPublicKeyInfo()
+        ?? throw new InvalidOperationException("M3 certificate public key is unsupported.");
+    string? subjectCommonName = certificate.GetNameInfo(X509NameType.SimpleName, forIssuer: false);
+    return new(
+        Convert.ToHexString(SHA256.HashData(certificate.RawData)),
+        certificate.Subject,
+        certificate.Issuer,
+        certificate.NotBefore,
+        certificate.NotAfter,
+        rsa is not null ? "RSA" : "ECDSA",
+        rsa?.KeySize ?? ecdsa?.KeySize ?? 0,
+        certificate.SerialNumber,
+        Convert.ToHexString(SHA256.HashData(subjectPublicKeyInfo)),
+        subjectCommonName);
 }
 
 static object Operation(string operationId, string endpointBinding, string path, string authentication, string? certificateBinding)

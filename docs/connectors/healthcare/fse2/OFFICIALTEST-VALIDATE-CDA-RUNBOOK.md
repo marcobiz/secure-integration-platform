@@ -143,10 +143,44 @@ configuration, JWTs, payloads, certificate chains, P12 material or session cooki
 
 ## Clean-state acceptance and recovery
 
-The release gate starts with a new PostgreSQL database, creates the synthetic Environment, Tenant,
-Application, active Installation and public-only provider catalog, then runs the supported role
-sequence above through Published read-back. Record elapsed time from empty database to Published;
-skipping the PostgreSQL gate is not a PASS.
+The dedicated release gate is
+`FSE2_OFFICIALTEST_clean_state_supported_provisioner_reaches_Published_for_authenticated_installation`.
+It creates a unique labelled Docker network, container and named volume from the already-present
+`postgres:18` image, publishing PostgreSQL only on a random loopback port. The empty-state proof is
+an authenticated Admin API read-back showing zero Tenants, Applications, Environments and provider
+resources; the test never reads PostgreSQL to establish or verify that inventory.
+
+The supported bootstrap sequence used by the gate is:
+
+1. `Gateway.Migrations apply`, with `GATEWAY_MIGRATION_CONNECTION`, applies the canonical migrations;
+2. `tools/m3/FixtureGenerator` creates only task-owned synthetic material;
+3. `tools/m3/Provisioner`, with the opt-in
+   `M3_FSE2_OFFICIALTEST_SYNTHETIC_BOOTSTRAP=1`, creates the synthetic Tenant, Application,
+   Environment, pending Installation and exact public A1/S1 catalog records through the existing
+   stack bootstrap component;
+4. the real Gateway host enrollment endpoints activate the Installation;
+5. authenticated Admin API sessions run Installation read-back, server-side Environment derivation,
+   exact provider-catalog resolution, configure, grant, propose, distinct approve, publish and
+   Published/Active read-back.
+
+The test project references the migration runner, fixture generator and M3 provisioner as build-only
+components and launches their produced entrypoints; it does not register replacement stores, create
+persisted records directly, or execute SQL. SQL used internally by the migration component and role
+bootstrap remains encapsulated behind those supported deployment entrypoints. The opt-in M3 output
+contains only public catalog identities needed to construct the protected synthetic plan.
+
+The three direct preflight negatives are
+`FSE2_OFFICIALTEST_preflight_rejects_missing_installation_before_any_Admin_mutation`,
+`FSE2_OFFICIALTEST_preflight_rejects_ambiguous_installation_before_any_Admin_mutation` and
+`FSE2_OFFICIALTEST_preflight_rejects_unauthorized_installation_before_any_Admin_mutation`.
+Missing and unauthorized selections return the same non-enumerating unavailable result; ambiguity
+never selects the first record. All three assert zero Admin mutation, provider access, signing, DNS,
+HTTPS, transport and network effects.
+
+Record elapsed time from empty database to Published. The dedicated PostgreSQL job sets
+`REQUIRE_FSE2_POSTGRES_GATE=1` and requires exactly one execution with zero failed and zero skipped;
+skipping that dedicated gate is not a PASS. Cleanup removes only the exact labelled task-owned
+container, network, volume and synthetic directory, then proves that none remains.
 
 A Published configuration with the wrong Environment is immutable and must not be updated in place.
 Preserve the historical bad volume/evidence, provision a new clean laboratory volume, bootstrap a new

@@ -32,6 +32,15 @@ sent only by the distinct approver of the exact request. This is also an authori
 condition: both the approval precheck and the serializable PostgreSQL publication transaction bind
 the authenticated session actor to the current approval's `approved_by`.
 
+The clean-state acceptance gate uses only supported deployment edges: the canonical migration
+runner, the existing M3 fixture generator and provisioner with an explicit synthetic FSE2 bootstrap
+option, the real Gateway enrollment endpoints, and authenticated Admin APIs. The bootstrap option is
+test/laboratory-only and creates just the minimum synthetic Environment, Installation and public A1/S1
+catalog state; it does not add a generic Admin, deployment or provider API. Test code does not issue
+SQL or resolve persistence stores. A missing or session-unauthorized Installation is exposed as the
+same unavailable result, while multiple exact matches fail as ambiguous, all before provider access
+or mutation.
+
 `server-public-metadata.json` is not an authority and is not accepted by operational commands.
 The Installation identity is re-read before each mutation, including binding, proposal, approval and
 publication; drift stops before the next mutation. The server-derived Environment selects the
@@ -69,3 +78,5 @@ signing oracle or Healthcare dependency in Core.
 - the Admin API exposes only public certificate identity (including SPKI SHA-256 and subject CN),
   never a provider locator, private key, P12, password or generic secret value;
 - no live network call is part of provisioning or qualification.
+- the clean-state gate owns and completely removes its PostgreSQL container, network, named volume
+  and synthetic files; historical Docker volumes are neither mounted nor inspected.

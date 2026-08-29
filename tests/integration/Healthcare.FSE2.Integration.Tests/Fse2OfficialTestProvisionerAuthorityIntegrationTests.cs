@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -8,10 +10,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.DependencyInjection;
-using Npgsql;
 using SecureIntegration.Gateway.Application;
-using SecureIntegration.Gateway.Domain;
-using SecureIntegration.Gateway.Infrastructure;
 using SecureIntegration.Gateway.Integration.Tests;
 using SecureIntegration.Tools.Fse2.OfficialTestProvisioner;
 using Xunit;
@@ -53,37 +52,124 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
     }
 
     [Fact]
+    public async Task FSE2_OFFICIALTEST_preflight_rejects_missing_installation_before_any_Admin_mutation()
+    {
+        Fse2OfficialTestOperationalPlan plan = Plan();
+        using ScriptedAdminApi api = new(plan, plan.EnvironmentId) { MissingInstallation = true };
+
+        ProvisionerProgram.ProvisioningException failure = await Assert.ThrowsAsync<ProvisionerProgram.ProvisioningException>(() =>
+            ProvisionerProgram.PreflightAsync(api, plan));
+
+        Assert.Equal("FSE2_OFFICIALTEST_INSTALLATION_UNAVAILABLE", failure.Code);
+        AssertNoEffects(api);
+    }
+
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_preflight_rejects_ambiguous_installation_before_any_Admin_mutation()
+    {
+        Fse2OfficialTestOperationalPlan plan = Plan();
+        using ScriptedAdminApi api = new(plan, plan.EnvironmentId) { DuplicateInstallation = true };
+
+        ProvisionerProgram.ProvisioningException failure = await Assert.ThrowsAsync<ProvisionerProgram.ProvisioningException>(() =>
+            ProvisionerProgram.PreflightAsync(api, plan));
+
+        Assert.Equal("FSE2_OFFICIALTEST_INSTALLATION_AMBIGUOUS", failure.Code);
+        AssertNoEffects(api);
+    }
+
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_preflight_rejects_unauthorized_installation_before_any_Admin_mutation()
+    {
+        Fse2OfficialTestOperationalPlan plan = Plan();
+        using ScriptedAdminApi api = new(plan, plan.EnvironmentId) { UnauthorizedInstallation = true };
+
+        ProvisionerProgram.ProvisioningException failure = await Assert.ThrowsAsync<ProvisionerProgram.ProvisioningException>(() =>
+            ProvisionerProgram.PreflightAsync(api, plan));
+
+        Assert.Equal("FSE2_OFFICIALTEST_INSTALLATION_UNAVAILABLE", failure.Code);
+        AssertNoEffects(api);
+    }
+
+    [Fact]
     public async Task FSE2_OFFICIALTEST_clean_state_supported_provisioner_reaches_Published_for_authenticated_installation()
     {
+        if (!string.Equals(Environment.GetEnvironmentVariable("REQUIRE_FSE2_POSTGRES_GATE"), "1", StringComparison.Ordinal))
+            Assert.Skip("The clean-state supported-path gate runs only in the dedicated PostgreSQL 18 job.");
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         Stopwatch timeToPublished = Stopwatch.StartNew();
-        string? configuredAdmin = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
-        string? configuredMigration = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
-        if (string.IsNullOrWhiteSpace(configuredAdmin) || string.IsNullOrWhiteSpace(configuredMigration))
-            Assert.Skip("The clean-state Published gate requires the dedicated PostgreSQL 18 test service.");
-        await using TemporaryPostgresDatabase database = await TemporaryPostgresDatabase.CreateAsync(
-            configuredAdmin, configuredMigration, cancellationToken);
-        await using AdminApiSecurityTests.PostgresRuntimeRoleLease runtimeRole =
-            await AdminApiSecurityTests.PostgresRuntimeRoleLease.CreateAsync(
-                database.AdminConnectionString, database.MigrationConnectionString, cancellationToken);
-        await using ProvisionerAdminFactory factory = new(runtimeRole.ConnectionString, database.AdminConnectionString);
-        Guid environmentId = Guid.NewGuid();
-        Guid tenantId = Guid.NewGuid();
-        Guid applicationId = Guid.NewGuid();
-        Guid installationId = Guid.NewGuid();
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        IAdminGatewayRegistry registry = factory.Services.GetRequiredService<IAdminGatewayRegistry>();
-        await registry.AddEnvironmentAsync(new(environmentId, "fse2-clean-" + environmentId.ToString("N")[..10], "FSE2 clean state", false), cancellationToken);
-        await registry.AddTenantAsync(new(tenantId, "fse2-clean-" + tenantId.ToString("N")[..10], "FSE2 clean tenant", TenantStatus.Active, now), cancellationToken);
-        await registry.AddApplicationAsync(new(applicationId, "fse2-clean-" + applicationId.ToString("N")[..10], "FSE2 clean application", ApplicationStatus.Active, "3.0.0", null, now), cancellationToken);
-        await registry.AddInstallationAsync(new(installationId, tenantId, applicationId, environmentId, InstallationStatus.Active, "3.0.0", now, UpdatedAt: now), cancellationToken);
+        string repository = RepositoryRoot();
+        await using DockerPostgresStack database = await DockerPostgresStack.CreateAsync(cancellationToken);
+        await RunDotNetComponentAsync(
+            repository,
+            "src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj",
+            ["apply"],
+            new Dictionary<string, string> { ["GATEWAY_MIGRATION_CONNECTION"] = database.AdminConnectionString },
+            "FSE2_CLEAN_STATE_MIGRATION_COMPONENT_FAILED",
+            cancellationToken);
 
-        Fse2OfficialTestProviderReference a1 = new("synthetic-provider", "officialtest-a1", "1", 1, 1);
-        Fse2OfficialTestProviderReference s1 = new("synthetic-provider", "officialtest-s1", "1", 1, 1);
-        IConnectorConfigurationStore store = factory.Services.GetRequiredService<IConnectorConfigurationStore>();
-        _ = await RegisterAsync(store, environmentId, a1, "A1 Synthetic Client", 'A', cancellationToken);
-        _ = await RegisterAsync(store, environmentId, s1, "S1 Synthetic Signing", 'B', cancellationToken);
+        string initialActivationKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        await using (ProvisionerAdminFactory initialFactory = new(database.AdminConnectionString, database.AdminConnectionString, initialActivationKey))
+        using (HttpAdminApi initialAdministrator = await HttpAdminApi.LoginAsync(initialFactory, "security-admin", cancellationToken))
+        {
+            await AssertEmptyPageAsync(initialAdministrator, "admin/api/v1/tenants?offset=0&limit=10");
+            await AssertEmptyPageAsync(initialAdministrator, "admin/api/v1/applications?offset=0&limit=10");
+            await AssertEmptyPageAsync(initialAdministrator, "admin/api/v1/environments?offset=0&limit=10");
+            await AssertEmptyPageAsync(initialAdministrator, "admin/api/v1/provider-resources?offset=0&limit=10");
+        }
+
+        string rawRoot = Path.Combine(database.TaskDirectory, "raw");
+        await RunDotNetComponentAsync(
+            repository,
+            "tools/m3/FixtureGenerator/FixtureGenerator.csproj",
+            [rawRoot],
+            null,
+            "FSE2_CLEAN_STATE_FIXTURE_COMPONENT_FAILED",
+            cancellationToken);
+        Dictionary<string, string> fixture = ReadEnvironmentFile(Path.Combine(rawRoot, "m3a.env"));
+        string adminApiPassword = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        string provisioningPath = Path.Combine(rawRoot, "provisioning.json");
+        Dictionary<string, string> bootstrapEnvironment = new(StringComparer.Ordinal)
+        {
+            ["M3_POSTGRES_ADMIN_CONNECTION"] = database.AdminConnectionString,
+            ["M3_POSTGRES_RUNTIME_PASSWORD"] = RequiredFixture(fixture, "M3_POSTGRES_RUNTIME_PASSWORD"),
+            ["M3_ACTIVATION_HMAC_BASE64"] = RequiredFixture(fixture, "M3_ACTIVATION_HMAC_BASE64"),
+            ["M3_PROVISIONING_OUTPUT"] = provisioningPath,
+            ["M3_VENDOR_CLIENT_PFX_BASE64"] = RequiredFixture(fixture, "M3_VENDOR_CLIENT_PFX_BASE64"),
+            ["M3_WRONG_VENDOR_CLIENT_PFX_BASE64"] = RequiredFixture(fixture, "M3_WRONG_VENDOR_CLIENT_PFX_BASE64"),
+            ["M5_POSTGRES_ADMIN_API_PASSWORD"] = adminApiPassword,
+            ["M3_FSE2_OFFICIALTEST_SYNTHETIC_BOOTSTRAP"] = "1"
+        };
+        await RunDotNetComponentAsync(
+            repository,
+            "tools/m3/Provisioner/Provisioner.csproj",
+            [],
+            bootstrapEnvironment,
+            "FSE2_CLEAN_STATE_STACK_BOOTSTRAP_FAILED",
+            cancellationToken);
+
+        using JsonDocument provisioning = JsonDocument.Parse(await File.ReadAllBytesAsync(provisioningPath, cancellationToken));
+        JsonElement root = provisioning.RootElement;
+        JsonElement fse2 = root.GetProperty("fse2OfficialTest");
+        Guid tenantId = fse2.GetProperty("tenantId").GetGuid();
+        Guid installationId = fse2.GetProperty("installationId").GetGuid();
+        Guid environmentId = fse2.GetProperty("environmentId").GetGuid();
+        Fse2OfficialTestProviderReference a1 = ProviderReference(fse2.GetProperty("a1"));
+        Fse2OfficialTestProviderReference s1 = ProviderReference(fse2.GetProperty("s1"));
         Fse2OfficialTestOperationalPlan plan = Plan(tenantId, installationId, environmentId, a1, s1);
+
+        string runtimeConnection = database.ConnectionString("m3_gateway_runtime", RequiredFixture(fixture, "M3_POSTGRES_RUNTIME_PASSWORD"));
+        string adminConnection = database.ConnectionString("m5_gateway_admin", adminApiPassword);
+        await using ProvisionerAdminFactory factory = new(
+            runtimeConnection,
+            adminConnection,
+            RequiredFixture(fixture, "M3_ACTIVATION_HMAC_BASE64"));
+        await ActivateInstallationAsync(
+            factory,
+            root.GetProperty("securityActivationCodeId").GetGuid(),
+            root.GetProperty("securityActivationCode").GetString()!,
+            Path.Combine(rawRoot, "certificates", "security-driver.pfx"),
+            RequiredFixture(fixture, "M3_CERTIFICATE_PASSWORD"),
+            cancellationToken);
 
         using HttpAdminApi securityAdministrator = await HttpAdminApi.LoginAsync(factory, "security-admin", cancellationToken);
         ProvisionerProgram.ProvisioningContext grantContext = await ProvisionerProgram.PreflightAsync(securityAdministrator, plan);
@@ -113,6 +199,8 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         Assert.Equal("Published", published.VersionState);
         Assert.Equal("Active", published.BindingState);
         Assert.Equal(environmentId, approverContext.Compiled.BindingRequest.EnvironmentId);
+        JsonElement finalVersions = await approver.GetAsync($"admin/api/v1/connectors/{Fse2OfficialTestCanonicalDefinition.ConnectorId}/versions?offset=0&limit=10");
+        Assert.Equal(1, finalVersions.GetProperty("total").GetInt32());
         Assert.Equal(0, editor.OfficialTestNetworkCount + securityAdministrator.OfficialTestNetworkCount + approver.OfficialTestNetworkCount);
         timeToPublished.Stop();
         Assert.InRange(timeToPublished.Elapsed, TimeSpan.Zero, TimeSpan.FromMinutes(5));
@@ -167,22 +255,167 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         Assert.Equal(Fse2OfficialTestSideEffectCounters.Zero, api.Effects);
     }
 
-    private static async Task<ProviderResourceCatalogRecord> RegisterAsync(
-        IConnectorConfigurationStore store,
-        Guid environmentId,
-        Fse2OfficialTestProviderReference reference,
-        string commonName,
-        char spki,
-        CancellationToken cancellationToken) =>
-        await store.RegisterProviderResourceAsync(new(
-            Guid.NewGuid(), reference.ProviderId, "Synthetic provider", "synthetic", reference.ResourceId,
-            ProviderResourceType.ClientCertificate, commonName, environmentId,
-            Fse2OfficialTestCanonicalDefinition.ConnectorId, Fse2OfficialTestCanonicalDefinition.OperationId,
-            $"synthetic://{reference.ResourceId}", ProviderResourceStatus.Active, reference.Version, 0,
-            reference.PublicMetadataRevision,
-            new(new string(spki, 64), $"CN={commonName}", "CN=Synthetic Root", DateTimeOffset.UtcNow.AddDays(-1),
-                DateTimeOffset.UtcNow.AddDays(30), "RSA", 2048, reference.Version!, new string(spki, 64), commonName),
-            string.Empty, DateTimeOffset.UtcNow), cancellationToken);
+    private static void AssertNoEffects(ScriptedAdminApi api)
+    {
+        Assert.Equal(0, api.AdminMutationCount);
+        Assert.Equal(0, api.ProviderCatalogReadCount);
+        Assert.Equal(Fse2OfficialTestSideEffectCounters.Zero, api.Effects);
+    }
+
+    private static async Task AssertEmptyPageAsync(HttpAdminApi api, string path)
+    {
+        JsonElement page = await api.GetAsync(path);
+        Assert.Equal(0, page.GetProperty("total").GetInt32());
+        Assert.Empty(page.GetProperty("items").EnumerateArray());
+    }
+
+    private static Fse2OfficialTestProviderReference ProviderReference(JsonElement value) => new(
+        value.GetProperty("providerId").GetString()!,
+        value.GetProperty("resourceId").GetString()!,
+        value.GetProperty("version").GetString(),
+        value.GetProperty("catalogRevision").GetInt64(),
+        value.GetProperty("publicMetadataRevision").GetInt64());
+
+    private static async Task ActivateInstallationAsync(
+        ProvisionerAdminFactory factory,
+        Guid activationCodeId,
+        string activationCode,
+        string certificatePath,
+        string certificatePassword,
+        CancellationToken cancellationToken)
+    {
+        using X509Certificate2 certificate = X509CertificateLoader.LoadPkcs12FromFile(
+            certificatePath,
+            certificatePassword,
+            X509KeyStorageFlags.EphemeralKeySet);
+        using ECDsa privateKey = certificate.GetECDsaPrivateKey()
+            ?? throw new InvalidOperationException("FSE2_CLEAN_STATE_ENROLLMENT_KEY_INVALID");
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
+        string publicKeySpki = Convert.ToBase64String(privateKey.ExportSubjectPublicKeyInfo());
+        using HttpResponseMessage challengeResponse = await client.PostAsJsonAsync(
+            "/v1/enrollments/challenges",
+            new { activationCodeId, publicKeySpki },
+            cancellationToken);
+        challengeResponse.EnsureSuccessStatusCode();
+        JsonElement challenge = await challengeResponse.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: cancellationToken);
+        Guid challengeId = challenge.GetProperty("challengeId").GetGuid();
+        string challengeValue = challenge.GetProperty("challenge").GetString()!;
+        byte[] proof = Encoding.UTF8.GetBytes(FormattableString.Invariant(
+            $"BGW-ENROLL1\n{challengeId:D}\n{challengeValue}\n{activationCodeId:D}"));
+        string signature = Base64Url(privateKey.SignData(
+            proof,
+            HashAlgorithmName.SHA256,
+            DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
+        using HttpResponseMessage activationResponse = await client.PostAsJsonAsync(
+            "/v1/enrollments:activate",
+            new
+            {
+                challengeId,
+                activationCode,
+                clientCertificate = Convert.ToBase64String(certificate.RawData),
+                proofSignature = signature,
+                brokerVersion = "1.0.0"
+            },
+            cancellationToken);
+        activationResponse.EnsureSuccessStatusCode();
+    }
+
+    private static string Base64Url(byte[] value) =>
+        Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+    private static Dictionary<string, string> ReadEnvironmentFile(string path)
+    {
+        Dictionary<string, string> values = new(StringComparer.Ordinal);
+        foreach (string line in File.ReadLines(path))
+        {
+            int separator = line.IndexOf('=');
+            if (separator <= 0) throw new InvalidOperationException("FSE2_CLEAN_STATE_FIXTURE_ENVIRONMENT_INVALID");
+            values.Add(line[..separator], line[(separator + 1)..]);
+        }
+        return values;
+    }
+
+    private static string RequiredFixture(Dictionary<string, string> values, string name) =>
+        values.TryGetValue(name, out string? value) && !string.IsNullOrWhiteSpace(value)
+            ? value
+            : throw new InvalidOperationException("FSE2_CLEAN_STATE_FIXTURE_VALUE_MISSING");
+
+    private static async Task RunDotNetComponentAsync(
+        string repository,
+        string project,
+        IReadOnlyList<string> arguments,
+        IReadOnlyDictionary<string, string>? environment,
+        string failureCode,
+        CancellationToken cancellationToken)
+    {
+        List<string> command = ["run", "--project", Path.Combine(repository, project), "--configuration", "Release", "--no-build", "--no-restore", "--"];
+        command.AddRange(arguments);
+        ProcessResult result = await RunProcessAsync(DotNetHost(), command, environment, TimeSpan.FromMinutes(3), cancellationToken);
+        if (result.ExitCode != 0) throw new InvalidOperationException(failureCode);
+    }
+
+    private static string DotNetHost()
+    {
+        string? configured = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH");
+        if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured)) return configured;
+
+        string? currentProcess = Environment.ProcessPath;
+        if (!string.IsNullOrWhiteSpace(currentProcess))
+        {
+            string currentProcessName = Path.GetFileName(currentProcess);
+            if (string.Equals(currentProcessName, "dotnet", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(currentProcessName, "dotnet.exe", StringComparison.OrdinalIgnoreCase))
+                return currentProcess;
+        }
+
+        return "dotnet";
+    }
+
+    private static async Task<ProcessResult> RunProcessAsync(
+        string fileName,
+        IReadOnlyList<string> arguments,
+        IReadOnlyDictionary<string, string>? environment,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        ProcessStartInfo start = new(fileName)
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (string argument in arguments) start.ArgumentList.Add(argument);
+        if (environment is not null)
+            foreach ((string name, string value) in environment) start.Environment[name] = value;
+        using Process process = Process.Start(start) ?? throw new InvalidOperationException("FSE2_CLEAN_STATE_PROCESS_START_FAILED");
+        Task<string> output = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        Task<string> error = process.StandardError.ReadToEndAsync(cancellationToken);
+        using CancellationTokenSource timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(timeout);
+        try { await process.WaitForExitAsync(timeoutSource.Token); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            throw new InvalidOperationException("FSE2_CLEAN_STATE_PROCESS_TIMEOUT");
+        }
+        string standardOutput = await output;
+        string standardError = await error;
+        if (standardOutput.Length > 1024 * 1024 || standardError.Length > 1024 * 1024)
+            throw new InvalidOperationException("FSE2_CLEAN_STATE_PROCESS_OUTPUT_TOO_LARGE");
+        return new(process.ExitCode, standardOutput, standardError);
+    }
+
+    private static string RepositoryRoot()
+    {
+        DirectoryInfo? current = new(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "BrokerGateway.slnx"))) return current.FullName;
+            current = current.Parent;
+        }
+        throw new DirectoryNotFoundException("Repository root was not found.");
+    }
 
     private static Fse2OfficialTestOperationalPlan Plan() => Plan(
         Guid.Parse("22222222-2222-2222-2222-222222222222"),
@@ -218,13 +451,17 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
     private static string VersionPath() =>
         $"admin/api/v1/connectors/{Fse2OfficialTestCanonicalDefinition.ConnectorId}/versions/{Fse2OfficialTestCanonicalDefinition.ConnectorVersion}";
 
-    private sealed class ProvisionerAdminFactory(string runtimeConnectionString, string adminConnectionString) : AdminDevelopmentFactory
+    private sealed class ProvisionerAdminFactory(
+        string runtimeConnectionString,
+        string adminConnectionString,
+        string activationHmacKey) : AdminDevelopmentFactory
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             base.ConfigureWebHost(builder);
             builder.UseSetting("ConnectionStrings:GatewayDatabase", runtimeConnectionString);
             builder.UseSetting("ConnectionStrings:GatewayAdminDatabase", adminConnectionString);
+            builder.UseSetting("Gateway:ActivationHmacKeyBase64", activationHmacKey);
             builder.ConfigureServices(services => services.Configure<RateLimiterOptions>(options =>
                 options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(_ =>
                     RateLimitPartition.GetFixedWindowLimiter("fse2-provisioner", _ => new FixedWindowRateLimiterOptions
@@ -237,65 +474,130 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         }
     }
 
-    private sealed class TemporaryPostgresDatabase(
-        string databaseName,
-        string controlConnectionString,
-        string adminConnectionString,
-        string migrationConnectionString) : IAsyncDisposable
+    private sealed class DockerPostgresStack(
+        string runId,
+        string containerName,
+        string networkName,
+        string volumeName,
+        int port,
+        string taskDirectory) : IAsyncDisposable
     {
-        public string AdminConnectionString { get; } = adminConnectionString;
-        public string MigrationConnectionString { get; } = migrationConnectionString;
+        public string AdminConnectionString { get; } =
+            $"Host=127.0.0.1;Port={port};Database=broker_gateway_m3;Username=postgres;SSL Mode=Disable;GSS Encryption Mode=Disable";
+        public string TaskDirectory { get; } = taskDirectory;
 
-        internal static async Task<TemporaryPostgresDatabase> CreateAsync(
-            string configuredAdmin,
-            string configuredMigration,
-            CancellationToken cancellationToken)
+        internal static async Task<DockerPostgresStack> CreateAsync(CancellationToken cancellationToken)
         {
-            string databaseName = "fse2_provisioner_" + Guid.NewGuid().ToString("N");
-            NpgsqlConnectionStringBuilder control = new(configuredMigration) { Database = "postgres" };
-            await using (NpgsqlConnection connection = new(control.ConnectionString))
+            string runId = Guid.NewGuid().ToString("N")[..12];
+            string container = "fse2-clean-pg-" + runId;
+            string network = "fse2-clean-net-" + runId;
+            string volume = "fse2-clean-data-" + runId;
+            string taskDirectory = Path.Combine(Path.GetTempPath(), "fse2-clean-state-" + runId);
+            if (Directory.Exists(taskDirectory)) throw new InvalidOperationException("FSE2_CLEAN_STATE_TASK_DIRECTORY_EXISTS");
+            Directory.CreateDirectory(taskDirectory);
+            DockerPostgresStack stack = new(runId, container, network, volume, 0, taskDirectory);
+            try
             {
-                await connection.OpenAsync(cancellationToken);
-                await using NpgsqlCommand command = new($"CREATE DATABASE \"{databaseName}\"", connection);
-                await command.ExecuteNonQueryAsync(cancellationToken);
+                await RequireDockerAsync(["image", "inspect", "postgres:18"], "FSE2_CLEAN_STATE_POSTGRES_IMAGE_MISSING", cancellationToken);
+                await RequireDockerAsync(
+                    ["volume", "create", "--label", "com.secureintegration.owner=fse2-clean-state", "--label", $"com.secureintegration.run={runId}", volume],
+                    "FSE2_CLEAN_STATE_VOLUME_CREATE_FAILED",
+                    cancellationToken);
+                await RequireDockerAsync(
+                    ["network", "create", "--label", "com.secureintegration.owner=fse2-clean-state", "--label", $"com.secureintegration.run={runId}", network],
+                    "FSE2_CLEAN_STATE_NETWORK_CREATE_FAILED",
+                    cancellationToken);
+                await RequireDockerAsync(
+                    [
+                        "run", "--detach", "--pull", "never", "--name", container,
+                        "--label", "com.secureintegration.owner=fse2-clean-state",
+                        "--label", $"com.secureintegration.run={runId}",
+                        "--network", network,
+                        "--volume", $"{volume}:/var/lib/postgresql",
+                        "--publish", "127.0.0.1::5432",
+                        "--env", "POSTGRES_USER=postgres",
+                        "--env", "POSTGRES_DB=broker_gateway_m3",
+                        "--env", "POSTGRES_HOST_AUTH_METHOD=trust",
+                        "postgres:18"
+                    ],
+                    "FSE2_CLEAN_STATE_POSTGRES_START_FAILED",
+                    cancellationToken);
+                ProcessResult portResult = await RunProcessAsync(
+                    "docker", ["port", container, "5432/tcp"], null, TimeSpan.FromSeconds(15), cancellationToken);
+                if (portResult.ExitCode != 0 || !TryReadLoopbackPort(portResult.StandardOutput, out int port))
+                    throw new InvalidOperationException("FSE2_CLEAN_STATE_POSTGRES_PORT_INVALID");
+                stack = new(runId, container, network, volume, port, taskDirectory);
+                DateTimeOffset deadline = DateTimeOffset.UtcNow.AddMinutes(1);
+                do
+                {
+                    ProcessResult ready = await RunProcessAsync(
+                        "docker", ["exec", container, "pg_isready", "-U", "postgres", "-d", "broker_gateway_m3"],
+                        null, TimeSpan.FromSeconds(10), cancellationToken);
+                    if (ready.ExitCode == 0) return stack;
+                    await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+                } while (DateTimeOffset.UtcNow < deadline);
+                throw new InvalidOperationException("FSE2_CLEAN_STATE_POSTGRES_NOT_READY");
             }
-
-            NpgsqlConnectionStringBuilder migration = new(configuredMigration) { Database = databaseName };
-            NpgsqlConnectionStringBuilder admin = new(configuredAdmin) { Database = databaseName };
-            await ApplyMigrationsAsync(migration.ConnectionString, cancellationToken);
-            return new(databaseName, control.ConnectionString, admin.ConnectionString, migration.ConnectionString);
+            catch
+            {
+                await stack.DisposeAsync();
+                throw;
+            }
         }
+
+        public string ConnectionString(string userName, string password) =>
+            $"Host=127.0.0.1;Port={port};Database=broker_gateway_m3;Username={userName};Password={password};SSL Mode=Disable;GSS Encryption Mode=Disable";
 
         public async ValueTask DisposeAsync()
         {
-            await using NpgsqlConnection connection = new(controlConnectionString);
-            await connection.OpenAsync();
-            await using NpgsqlCommand command = new($"DROP DATABASE IF EXISTS \"{databaseName}\" WITH (FORCE)", connection);
-            await command.ExecuteNonQueryAsync();
+            CancellationToken cancellationToken = CancellationToken.None;
+            _ = await RunProcessAsync("docker", ["rm", "--force", "--volumes", containerName], null, TimeSpan.FromSeconds(30), cancellationToken);
+            _ = await RunProcessAsync("docker", ["network", "rm", networkName], null, TimeSpan.FromSeconds(30), cancellationToken);
+            _ = await RunProcessAsync("docker", ["volume", "rm", volumeName], null, TimeSpan.FromSeconds(30), cancellationToken);
+            if (Directory.Exists(TaskDirectory))
+            {
+                string expectedPrefix = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                string exact = Path.GetFullPath(TaskDirectory);
+                if (!exact.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase) ||
+                    !Path.GetFileName(exact).Equals("fse2-clean-state-" + runId, StringComparison.Ordinal))
+                    throw new InvalidOperationException("FSE2_CLEAN_STATE_TASK_DIRECTORY_CLEANUP_DENIED");
+                Directory.Delete(exact, recursive: true);
+            }
+            ProcessResult containers = await RunProcessAsync(
+                "docker", ["ps", "-a", "--filter", $"label=com.secureintegration.run={runId}", "--format", "{{.ID}}"],
+                null, TimeSpan.FromSeconds(15), cancellationToken);
+            ProcessResult networks = await RunProcessAsync(
+                "docker", ["network", "ls", "--filter", $"label=com.secureintegration.run={runId}", "--format", "{{.ID}}"],
+                null, TimeSpan.FromSeconds(15), cancellationToken);
+            ProcessResult volumes = await RunProcessAsync(
+                "docker", ["volume", "ls", "--filter", $"label=com.secureintegration.run={runId}", "--format", "{{.Name}}"],
+                null, TimeSpan.FromSeconds(15), cancellationToken);
+            if (containers.ExitCode != 0 || networks.ExitCode != 0 || volumes.ExitCode != 0 ||
+                !string.IsNullOrWhiteSpace(containers.StandardOutput) ||
+                !string.IsNullOrWhiteSpace(networks.StandardOutput) ||
+                !string.IsNullOrWhiteSpace(volumes.StandardOutput) ||
+                Directory.Exists(TaskDirectory))
+                throw new InvalidOperationException("FSE2_CLEAN_STATE_CLEANUP_INCOMPLETE");
         }
 
-        private static async Task ApplyMigrationsAsync(string connectionString, CancellationToken cancellationToken)
+        private static async Task RequireDockerAsync(
+            IReadOnlyList<string> arguments,
+            string failureCode,
+            CancellationToken cancellationToken)
         {
-            string directory = Path.Combine(RepositoryRoot(), "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations");
-            await using NpgsqlConnection connection = new(connectionString);
-            await connection.OpenAsync(cancellationToken);
-            foreach (string path in Directory.GetFiles(directory, "*.sql").Order(StringComparer.Ordinal))
-            {
-                string sql = await File.ReadAllTextAsync(path, cancellationToken);
-                await using NpgsqlCommand command = new(sql, connection);
-                await command.ExecuteNonQueryAsync(cancellationToken);
-            }
+            ProcessResult result = await RunProcessAsync("docker", arguments, null, TimeSpan.FromSeconds(30), cancellationToken);
+            if (result.ExitCode != 0) throw new InvalidOperationException(failureCode);
         }
 
-        private static string RepositoryRoot()
+        private static bool TryReadLoopbackPort(string value, out int port)
         {
-            DirectoryInfo? current = new(AppContext.BaseDirectory);
-            while (current is not null)
-            {
-                if (File.Exists(Path.Combine(current.FullName, "BrokerGateway.slnx"))) return current.FullName;
-                current = current.Parent;
-            }
-            throw new DirectoryNotFoundException("Repository root was not found.");
+            port = 0;
+            string text = value.Trim();
+            int separator = text.LastIndexOf(':');
+            return text.StartsWith("127.0.0.1:", StringComparison.Ordinal) &&
+                separator > 0 &&
+                int.TryParse(text[(separator + 1)..], out port) &&
+                port is > 0 and <= 65535;
         }
     }
 
@@ -371,6 +673,9 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         public int AdminMutationCount => AdminMutationPaths.Count;
         public List<string> AdminMutationPaths { get; } = [];
         public int? DriftInstallationOnRead { get; set; }
+        public bool MissingInstallation { get; init; }
+        public bool DuplicateInstallation { get; init; }
+        public bool UnauthorizedInstallation { get; init; }
         public Fse2OfficialTestCompiledConfiguration? Compiled { get; set; }
         public Fse2OfficialTestSideEffectCounters Effects { get; } = Fse2OfficialTestSideEffectCounters.Zero;
 
@@ -379,27 +684,30 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             if (relative.StartsWith("admin/api/v1/installations?", StringComparison.Ordinal))
             {
                 InstallationReadCount++;
+                if (UnauthorizedInstallation)
+                    throw new ProvisionerProgram.ProvisioningException("FSE2_OFFICIALTEST_ADMIN_REJECTED_403", inputFailure: false);
                 Guid environment = DriftInstallationOnRead is not null && InstallationReadCount >= DriftInstallationOnRead
                     ? Guid.Parse("99999999-9999-9999-9999-999999999999")
                     : InstallationEnvironmentId;
+                object installation = new
+                {
+                    id = plan.InstallationId,
+                    tenantId = plan.TenantId,
+                    applicationId = Guid.Parse("66666666-6666-6666-6666-666666666666"),
+                    environmentId = environment,
+                    status = "Active",
+                    brokerVersion = "3.0.0",
+                    createdAt = new DateTimeOffset(2026, 8, 29, 0, 0, 0, TimeSpan.Zero),
+                    installationKind = "Broker",
+                    updatedAt = new DateTimeOffset(2026, 8, 29, 0, 0, 0, TimeSpan.Zero)
+                };
+                object[] items = MissingInstallation
+                    ? []
+                    : DuplicateInstallation ? [installation, installation] : [installation];
                 return Task.FromResult(Element(new
                 {
-                    items = new[]
-                    {
-                        new
-                        {
-                            id = plan.InstallationId,
-                            tenantId = plan.TenantId,
-                            applicationId = Guid.Parse("66666666-6666-6666-6666-666666666666"),
-                            environmentId = environment,
-                            status = "Active",
-                            brokerVersion = "3.0.0",
-                            createdAt = new DateTimeOffset(2026, 8, 29, 0, 0, 0, TimeSpan.Zero),
-                            installationKind = "Broker",
-                            updatedAt = new DateTimeOffset(2026, 8, 29, 0, 0, 0, TimeSpan.Zero)
-                        }
-                    },
-                    total = 1,
+                    items,
+                    total = items.Length,
                     offset = 0,
                     limit = 100
                 }));
@@ -504,6 +812,8 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
     }
 
     private static JsonElement Element<T>(T value) => JsonSerializer.SerializeToElement(value, WireJson);
+
+    private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
 
     private static JsonSerializerOptions CreateWireJson()
     {
