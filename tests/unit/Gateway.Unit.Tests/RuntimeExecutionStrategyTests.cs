@@ -148,7 +148,8 @@ public sealed class RuntimeExecutionStrategyTests
             [nameof(IAuthorizedConnectorCapabilityBridge.CreateSignedTokenAsync), nameof(IAuthorizedConnectorCapabilityBridge.CreateSignedTokenAsync),
                 nameof(IAuthorizedConnectorCapabilityBridge.ExecuteComposedSoapAsync),
                 nameof(IAuthorizedConnectorCapabilityBridge.ExecuteRestrictedTransportAsync), nameof(IAuthorizedConnectorCapabilityBridge.ExecuteTypedSessionHandshakeAsync),
-                nameof(IAuthorizedConnectorCapabilityBridge.RejectRestrictedTransportResponse)],
+                nameof(IAuthorizedConnectorCapabilityBridge.RejectRestrictedTransportResponse),
+                nameof(IAuthorizedConnectorCapabilityBridge.RejectRestrictedTransportResponseMapping)],
             typeof(IAuthorizedConnectorCapabilityBridge).GetMethods().Select(method => method.Name).Order(StringComparer.Ordinal).ToArray());
         MethodInfo slotSigning = Assert.Single(typeof(IAuthorizedConnectorCapabilityBridge).GetMethods(), method =>
             method.Name == nameof(IAuthorizedConnectorCapabilityBridge.CreateSignedTokenAsync) &&

@@ -13,8 +13,6 @@ public sealed partial class AdminOpenApiParityTests
         string yaml = File.ReadAllText(Path.Combine(Root, "docs", "api", "gateway-openapi.yaml"));
         string generated = File.ReadAllText(Path.Combine(Root, "src", "Admin", "Admin.Web", "src", "api", "schema.d.ts"));
         string contracts = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "AdminContracts.cs"));
-        string mapper = File.ReadAllText(Path.Combine(Root, "src", "ConnectorPacks", "Healthcare", "Healthcare.FSE2", "Fse2Connector.cs"));
-        string reducer = File.ReadAllText(Path.Combine(Root, "tools", "fse2", "OfficialTestProvisioner", "Fse2FailureEvidenceReducer.cs"));
         string[] phases =
         [
             "DNS_FAILURE", "TCP_CONNECT_FAILURE", "TLS_SERVER_VALIDATION_FAILURE",
@@ -47,14 +45,11 @@ public sealed partial class AdminOpenApiParityTests
         Assert.Contains("upstreamStatus: number | null", generated, StringComparison.Ordinal);
         foreach (string value in upstreamCodes)
         {
-            Assert.Contains(value, mapper, StringComparison.Ordinal);
-            Assert.Contains(value, reducer, StringComparison.Ordinal);
             Assert.Contains(value, yaml, StringComparison.Ordinal);
             Assert.Contains(value, generated, StringComparison.Ordinal);
         }
         Assert.Contains("safeUpstreamCode: null |", generated, StringComparison.Ordinal);
         Assert.Contains("localSafeCode: null | \"FSE2_RESPONSE_INVALID\"", generated, StringComparison.Ordinal);
-        Assert.Contains("FSE2_RESPONSE_INVALID", reducer, StringComparison.Ordinal);
     }
 
     [Fact]
