@@ -39,6 +39,47 @@ client API or direct OfficialTest transport. The FSE2 pack still references only
 `Gateway.Application`; full schema validation remains on the normal Admin surface. Test material is
 synthetic and all local network coverage is loopback-only.
 
+### Shared provisioning resume after rate limit (2026-08-30)
+
+Starting from exact main `156f804aafe9a82fb8b652ce568472a42d47dd63`, the supported tooling
+adds a connector-neutral provisioning state machine and makes the FSE2 vertical provisioner
+phase-aware. Before every mutation it discovers the exact server-side Connector/version/checksum,
+Installation Application and Environment, binding/operation digests, provider identities and
+revisions, operation grant, approval request/decision and publication read-back. It accepts only a
+monotonic phase prefix. Missing/Draft/Validated/bound/granted/proposed/approved states resume at the
+next phase; exact Published/Active is verify-only and performs zero mutations.
+
+An HTTP 429 is never retried by the tool. `Retry-After` is used only when syntactically valid and no
+greater than one hour, and the redacted `BGW-PROVISIONING-RATE-LIMITED` result contains only current
+state, completed phases, next phase, retry safety, optional seconds and the supported command. It
+does not retain response bytes, arbitrary headers, endpoint, tokens, cookies, certificates or
+exception data. Repeating the same `configure` command and protected plan after a rejection at
+binding resumes from server-observed `Validated` and does not re-import or revalidate. Rate limiting
+does not alter server RBAC, CSRF, distinct four-eyes approval, publication concurrency or any
+runtime egress control; there is no force/recovery path.
+
+The ten `PROVISIONER_*` tests use a persistent in-memory Admin API simulator and the real vertical
+command methods. They prove the observed 429/Validated case, same-plan completion, Published no-op,
+checksum/Environment/binding/provider drift denial before mutations, role and self-approval denial,
+redaction, clean-state completion and reuse of the shared state machine with a non-FSE2 identity.
+All negative runtime counters are zero. This is an offline product remediation only and performs no
+OfficialTest DNS/network call or access to real FSE2 material.
+
+The bounded local qualification closed with 10/10 resumability cases, 1/1 clean-state provisioner,
+1/1 PostgreSQL OfficialTest lifecycle, 3/3 PostgreSQL FSE2 round trips, 10/10 targeted runtime and
+version-policy regressions, 1/1 frozen T03 multipart, and 10/10 focused architecture checks. The
+ephemeral PostgreSQL containers and frozen dataset clone were removed. Preliminary failures remain
+recorded: the first PostgreSQL harness invocation lacked Release outputs; a sandboxed certificate
+run denied synthetic ephemeral-key access; the architecture test still assumed one project
+reference; and two parallel MSBuild traversals ended without diagnostics and left task-owned worker
+processes, which were removed after exact process/path verification. Respectively, a Release
+build, the same synthetic tests with required process access, the updated exact boundary assertion,
+and a serialized build produced the final passing results. None involved OfficialTest traffic or
+real certificate material. Locked restore and advisory inventory also first hit the sandbox network
+sink; the authorized NuGet-only rerun completed all 44 projects with no vulnerable package. A later
+clean-state repetition stopped in the migration child-process harness before product execution; its
+single rerun with the pinned .NET host and build servers disabled passed 1/1 with cleanup complete.
+
 Current gate classification is intentionally bounded:
 
 ```text

@@ -23,3 +23,20 @@ Configurazione:
 - `CONNECTOR_GATEWAY_CA_FILE`: CA sintetica opzionale per il quick start.
 
 La CLI richiede HTTPS salvo loopback, disabilita proxy/cookie/redirect e non implementa trust-all. Il file CA aggiunge soltanto una trust root esplicita e mantiene la verifica hostname.
+
+## Provisioning resumable condiviso
+
+I provisioner verticali possono usare `tools/connector-provisioning`, una state machine soltanto
+operativa e connector-neutral. Prima di ogni mutazione il verticale deve ricostruire lo stato dalle
+Admin API supportate e confrontare in modo ordinale l'identità completa: Connector/version/checksum,
+Environment e Application server-owned, binding e operation-profile digest, provider reference e
+revisioni, grant e approval correnti. Le sole fasi ammesse sono un prefisso monotono da import a
+Published/Active; una combinazione incompleta o un drift produce un arresto prima della mutazione.
+
+Un HTTP 429 non viene ritentato automaticamente. Il risultato `BGW-PROVISIONING-RATE-LIMITED`
+contiene soltanto stato corrente, fasi completate, prossima fase, `retrySafe`, un `Retry-After`
+opzionale e bounded, e il comando supportato da ripetere. Non contiene response body/header,
+endpoint, credenziali o exception text. Dopo l'attesa operativa l'operatore ripete esattamente lo
+stesso comando e piano: le fasi persistite vengono verificate e saltate. Uno stato già Published e
+identico è verify-only/no-op. Non esistono flag force/recovery né bypass del rate limiter, di RBAC o
+del four-eyes.

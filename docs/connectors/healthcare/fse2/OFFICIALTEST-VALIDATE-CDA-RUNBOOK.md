@@ -82,7 +82,7 @@ The provisioner rejects a reparse point, oversized file, non-CA certificate or a
 a private key. Never pass cookies on
 the command line or write them into the plan.
 
-Run `configure` once. After authenticated Installation and Environment read-back, it compiles the repository source definition with the protected organization
+Run `configure`. After authenticated Installation and Environment read-back, it compiles the repository source definition with the protected organization
 profile, the source-owned application identity `secure-integration-platform` / `ApoCert S.r.l.` /
 `0.1.0-alpha.1`, and exact server-catalog A1/S1 metadata, then uses only the existing Admin validate, import,
 validate-stored and binding endpoints. Read-back must match:
@@ -96,15 +96,26 @@ validate-stored and binding endpoints. Read-back must match:
 - exactly the S1 leaf, and no issuer/intermediate/root certificate, in each JWT `x5c`;
 - zero ordinary secret bindings.
 
-The exact Admin order is: `GET /admin/auth/me`; paged `GET /admin/api/v1/installations` for the
-selected Tenant; `GET /admin/api/v1/environments`; exact A1/S1
-`GET /admin/api/v1/provider-resources:resolve`; `POST /connectors:validate`; `POST
-/connectors:import`; `POST /connectors/{id}/versions/{version}:validate`; Installation and provider
-recheck; then `PUT /connectors/{id}/bindings`. The provisioner repeats Installation authority
-read-back before every Admin mutation and denies any identity or Environment drift before the next
-mutation.
+After `GET /admin/auth/me`, every command first discovers the exact Connector/version/checksum,
+server-owned Installation/Application/Environment, provider revisions, binding, grant, approval and
+publication state through bounded Admin API pages and read-back. It then performs only the next
+missing supported phase. From an empty state, `configure` uses `POST /connectors:validate`, `POST
+/connectors:import`, stored validation and `PUT /connectors/{id}/bindings`, with full discovery after
+each persistent transition. From Draft it resumes at stored validation; from Validated it resumes at
+binding; with the exact binding already present it is verify-only. Identity drift or a non-monotonic
+server state stops before the next mutation.
 
-Run `grant` once in the same Security Administrator session. It re-resolves the Installation, then
+An Admin HTTP 429 is returned once as the bounded redacted code
+`BGW-PROVISIONING-RATE-LIMITED`; the provisioner performs no retry loop. The result reports
+`currentState`, `completedPhases`, `nextRequiredPhase`, `retrySafe`, an optional valid Retry-After
+bounded to one hour, and the same supported command. It never preserves the response body, arbitrary
+headers, endpoint, token, cookie, certificate, stack or exception message. After respecting the
+operational rate limit, repeat the exact same command with the same plan. For the observed
+post-validation case the result is `Validated`, retry-safe, with next phase
+`BindingConfiguration`; re-entry does not import or validate again. Invalid or oversized
+Retry-After is omitted and never causes a hidden retry.
+
+Run `grant` in the same Security Administrator session. It re-resolves the Installation, then
 lists grants for the server-owned Tenant. It verifies one exact enabled grant or creates one for the
 selected Installation, Connector and `validate-cda`, followed by exact read-back. It never accepts
 an Environment in the grant request; Environment authority remains the Installation record.
@@ -138,6 +149,11 @@ operation-profile checksums, exact logical resource revisions, no generic secret
 the fixed OfficialTest endpoint component checksum. Every operational phase re-resolves the exact
 unique active provider-catalog identities before mutation or read-back. The provisioner never prints
 the endpoint.
+
+Every phase has the same resume rule. An exact existing grant, request or approval is verified and
+not recreated; exact Published/Active is a final verify-only no-op. RBAC and the distinct proposer /
+approver handoff remain server-enforced on every real mutation. Never change role, plan, version,
+binding or provider revision merely to continue after a 429, and never use a force/recovery flag.
 
 ## Handoff to the single-live runner
 
@@ -196,6 +212,13 @@ The three direct preflight negatives are
 Missing and unauthorized selections return the same non-enumerating unavailable result; ambiguity
 never selects the first record. All three assert zero Admin mutation, provider access, signing, DNS,
 HTTPS, transport and network effects.
+
+The shared deterministic recovery qualification consists of the ten exact `PROVISIONER_*` named
+tests in `Fse2ProvisionerResumabilityIntegrationTests`. They persist a synthetic Validated state,
+inject one 429 before binding, prove one-attempt/no-loop behavior, same-plan resume through
+Published/Active, Published re-entry no-op, exact identity drift denial, unchanged four-eyes/RBAC,
+bounded redaction and connector-neutral operation. Every negative asserts zero signing, DNS, HTTPS,
+transport and external network effects.
 
 Record elapsed time from empty database to Published. The dedicated PostgreSQL job sets
 `REQUIRE_FSE2_POSTGRES_GATE=1` and requires exactly one execution with zero failed and zero skipped;
