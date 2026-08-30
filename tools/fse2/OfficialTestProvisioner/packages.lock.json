@@ -41,6 +41,9 @@
       "SecureIntegration.Providers.Abstractions": {
         "type": "Project"
       },
+      "SecureIntegration.Tools.ConnectorProvisioning": {
+        "type": "Project"
+      },
       "JsonSchema.Net": {
         "type": "CentralTransitive",
         "requested": "[9.4.0, )",

@@ -107,6 +107,7 @@ tests/unit/Authentication.CertificateSigning.Tests/
 tests/unit/Broker.Core.Tests/
 tests/unit/Gateway.Unit.Tests/
 tools/connector-cli/
+tools/connector-provisioning/
 tools/m3/FixtureGenerator/
 tools/m3/LegacySimulator/
 tools/m3/Provisioner/

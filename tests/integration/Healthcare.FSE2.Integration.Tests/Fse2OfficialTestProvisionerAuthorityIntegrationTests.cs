@@ -226,13 +226,13 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         using ScriptedAdminApi api = new(plan, plan.EnvironmentId);
         ProvisionerProgram.ProvisioningContext context = await ProvisionerProgram.PreflightAsync(api, plan);
         api.Compiled = context.Compiled;
-        api.DriftInstallationOnRead = 5;
+        api.DriftInstallationOnRead = 2;
 
         ProvisionerProgram.ProvisioningException failure = await Assert.ThrowsAsync<ProvisionerProgram.ProvisioningException>(() =>
             ProvisionerProgram.ConfigureAsync(api, context));
 
         Assert.Equal("FSE2_OFFICIALTEST_INSTALLATION_AUTHORITY_DRIFT", failure.Code);
-        Assert.Equal(3, api.AdminMutationCount);
+        Assert.Equal(0, api.AdminMutationCount);
         Assert.DoesNotContain(api.AdminMutationPaths, path => path.EndsWith("/bindings", StringComparison.Ordinal));
         Assert.Equal(Fse2OfficialTestSideEffectCounters.Zero, api.Effects);
     }
@@ -244,7 +244,7 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         using ScriptedAdminApi api = new(plan, plan.EnvironmentId);
         ProvisionerProgram.ProvisioningContext context = await ProvisionerProgram.PreflightAsync(api, plan);
         api.Compiled = context.Compiled;
-        api.DriftInstallationOnRead = 3;
+        api.DriftInstallationOnRead = 2;
 
         ProvisionerProgram.ProvisioningException failure = await Assert.ThrowsAsync<ProvisionerProgram.ProvisioningException>(() =>
             ProvisionerProgram.PublishAsync(api, context, expectedPublicationRevision: 0));

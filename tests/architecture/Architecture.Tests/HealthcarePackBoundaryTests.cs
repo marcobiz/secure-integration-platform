@@ -208,9 +208,25 @@ public sealed class HealthcarePackBoundaryTests
     {
         string projectPath = Path.Combine(Root, "tools", "fse2", "OfficialTestProvisioner", "OfficialTestProvisioner.csproj");
         XDocument project = XDocument.Load(projectPath);
-        string reference = Assert.Single(project.Descendants("ProjectReference"))
-            .Attribute("Include")?.Value ?? string.Empty;
-        Assert.EndsWith("Healthcare.FSE2.csproj", reference, StringComparison.Ordinal);
+        string[] references = project.Descendants("ProjectReference")
+            .Select(reference => (reference.Attribute("Include")?.Value ?? string.Empty).Replace('\\', '/'))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(
+            [
+                "../../../src/ConnectorPacks/Healthcare/Healthcare.FSE2/Healthcare.FSE2.csproj",
+                "../../connector-provisioning/Connector.Provisioning.csproj"
+            ],
+            references);
+
+        string sharedProjectPath = Path.Combine(Root, "tools", "connector-provisioning", "Connector.Provisioning.csproj");
+        XDocument sharedProject = XDocument.Load(sharedProjectPath);
+        Assert.Empty(sharedProject.Descendants("ProjectReference"));
+
+        string sharedSource = File.ReadAllText(Path.Combine(Path.GetDirectoryName(sharedProjectPath)!, "ConnectorProvisioningStateMachine.cs"));
+        Assert.DoesNotContain("FSE2", sharedSource, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("OfficialTest", sharedSource, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Healthcare", sharedSource, StringComparison.OrdinalIgnoreCase);
 
         string fullSolution = File.ReadAllText(Path.Combine(Root, "BrokerGateway.slnx"));
         string coreSolution = File.ReadAllText(Path.Combine(Root, "BrokerGateway.Core.slnx"));

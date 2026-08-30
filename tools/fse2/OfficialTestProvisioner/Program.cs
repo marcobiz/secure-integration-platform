@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using SecureIntegration.ConnectorPacks.Healthcare.FSE2;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Tools.ConnectorProvisioning;
 
 namespace SecureIntegration.Tools.Fse2.OfficialTestProvisioner;
 
@@ -32,6 +33,7 @@ internal static class Program
             return args.Length == 0 ? 2 : 0;
         }
 
+        string? supportedCommand = null;
         try
         {
             if (args[0] == "plan" && args.Length == 2)
@@ -51,6 +53,7 @@ internal static class Program
             }
 
             Command command = ParseCommand(args);
+            supportedCommand = SupportedCommand(command.Name);
             Fse2OfficialTestOperationalPlan operationalPlan = ReadPlan(command.PlanPath);
             using AdminApi api = await AdminApi.CreateAsync().ConfigureAwait(false);
             ProvisioningContext context = await PreflightAsync(api, operationalPlan).ConfigureAwait(false);
@@ -85,9 +88,26 @@ internal static class Program
             Console.Error.WriteLine(exception.SafeCode);
             return 2;
         }
+        catch (ConnectorProvisioningRateLimitException exception)
+        {
+            ConnectorProvisioningSnapshot unknown = new(
+                ConnectorProvisioningCurrentState.Unknown,
+                Array.Empty<ConnectorProvisioningPhase>(),
+                null,
+                RetrySafe: false);
+            Console.Error.WriteLine(JsonSerializer.Serialize(
+                ConnectorProvisioningStateMachine.RateLimited(
+                    unknown,
+                    exception.RetryAfter,
+                    supportedCommand ?? "fse2-officialtest <command> <operational-plan.json>"),
+                Json));
+            return 1;
+        }
         catch (ProvisioningException exception)
         {
-            Console.Error.WriteLine(exception.Code);
+            Console.Error.WriteLine(exception.RateLimitResult is null
+                ? exception.Code
+                : JsonSerializer.Serialize(exception.RateLimitResult, Json));
             return exception.InputFailure ? 2 : 1;
         }
         catch (Exception exception) when (exception is IOException or JsonException or HttpRequestException or TaskCanceledException or FormatException or OverflowException)
@@ -99,96 +119,129 @@ internal static class Program
 
     internal static async Task ConfigureAsync(IOfficialTestAdminApi api, ProvisioningContext context)
     {
-        Fse2OfficialTestOperationalPlan plan = context.EffectivePlan;
-        Fse2OfficialTestResolvedProviderAuthority publicAuthority = context.PublicAuthority;
         Fse2OfficialTestCompiledConfiguration compiled = context.Compiled;
-        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
-        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
-        using JsonDocument definition = JsonDocument.Parse(compiled.CanonicalDefinition);
-        JsonElement validated = await api.MutateAsync(HttpMethod.Post, "admin/api/v1/connectors:validate",
-            new ConnectorImportRequest(definition.RootElement.Clone())).ConfigureAwait(false);
-        if (!validated.GetProperty("valid").GetBoolean() ||
-            !string.Equals(validated.GetProperty("checksumSha256").GetString(), compiled.CanonicalDefinitionSha256, StringComparison.Ordinal))
-            throw Failure("FSE2_OFFICIALTEST_SERVER_VALIDATION_DRIFT");
+        DiscoveredProvisioningState? discovered = null;
+        try
+        {
+            while (true)
+            {
+                discovered = await DiscoverProvisioningStateAsync(api, context).ConfigureAwait(false);
+                if (HasCompleted(discovered.Snapshot, ConnectorProvisioningPhase.BindingConfiguration))
+                {
+                    Print(Result("configured", compiled, RequireVerification(discovered)));
+                    return;
+                }
 
-        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
-        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
-        JsonElement imported = await api.MutateAsync(HttpMethod.Post, "admin/api/v1/connectors:import",
-            new ConnectorImportRequest(definition.RootElement.Clone(), compiled.CanonicalDefinitionSha256)).ConfigureAwait(false);
-        long importedRowVersion = PositiveLong(imported, "rowVersion");
-        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
-        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
-        JsonElement stored = await api.MutateAsync(HttpMethod.Post,
-            $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/versions/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorVersion)}:validate",
-            body: null,
-            ifMatch: importedRowVersion).ConfigureAwait(false);
-        if (!string.Equals(stored.GetProperty("state").GetString(), "Validated", StringComparison.Ordinal))
-            throw Failure("FSE2_OFFICIALTEST_VALIDATE_STORED_FAILED");
-
-        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
-        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
-        _ = await api.MutateAsync(HttpMethod.Put,
-            $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/bindings",
-            compiled.BindingRequest,
-            plan.ExpectedBindingRevision).ConfigureAwait(false);
-        ServerVerification verified = await VerifyServerAsync(api, context, "Validated", "Draft").ConfigureAwait(false);
-        Print(Result("configured", compiled, verified));
+                switch (discovered.Snapshot.NextRequiredPhase)
+                {
+                    case ConnectorProvisioningPhase.DefinitionImported:
+                        using (JsonDocument definition = JsonDocument.Parse(compiled.CanonicalDefinition))
+                        {
+                            JsonElement validated = await api.MutateAsync(HttpMethod.Post, "admin/api/v1/connectors:validate",
+                                new ConnectorImportRequest(definition.RootElement.Clone())).ConfigureAwait(false);
+                            if (!validated.GetProperty("valid").GetBoolean() ||
+                                !string.Equals(validated.GetProperty("checksumSha256").GetString(), compiled.CanonicalDefinitionSha256, StringComparison.Ordinal))
+                                throw Failure("FSE2_OFFICIALTEST_SERVER_VALIDATION_DRIFT");
+                            discovered = await DiscoverProvisioningStateAsync(api, context).ConfigureAwait(false);
+                            if (discovered.Snapshot.NextRequiredPhase != ConnectorProvisioningPhase.DefinitionImported)
+                                break;
+                            _ = await api.MutateAsync(HttpMethod.Post, "admin/api/v1/connectors:import",
+                                new ConnectorImportRequest(definition.RootElement.Clone(), compiled.CanonicalDefinitionSha256)).ConfigureAwait(false);
+                        }
+                        break;
+                    case ConnectorProvisioningPhase.StoredValidation:
+                        JsonElement stored = await api.MutateAsync(HttpMethod.Post, VersionPath() + ":validate",
+                            body: null, ifMatch: discovered.VersionRowVersion).ConfigureAwait(false);
+                        if (!string.Equals(stored.GetProperty("state").GetString(), "Validated", StringComparison.Ordinal))
+                            throw Failure("FSE2_OFFICIALTEST_VALIDATE_STORED_FAILED");
+                        break;
+                    case ConnectorProvisioningPhase.BindingConfiguration:
+                        _ = await api.MutateAsync(HttpMethod.Put,
+                            $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/bindings",
+                            compiled.BindingRequest,
+                            context.EffectivePlan.ExpectedBindingRevision).ConfigureAwait(false);
+                        break;
+                    default:
+                        throw Failure("BGW-PROVISIONING-SERVER-STATE-INVALID");
+                }
+            }
+        }
+        catch (ConnectorProvisioningRateLimitException exception)
+        {
+            throw RateLimitedFailure(exception, discovered, SupportedCommand("configure"));
+        }
+        catch (ConnectorProvisioningIdentityDriftException)
+        {
+            throw Failure("BGW-PROVISIONING-IDENTITY-DRIFT");
+        }
     }
 
     internal static async Task GrantAsync(IOfficialTestAdminApi api, ProvisioningContext context)
     {
-        InstallationGrantAuthority[] existing = await ReadExactGrantsAsync(api, context.Installation).ConfigureAwait(false);
-        if (existing.Length > 1) throw Failure("FSE2_OFFICIALTEST_GRANT_AUTHORITY_AMBIGUOUS");
-        if (existing.Length == 1)
+        DiscoveredProvisioningState? discovered = null;
+        try
         {
-            RequireGrantCurrent(existing[0], context.Installation);
-            Print(new { status = "grant-verified", installationId = context.Installation.Id, environmentId = context.Installation.EnvironmentId });
-            return;
-        }
+            discovered = await DiscoverProvisioningStateAsync(api, context).ConfigureAwait(false);
+            RequireCompleted(discovered.Snapshot, ConnectorProvisioningPhase.BindingConfiguration);
+            if (HasCompleted(discovered.Snapshot, ConnectorProvisioningPhase.Grant))
+            {
+                Print(new { status = "grant-verified", installationId = context.Installation.Id, environmentId = context.Installation.EnvironmentId });
+                return;
+            }
 
-        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
-        JsonElement created = await api.MutateAsync(HttpMethod.Post, "admin/api/v1/grants", new
+            JsonElement created = await api.MutateAsync(HttpMethod.Post, "admin/api/v1/grants", new
+            {
+                tenantId = context.Installation.TenantId,
+                installationId = context.Installation.Id,
+                connectorId = Fse2OfficialTestCanonicalDefinition.ConnectorId,
+                operationId = Fse2OfficialTestCanonicalDefinition.OperationId,
+                validUntil = (DateTimeOffset?)null
+            }).ConfigureAwait(false);
+            InstallationGrantAuthority grant = GrantAuthority(created);
+            RequireGrantCurrent(grant, context.Installation);
+            discovered = await DiscoverProvisioningStateAsync(api, context).ConfigureAwait(false);
+            RequireCompleted(discovered.Snapshot, ConnectorProvisioningPhase.Grant);
+            Print(new { status = "granted", installationId = context.Installation.Id, environmentId = context.Installation.EnvironmentId });
+        }
+        catch (ConnectorProvisioningRateLimitException exception)
         {
-            tenantId = context.Installation.TenantId,
-            installationId = context.Installation.Id,
-            connectorId = Fse2OfficialTestCanonicalDefinition.ConnectorId,
-            operationId = Fse2OfficialTestCanonicalDefinition.OperationId,
-            validUntil = (DateTimeOffset?)null
-        }).ConfigureAwait(false);
-        InstallationGrantAuthority grant = GrantAuthority(created);
-        RequireGrantCurrent(grant, context.Installation);
-        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
-        InstallationGrantAuthority[] readback = await ReadExactGrantsAsync(api, context.Installation).ConfigureAwait(false);
-        if (readback.Length != 1 || readback[0].Id != grant.Id) throw Failure("FSE2_OFFICIALTEST_GRANT_READBACK_DRIFT");
-        RequireGrantCurrent(readback[0], context.Installation);
-        Print(new { status = "granted", installationId = context.Installation.Id, environmentId = context.Installation.EnvironmentId });
+            throw RateLimitedFailure(exception, discovered, SupportedCommand("grant"));
+        }
+        catch (ConnectorProvisioningIdentityDriftException) { throw Failure("BGW-PROVISIONING-IDENTITY-DRIFT"); }
     }
 
     internal static async Task ProposeAsync(IOfficialTestAdminApi api, ProvisioningContext context)
     {
-        Fse2OfficialTestOperationalPlan plan = context.EffectivePlan;
-        Fse2OfficialTestResolvedProviderAuthority publicAuthority = context.PublicAuthority;
         Fse2OfficialTestCompiledConfiguration compiled = context.Compiled;
-        ServerVerification verified = await VerifyServerAsync(api, context, "Validated", "Draft").ConfigureAwait(false);
-        ApprovalReviewResult review = await ReadReviewAsync(api).ConfigureAwait(false);
-        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
-        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
-        JsonElement requested = await api.MutateAsync(HttpMethod.Post,
-            $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/versions/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorVersion)}/approval-requests",
-            body: null).ConfigureAwait(false);
-        Guid requestId = RequiredGuid(requested, "id");
-        Print(new
+        DiscoveredProvisioningState? discovered = null;
+        try
         {
-            status = "proposed",
-            connectorId = Fse2OfficialTestCanonicalDefinition.ConnectorId,
-            connectorVersion = Fse2OfficialTestCanonicalDefinition.ConnectorVersion,
-            approvalRequestId = requestId,
-            approvalDigestSha256 = review.DigestSha256,
-            canonicalDefinitionSha256 = compiled.CanonicalDefinitionSha256,
-            operationProfileChecksumSha256 = compiled.OperationProfileChecksumSha256,
-            bindingConfigurationDigestSha256 = compiled.BindingConfigurationDigestSha256,
-            serverBindingChecksumSha256 = verified.BindingChecksumSha256
-        });
+            discovered = await DiscoverProvisioningStateAsync(api, context).ConfigureAwait(false);
+            RequireCompleted(discovered.Snapshot, ConnectorProvisioningPhase.Grant);
+            if (!HasCompleted(discovered.Snapshot, ConnectorProvisioningPhase.Proposal))
+            {
+                _ = await api.MutateAsync(HttpMethod.Post, VersionPath() + "/approval-requests", body: null).ConfigureAwait(false);
+                discovered = await DiscoverProvisioningStateAsync(api, context).ConfigureAwait(false);
+            }
+            RequireCompleted(discovered.Snapshot, ConnectorProvisioningPhase.Proposal);
+            Print(new
+            {
+                status = "proposed",
+                connectorId = Fse2OfficialTestCanonicalDefinition.ConnectorId,
+                connectorVersion = Fse2OfficialTestCanonicalDefinition.ConnectorVersion,
+                approvalRequestId = discovered.ApprovalRequestId,
+                approvalDigestSha256 = discovered.ApprovalDigestSha256,
+                canonicalDefinitionSha256 = compiled.CanonicalDefinitionSha256,
+                operationProfileChecksumSha256 = compiled.OperationProfileChecksumSha256,
+                bindingConfigurationDigestSha256 = compiled.BindingConfigurationDigestSha256,
+                serverBindingChecksumSha256 = discovered.BindingChecksumSha256
+            });
+        }
+        catch (ConnectorProvisioningRateLimitException exception)
+        {
+            throw RateLimitedFailure(exception, discovered, SupportedCommand("propose"));
+        }
+        catch (ConnectorProvisioningIdentityDriftException) { throw Failure("BGW-PROVISIONING-IDENTITY-DRIFT"); }
     }
 
     internal static async Task ApproveAsync(
@@ -197,29 +250,40 @@ internal static class Program
         Guid approvalRequestId,
         string expectedApprovalDigest)
     {
-        Fse2OfficialTestOperationalPlan plan = context.EffectivePlan;
-        Fse2OfficialTestResolvedProviderAuthority publicAuthority = context.PublicAuthority;
         Fse2OfficialTestCompiledConfiguration compiled = context.Compiled;
-        _ = await VerifyServerAsync(api, context, "Validated", "Draft").ConfigureAwait(false);
-        ApprovalReviewResult review = await ReadReviewAsync(api).ConfigureAwait(false);
-        if (!IsSha256(expectedApprovalDigest) || !string.Equals(review.DigestSha256, expectedApprovalDigest, StringComparison.Ordinal))
-            throw Failure("FSE2_OFFICIALTEST_APPROVAL_DIGEST_STALE", inputFailure: true);
-        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
-        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
-        JsonElement approved = await api.MutateAsync(HttpMethod.Post,
-            $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/versions/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorVersion)}/approvals",
-            new ConnectorApprovalAcceptanceRequest(approvalRequestId, expectedApprovalDigest)).ConfigureAwait(false);
-        if (!string.Equals(approved.GetProperty("status").GetString(), "Approved", StringComparison.Ordinal))
-            throw Failure("FSE2_OFFICIALTEST_APPROVAL_FAILED");
-        Print(new
+        DiscoveredProvisioningState? discovered = null;
+        try
         {
-            status = "approved",
-            approvalRequestId,
-            approvalDigestSha256 = expectedApprovalDigest,
-            canonicalDefinitionSha256 = compiled.CanonicalDefinitionSha256,
-            operationProfileChecksumSha256 = compiled.OperationProfileChecksumSha256,
-            bindingConfigurationDigestSha256 = compiled.BindingConfigurationDigestSha256
-        });
+            discovered = await DiscoverProvisioningStateAsync(api, context).ConfigureAwait(false);
+            RequireCompleted(discovered.Snapshot, ConnectorProvisioningPhase.Proposal);
+            if (discovered.ApprovalRequestId != approvalRequestId ||
+                !IsSha256(expectedApprovalDigest) ||
+                !string.Equals(discovered.ApprovalDigestSha256, expectedApprovalDigest, StringComparison.Ordinal))
+                throw Failure("FSE2_OFFICIALTEST_APPROVAL_DIGEST_STALE", inputFailure: true);
+            if (!HasCompleted(discovered.Snapshot, ConnectorProvisioningPhase.Approval))
+            {
+                JsonElement approved = await api.MutateAsync(HttpMethod.Post, VersionPath() + "/approvals",
+                    new ConnectorApprovalAcceptanceRequest(approvalRequestId, expectedApprovalDigest)).ConfigureAwait(false);
+                if (!string.Equals(approved.GetProperty("status").GetString(), "Approved", StringComparison.Ordinal))
+                    throw Failure("FSE2_OFFICIALTEST_APPROVAL_FAILED");
+                discovered = await DiscoverProvisioningStateAsync(api, context).ConfigureAwait(false);
+            }
+            RequireCompleted(discovered.Snapshot, ConnectorProvisioningPhase.Approval);
+            Print(new
+            {
+                status = "approved",
+                approvalRequestId,
+                approvalDigestSha256 = expectedApprovalDigest,
+                canonicalDefinitionSha256 = compiled.CanonicalDefinitionSha256,
+                operationProfileChecksumSha256 = compiled.OperationProfileChecksumSha256,
+                bindingConfigurationDigestSha256 = compiled.BindingConfigurationDigestSha256
+            });
+        }
+        catch (ConnectorProvisioningRateLimitException exception)
+        {
+            throw RateLimitedFailure(exception, discovered, SupportedCommand("approve"));
+        }
+        catch (ConnectorProvisioningIdentityDriftException) { throw Failure("BGW-PROVISIONING-IDENTITY-DRIFT"); }
     }
 
     internal static async Task PublishAsync(
@@ -227,22 +291,30 @@ internal static class Program
         ProvisioningContext context,
         long expectedPublicationRevision)
     {
-        Fse2OfficialTestOperationalPlan plan = context.EffectivePlan;
-        Fse2OfficialTestResolvedProviderAuthority publicAuthority = context.PublicAuthority;
         Fse2OfficialTestCompiledConfiguration compiled = context.Compiled;
         if (expectedPublicationRevision < 0) throw Failure("FSE2_OFFICIALTEST_PUBLICATION_REVISION_INVALID", inputFailure: true);
-        _ = await VerifyServerAsync(api, context, "Validated", "Draft").ConfigureAwait(false);
-        await RequireCurrentApproverAsync(api, compiled).ConfigureAwait(false);
-        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
-        await RequirePublicAuthorityCurrentAsync(api, plan, publicAuthority).ConfigureAwait(false);
-        JsonElement current = await api.GetAsync(VersionPath()).ConfigureAwait(false);
-        long rowVersion = PositiveLong(current, "rowVersion");
-        JsonElement published = await api.MutateAsync(HttpMethod.Post, VersionPath() + ":publish",
-            new ConnectorVersionActionRequest(rowVersion, expectedPublicationRevision), rowVersion).ConfigureAwait(false);
-        if (!string.Equals(published.GetProperty("state").GetString(), "Published", StringComparison.Ordinal))
-            throw Failure("FSE2_OFFICIALTEST_PUBLICATION_FAILED");
-        ServerVerification verified = await VerifyServerAsync(api, context, "Published", "Active").ConfigureAwait(false);
-        Print(Result("published", compiled, verified));
+        DiscoveredProvisioningState? discovered = null;
+        try
+        {
+            discovered = await DiscoverProvisioningStateAsync(api, context).ConfigureAwait(false);
+            RequireCompleted(discovered.Snapshot, ConnectorProvisioningPhase.Approval);
+            if (!HasCompleted(discovered.Snapshot, ConnectorProvisioningPhase.Publication))
+            {
+                await RequireCurrentApproverAsync(api, compiled).ConfigureAwait(false);
+                JsonElement published = await api.MutateAsync(HttpMethod.Post, VersionPath() + ":publish",
+                    new ConnectorVersionActionRequest(discovered.VersionRowVersion, expectedPublicationRevision), discovered.VersionRowVersion).ConfigureAwait(false);
+                if (!string.Equals(published.GetProperty("state").GetString(), "Published", StringComparison.Ordinal))
+                    throw Failure("FSE2_OFFICIALTEST_PUBLICATION_FAILED");
+                discovered = await DiscoverProvisioningStateAsync(api, context).ConfigureAwait(false);
+            }
+            RequireCompleted(discovered.Snapshot, ConnectorProvisioningPhase.Verification);
+            Print(Result("published", compiled, RequireVerification(discovered)));
+        }
+        catch (ConnectorProvisioningRateLimitException exception)
+        {
+            throw RateLimitedFailure(exception, discovered, SupportedCommand("publish"));
+        }
+        catch (ConnectorProvisioningIdentityDriftException) { throw Failure("BGW-PROVISIONING-IDENTITY-DRIFT"); }
     }
 
     internal static async Task VerifyAndPrintAsync(
@@ -268,6 +340,184 @@ internal static class Program
         versionState = verified.VersionState,
         bindingState = verified.BindingState
     };
+
+    internal static async Task<DiscoveredProvisioningState> DiscoverProvisioningStateAsync(
+        IOfficialTestAdminApi api,
+        ProvisioningContext context)
+    {
+        await RequireInstallationCurrentAsync(api, context.Installation).ConfigureAwait(false);
+        await RequireEnvironmentCurrentAsync(api, context.Installation.EnvironmentId).ConfigureAwait(false);
+        await RequirePublicAuthorityCurrentAsync(api, context.EffectivePlan, context.PublicAuthority).ConfigureAwait(false);
+
+        ConnectorProvisioningIdentity expected = ProvisioningIdentity(context);
+        JsonElement[] connectors = (await ReadPagedItemsAsync(
+            api,
+            offset => $"admin/api/v1/connectors?offset={offset}&limit=100",
+            "FSE2_OFFICIALTEST_CONNECTOR_CATALOG_TOO_LARGE").ConfigureAwait(false))
+            .Where(value => string.Equals(value.GetProperty("connectorId").GetString(), Fse2OfficialTestCanonicalDefinition.ConnectorId, StringComparison.Ordinal))
+            .ToArray();
+        if (connectors.Length > 1) throw Failure("BGW-PROVISIONING-SERVER-STATE-INVALID");
+
+        JsonElement[] versions = (await ReadPagedItemsAsync(
+            api,
+            offset => $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/versions?offset={offset}&limit=100",
+            "FSE2_OFFICIALTEST_VERSION_CATALOG_TOO_LARGE").ConfigureAwait(false))
+            .Where(value =>
+                string.Equals(value.GetProperty("connectorId").GetString(), Fse2OfficialTestCanonicalDefinition.ConnectorId, StringComparison.Ordinal) &&
+                string.Equals(value.GetProperty("version").GetString(), Fse2OfficialTestCanonicalDefinition.ConnectorVersion, StringComparison.Ordinal))
+            .ToArray();
+        if (versions.Length > 1) throw Failure("BGW-PROVISIONING-SERVER-STATE-INVALID");
+
+        InstallationGrantAuthority[] grants = await ReadExactGrantsAsync(api, context.Installation).ConfigureAwait(false);
+        if (grants.Length > 1) throw Failure("FSE2_OFFICIALTEST_GRANT_AUTHORITY_AMBIGUOUS");
+        if (grants.Length == 1) RequireGrantCurrent(grants[0], context.Installation);
+
+        if (versions.Length == 0)
+        {
+            if (grants.Length != 0) throw Failure("BGW-PROVISIONING-SERVER-STATE-INVALID");
+            ConnectorProvisioningSnapshot missing = ConnectorProvisioningStateMachine.Evaluate(expected, null, []);
+            return new(missing, 0, null, null, null, null, null);
+        }
+
+        JsonElement version = versions[0];
+        string versionState = version.GetProperty("state").GetString() ?? string.Empty;
+        if (versionState is not ("Draft" or "Validated" or "Published") ||
+            !string.Equals(version.GetProperty("checksumSha256").GetString(), context.Compiled.CanonicalDefinitionSha256, StringComparison.Ordinal))
+            throw new ConnectorProvisioningIdentityDriftException();
+        long rowVersion = PositiveLong(version, "rowVersion");
+        byte[] storedDefinition = await api.GetBytesAsync(VersionPath() + "/definition").ConfigureAwait(false);
+        try { Fse2OfficialTestOperationalization.VerifyDefinitionReadback(storedDefinition, context.Compiled); }
+        catch (Fse2OfficialTestOperationalizationException) { throw new ConnectorProvisioningIdentityDriftException(); }
+
+        List<ConnectorProvisioningPhase> completed = [ConnectorProvisioningPhase.DefinitionImported];
+        if (versionState is "Validated" or "Published") completed.Add(ConnectorProvisioningPhase.StoredValidation);
+
+        string bindingPath = $"admin/api/v1/connectors/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorId)}/versions/{Segment(Fse2OfficialTestCanonicalDefinition.ConnectorVersion)}/bindings?environmentId={context.EffectivePlan.EnvironmentId:D}&offset=0&limit=10";
+        JsonElement bindingPage = await api.GetAsync(bindingPath).ConfigureAwait(false);
+        JsonElement[] bindings = bindingPage.GetProperty("items").EnumerateArray().Select(value => value.Clone()).ToArray();
+        if (bindings.Length > 1) throw Failure("FSE2_OFFICIALTEST_BINDING_READBACK_DRIFT");
+        string? bindingChecksum = null;
+        string? bindingState = null;
+        ApprovalReviewResult? review = null;
+        Guid? approvalRequestId = null;
+        string? approvalStatus = null;
+
+        if (bindings.Length == 1)
+        {
+            if (versionState == "Draft") throw Failure("BGW-PROVISIONING-SERVER-STATE-INVALID");
+            JsonElement binding = bindings[0];
+            bindingState = binding.GetProperty("state").GetString();
+            string expectedBindingState = versionState == "Published" ? "Active" : "Draft";
+            if (!string.Equals(bindingState, expectedBindingState, StringComparison.Ordinal) ||
+                binding.GetProperty("environmentId").GetGuid() != context.EffectivePlan.EnvironmentId)
+                throw new ConnectorProvisioningIdentityDriftException();
+            string expectedEndpointDigest = ConnectorBindingDigests.Component(new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [Fse2OfficialTestCanonicalDefinition.EndpointBinding] = context.EffectivePlan.Endpoint.AbsoluteUri
+            });
+            if (!string.Equals(binding.GetProperty("endpointChecksumSha256").GetString(), expectedEndpointDigest, StringComparison.Ordinal))
+                throw new ConnectorProvisioningIdentityDriftException();
+            JsonElement certificates = binding.GetProperty("certificateResources");
+            try
+            {
+                VerifyReference(certificates.GetProperty(Fse2OfficialTestCanonicalDefinition.MutualTlsBinding), context.EffectivePlan.A1, "A1");
+                VerifyReference(certificates.GetProperty(Fse2OfficialTestCanonicalDefinition.SigningBinding), context.EffectivePlan.S1, "S1");
+            }
+            catch (ProvisioningException) { throw new ConnectorProvisioningIdentityDriftException(); }
+            if (binding.GetProperty("secretResources").EnumerateObject().Any())
+                throw new ConnectorProvisioningIdentityDriftException();
+            bindingChecksum = binding.GetProperty("checksumSha256").GetString();
+            if (!IsSha256(bindingChecksum ?? string.Empty)) throw Failure("FSE2_OFFICIALTEST_SERVER_RESPONSE_INVALID");
+            completed.Add(ConnectorProvisioningPhase.BindingConfiguration);
+
+            if (grants.Length == 1) completed.Add(ConnectorProvisioningPhase.Grant);
+            JsonElement approvalsPage = await api.GetAsync(VersionPath() + "/approvals?offset=0&limit=100").ConfigureAwait(false);
+            JsonElement[] activeApprovals = approvalsPage.GetProperty("items").EnumerateArray()
+                .Where(value => value.GetProperty("status").GetString() is "Requested" or "Approved")
+                .ToArray();
+            if (activeApprovals.Length > 1) throw Failure("BGW-PROVISIONING-SERVER-STATE-INVALID");
+            if (activeApprovals.Length == 1)
+            {
+                if (grants.Length != 1) throw Failure("BGW-PROVISIONING-SERVER-STATE-INVALID");
+                JsonElement approval = activeApprovals[0];
+                if (!string.Equals(approval.GetProperty("checksumSha256").GetString(), context.Compiled.CanonicalDefinitionSha256, StringComparison.Ordinal))
+                    throw new ConnectorProvisioningIdentityDriftException();
+                approvalRequestId = RequiredGuid(approval, "id");
+                approvalStatus = approval.GetProperty("status").GetString();
+                review = await ReadReviewAsync(api).ConfigureAwait(false);
+                if (!string.Equals(approval.GetProperty("bindingDigestSha256").GetString(), review.DigestSha256, StringComparison.Ordinal))
+                    throw new ConnectorProvisioningIdentityDriftException();
+                completed.Add(ConnectorProvisioningPhase.Proposal);
+                if (approvalStatus == "Approved") completed.Add(ConnectorProvisioningPhase.Approval);
+            }
+        }
+        else if (grants.Length != 0)
+        {
+            throw Failure("BGW-PROVISIONING-SERVER-STATE-INVALID");
+        }
+
+        if (versionState == "Published")
+        {
+            if (bindingState != "Active" || approvalStatus != "Approved" || connectors.Length != 1 ||
+                !string.Equals(connectors[0].GetProperty("publishedVersion").GetString(), Fse2OfficialTestCanonicalDefinition.ConnectorVersion, StringComparison.Ordinal))
+                throw Failure("BGW-PROVISIONING-SERVER-STATE-INVALID");
+            completed.Add(ConnectorProvisioningPhase.Publication);
+            completed.Add(ConnectorProvisioningPhase.Verification);
+        }
+        else if (connectors.Length == 1 && connectors[0].GetProperty("publishedVersion").ValueKind == JsonValueKind.String &&
+            string.Equals(connectors[0].GetProperty("publishedVersion").GetString(), Fse2OfficialTestCanonicalDefinition.ConnectorVersion, StringComparison.Ordinal))
+        {
+            throw Failure("BGW-PROVISIONING-SERVER-STATE-INVALID");
+        }
+
+        ConnectorProvisioningSnapshot snapshot = ConnectorProvisioningStateMachine.Evaluate(expected, ProvisioningIdentity(context), completed);
+        return new(snapshot, rowVersion, versionState, bindingState, bindingChecksum, approvalRequestId, review?.DigestSha256);
+    }
+
+    private static ConnectorProvisioningIdentity ProvisioningIdentity(ProvisioningContext context) => new(
+        Fse2OfficialTestCanonicalDefinition.ConnectorId,
+        Fse2OfficialTestCanonicalDefinition.ConnectorVersion,
+        context.Compiled.CanonicalDefinitionSha256,
+        context.Installation.EnvironmentId,
+        context.Compiled.BindingConfigurationDigestSha256,
+        context.Compiled.OperationProfileChecksumSha256,
+        context.Installation.ApplicationId,
+        [ProviderRevision(Fse2OfficialTestCanonicalDefinition.MutualTlsBinding, context.PublicAuthority.A1.Reference),
+         ProviderRevision(Fse2OfficialTestCanonicalDefinition.SigningBinding, context.PublicAuthority.S1.Reference)]);
+
+    private static ConnectorProvisioningProviderRevision ProviderRevision(string binding, Fse2OfficialTestProviderReference reference) =>
+        new(binding, reference.ProviderId, reference.ResourceId, reference.Version, reference.CatalogRevision, reference.PublicMetadataRevision);
+
+    private static bool HasCompleted(ConnectorProvisioningSnapshot snapshot, ConnectorProvisioningPhase phase) =>
+        snapshot.CompletedPhases.Contains(phase);
+
+    private static void RequireCompleted(ConnectorProvisioningSnapshot snapshot, ConnectorProvisioningPhase phase)
+    {
+        if (!HasCompleted(snapshot, phase)) throw Failure("BGW-PROVISIONING-PHASE-REQUIRED");
+    }
+
+    private static ServerVerification RequireVerification(DiscoveredProvisioningState discovered)
+    {
+        if (discovered.VersionState is null || discovered.BindingState is null || discovered.BindingChecksumSha256 is null)
+            throw Failure("BGW-PROVISIONING-SERVER-STATE-INVALID");
+        return new(discovered.VersionState, discovered.BindingState, discovered.BindingChecksumSha256);
+    }
+
+    private static ProvisioningException RateLimitedFailure(
+        ConnectorProvisioningRateLimitException exception,
+        DiscoveredProvisioningState? discovered,
+        string command)
+    {
+        ConnectorProvisioningSnapshot snapshot = discovered?.Snapshot ?? new(
+            ConnectorProvisioningCurrentState.Unknown,
+            Array.Empty<ConnectorProvisioningPhase>(),
+            null,
+            RetrySafe: false);
+        return new ProvisioningException(
+            "BGW-PROVISIONING-RATE-LIMITED",
+            inputFailure: false,
+            ConnectorProvisioningStateMachine.RateLimited(snapshot, exception.RetryAfter, command));
+    }
 
     internal static async Task<ServerVerification> VerifyServerAsync(
         IOfficialTestAdminApi api,
@@ -491,6 +741,7 @@ internal static class Program
         if (grant.InstallationId != installation.Id || grant.TenantId != installation.TenantId || !grant.Enabled ||
             !string.Equals(grant.ConnectorId, Fse2OfficialTestCanonicalDefinition.ConnectorId, StringComparison.Ordinal) ||
             !string.Equals(grant.OperationId, Fse2OfficialTestCanonicalDefinition.OperationId, StringComparison.Ordinal) ||
+            grant.ValidFrom > DateTimeOffset.UtcNow ||
             grant.ValidUntil is not null && grant.ValidUntil <= DateTimeOffset.UtcNow)
             throw Failure("FSE2_OFFICIALTEST_GRANT_AUTHORITY_DRIFT");
     }
@@ -511,7 +762,9 @@ internal static class Program
         Fse2OfficialTestOperationalPlan plan,
         Fse2OfficialTestResolvedProviderAuthority expected)
     {
-        Fse2OfficialTestResolvedProviderAuthority current = await ResolvePublicAuthorityAsync(api, plan).ConfigureAwait(false);
+        Fse2OfficialTestResolvedProviderAuthority current;
+        try { current = await ResolvePublicAuthorityAsync(api, plan).ConfigureAwait(false); }
+        catch (Fse2OfficialTestOperationalizationException) { throw Failure("FSE2_OFFICIALTEST_PROVIDER_AUTHORITY_DRIFT"); }
         if (current != expected) throw Failure("FSE2_OFFICIALTEST_PROVIDER_AUTHORITY_DRIFT");
     }
 
@@ -569,6 +822,17 @@ internal static class Program
             when long.TryParse(revision, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out long parsed) && parsed >= 0 =>
             new("publish", plan, ExpectedPublicationRevision: parsed),
         _ => throw Failure("FSE2_OFFICIALTEST_COMMAND_INVALID", true)
+    };
+
+    private static string SupportedCommand(string command) => command switch
+    {
+        "configure" => "fse2-officialtest configure <operational-plan.json>",
+        "grant" => "fse2-officialtest grant <operational-plan.json>",
+        "propose" => "fse2-officialtest propose <operational-plan.json>",
+        "approve" => "fse2-officialtest approve <operational-plan.json> <approval-request-id> <approval-digest-sha256>",
+        "publish" => "fse2-officialtest publish <operational-plan.json> <expected-publication-revision>",
+        "verify" => "fse2-officialtest verify <operational-plan.json>",
+        _ => "fse2-officialtest <command> <operational-plan.json>"
     };
 
     private static long PositiveLong(JsonElement value, string name)
@@ -749,10 +1013,18 @@ internal static class Program
 
         private static void RequireSuccess(HttpResponseMessage response)
         {
+            if (response.StatusCode == HttpStatusCode.TooManyRequests)
+                throw new ConnectorProvisioningRateLimitException(ParseRetryAfter(response.Headers.RetryAfter));
             if (!response.IsSuccessStatusCode)
                 throw Failure($"FSE2_OFFICIALTEST_ADMIN_REJECTED_{(int)response.StatusCode}");
             if (response.Content.Headers.ContentLength is > 1024 * 1024)
                 throw Failure("FSE2_OFFICIALTEST_SERVER_RESPONSE_TOO_LARGE");
+        }
+
+        private static TimeSpan? ParseRetryAfter(RetryConditionHeaderValue? retryAfter)
+        {
+            if (retryAfter?.Delta is { } delta) return delta;
+            return retryAfter?.Date is { } date ? date - DateTimeOffset.UtcNow : null;
         }
 
         public void Dispose()
@@ -791,10 +1063,22 @@ internal static class Program
         InstallationAuthority Installation,
         Fse2OfficialTestResolvedProviderAuthority PublicAuthority,
         Fse2OfficialTestCompiledConfiguration Compiled);
+    internal sealed record DiscoveredProvisioningState(
+        ConnectorProvisioningSnapshot Snapshot,
+        long VersionRowVersion,
+        string? VersionState,
+        string? BindingState,
+        string? BindingChecksumSha256,
+        Guid? ApprovalRequestId,
+        string? ApprovalDigestSha256);
     internal sealed record ServerVerification(string VersionState, string BindingState, string BindingChecksumSha256);
-    internal sealed class ProvisioningException(string code, bool inputFailure) : Exception(code)
+    internal sealed class ProvisioningException(
+        string code,
+        bool inputFailure,
+        ConnectorProvisioningRateLimitResult? rateLimitResult = null) : Exception(code)
     {
         internal string Code { get; } = code;
         internal bool InputFailure { get; } = inputFailure;
+        internal ConnectorProvisioningRateLimitResult? RateLimitResult { get; } = rateLimitResult;
     }
 }
