@@ -65,7 +65,8 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             Fse2OfficialTestCanonicalDefinition.OfficialTestAudience,
             Fse2OfficialTestCanonicalDefinition.ApplicationId,
             Fse2OfficialTestCanonicalDefinition.ApplicationVendor,
-            Fse2OfficialTestCanonicalDefinition.ApplicationVersion);
+            Fse2OfficialTestCanonicalDefinition.ApplicationVersion,
+            expectLeafOnlyX5c: true);
         await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
             "unused-fse2-officialtest-application-identity",
             executionModule: Module(),
@@ -120,7 +121,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             HttpMethod.Post,
             $"/v1/connectors/{authority.ConnectorId}/operations/{operation.OperationId}:invoke",
             InvokeRequest(PayloadFor(operation,
-                "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}",
+                "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}",
                 DocumentBytes())));
         string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.True(response.IsSuccessStatusCode, responseBody);
@@ -133,7 +134,18 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     }
 
     [Fact]
-    public async Task FSE2_OFFICIALTEST_HOSTED_authoritative_runtime_recheck_preserves_effective_URI_and_dispatches_once_to_local_mock()
+    public Task FSE2_OFFICIALTEST_HOSTED_authoritative_runtime_recheck_preserves_effective_URI_and_dispatches_once_to_local_mock() =>
+        RunOfficialTestRuntimeContractAsync();
+
+    [Fact]
+    public Task FSE2_OFFICIALTEST_authorization_and_integrity_x5c_contain_exactly_the_S1_leaf() =>
+        RunOfficialTestRuntimeContractAsync();
+
+    [Fact]
+    public Task FSE2_OFFICIALTEST_validate_cda_VERIFICA_omits_mode_and_attachment_hash() =>
+        RunOfficialTestRuntimeContractAsync();
+
+    private static async Task RunOfficialTestRuntimeContractAsync()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
         TrackingCapabilityProvider provider = new(Provider(material));
@@ -143,7 +155,9 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             UriKind.Absolute);
         OfficialTestInMemoryTransport localMock = new(
             expectedEffective,
-            Convert.ToHexString(SHA256.HashData(material.ClientCertificateRevision1.RawData)));
+            Convert.ToHexString(SHA256.HashData(material.ClientCertificateRevision1.RawData)),
+            material.SigningKeyRevision1.RawData,
+            material.RootCertificate.RawData);
         await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
             "unused-fse2-officialtest-runtime-uri",
             executionModule: Module(),
@@ -200,7 +214,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             HttpMethod.Post,
             $"/v1/connectors/{authority.ConnectorId}/operations/{operation.OperationId}:invoke",
             InvokeRequest(PayloadFor(operation,
-                "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}",
+                "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}",
                 DocumentBytes())));
         string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
@@ -209,6 +223,8 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Assert.Equal(expectedEffective, localMock.RequestUri);
         Assert.True(localMock.A1MutualTlsObserved);
         Assert.True(localMock.DualDistinctJwtObserved);
+        Assert.True(localMock.S1LeafOnlyX5cObserved);
+        Assert.True(localMock.ExactMinisterialRequestBodyObserved);
         Assert.True(localMock.AttachmentHashAbsent);
         Assert.Equal(1, fixture.HostResolutionCount);
         Assert.Equal(1, fixture.GenericTransportRequests);
@@ -1267,7 +1283,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             tenantId, applicationId, environmentId, "fse2-t03-frozen-identity");
         await fixture.AddOperationGrantAsync(identity, connectorId, operation.OperationId);
 
-        const string requestBody = "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}";
+        const string requestBody = "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}";
         using HttpResponseMessage response = await fixture.SendSignedAsync(
             identity,
             HttpMethod.Post,
@@ -1300,10 +1316,10 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         using JsonDocument capturedRequestBody = JsonDocument.Parse(multipart.RequestBodyBytes);
         Assert.Equal("VERIFICA", capturedRequestBody.RootElement.GetProperty("activity").GetString());
         Assert.Equal("CDA", capturedRequestBody.RootElement.GetProperty("healthDataFormat").GetString());
-        Assert.Equal("ATTACHMENT", capturedRequestBody.RootElement.GetProperty("mode").GetString());
+        Assert.False(capturedRequestBody.RootElement.TryGetProperty("mode", out _));
         Assert.False(capturedRequestBody.RootElement.TryGetProperty("attachment_hash", out _));
         Assert.Equal(
-            ["activity", "healthDataFormat", "mode"],
+            ["activity", "healthDataFormat"],
             capturedRequestBody.RootElement.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal).ToArray());
 
         await WriteT03ResultIfConfiguredAsync(dataset, observation, multipart, TestContext.Current.CancellationToken);
@@ -1336,6 +1352,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         string existingBehaviorBody = JsonSerializer.Serialize(new
         {
             workflowInstanceId = new string('w', 257),
+            mode = "ATTACHMENT",
             metadata = "operation-aware-scope"
         }, WebJson);
         return AssertJsonBodiesAcceptedAndPreservedAsync(new Dictionary<Fse2Operation, string>
@@ -2177,7 +2194,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         if (operation.HasJsonBody)
         {
             requestBodyJson ??= operation.Operation == Fse2Operation.ValidateCda
-                ? "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}"
+                ? "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}"
                 : "{\"metadata\":\"published-exact\"}";
             payload["requestBodyBase64"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(requestBodyJson));
         }
@@ -2311,17 +2328,25 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         byte[] FileBytes,
         byte[] RequestBodyBytes);
 
-    private sealed class OfficialTestInMemoryTransport(Uri expectedUri, string expectedClientFingerprint) : IRestrictedTransport
+    private sealed class OfficialTestInMemoryTransport(
+        Uri expectedUri,
+        string expectedClientFingerprint,
+        byte[] expectedSigningLeaf,
+        byte[] excludedRoot) : IRestrictedTransport
     {
         private int requests;
         private int a1MutualTlsObserved;
         private int dualDistinctJwtObserved;
+        private int s1LeafOnlyX5cObserved;
+        private int exactMinisterialRequestBodyObserved;
         private int attachmentHashAbsent;
 
         internal int Requests => Volatile.Read(ref requests);
         internal Uri? RequestUri { get; private set; }
         internal bool A1MutualTlsObserved => Volatile.Read(ref a1MutualTlsObserved) == 1;
         internal bool DualDistinctJwtObserved => Volatile.Read(ref dualDistinctJwtObserved) == 1;
+        internal bool S1LeafOnlyX5cObserved => Volatile.Read(ref s1LeafOnlyX5cObserved) == 1;
+        internal bool ExactMinisterialRequestBodyObserved => Volatile.Read(ref exactMinisterialRequestBodyObserved) == 1;
         internal bool AttachmentHashAbsent => Volatile.Read(ref attachmentHashAbsent) == 1;
 
         public async Task<ExternalResponse> SendAsync(
@@ -2352,18 +2377,42 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             if (!string.IsNullOrWhiteSpace(authorization) &&
                 !string.Equals(authorization, integrity, StringComparison.Ordinal))
                 Interlocked.Exchange(ref dualDistinctJwtObserved, 1);
-            if (!string.IsNullOrWhiteSpace(integrity))
+            if (!string.IsNullOrWhiteSpace(authorization) && !string.IsNullOrWhiteSpace(integrity))
             {
-                string[] parts = integrity.Split('.');
-                Assert.Equal(3, parts.Length);
-                using JsonDocument payload = JsonDocument.Parse(DecodeBase64Url(parts[1]));
+                byte[] authorizationLeaf = AssertSingleLeafX5c(authorization);
+                byte[] integrityLeaf = AssertSingleLeafX5c(integrity);
+                Assert.Equal(expectedSigningLeaf, authorizationLeaf);
+                Assert.Equal(expectedSigningLeaf, integrityLeaf);
+                Assert.False(authorizationLeaf.AsSpan().SequenceEqual(excludedRoot));
+                Assert.False(integrityLeaf.AsSpan().SequenceEqual(excludedRoot));
+                Interlocked.Exchange(ref s1LeafOnlyX5cObserved, 1);
+
+                string[] integrityParts = integrity.Split('.');
+                using JsonDocument payload = JsonDocument.Parse(DecodeBase64Url(integrityParts[1]));
                 if (!payload.RootElement.TryGetProperty("attachment_hash", out _))
                     Interlocked.Exchange(ref attachmentHashAbsent, 1);
             }
 
             byte[] body = await request.Content!.ReadAsByteArrayAsync(cancellationToken);
             Assert.True(body.AsSpan().IndexOf(DocumentBytes()) >= 0);
+            ReadOnlySpan<byte> expectedRequestBody = "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}"u8;
+            Assert.True(body.AsSpan().IndexOf(expectedRequestBody) >= 0);
+            Assert.True(body.AsSpan().IndexOf("\"mode\""u8) < 0);
+            Assert.True(body.AsSpan().IndexOf("attachment_hash"u8) < 0);
+            Interlocked.Exchange(ref exactMinisterialRequestBodyObserved, 1);
             return new ExternalResponse(200, "application/json", "{}"u8.ToArray());
+        }
+
+        private byte[] AssertSingleLeafX5c(string compactToken)
+        {
+            string[] parts = compactToken.Split('.');
+            Assert.Equal(3, parts.Length);
+            using JsonDocument header = JsonDocument.Parse(DecodeBase64Url(parts[0]));
+            JsonElement chain = header.RootElement.GetProperty("x5c");
+            Assert.Equal(JsonValueKind.Array, chain.ValueKind);
+            string encodedLeaf = Assert.Single(chain.EnumerateArray()).GetString()!;
+            Assert.Equal(Convert.ToBase64String(expectedSigningLeaf), encodedLeaf);
+            return Convert.FromBase64String(encodedLeaf);
         }
 
         private static byte[] DecodeBase64Url(string value)
@@ -2495,6 +2544,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
     private readonly string expectedApplicationId;
     private readonly string expectedApplicationVendor;
     private readonly string expectedApplicationVersion;
+    private readonly bool expectLeafOnlyX5c;
     private readonly List<Observation> observations = [];
     private readonly object observationGate = new();
     private int requests;
@@ -2508,7 +2558,8 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         string expectedAudience,
         string expectedApplicationId,
         string expectedApplicationVendor,
-        string expectedApplicationVersion)
+        string expectedApplicationVersion,
+        bool expectLeafOnlyX5c)
     {
         this.application = application;
         Endpoint = endpoint;
@@ -2519,6 +2570,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         this.expectedApplicationId = expectedApplicationId;
         this.expectedApplicationVendor = expectedApplicationVendor;
         this.expectedApplicationVersion = expectedApplicationVersion;
+        this.expectLeafOnlyX5c = expectLeafOnlyX5c;
     }
 
     internal Uri Endpoint { get; }
@@ -2537,7 +2589,8 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         string expectedAudience = Fse2OrganizationHostedIntegrationTests.Audience,
         string expectedApplicationId = "broker-gateway",
         string expectedApplicationVendor = "Secure Integration",
-        string expectedApplicationVersion = "1.0.0")
+        string expectedApplicationVersion = "1.0.0",
+        bool expectLeafOnlyX5c = false)
     {
         WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0, listen => listen.UseHttps(https =>
@@ -2564,7 +2617,8 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
             expectedAudience,
             expectedApplicationId,
             expectedApplicationVendor,
-            expectedApplicationVersion);
+            expectedApplicationVersion,
+            expectLeafOnlyX5c);
         return server;
     }
 
@@ -2612,7 +2666,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         bool multipartEnvelopeDigestRejected = exactClaims && (!operation.RequiresAttachmentHash || !string.Equals(
             attachmentHash.GetString(), multipartEnvelopeDigest, StringComparison.Ordinal));
         ReadOnlySpan<byte> expectedRequestBody = operation.Operation == Fse2Operation.ValidateCda
-            ? "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}"u8
+            ? "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}"u8
             : "{\"metadata\":\"published-exact\"}"u8;
         bool exactDocumentAndJson = body.AsSpan().IndexOf(Fse2OrganizationHostedIntegrationTests.DocumentBytes()) >= 0 &&
             body.AsSpan().IndexOf(expectedRequestBody) >= 0;
@@ -2660,8 +2714,9 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
             using JsonDocument payload = JsonDocument.Parse(Decode(parts[1]));
             if (!string.Equals(header.RootElement.GetProperty("alg").GetString(), "RS256", StringComparison.Ordinal) ||
                 !header.RootElement.TryGetProperty("x5c", out JsonElement chain) ||
-                chain.ValueKind != JsonValueKind.Array || chain.GetArrayLength() != 2 ||
-                !CryptographicOperations.FixedTimeEquals(Convert.FromBase64String(chain[1].GetString()!), expectedRoot))
+                chain.ValueKind != JsonValueKind.Array ||
+                chain.GetArrayLength() != (expectLeafOnlyX5c ? 1 : 2) ||
+                (!expectLeafOnlyX5c && !CryptographicOperations.FixedTimeEquals(Convert.FromBase64String(chain[1].GetString()!), expectedRoot)))
                 return null;
             using X509Certificate2 leaf = X509CertificateLoader.LoadCertificate(
                 Convert.FromBase64String(chain[0].GetString()!));

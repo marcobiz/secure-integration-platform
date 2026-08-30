@@ -448,7 +448,7 @@ public sealed class Fse2FoundationTests
         const string datasetPdfBlob = "a4bf835cbf08661a6c530f95bdea1770e0ca4ad0";
         const int datasetPdfBytes = 60_148;
         const string datasetPdfSha256 = "129BE437228376B897B8D176DE099CA165714901DA3CB7B78EE2F9B68F4A252E";
-        byte[] requestBody = "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}"u8.ToArray();
+        byte[] requestBody = "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}"u8.ToArray();
         Fse2Request request = Fse2Request.ValidateCda("synthetic-pdf-fixture"u8.ToArray(), requestBody, Claims());
         using JsonDocument payload = JsonDocument.Parse(request.SerializeAuthorizedPayload());
         using JsonDocument sealedRequest = JsonDocument.Parse(
@@ -460,7 +460,10 @@ public sealed class Fse2FoundationTests
         Assert.Equal("/documents/validation", operation.PathTemplate);
         Assert.Equal("VERIFICA", sealedRequest.RootElement.GetProperty("activity").GetString());
         Assert.Equal("CDA", sealedRequest.RootElement.GetProperty("healthDataFormat").GetString());
-        Assert.Equal("ATTACHMENT", sealedRequest.RootElement.GetProperty("mode").GetString());
+        Assert.False(sealedRequest.RootElement.TryGetProperty("mode", out _));
+        Assert.Equal(
+            ["activity", "healthDataFormat"],
+            sealedRequest.RootElement.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal).ToArray());
         Assert.False(operation.RequiresAttachmentHash);
         Assert.DoesNotContain("attachment_hash", Encoding.UTF8.GetString(request.SerializeAuthorizedPayload()), StringComparison.Ordinal);
         Assert.Equal("430e6b5d9dde8a35b04ae635c11303db787a977e", documentationCommit);

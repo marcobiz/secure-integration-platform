@@ -2,10 +2,17 @@
 
 ## Purpose and hard stop
 
-This runbook configures and publishes only `fse2-officialtest-validate-cda@1.0.0` through the
+This runbook configures and publishes only `fse2-officialtest-validate-cda@1.0.1` through the
 existing authenticated Admin API. It does not invoke the Connector and does not authorize a live
 FSE2 call. Production, accreditation, create/replace/status/delete and provider-material creation
 are outside this procedure.
+
+Version `1.0.1` is the immutable contract-parity successor to the historical Published `1.0.0`.
+It must be imported, validated, approved and published as a new Connector Version through this
+supported lifecycle; an existing Published version must never be edited in place. Both JWT slots
+emit `x5c` with exactly the S1 leaf certificate, and the `VERIFICA` request body contains only
+`healthDataFormat=CDA` and `activity=VERIFICA` (no `mode` and no `attachment_hash`). This offline
+contract correction does not establish that an upstream HTTP 401 or 403 is resolved.
 
 Stop unless three already-authorized role handoffs are available in separate authenticated Admin
 sessions: Security Administrator for binding and grant, Connector Editor for proposal, and a
@@ -78,6 +85,7 @@ validate-stored and binding endpoints. Read-back must match:
 - server binding checksum and exact provider revisions;
 - one operation, `validate-cda`;
 - A1 on mTLS and the same S1 on both signing slots;
+- exactly the S1 leaf, and no issuer/intermediate/root certificate, in each JWT `x5c`;
 - zero ordinary secret bindings.
 
 The exact Admin order is: `GET /admin/auth/me`; paged `GET /admin/api/v1/installations` for the

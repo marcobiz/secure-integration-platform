@@ -207,12 +207,11 @@ public static partial class Fse2Validation
     private static void ValidateCdaRequestBody(JsonElement root)
     {
         JsonProperty[] properties = root.EnumerateObject().ToArray();
-        if (properties.Length != 3 ||
-            properties.Select(value => value.Name).Distinct(StringComparer.Ordinal).Count() != 3 ||
+        if (properties.Length != 2 ||
+            properties.Select(value => value.Name).Distinct(StringComparer.Ordinal).Count() != 2 ||
             !string.Equals(root.GetProperty("activity").GetString(), Fse2PublishedOrganizationProfile.ValidateCdaActivity, StringComparison.Ordinal) ||
             !string.Equals(root.GetProperty("healthDataFormat").GetString(), "CDA", StringComparison.Ordinal) ||
-            !string.Equals(root.GetProperty("mode").GetString(), "ATTACHMENT", StringComparison.Ordinal) ||
-            properties.Any(value => value.Value.ValueKind != JsonValueKind.String || value.Name is not ("activity" or "healthDataFormat" or "mode")))
+            properties.Any(value => value.Value.ValueKind != JsonValueKind.String || value.Name is not ("activity" or "healthDataFormat")))
             throw new JsonException();
     }
 

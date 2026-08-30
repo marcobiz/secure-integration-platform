@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0",
   "connectorId": "fse2-officialtest-validate-cda",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "displayName": "FSE2 OfficialTest validate-cda",
   "bindings": {
     "endpoints": [
@@ -75,7 +75,7 @@
               "tokenLifetimeSeconds": 300,
               "clockSkewSeconds": 30,
               "certificateKeyUsage": "contentCommitment",
-              "certificateHeader": "chain",
+              "certificateHeader": "leaf",
               "temporalClaims": "iat-exp",
               "minimumRsaKeySize": 2048
             },
@@ -112,7 +112,7 @@
               "tokenLifetimeSeconds": 300,
               "clockSkewSeconds": 30,
               "certificateKeyUsage": "contentCommitment",
-              "certificateHeader": "chain",
+              "certificateHeader": "leaf",
               "temporalClaims": "iat-exp",
               "minimumRsaKeySize": 2048
             },

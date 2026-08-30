@@ -58,6 +58,9 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
             throw new Fse2ConnectorException(Fse2ErrorCategory.PolicyDenied, "FSE2_OFFICIALTEST_PROFILE_DENIED");
         ConnectorSigningSlotKey authorization = profile.AuthorizationSigningSlot;
         ConnectorSigningSlotKey integrity = profile.IntegritySigningSlot;
+        AuthorizedSigningCertificateHeaderMode certificateHeaderMode = officialTestValidateCda
+            ? AuthorizedSigningCertificateHeaderMode.Leaf
+            : AuthorizedSigningCertificateHeaderMode.Chain;
         AuthorizedSigningSlotExpectation authorizationExpectation = new(
             authorization,
             required: true,
@@ -69,7 +72,7 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
             Fse2PublishedOrganizationProfile.TokenLifetimeSeconds,
             AuthorizedSigningTemporalMode.IssuedAtExpiration,
             jtiRequired: true,
-            AuthorizedSigningCertificateHeaderMode.Chain,
+            certificateHeaderMode,
             AuthorizedSigningIssuerExpectation.FixedPrefixAndCertificateSubjectCommonName("auth:"),
             AuthorizedSigningCertificateKeyUsageMode.ContentCommitment);
         AuthorizedSigningSlotExpectation integrityExpectation = new(
@@ -83,7 +86,7 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
             Fse2PublishedOrganizationProfile.TokenLifetimeSeconds,
             AuthorizedSigningTemporalMode.IssuedAtExpiration,
             jtiRequired: true,
-            AuthorizedSigningCertificateHeaderMode.Chain,
+            certificateHeaderMode,
             AuthorizedSigningIssuerExpectation.FixedPrefixAndCertificateSubjectCommonName("integrity:"),
             AuthorizedSigningCertificateKeyUsageMode.ContentCommitment);
         return new(

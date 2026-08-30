@@ -56,6 +56,24 @@ real protected configuration is applied by authorized operators and the separate
 single live call occurs. T06 remains partial because there is no OfficialTest response in this
 slice.
 
+### OfficialTest contract-parity remediation (2026-08-30)
+
+Starting from exact main `7ef788e70e881ba0382d5ac2967fe944d8b6ba05`, the canonical
+single-operation source advances immutably from Connector Version `1.0.0` to `1.0.1`. The supported
+provisioner lifecycle therefore creates a new draft/version and never edits a Published definition
+or uses direct SQL/store access. For this OfficialTest `validate-cda` path only, both authorized JWT
+slots now require `certificateHeader=leaf`; the runtime emits an `x5c` array containing exactly the
+same S1 leaf DER encoded with standard Base64 and no issuer, intermediate or root certificate.
+Synthetic and other connector profiles retain their existing certificate-header policy.
+
+The `VERIFICA` CDA request validator now admits exactly `healthDataFormat=CDA` and
+`activity=VERIFICA`; `mode` and `attachment_hash` are absent. Other operations retain their existing
+JSON body behavior, including bodies where `mode` is meaningful. The hosted loopback proof crosses
+Published authority, dual signing, A1 mTLS and restricted transport once, while T03 preserves the
+exact frozen PDF and request-body bytes in the multipart. This is offline contract parity only: no
+OfficialTest DNS/network operation or real FSE2 material is used, and it does not claim that either
+the previously observed HTTP 401 or the independent-reference HTTP 403 is resolved.
+
 The Organization profile now runs as the external module `healthcare-fse2` and strategy
 `healthcare-fse2-organization`. Its only declared outbound authentication kind is `mtls`.
 The pack consumes the public `AuthorizedConnectorExecution` surface and has one project dependency:
@@ -206,7 +224,7 @@ The sole byte-identical embedded-CDA match is
 `129BE437228376B897B8D176DE099CA165714901DA3CB7B78EE2F9B68F4A252E`. Its embedded `cda.xml`
 matches the canonical XML byte-for-byte. The exact PDF, not the XML, is projected through
 `Fse2Request` and the multipart `file` part for `POST /documents/validation`; `requestBody` is
-`VERIFICA`/`CDA`/`ATTACHMENT` and `attachment_hash` is absent. The gate uses only a loopback mock and
+exactly `healthDataFormat=CDA` plus `activity=VERIFICA`; `mode` and `attachment_hash` are absent. The gate uses only a loopback mock and
 performs no OfficialTest DNS resolution or network dispatch.
 
 The historical live evidence at

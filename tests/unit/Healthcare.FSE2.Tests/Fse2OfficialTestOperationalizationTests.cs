@@ -8,8 +8,8 @@ namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2.Tests;
 
 public sealed class Fse2OfficialTestOperationalizationTests
 {
-    private const string ExpectedCanonicalSourceSha256 = "AC6A1EBA9E04CFED9B7E365A04865636243BEA1211D5540BFFF1416DF60F1408";
-    private const string ExpectedCompiledCanonicalDefinitionSha256 = "7E69C57D9F7AC50252CDB28D4DE5195367C6E2E16ADF6514CC537B828035BF58";
+    private const string ExpectedCanonicalSourceSha256 = "3003DBF9F9D00353C3AF6508BCC2564BD109F3A1AFD9C981E40AF41BDBD3FD4B";
+    private const string ExpectedCompiledCanonicalDefinitionSha256 = "9998AADB849A4534C9C3FEB507589712647C4C0CDDFF1274A6ED7C064473E895";
 
     [Fact]
     public void FSE2_OFFICIALTEST_canonical_definition_bytes_checksum_and_single_operation_are_frozen()
@@ -26,6 +26,7 @@ public sealed class Fse2OfficialTestOperationalizationTests
         Assert.Equal("POST", operation.GetProperty("method").GetString());
         Assert.Equal("/documents/validation", operation.GetProperty("path").GetString());
         Assert.Equal("appendToBasePath", operation.GetProperty("pathResolution").GetString());
+        Assert.Equal("1.0.1", validated.Version);
         Assert.Equal("multipart/form-data; boundary=broker-gateway-fse2-officialtest-v1", operation.GetProperty("request").GetProperty("contentType").GetString());
         Assert.Equal(0, operation.GetProperty("maximumRetries").GetInt32());
         Assert.Equal("deny", operation.GetProperty("redirectPolicy").GetString());
@@ -64,6 +65,7 @@ public sealed class Fse2OfficialTestOperationalizationTests
         Assert.Equal(["authorization", "integrity"], slots.Select(value => value.GetProperty("slot").GetString()));
         Assert.All(slots, value => Assert.Equal("s1-signing-certificate", value.GetProperty("signing").GetProperty("keyBinding").GetString()));
         Assert.All(slots, value => Assert.Equal(new string('B', 64), value.GetProperty("signing").GetProperty("publicKeySpkiSha256").GetString()));
+        Assert.All(slots, value => Assert.Equal("leaf", value.GetProperty("signing").GetProperty("certificateHeader").GetString()));
         Assert.Equal(new string('A', 64), capabilities.GetProperty("restrictedTransport").GetProperty("clientCertificateSpkiSha256").GetString());
         Assert.DoesNotContain("attachment_hash", slots.Single(value => value.GetProperty("slot").GetString() == "integrity")
             .GetProperty("signing").GetProperty("allowedClaims").EnumerateArray().Select(value => value.GetString()));
@@ -74,6 +76,21 @@ public sealed class Fse2OfficialTestOperationalizationTests
         Assert.DoesNotContain(typeof(Fse2OfficialTestOperationalization).Assembly.GetTypes(), type =>
             type.Namespace == typeof(Fse2OfficialTestOperationalization).Namespace &&
             type.GetMethods().Any(method => method.Name.Contains("GetSecret", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void FSE2_OFFICIALTEST_x5c_excludes_intermediate_and_root_certificates()
+    {
+        using JsonDocument definition = JsonDocument.Parse(Compile().CanonicalDefinition);
+        JsonElement[] slots = definition.RootElement.GetProperty("operations")[0]
+            .GetProperty("authorizedCapabilities").GetProperty("signingSlots")
+            .EnumerateArray().ToArray();
+
+        Assert.Equal(2, slots.Length);
+        Assert.All(slots, slot => Assert.Equal(
+            "leaf",
+            slot.GetProperty("signing").GetProperty("certificateHeader").GetString()));
+        Assert.DoesNotContain("chain", definition.RootElement.GetRawText(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -232,18 +249,22 @@ public sealed class Fse2OfficialTestOperationalizationTests
     }
 
     [Fact]
-    public void FSE2_OFFICIALTEST_validate_cda_contract_requires_VERIFICA_CDA_ATTACHMENT_and_no_attachment_hash()
+    public void FSE2_OFFICIALTEST_validate_cda_request_matches_frozen_ministerial_contract()
     {
-        byte[] valid = "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}"u8.ToArray();
+        byte[] valid = "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}"u8.ToArray();
         Fse2ClinicalClaims claims = Fse2ClinicalClaims.CreatePerson(
             "RSSMRA80A01H501U", "2.16.840.1.113883.2.9.4.3.2", true, "('11502-2^^2.16.840.1.113883.6.1')");
-        _ = Fse2Request.ValidateCda("synthetic-pdf"u8.ToArray(), valid, claims);
+        Fse2Request request = Fse2Request.ValidateCda("synthetic-pdf"u8.ToArray(), valid, claims);
+        using JsonDocument payload = JsonDocument.Parse(request.SerializeAuthorizedPayload());
+        byte[] sealedRequestBody = Convert.FromBase64String(payload.RootElement.GetProperty("requestBodyBase64").GetString()!);
+        Assert.Equal(valid, sealedRequestBody);
 
         foreach (string invalid in new[]
         {
-            "{\"activity\":\"CREATE\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\"}",
-            "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"FHIR\",\"mode\":\"ATTACHMENT\"}",
-            "{\"activity\":\"VERIFICA\",\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\",\"attachment_hash\":\"caller\"}"
+            "{\"healthDataFormat\":\"CDA\",\"activity\":\"CREATE\"}",
+            "{\"healthDataFormat\":\"FHIR\",\"activity\":\"VERIFICA\"}",
+            "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\",\"mode\":\"ATTACHMENT\"}",
+            "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\",\"attachment_hash\":\"caller\"}"
         })
             Assert.Throws<ArgumentException>(() => Fse2Request.ValidateCda("synthetic-pdf"u8.ToArray(), Encoding.UTF8.GetBytes(invalid), claims));
     }

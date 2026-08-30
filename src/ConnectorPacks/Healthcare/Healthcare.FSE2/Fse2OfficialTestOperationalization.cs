@@ -17,7 +17,7 @@ public static class Fse2OfficialTestCanonicalDefinition
     private static readonly byte[] Bytes = Read();
 
     public const string ConnectorId = "fse2-officialtest-validate-cda";
-    public const string ConnectorVersion = "1.0.0";
+    public const string ConnectorVersion = "1.0.1";
     public const string OperationId = "validate-cda";
     public const string EndpointBinding = "officialtest-gateway";
     public const string MutualTlsBinding = "a1-mtls-certificate";
@@ -464,6 +464,7 @@ public static class Fse2OfficialTestOperationalization
         JsonElement capabilities = operation.GetProperty("authorizedCapabilities");
         JsonElement[] slots = capabilities.GetProperty("signingSlots").EnumerateArray().ToArray();
         if (slots.Length != 2 || slots.Any(slot => !string.Equals(slot.GetProperty("signing").GetProperty("keyBinding").GetString(), Fse2OfficialTestCanonicalDefinition.SigningBinding, StringComparison.Ordinal)) ||
+            slots.Any(slot => !string.Equals(slot.GetProperty("signing").GetProperty("certificateHeader").GetString(), "leaf", StringComparison.Ordinal)) ||
             !string.Equals(operation.GetProperty("authentication").GetProperty("certificateBinding").GetString(), Fse2OfficialTestCanonicalDefinition.MutualTlsBinding, StringComparison.Ordinal) ||
             !string.Equals(operation.GetProperty("pathResolution").GetString(), "appendToBasePath", StringComparison.Ordinal) ||
             operation.GetProperty("maximumRetries").GetInt32() != 0 || operation.GetProperty("redirectPolicy").GetString() != "deny" ||
