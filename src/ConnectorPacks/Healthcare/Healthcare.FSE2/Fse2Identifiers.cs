@@ -178,7 +178,16 @@ public static partial class Fse2Validation
 
     internal static void ValidateJsonObject(ReadOnlyMemory<byte> value, Fse2Operation operation) => ValidateJsonObject(value, (Fse2Operation?)operation);
 
-    private static void ValidateJsonObject(ReadOnlyMemory<byte> value, Fse2Operation? operation)
+    internal static void ValidateJsonObject(
+        ReadOnlyMemory<byte> value,
+        Fse2Operation operation,
+        Fse2ValidateCdaPublishedContract validateCdaContract) =>
+        ValidateJsonObject(value, (Fse2Operation?)operation, validateCdaContract);
+
+    private static void ValidateJsonObject(
+        ReadOnlyMemory<byte> value,
+        Fse2Operation? operation,
+        Fse2ValidateCdaPublishedContract? validateCdaContract = null)
     {
         if (value.IsEmpty || value.Length > 1024 * 1024) throw new ArgumentException("FSE2_REQUEST_BODY_INVALID", nameof(value));
         try
@@ -194,7 +203,7 @@ public static partial class Fse2Validation
                 property.Name.Equals("attachmentHashInput", StringComparison.OrdinalIgnoreCase)))
                 throw new JsonException();
             if (operation == Fse2Operation.ValidateCda)
-                ValidateCdaRequestBody(document.RootElement);
+                ValidateCdaRequestBody(document.RootElement, validateCdaContract);
             if (operation is Fse2Operation.Create or Fse2Operation.Replace)
                 ValidatePublicationWorkflowInstanceId(value.Span);
         }
@@ -204,14 +213,32 @@ public static partial class Fse2Validation
         }
     }
 
-    private static void ValidateCdaRequestBody(JsonElement root)
+    private static void ValidateCdaRequestBody(
+        JsonElement root,
+        Fse2ValidateCdaPublishedContract? publishedContract)
     {
         JsonProperty[] properties = root.EnumerateObject().ToArray();
-        if (properties.Length != 2 ||
-            properties.Select(value => value.Name).Distinct(StringComparer.Ordinal).Count() != 2 ||
+        bool commonFieldsAreInvalid =
+            properties.Select(value => value.Name).Distinct(StringComparer.Ordinal).Count() != properties.Length ||
             !string.Equals(root.GetProperty("activity").GetString(), Fse2PublishedOrganizationProfile.ValidateCdaActivity, StringComparison.Ordinal) ||
-            !string.Equals(root.GetProperty("healthDataFormat").GetString(), "CDA", StringComparison.Ordinal) ||
-            properties.Any(value => value.Value.ValueKind != JsonValueKind.String || value.Name is not ("activity" or "healthDataFormat")))
+            !string.Equals(root.GetProperty("healthDataFormat").GetString(), "CDA", StringComparison.Ordinal);
+        bool parity101 = properties.Length == 2 &&
+            properties.All(value => value.Value.ValueKind == JsonValueKind.String &&
+                value.Name is ("activity" or "healthDataFormat"));
+        bool historical100 = properties.Length == 3 &&
+            root.TryGetProperty("mode", out JsonElement mode) &&
+            mode.ValueKind == JsonValueKind.String &&
+            string.Equals(mode.GetString(), "ATTACHMENT", StringComparison.Ordinal) &&
+            properties.All(value => value.Value.ValueKind == JsonValueKind.String &&
+                value.Name is ("activity" or "healthDataFormat" or "mode"));
+        bool contractMatches = publishedContract switch
+        {
+            Fse2ValidateCdaPublishedContract.Historical100 => historical100,
+            Fse2ValidateCdaPublishedContract.OfficialTestParity101 => parity101,
+            null => historical100 || parity101,
+            _ => false
+        };
+        if (commonFieldsAreInvalid || !contractMatches)
             throw new JsonException();
     }
 

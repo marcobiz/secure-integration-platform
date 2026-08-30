@@ -17,6 +17,7 @@ public static class Fse2OfficialTestCanonicalDefinition
     private static readonly byte[] Bytes = Read();
 
     public const string ConnectorId = "fse2-officialtest-validate-cda";
+    internal const string HistoricalConnectorVersion = "1.0.0";
     public const string ConnectorVersion = "1.0.1";
     public const string OperationId = "validate-cda";
     public const string EndpointBinding = "officialtest-gateway";

@@ -61,18 +61,26 @@ slice.
 Starting from exact main `7ef788e70e881ba0382d5ac2967fe944d8b6ba05`, the canonical
 single-operation source advances immutably from Connector Version `1.0.0` to `1.0.1`. The supported
 provisioner lifecycle therefore creates a new draft/version and never edits a Published definition
-or uses direct SQL/store access. For this OfficialTest `validate-cda` path only, both authorized JWT
-slots now require `certificateHeader=leaf`; the runtime emits an `x5c` array containing exactly the
-same S1 leaf DER encoded with standard Base64 and no issuer, intermediate or root certificate.
-Synthetic and other connector profiles retain their existing certificate-header policy.
+or uses direct SQL/store access. The runtime applies parity only when the exact server-owned
+Published identity is Connector ID `fse2-officialtest-validate-cda`, Connector Version `1.0.1`,
+Environment `OfficialTest` and operation `validate-cda`. Both authorized JWT slots then require
+`certificateHeader=leaf`; the runtime emits an `x5c` array containing exactly the same S1 leaf DER
+encoded with standard Base64 and no issuer, intermediate or root certificate. Exact ordinal ID and
+version comparisons prevent another Connector ID or an unknown future version from inheriting this
+policy. The canonical ID with an unsupported version is denied before provider, signing, DNS or
+transport effects.
 
-The `VERIFICA` CDA request validator now admits exactly `healthDataFormat=CDA` and
-`activity=VERIFICA`; `mode` and `attachment_hash` are absent. Other operations retain their existing
-JSON body behavior, including bodies where `mode` is meaningful. The hosted loopback proof crosses
-Published authority, dual signing, A1 mTLS and restricted transport once, while T03 preserves the
-exact frozen PDF and request-body bytes in the multipart. This is offline contract parity only: no
-OfficialTest DNS/network operation or real FSE2 material is used, and it does not claim that either
-the previously observed HTTP 401 or the independent-reference HTTP 403 is resolved.
+For exact `1.0.1`, the `VERIFICA` CDA request contains only `healthDataFormat=CDA` and
+`activity=VERIFICA`; `mode` and `attachment_hash` are absent. Published `1.0.0` is explicitly
+historical compatibility, not contract-parity qualified: it retains chain `x5c` and
+`mode=ATTACHMENT`. The real hosted runtime tests publish and invoke both immutable versions, prove
+isolation for another Connector ID and an unsupported version, then exercise supported upgrade and
+rollback while capturing both JWTs, multipart JSON, endpoint and dispatch count. Upgrade and
+rollback reactivate each version's own effective wire contract rather than changing its semantics.
+Other operations remain unchanged. T03 preserves the exact frozen PDF and `1.0.1` request-body
+bytes in the multipart. This is offline contract parity only: no OfficialTest DNS/network operation
+or real FSE2 material is used, and it does not claim that either the previously observed HTTP 401 or
+the independent-reference HTTP 403 is resolved.
 
 The Organization profile now runs as the external module `healthcare-fse2` and strategy
 `healthcare-fse2-organization`. Its only declared outbound authentication kind is `mtls`.

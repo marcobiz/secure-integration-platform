@@ -37,11 +37,20 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     internal const string AuthorizationIssuer = "auth:M6 Synthetic JWT Signing R1";
     internal const string IntegrityIssuer = "integrity:M6 Synthetic JWT Signing R1";
     internal const string Boundary = "broker-gateway-fse2-v1";
+    internal const string OfficialTestBoundary = "broker-gateway-fse2-officialtest-v1";
     private const string BoundaryA = "broker-gateway-fse2-boundary-a";
     private const string BoundaryB = "broker-gateway-fse2-boundary-b";
+    private const string HistoricalOfficialTestConnectorVersion = "1.0.0";
+    private const string HistoricalValidateCdaRequestBody =
+        "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\",\"mode\":\"ATTACHMENT\"}";
+    private const string ParityValidateCdaRequestBody =
+        "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}";
     internal const int TokenLifetimeSeconds = 300;
     private const string RequirePostgresGateVariable = "REQUIRE_FSE2_POSTGRES_GATE";
     private static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web);
+    private static readonly Uri OfficialTestEffectiveUri = new(
+        "https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1/documents/validation",
+        UriKind.Absolute);
 
     [Fact]
     public Task FSE2_IT_PRODUCTION_HOST_in_memory_Published_Organization_dual_JWT_mTLS_exact_bytes() =>
@@ -145,6 +154,139 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     public Task FSE2_OFFICIALTEST_validate_cda_VERIFICA_omits_mode_and_attachment_hash() =>
         RunOfficialTestRuntimeContractAsync();
 
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_versions_1_0_0_and_1_0_1_preserve_distinct_published_contracts()
+    {
+        VersionPolicyResult historical = await RunVersionPolicyContractAsync(
+            Fse2OfficialTestCanonicalDefinition.ConnectorId,
+            HistoricalOfficialTestConnectorVersion,
+            "chain",
+            HistoricalValidateCdaRequestBody,
+            "distinct-historical");
+        VersionPolicyResult parity = await RunVersionPolicyContractAsync(
+            Fse2OfficialTestCanonicalDefinition.ConnectorId,
+            Fse2OfficialTestCanonicalDefinition.ConnectorVersion,
+            "leaf",
+            ParityValidateCdaRequestBody,
+            "distinct-parity");
+
+        AssertHistoricalWireContract(historical);
+        AssertParityWireContract(parity);
+        Assert.NotEqual(
+            historical.Observation.AuthorizationX5cCount,
+            parity.Observation.AuthorizationX5cCount);
+        Assert.NotEqual(
+            Encoding.UTF8.GetString(historical.Observation.RequestBody),
+            Encoding.UTF8.GetString(parity.Observation.RequestBody));
+    }
+
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_1_0_0_preserves_chain_and_historical_mode_body() =>
+        AssertHistoricalWireContract(await RunVersionPolicyContractAsync(
+            Fse2OfficialTestCanonicalDefinition.ConnectorId,
+            HistoricalOfficialTestConnectorVersion,
+            "chain",
+            HistoricalValidateCdaRequestBody,
+            "historical"));
+
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_1_0_1_uses_leaf_only_and_two_field_VERIFICA_body() =>
+        AssertParityWireContract(await RunVersionPolicyContractAsync(
+            Fse2OfficialTestCanonicalDefinition.ConnectorId,
+            Fse2OfficialTestCanonicalDefinition.ConnectorVersion,
+            "leaf",
+            ParityValidateCdaRequestBody,
+            "parity"));
+
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_other_connector_id_does_not_inherit_1_0_1_policy()
+    {
+        VersionPolicyResult result = await RunVersionPolicyContractAsync(
+            Fse2OfficialTestCanonicalDefinition.ConnectorId + "-other",
+            Fse2OfficialTestCanonicalDefinition.ConnectorVersion,
+            "chain",
+            HistoricalValidateCdaRequestBody,
+            "other-connector");
+
+        AssertHistoricalWireContract(result);
+    }
+
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_unknown_version_does_not_silently_inherit_1_0_1_policy()
+    {
+        VersionPolicyResult result = await RunVersionPolicyContractAsync(
+            Fse2OfficialTestCanonicalDefinition.ConnectorId,
+            "1.0.2",
+            "leaf",
+            ParityValidateCdaRequestBody,
+            "unknown-version");
+
+        Assert.False((int)result.StatusCode is >= 200 and <= 299);
+        Assert.Empty(result.TransportObservations);
+        Assert.Equal(0, result.TransportRequests);
+        Assert.Equal(0, result.HostResolutionCount);
+        Assert.Equal(0, result.GenericTransportRequests);
+        Assert.Equal(0, result.SignDigestCalls);
+    }
+
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_upgrade_and_rollback_preserve_effective_wire_contract()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        Uri publishedBase = new(Fse2OfficialTestCanonicalDefinition.OfficialTestEndpoint, UriKind.Absolute);
+        VersionPolicyInMemoryTransport localMock = new(
+            OfficialTestEffectiveUri,
+            Convert.ToHexString(SHA256.HashData(material.ClientCertificateRevision1.RawData)),
+            material.SigningKeyRevision1.RawData,
+            material.RootCertificate.RawData);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-officialtest-upgrade-rollback",
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate),
+            restrictedTransport: localMock,
+            privateDestinationHosts: new HashSet<string>([publishedBase.DnsSafeHost], StringComparer.OrdinalIgnoreCase));
+
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-officialtest-upgrade-rollback-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-officialtest-upgrade-rollback-application");
+        HostedCapabilityAuthority historical = await PrepareVersionPolicyAuthorityAsync(
+            fixture, provider, material, environmentId,
+            Fse2OfficialTestCanonicalDefinition.ConnectorId,
+            HistoricalOfficialTestConnectorVersion,
+            "chain");
+        _ = await fixture.PublishAsync(historical, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "fse2-officialtest-upgrade-rollback-identity");
+        await fixture.AddOperationGrantAsync(identity, historical.ConnectorId, Fse2OfficialTestCanonicalDefinition.OperationId);
+
+        await InvokeVersionPolicyAsync(fixture, identity, historical.ConnectorId, HistoricalValidateCdaRequestBody);
+
+        HostedCapabilityAuthority parity = await PrepareVersionPolicyAuthorityAsync(
+            fixture, provider, material, environmentId,
+            Fse2OfficialTestCanonicalDefinition.ConnectorId,
+            Fse2OfficialTestCanonicalDefinition.ConnectorVersion,
+            "leaf");
+        ConnectorVersionResource publishedParity = await fixture.PublishAsync(parity, expectedPublicationRevision: 1);
+        await InvokeVersionPolicyAsync(fixture, identity, parity.ConnectorId, ParityValidateCdaRequestBody);
+
+        _ = await fixture.RollbackAsync(
+            parity,
+            HistoricalOfficialTestConnectorVersion,
+            publishedParity.RowVersion);
+        await InvokeVersionPolicyAsync(fixture, identity, historical.ConnectorId, HistoricalValidateCdaRequestBody);
+
+        VersionPolicyWireObservation[] observations = localMock.Observations;
+        Assert.Equal(3, observations.Length);
+        AssertHistoricalWireObservation(observations[0]);
+        AssertParityWireObservation(observations[1]);
+        AssertHistoricalWireObservation(observations[2]);
+        Assert.Equal(3, localMock.Requests);
+        Assert.Equal(3, fixture.HostResolutionCount);
+        Assert.Equal(3, fixture.GenericTransportRequests);
+        Assert.Equal(6, provider.SignDigestCalls);
+    }
+
     private static async Task RunOfficialTestRuntimeContractAsync()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
@@ -229,6 +371,219 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Assert.Equal(1, fixture.HostResolutionCount);
         Assert.Equal(1, fixture.GenericTransportRequests);
         Assert.Equal(2, provider.SignDigestCalls);
+    }
+
+    private static async Task<VersionPolicyResult> RunVersionPolicyContractAsync(
+        string connectorId,
+        string connectorVersion,
+        string certificateHeader,
+        string requestBody,
+        string identitySuffix)
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        Uri publishedBase = new(Fse2OfficialTestCanonicalDefinition.OfficialTestEndpoint, UriKind.Absolute);
+        VersionPolicyInMemoryTransport localMock = new(
+            OfficialTestEffectiveUri,
+            Convert.ToHexString(SHA256.HashData(material.ClientCertificateRevision1.RawData)),
+            material.SigningKeyRevision1.RawData,
+            material.RootCertificate.RawData);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-officialtest-version-policy-" + identitySuffix,
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate),
+            restrictedTransport: localMock,
+            privateDestinationHosts: new HashSet<string>([publishedBase.DnsSafeHost], StringComparer.OrdinalIgnoreCase));
+
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        HostedCapabilityAuthority authority = await PrepareVersionPolicyAuthorityAsync(
+            fixture,
+            provider,
+            material,
+            environmentId,
+            connectorId,
+            connectorVersion,
+            certificateHeader);
+        _ = await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-officialtest-version-policy-tenant-" + identitySuffix);
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-officialtest-version-policy-application-" + identitySuffix);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId,
+            applicationId,
+            environmentId,
+            "fse2-officialtest-version-policy-identity-" + identitySuffix);
+        await fixture.AddOperationGrantAsync(identity, connectorId, Fse2OfficialTestCanonicalDefinition.OperationId);
+
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{Fse2OfficialTestCanonicalDefinition.OperationId}:invoke",
+            InvokeRequest(PayloadFor(
+                Fse2OperationCatalog.Get(Fse2Operation.ValidateCda),
+                requestBody,
+                DocumentBytes())));
+        string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        if (response.IsSuccessStatusCode && string.Equals(
+            connectorId,
+            Fse2OfficialTestCanonicalDefinition.ConnectorId,
+            StringComparison.Ordinal) && connectorVersion is "1.0.0" or "1.0.1")
+        {
+            string mismatchedBody = string.Equals(connectorVersion, HistoricalOfficialTestConnectorVersion, StringComparison.Ordinal)
+                ? ParityValidateCdaRequestBody
+                : HistoricalValidateCdaRequestBody;
+            using HttpResponseMessage denied = await fixture.SendSignedAsync(
+                identity,
+                HttpMethod.Post,
+                $"/v1/connectors/{connectorId}/operations/{Fse2OfficialTestCanonicalDefinition.OperationId}:invoke",
+                InvokeRequest(PayloadFor(
+                    Fse2OperationCatalog.Get(Fse2Operation.ValidateCda),
+                    mismatchedBody,
+                    DocumentBytes())));
+            Assert.False(denied.IsSuccessStatusCode);
+        }
+
+        return new(
+            response.StatusCode,
+            responseBody,
+            localMock.Requests,
+            localMock.Observations,
+            fixture.HostResolutionCount,
+            fixture.GenericTransportRequests,
+            provider.SignDigestCalls);
+    }
+
+    private static async Task<HostedCapabilityAuthority> PrepareVersionPolicyAuthorityAsync(
+        HostedTypedSessionFixture fixture,
+        TrackingCapabilityProvider provider,
+        SyntheticAuthenticationMaterial material,
+        Guid environmentId,
+        string connectorId,
+        string connectorVersion,
+        string certificateHeader)
+    {
+        string definition = CompileVersionPolicyDefinition(
+            environmentId,
+            material,
+            connectorId,
+            connectorVersion,
+            certificateHeader);
+        return await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId,
+            connectorVersion,
+            environmentId,
+            new(Fse2OfficialTestCanonicalDefinition.OfficialTestEndpoint, UriKind.Absolute),
+            definition,
+            provider,
+            "sign-r1",
+            "mtls-r1",
+            operationId: Fse2OfficialTestCanonicalDefinition.OperationId,
+            endpointBinding: Fse2OfficialTestCanonicalDefinition.EndpointBinding,
+            signingCertificateBinding: Fse2OfficialTestCanonicalDefinition.SigningBinding,
+            clientCertificateBinding: Fse2OfficialTestCanonicalDefinition.MutualTlsBinding);
+    }
+
+    private static string CompileVersionPolicyDefinition(
+        Guid environmentId,
+        SyntheticAuthenticationMaterial material,
+        string connectorId,
+        string connectorVersion,
+        string certificateHeader)
+    {
+        Fse2OfficialTestProviderReference a1 = new("synthetic-capability", "officialtest-a1", "1", 1, 1);
+        Fse2OfficialTestProviderReference s1 = new("synthetic-capability", "officialtest-s1", "1", 1, 1);
+        string planJson = $$"""
+            {
+              "schemaVersion":"1.0",
+              "tenantId":"22222222-2222-2222-2222-222222222222",
+              "installationId":"33333333-3333-3333-3333-333333333333",
+              "environmentId":"{{environmentId:D}}",
+              "officialTestEndpoint":"{{Fse2OfficialTestCanonicalDefinition.OfficialTestEndpoint}}",
+              "organization":{"identifier":"12345678903","assigningAuthorityOid":"2.16.840.1.113883.2.9.4.1.2","description":"ASL Roma 1","domainId":"asl-roma-1"},
+              "locality":{"name":"ASL Roma 1","assigningAuthorityOid":"2.16.840.1.113883.2.9.4.1.2","code":"ASLROMA1"},
+              "a1":{"providerId":"{{a1.ProviderId}}","resourceId":"{{a1.ResourceId}}","version":"{{a1.Version}}","catalogRevision":1,"publicMetadataRevision":1},
+              "s1":{"providerId":"{{s1.ProviderId}}","resourceId":"{{s1.ResourceId}}","version":"{{s1.Version}}","catalogRevision":1,"publicMetadataRevision":1},
+              "expectedBindingRevision":null
+            }
+            """;
+        Fse2OfficialTestOperationalPlan plan = Fse2OfficialTestOperationalization.ParsePlan(Encoding.UTF8.GetBytes(planJson));
+        Fse2OfficialTestCompiledConfiguration compiled = Fse2OfficialTestOperationalization.Compile(
+            plan,
+            new(a1, SpkiSha256(material.ClientCertificateRevision1), material.ClientCertificateRevision1.GetNameInfo(X509NameType.SimpleName, false), new string('C', 64)),
+            new(s1, SpkiSha256(material.SigningKeyRevision1), material.SigningKeyRevision1.GetNameInfo(X509NameType.SimpleName, false), new string('D', 64)));
+        JsonObject root = JsonNode.Parse(compiled.CanonicalDefinition)!.AsObject();
+        root["connectorId"] = connectorId;
+        root["version"] = connectorVersion;
+        JsonObject operation = root["operations"]![0]!.AsObject();
+        Assert.Equal("appendToBasePath", operation["pathResolution"]!.GetValue<string>());
+        Assert.Equal("deny", operation["redirectPolicy"]!.GetValue<string>());
+        Assert.Equal(0, operation["maximumRetries"]!.GetValue<int>());
+        foreach (JsonNode? slot in operation["authorizedCapabilities"]!["signingSlots"]!.AsArray())
+            slot!["signing"]!["certificateHeader"] = certificateHeader;
+        return root.ToJsonString();
+    }
+
+    private static async Task InvokeVersionPolicyAsync(
+        HostedTypedSessionFixture fixture,
+        HostedIdentity identity,
+        string connectorId,
+        string requestBody)
+    {
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{Fse2OfficialTestCanonicalDefinition.OperationId}:invoke",
+            InvokeRequest(PayloadFor(
+                Fse2OperationCatalog.Get(Fse2Operation.ValidateCda),
+                requestBody,
+                DocumentBytes())));
+        string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.True(response.IsSuccessStatusCode, responseBody);
+    }
+
+    private static void AssertHistoricalWireContract(VersionPolicyResult result)
+    {
+        Assert.True((int)result.StatusCode is >= 200 and <= 299, result.ResponseBody);
+        Assert.Equal(1, result.TransportRequests);
+        Assert.Equal(1, result.HostResolutionCount);
+        Assert.Equal(1, result.GenericTransportRequests);
+        Assert.Equal(2, result.SignDigestCalls);
+        AssertHistoricalWireObservation(result.Observation);
+    }
+
+    private static void AssertHistoricalWireObservation(VersionPolicyWireObservation observation)
+    {
+        AssertWireObservation(observation);
+        Assert.Equal(2, observation.AuthorizationX5cCount);
+        Assert.Equal(2, observation.IntegrityX5cCount);
+        Assert.Equal(HistoricalValidateCdaRequestBody, Encoding.UTF8.GetString(observation.RequestBody));
+    }
+
+    private static void AssertParityWireContract(VersionPolicyResult result)
+    {
+        Assert.True((int)result.StatusCode is >= 200 and <= 299, result.ResponseBody);
+        Assert.Equal(1, result.TransportRequests);
+        Assert.Equal(1, result.HostResolutionCount);
+        Assert.Equal(1, result.GenericTransportRequests);
+        Assert.Equal(2, result.SignDigestCalls);
+        AssertParityWireObservation(result.Observation);
+    }
+
+    private static void AssertParityWireObservation(VersionPolicyWireObservation observation)
+    {
+        AssertWireObservation(observation);
+        Assert.Equal(1, observation.AuthorizationX5cCount);
+        Assert.Equal(1, observation.IntegrityX5cCount);
+        Assert.Equal(ParityValidateCdaRequestBody, Encoding.UTF8.GetString(observation.RequestBody));
+    }
+
+    private static void AssertWireObservation(VersionPolicyWireObservation observation)
+    {
+        Assert.Equal(OfficialTestEffectiveUri, observation.RequestUri);
+        Assert.True(observation.A1MutualTlsObserved);
+        Assert.True(observation.DualDistinctJwtObserved);
+        Assert.True(observation.ExactPdfObserved);
+        Assert.True(observation.AttachmentHashAbsent);
     }
 
     [Fact]
@@ -1250,40 +1605,48 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             material.ClientCertificateRevision1,
             material.SigningKeyRevision1,
             material.RootCertificate,
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken,
+            Fse2OfficialTestCanonicalDefinition.OfficialTestAudience,
+            Fse2OfficialTestCanonicalDefinition.ApplicationId,
+            Fse2OfficialTestCanonicalDefinition.ApplicationVendor,
+            Fse2OfficialTestCanonicalDefinition.ApplicationVersion,
+            expectLeafOnlyX5c: true);
         await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
             "unused-fse2-t03-frozen-dataset",
             executionModule: Module(),
             capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
 
         Fse2OperationDescriptor operation = Fse2OperationCatalog.Get(Fse2Operation.ValidateCda);
-        string connectorId = "fse2-t03-frozen-" + Guid.NewGuid().ToString("N");
+        string connectorId = Fse2OfficialTestCanonicalDefinition.ConnectorId;
+        string connectorVersion = Fse2OfficialTestCanonicalDefinition.ConnectorVersion;
         Guid environmentId = await fixture.CreateEnvironmentAsync();
         Guid tenantId = await fixture.CreateTenantAsync("fse2-t03-frozen-tenant");
         Guid applicationId = await fixture.CreateApplicationAsync("fse2-t03-frozen-application");
         HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
             connectorId,
-            "1.0.0",
+            connectorVersion,
             environmentId,
             server.Endpoint,
-            DefinitionForOperations(
+            CompileVersionPolicyDefinition(
+                environmentId,
+                material,
                 connectorId,
-                "1.0.0",
-                SpkiSha256(material.SigningKeyRevision1),
-                SpkiSha256(material.ClientCertificateRevision1),
-                "1.0.0",
-                [operation]),
+                connectorVersion,
+                "leaf"),
             provider,
             "sign-r1",
             "mtls-r1",
             operationId: operation.OperationId,
-            expectedOperationCount: 1);
+            expectedOperationCount: 1,
+            endpointBinding: Fse2OfficialTestCanonicalDefinition.EndpointBinding,
+            signingCertificateBinding: Fse2OfficialTestCanonicalDefinition.SigningBinding,
+            clientCertificateBinding: Fse2OfficialTestCanonicalDefinition.MutualTlsBinding);
         await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
         HostedIdentity identity = await fixture.EnrollIdentityAsync(
             tenantId, applicationId, environmentId, "fse2-t03-frozen-identity");
         await fixture.AddOperationGrantAsync(identity, connectorId, operation.OperationId);
 
-        const string requestBody = "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}";
+        const string requestBody = ParityValidateCdaRequestBody;
         using HttpResponseMessage response = await fixture.SendSignedAsync(
             identity,
             HttpMethod.Post,
@@ -1296,7 +1659,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Assert.Equal(Fse2Operation.ValidateCda, observation.Operation);
         Assert.Equal("POST", observation.Method);
         Assert.Equal("/documents/validation", observation.RawTarget);
-        Assert.Equal($"multipart/form-data; boundary={Boundary}", observation.ContentType);
+        Assert.Equal($"multipart/form-data; boundary={OfficialTestBoundary}", observation.ContentType);
         Assert.False(observation.AttachmentHashPresent);
         Assert.True(observation.HasHttpContent);
         Assert.True(observation.ExactApplicationJsonAcceptObserved);
@@ -1305,7 +1668,11 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Assert.True(observation.ExactJwtPolicyObserved);
         Assert.True(observation.ExactClaimsObserved);
 
-        MultipartCapture multipart = await ReadMultipartCaptureAsync(observation, TestContext.Current.CancellationToken);
+        MultipartCapture multipart = await ReadMultipartCaptureAsync(
+            observation.ContentType,
+            observation.Body,
+            OfficialTestBoundary,
+            TestContext.Current.CancellationToken);
         Assert.Equal(1, multipart.FilePartCount);
         Assert.Equal(1, multipart.RequestBodyPartCount);
         Assert.Equal("document.pdf", multipart.FileName);
@@ -2194,7 +2561,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         if (operation.HasJsonBody)
         {
             requestBodyJson ??= operation.Operation == Fse2Operation.ValidateCda
-                ? "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}"
+                ? HistoricalValidateCdaRequestBody
                 : "{\"metadata\":\"published-exact\"}";
             payload["requestBodyBase64"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(requestBodyJson));
         }
@@ -2204,18 +2571,28 @@ public sealed class Fse2OrganizationHostedIntegrationTests
 
     private static async Task<MultipartCapture> ReadMultipartCaptureAsync(
         SyntheticFse2OperationMatrixServer.Observation observation,
+        CancellationToken cancellationToken) => await ReadMultipartCaptureAsync(
+            observation.ContentType,
+            observation.Body,
+            Boundary,
+            cancellationToken);
+
+    private static async Task<MultipartCapture> ReadMultipartCaptureAsync(
+        string? rawContentType,
+        byte[] rawBody,
+        string expectedBoundary,
         CancellationToken cancellationToken)
     {
-        Assert.NotNull(observation.ContentType);
-        Assert.True(MediaTypeHeaderValue.TryParse(observation.ContentType, out MediaTypeHeaderValue? contentType));
+        Assert.NotNull(rawContentType);
+        Assert.True(MediaTypeHeaderValue.TryParse(rawContentType, out MediaTypeHeaderValue? contentType));
         NameValueHeaderValue boundaryParameter = Assert.Single(
             contentType.Parameters,
             parameter => parameter.Name.Equals("boundary", StringComparison.OrdinalIgnoreCase));
         string boundary = HeaderUtilities.RemoveQuotes(boundaryParameter.Value).Value
             ?? throw new InvalidOperationException("FSE2_T03_MULTIPART_BOUNDARY_MISSING");
-        Assert.Equal(Boundary, boundary);
+        Assert.Equal(expectedBoundary, boundary);
 
-        using MemoryStream body = new(observation.Body, writable: false);
+        using MemoryStream body = new(rawBody, writable: false);
         MultipartReader reader = new(boundary, body);
         int filePartCount = 0;
         int requestBodyPartCount = 0;
@@ -2327,6 +2704,126 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         string? FileMediaType,
         byte[] FileBytes,
         byte[] RequestBodyBytes);
+
+    private sealed record VersionPolicyResult(
+        HttpStatusCode StatusCode,
+        string ResponseBody,
+        int TransportRequests,
+        VersionPolicyWireObservation[] TransportObservations,
+        int HostResolutionCount,
+        int GenericTransportRequests,
+        int SignDigestCalls)
+    {
+        internal VersionPolicyWireObservation Observation => Assert.Single(TransportObservations);
+    }
+
+    private sealed record VersionPolicyWireObservation(
+        Uri RequestUri,
+        int AuthorizationX5cCount,
+        int IntegrityX5cCount,
+        byte[] RequestBody,
+        bool A1MutualTlsObserved,
+        bool DualDistinctJwtObserved,
+        bool ExactPdfObserved,
+        bool AttachmentHashAbsent);
+
+    private sealed class VersionPolicyInMemoryTransport(
+        Uri expectedUri,
+        string expectedClientFingerprint,
+        byte[] expectedSigningLeaf,
+        byte[] expectedRoot) : IRestrictedTransport
+    {
+        private readonly Lock observationGate = new();
+        private readonly List<VersionPolicyWireObservation> observations = [];
+        private int requests;
+
+        internal int Requests => Volatile.Read(ref requests);
+        internal VersionPolicyWireObservation[] Observations
+        {
+            get
+            {
+                lock (observationGate) return observations.ToArray();
+            }
+        }
+
+        public async Task<ExternalResponse> SendAsync(
+            HttpRequestMessage request,
+            IReadOnlyList<IPAddress> approvedAddresses,
+            X509Certificate2? clientCertificate,
+            TimeSpan timeout,
+            long maximumResponseBytes,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref requests);
+            Assert.Equal(expectedUri, request.RequestUri);
+            Assert.Equal([IPAddress.Loopback], approvedAddresses);
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal($"multipart/form-data; boundary={OfficialTestBoundary}", request.Content?.Headers.ContentType?.ToString());
+            Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
+            Assert.Equal(TimeSpan.FromSeconds(5), timeout);
+            Assert.Equal(4096, maximumResponseBytes);
+
+            bool a1MutualTlsObserved = clientCertificate is not null && string.Equals(
+                Convert.ToHexString(SHA256.HashData(clientCertificate.RawData)),
+                expectedClientFingerprint,
+                StringComparison.Ordinal);
+            string authorization = request.Headers.Authorization?.Parameter
+                ?? throw new InvalidOperationException("FSE2_TEST_AUTHORIZATION_JWT_MISSING");
+            string integrity = Assert.Single(request.Headers.GetValues(Fse2PublishedOrganizationProfile.IntegrityHeaderName));
+            bool dualDistinctJwtObserved = !string.Equals(authorization, integrity, StringComparison.Ordinal);
+            int authorizationX5cCount = AssertBoundedX5c(authorization);
+            int integrityX5cCount = AssertBoundedX5c(integrity);
+            string[] integrityParts = integrity.Split('.');
+            Assert.Equal(3, integrityParts.Length);
+            using JsonDocument integrityPayload = JsonDocument.Parse(DecodeBase64Url(integrityParts[1]));
+            bool attachmentHashAbsent = !integrityPayload.RootElement.TryGetProperty("attachment_hash", out _);
+
+            byte[] body = await request.Content!.ReadAsByteArrayAsync(cancellationToken);
+            MultipartCapture multipart = await ReadMultipartCaptureAsync(
+                request.Content.Headers.ContentType?.ToString(),
+                body,
+                OfficialTestBoundary,
+                cancellationToken);
+            Assert.Equal(1, multipart.FilePartCount);
+            Assert.Equal(1, multipart.RequestBodyPartCount);
+            bool exactPdfObserved = multipart.FileBytes.AsSpan().SequenceEqual(DocumentBytes());
+            lock (observationGate)
+            {
+                observations.Add(new(
+                    request.RequestUri!,
+                    authorizationX5cCount,
+                    integrityX5cCount,
+                    multipart.RequestBodyBytes,
+                    a1MutualTlsObserved,
+                    dualDistinctJwtObserved,
+                    exactPdfObserved,
+                    attachmentHashAbsent));
+            }
+            return new ExternalResponse(200, "application/json", "{}"u8.ToArray());
+        }
+
+        private int AssertBoundedX5c(string compactToken)
+        {
+            string[] parts = compactToken.Split('.');
+            Assert.Equal(3, parts.Length);
+            using JsonDocument header = JsonDocument.Parse(DecodeBase64Url(parts[0]));
+            JsonElement chain = header.RootElement.GetProperty("x5c");
+            Assert.Equal(JsonValueKind.Array, chain.ValueKind);
+            Assert.True(chain.GetArrayLength() is 1 or 2);
+            Assert.Equal(Convert.ToBase64String(expectedSigningLeaf), chain[0].GetString());
+            if (chain.GetArrayLength() == 2)
+                Assert.Equal(Convert.ToBase64String(expectedRoot), chain[1].GetString());
+            return chain.GetArrayLength();
+        }
+
+        private static byte[] DecodeBase64Url(string value)
+        {
+            string padded = value.Replace('-', '+').Replace('_', '/');
+            padded += new string('=', (4 - padded.Length % 4) % 4);
+            return Convert.FromBase64String(padded);
+        }
+    }
 
     private sealed class OfficialTestInMemoryTransport(
         Uri expectedUri,
@@ -2666,7 +3163,9 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         bool multipartEnvelopeDigestRejected = exactClaims && (!operation.RequiresAttachmentHash || !string.Equals(
             attachmentHash.GetString(), multipartEnvelopeDigest, StringComparison.Ordinal));
         ReadOnlySpan<byte> expectedRequestBody = operation.Operation == Fse2Operation.ValidateCda
-            ? "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}"u8
+            ? expectLeafOnlyX5c
+                ? "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}"u8
+                : "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\",\"mode\":\"ATTACHMENT\"}"u8
             : "{\"metadata\":\"published-exact\"}"u8;
         bool exactDocumentAndJson = body.AsSpan().IndexOf(Fse2OrganizationHostedIntegrationTests.DocumentBytes()) >= 0 &&
             body.AsSpan().IndexOf(expectedRequestBody) >= 0;

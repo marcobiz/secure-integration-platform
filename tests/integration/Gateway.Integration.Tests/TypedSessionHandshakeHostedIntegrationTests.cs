@@ -702,12 +702,29 @@ public sealed class HostedTypedSessionFixture : IAsyncDisposable
         }
     }
 
-    public async Task PublishAsync(HostedCapabilityAuthority authority, long expectedPublicationRevision)
+    public async Task<ConnectorVersionResource> PublishAsync(HostedCapabilityAuthority authority, long expectedPublicationRevision)
     {
         ConnectorVersionResource published = await Factory.Services.GetRequiredService<ConnectorAdministrationService>().PublishAsync(
             authority.ConnectorId, authority.Version, authority.Validated.RowVersion, expectedPublicationRevision,
             authority.Approver.ActorId, Guid.NewGuid(), TestContext.Current.CancellationToken);
         Assert.Equal(ConnectorVersionState.Published, published.State);
+        return published;
+    }
+
+    public async Task<ConnectorVersionResource> RollbackAsync(
+        HostedCapabilityAuthority activeAuthority,
+        string targetVersion,
+        long expectedActiveRowVersion)
+    {
+        ConnectorVersionResource rolledBack = await Factory.Services.GetRequiredService<ConnectorAdministrationService>().RollbackAsync(
+            activeAuthority.ConnectorId,
+            new(targetVersion, expectedActiveRowVersion),
+            activeAuthority.Approver.ActorId,
+            Guid.NewGuid(),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(ConnectorVersionState.Published, rolledBack.State);
+        Assert.Equal(targetVersion, rolledBack.Version);
+        return rolledBack;
     }
 
     internal async Task DisableUsernameResourceAsync(HostedConnectorAuthority authority)

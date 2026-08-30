@@ -251,22 +251,29 @@ public sealed class Fse2OfficialTestOperationalizationTests
     [Fact]
     public void FSE2_OFFICIALTEST_validate_cda_request_matches_frozen_ministerial_contract()
     {
-        byte[] valid = "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}"u8.ToArray();
+        byte[] parity101 = "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}"u8.ToArray();
+        byte[] historical100 = "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\",\"mode\":\"ATTACHMENT\"}"u8.ToArray();
         Fse2ClinicalClaims claims = Fse2ClinicalClaims.CreatePerson(
             "RSSMRA80A01H501U", "2.16.840.1.113883.2.9.4.3.2", true, "('11502-2^^2.16.840.1.113883.6.1')");
-        Fse2Request request = Fse2Request.ValidateCda("synthetic-pdf"u8.ToArray(), valid, claims);
-        using JsonDocument payload = JsonDocument.Parse(request.SerializeAuthorizedPayload());
-        byte[] sealedRequestBody = Convert.FromBase64String(payload.RootElement.GetProperty("requestBodyBase64").GetString()!);
-        Assert.Equal(valid, sealedRequestBody);
+        AssertSealedWithoutCallerAuthority(parity101);
+        AssertSealedWithoutCallerAuthority(historical100);
 
         foreach (string invalid in new[]
         {
             "{\"healthDataFormat\":\"CDA\",\"activity\":\"CREATE\"}",
             "{\"healthDataFormat\":\"FHIR\",\"activity\":\"VERIFICA\"}",
-            "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\",\"mode\":\"ATTACHMENT\"}",
+            "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\",\"mode\":\"OTHER\"}",
             "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\",\"attachment_hash\":\"caller\"}"
         })
             Assert.Throws<ArgumentException>(() => Fse2Request.ValidateCda("synthetic-pdf"u8.ToArray(), Encoding.UTF8.GetBytes(invalid), claims));
+
+        void AssertSealedWithoutCallerAuthority(byte[] requestBody)
+        {
+            Fse2Request request = Fse2Request.ValidateCda("synthetic-pdf"u8.ToArray(), requestBody, claims);
+            using JsonDocument payload = JsonDocument.Parse(request.SerializeAuthorizedPayload());
+            byte[] sealedRequestBody = Convert.FromBase64String(payload.RootElement.GetProperty("requestBodyBase64").GetString()!);
+            Assert.Equal(requestBody, sealedRequestBody);
+        }
     }
 
     private static Fse2OfficialTestCompiledConfiguration Compile(Fse2OfficialTestOperationalPlan? value = null)

@@ -7,6 +7,36 @@ using SecureIntegration.Gateway.Application;
 
 namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2;
 
+internal enum Fse2ValidateCdaPublishedContract
+{
+    Historical100,
+    OfficialTestParity101
+}
+
+internal static class Fse2ValidateCdaPublishedContractResolver
+{
+    internal static Fse2ValidateCdaPublishedContract Resolve(
+        string connectorId,
+        string connectorVersion,
+        string operationId,
+        Fse2EnvironmentClass environmentClass)
+    {
+        if (environmentClass != Fse2EnvironmentClass.OfficialTest ||
+            !string.Equals(operationId, Fse2OfficialTestCanonicalDefinition.OperationId, StringComparison.Ordinal) ||
+            !string.Equals(connectorId, Fse2OfficialTestCanonicalDefinition.ConnectorId, StringComparison.Ordinal))
+            return Fse2ValidateCdaPublishedContract.Historical100;
+
+        if (string.Equals(connectorVersion, Fse2OfficialTestCanonicalDefinition.HistoricalConnectorVersion, StringComparison.Ordinal))
+            return Fse2ValidateCdaPublishedContract.Historical100;
+        if (string.Equals(connectorVersion, Fse2OfficialTestCanonicalDefinition.ConnectorVersion, StringComparison.Ordinal))
+            return Fse2ValidateCdaPublishedContract.OfficialTestParity101;
+
+        throw new Fse2ConnectorException(
+            Fse2ErrorCategory.PolicyDenied,
+            "FSE2_OFFICIALTEST_CONNECTOR_VERSION_UNSUPPORTED");
+    }
+}
+
 /// <summary>External Healthcare module for the frozen FSE2 Organization profile.</summary>
 public sealed class Fse2OrganizationExecutionModule : IConnectorExecutionModule
 {
@@ -50,6 +80,11 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
 
         Fse2PublishedOrganizationProfile profile = Fse2PublishedOrganizationProfile.Parse(
             context.OpenPublishedExtensionConfiguration(), context.OperationId);
+        Fse2ValidateCdaPublishedContract validateCdaContract = Fse2ValidateCdaPublishedContractResolver.Resolve(
+            context.ConnectorId,
+            context.ConnectorVersion,
+            context.OperationId,
+            profile.EnvironmentClass);
         bool officialTestValidateCda = profile.EnvironmentClass == Fse2EnvironmentClass.OfficialTest &&
             profile.Operation.Operation == Fse2Operation.ValidateCda;
         if (officialTestValidateCda &&
@@ -58,7 +93,8 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
             throw new Fse2ConnectorException(Fse2ErrorCategory.PolicyDenied, "FSE2_OFFICIALTEST_PROFILE_DENIED");
         ConnectorSigningSlotKey authorization = profile.AuthorizationSigningSlot;
         ConnectorSigningSlotKey integrity = profile.IntegritySigningSlot;
-        AuthorizedSigningCertificateHeaderMode certificateHeaderMode = officialTestValidateCda
+        AuthorizedSigningCertificateHeaderMode certificateHeaderMode =
+            validateCdaContract == Fse2ValidateCdaPublishedContract.OfficialTestParity101
             ? AuthorizedSigningCertificateHeaderMode.Leaf
             : AuthorizedSigningCertificateHeaderMode.Chain;
         AuthorizedSigningSlotExpectation authorizationExpectation = new(
@@ -127,11 +163,16 @@ public sealed class Fse2OrganizationExecutionStrategy(
 
         Fse2PublishedOrganizationProfile profile =
             Fse2PublishedOrganizationProfile.Parse(execution.OpenPublishedExtensionConfiguration(), execution.OperationId);
+        Fse2ValidateCdaPublishedContract validateCdaContract = Fse2ValidateCdaPublishedContractResolver.Resolve(
+            execution.ConnectorId,
+            execution.ConnectorVersion,
+            execution.OperationId,
+            profile.EnvironmentClass);
 
         Fse2InboundPayload inbound;
         using (Stream payload = execution.OpenPayloadStream())
             inbound = Fse2InboundPayload.Parse(payload, execution.PayloadLength);
-        ValidateRequest(profile, inbound);
+        ValidateRequest(profile, inbound, validateCdaContract);
 
         Fse2WorkflowExecutionContext security = await ResolveSecurityContextAsync(
             execution, profile, inbound, cancellationToken).ConfigureAwait(false);
@@ -236,7 +277,10 @@ public sealed class Fse2OrganizationExecutionStrategy(
         catch (Exception) { throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_WORKFLOW_CONTEXT_NOT_FOUND"); }
     }
 
-    private static void ValidateRequest(Fse2PublishedOrganizationProfile profile, Fse2InboundPayload inbound)
+    private static void ValidateRequest(
+        Fse2PublishedOrganizationProfile profile,
+        Fse2InboundPayload inbound,
+        Fse2ValidateCdaPublishedContract validateCdaContract)
     {
         Fse2OperationDescriptor operation = profile.Operation;
         if (inbound.Document.Length > profile.MaximumDocumentBytes ||
@@ -244,7 +288,21 @@ public sealed class Fse2OrganizationExecutionStrategy(
             operation.HasJsonBody != !inbound.RequestBody.IsEmpty ||
             operation.RequiresResourceIdentifier != (inbound.ResourceIdentifier is not null))
             throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_REQUEST_SHAPE_DENIED");
-        if (operation.HasJsonBody) Fse2Validation.ValidateJsonObject(inbound.RequestBody, operation.Operation);
+        if (operation.Operation == Fse2Operation.ValidateCda)
+        {
+            try
+            {
+                Fse2Validation.ValidateJsonObject(inbound.RequestBody, operation.Operation, validateCdaContract);
+            }
+            catch (ArgumentException)
+            {
+                throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_VALIDATE_CDA_PUBLISHED_CONTRACT_DENIED");
+            }
+        }
+        else if (operation.HasJsonBody)
+        {
+            Fse2Validation.ValidateJsonObject(inbound.RequestBody, operation.Operation);
+        }
         if (inbound.ResourceIdentifier is not null)
             _ = operation.Operation switch
             {

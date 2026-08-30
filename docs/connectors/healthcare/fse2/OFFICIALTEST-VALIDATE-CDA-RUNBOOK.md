@@ -14,6 +14,14 @@ emit `x5c` with exactly the S1 leaf certificate, and the `VERIFICA` request body
 `healthDataFormat=CDA` and `activity=VERIFICA` (no `mode` and no `attachment_hash`). This offline
 contract correction does not establish that an upstream HTTP 401 or 403 is resolved.
 
+The parity behavior is selected only from the exact server-owned Published identity:
+`fse2-officialtest-validate-cda@1.0.1`, Environment `OfficialTest`, operation `validate-cda`.
+Published `1.0.0` remains historical compatibility, is not contract-parity qualified, and retains
+`certificateHeader=chain` plus `mode=ATTACHMENT`. A differently named connector cannot inherit the
+`1.0.1` behavior, and an unknown version of the canonical Connector ID fails before signing, DNS or
+transport. The caller has no field that selects the Connector ID, version, environment or operation
+authority used by this decision.
+
 Stop unless three already-authorized role handoffs are available in separate authenticated Admin
 sessions: Security Administrator for binding and grant, Connector Editor for proposal, and a
 distinct Connector Approver for approval and publication. The same human must not perform both
@@ -145,6 +153,10 @@ exact version through the normal Security Administrator surface. After live use,
 release rollback decision; do not restore an older database or provider state manually. Provider
 resource disablement/rotation is a separate privileged operation and intentionally makes the
 Published resource stamp stale before signing, DNS and network.
+
+An upgrade publishes immutable `1.0.1`; a supported lifecycle rollback reactivates immutable
+`1.0.0`. Neither transition rewrites either version's effective wire contract: `1.0.1` remains
+leaf-only/two-field parity and `1.0.0` remains chain/historical-body compatibility.
 
 Evidence must be redacted and stored outside Git. Never retain raw Admin responses, provider
 configuration, JWTs, payloads, certificate chains, P12 material or session cookies.
