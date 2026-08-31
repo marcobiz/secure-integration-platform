@@ -16,6 +16,13 @@ internal static class Fse2OfficialIdentifierBounds
 /// <summary>Strict FSE2-only CX and XON formatting. This is not a general IHE framework.</summary>
 public static partial class Fse2IheFormatter
 {
+    public static string FormatSubjectCx(string subjectIdentifier, string assigningAuthorityOid)
+    {
+        string identifier = Fse2Validation.ValidateItalianSubjectIdentifier(subjectIdentifier);
+        string authority = Fse2Validation.ValidateOid(assigningAuthorityOid);
+        return $"{identifier}^^^&{authority}&ISO";
+    }
+
     public static string FormatOrganizationCx(string organizationIdentifier, string assigningAuthorityOid)
     {
         string identifier = Fse2Validation.ValidateItalianVatNumber(organizationIdentifier);
@@ -87,6 +94,17 @@ public static partial class Fse2Validation
         }
         if ((10 - (sum % 10)) % 10 != value[10] - '0') throw new ArgumentException("FSE2_ORGANIZATION_IDENTIFIER_CHECKSUM", nameof(value));
         return value;
+    }
+
+    public static string ValidateItalianSubjectIdentifier(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        return value.Length switch
+        {
+            11 => ValidateItalianVatNumber(value),
+            16 => ValidateItalianTaxIdentifier(value),
+            _ => throw new ArgumentException("FSE2_SUBJECT_IDENTIFIER_INVALID", nameof(value))
+        };
     }
 
     public static string ValidateItalianTaxIdentifier(string value)

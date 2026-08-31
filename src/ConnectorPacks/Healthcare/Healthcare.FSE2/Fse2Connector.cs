@@ -526,7 +526,7 @@ public static class Fse2ResponseMapper
                 Safe(root, "workflowInstanceId", Fse2OfficialIdentifierBounds.WorkflowInstanceIdMaximumLength, workflow: true),
                 Safe(root, "traceID", Fse2OfficialIdentifierBounds.TraceIdMaximumLength),
                 Safe(root, "spanID", Fse2OfficialIdentifierBounds.SpanIdMaximumLength),
-                Safe(root, "warning", 96), operation.RetryClass);
+                SafeWarning(root), operation.RetryClass);
         }
         catch (Fse2ConnectorException) { throw; }
         catch (Exception) { throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID"); }
@@ -667,5 +667,16 @@ public static class Fse2ResponseMapper
         if (name == "warning" && !Fse2Validation.IsSafeCode(text))
             throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
         return text;
+    }
+
+    private static string? SafeWarning(JsonElement root)
+    {
+        if (!root.TryGetProperty("warning", out JsonElement value) || value.ValueKind == JsonValueKind.Null) return null;
+        if (value.ValueKind != JsonValueKind.String)
+            throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
+        string text = value.GetString()!;
+        if (string.IsNullOrWhiteSpace(text) || text.Length > 512 || text.Any(char.IsControl))
+            throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
+        return "FSE2_UPSTREAM_WARNING";
     }
 }

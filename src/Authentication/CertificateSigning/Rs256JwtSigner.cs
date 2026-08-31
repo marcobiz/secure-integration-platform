@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using SecureIntegration.Providers.Abstractions;
 using SecureIntegration.Security;
@@ -206,7 +207,12 @@ public sealed class Rs256JwtSigner(
     private static byte[] BuildProtectedHeader(JwtCertificateHeaderMode mode, IReadOnlyList<byte[]> certificates)
     {
         using MemoryStream output = new();
-        using (Utf8JsonWriter writer = new(output))
+        using (Utf8JsonWriter writer = new(output, new JsonWriterOptions
+        {
+            // JWS x5c is standard Base64. Keep '+' '/' and '=' literal so strict
+            // receivers can decode the protected-header certificate directly.
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        }))
         {
             writer.WriteStartObject();
             writer.WriteString("alg", "RS256");

@@ -17,6 +17,23 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
     private static readonly JsonSerializerOptions EvidenceJson = new(JsonSerializerDefaults.Web);
 
     [Fact]
+    public void FSE2_OFFICIALTEST_plan_accepts_professional_subject_identifier()
+    {
+        Fse2OfficialTestProviderReference a1 = new("synthetic-provider", "officialtest-a1", "1", 1, 1);
+        Fse2OfficialTestProviderReference s1 = new("synthetic-provider", "officialtest-s1", "1", 1, 1);
+
+        Fse2OfficialTestOperationalPlan plan = Plan(
+            Guid.NewGuid(),
+            a1,
+            s1,
+            "PROVAX00X00X000Y",
+            "2.16.840.1.113883.2.9.4.3.2");
+
+        Assert.Equal("PROVAX00X00X000Y", plan.Organization.Identifier);
+        Assert.Equal("2.16.840.1.113883.2.9.4.3.2", plan.Organization.AssigningAuthorityOid);
+    }
+
+    [Fact]
     public void FSE2_EVIDENCE_reducer_retains_only_bounded_failure_diagnostics()
     {
         Guid correlationId = Guid.NewGuid();
@@ -418,7 +435,9 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
     private static Fse2OfficialTestOperationalPlan Plan(
         Guid environmentId,
         Fse2OfficialTestProviderReference a1,
-        Fse2OfficialTestProviderReference s1)
+        Fse2OfficialTestProviderReference s1,
+        string organizationIdentifier = "12345678903",
+        string organizationAssigningAuthorityOid = "2.16.840.1.113883.2.9.4.1.2")
     {
         string json = $$"""
             {
@@ -427,7 +446,7 @@ public sealed class Fse2OfficialTestProvisioningIntegrationTests
               "installationId":"33333333-3333-3333-3333-333333333333",
               "environmentId":"{{environmentId:D}}",
               "officialTestEndpoint":"https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1/",
-              "organization":{"identifier":"12345678903","assigningAuthorityOid":"2.16.840.1.113883.2.9.4.1.2","description":"Synthetic Organization","domainId":"synthetic-organization"},
+              "organization":{"identifier":"{{organizationIdentifier}}","assigningAuthorityOid":"{{organizationAssigningAuthorityOid}}","description":"Synthetic Organization","domainId":"synthetic-organization"},
               "locality":{"name":"Synthetic Locality","assigningAuthorityOid":"2.16.840.1.113883.2.9.4.1.2","code":"SYNTHETIC"},
               "a1":{"providerId":"{{a1.ProviderId}}","resourceId":"{{a1.ResourceId}}","version":"{{a1.Version}}","catalogRevision":{{a1.CatalogRevision}},"publicMetadataRevision":{{a1.PublicMetadataRevision}}},
               "s1":{"providerId":"{{s1.ProviderId}}","resourceId":"{{s1.ResourceId}}","version":"{{s1.Version}}","catalogRevision":{{s1.CatalogRevision}},"publicMetadataRevision":{{s1.PublicMetadataRevision}}},

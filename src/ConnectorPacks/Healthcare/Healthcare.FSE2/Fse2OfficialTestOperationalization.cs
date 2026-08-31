@@ -204,7 +204,7 @@ public static class Fse2OfficialTestOperationalization
                 installationId,
                 environmentId,
                 endpoint,
-                new(String(organization, "identifier", 11), String(organization, "assigningAuthorityOid", 128),
+                new(String(organization, "identifier", 16), String(organization, "assigningAuthorityOid", 128),
                     String(organization, "description", 128), String(organization, "domainId", 128)),
                 new(String(locality, "name", 128), String(locality, "assigningAuthorityOid", 128), String(locality, "code", 32)),
                 Provider(root, "a1"),

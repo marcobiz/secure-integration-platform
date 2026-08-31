@@ -72,6 +72,18 @@ public sealed class Fse2FoundationTests
         Assert.NotEqual(profile.SharedOrganizationProfileChecksumSha256, profile.OperationProfileChecksumSha256);
     }
 
+    [Fact]
+    public void FSE2_PROFILE_OfficialTest_professional_subject_builds_canonical_CX()
+    {
+        byte[] profileJson = Encoding.UTF8.GetBytes(ProfileText()
+            .Replace("12345678903", "PROVAX00X00X000Y", StringComparison.Ordinal)
+            .Replace("2.16.840.1.113883.2.9.4.1.2", "2.16.840.1.113883.2.9.4.3.2", StringComparison.Ordinal));
+
+        Fse2PublishedOrganizationProfile profile = Fse2PublishedOrganizationProfile.ParseJson(profileJson, "validate-cda");
+
+        Assert.Equal("PROVAX00X00X000Y^^^&2.16.840.1.113883.2.9.4.3.2&ISO", profile.SubjectCx);
+    }
+
     [Theory]
     [InlineData("\"subjectRole\":\"DAP\"", "\"subjectRole\":\"PATIENT\"")]
     [InlineData("\"environmentClass\":\"synthetic\"", "\"environmentClass\":\"invalid\"")]
@@ -547,7 +559,7 @@ public sealed class Fse2FoundationTests
     }
 
     [Fact]
-    public void FSE2_RESPONSE_invalid_warning_and_raw_response_are_not_exposed()
+    public void FSE2_RESPONSE_official_warning_is_collapsed_and_raw_response_is_not_exposed()
     {
         const string rawWarning = "raw warning canary";
         const string rawResponseCanary = "raw-response-canary";
@@ -557,15 +569,15 @@ public sealed class Fse2FoundationTests
             upstreamPayload = rawResponseCanary
         });
 
-        Fse2ConnectorException error = Assert.Throws<Fse2ConnectorException>(() => Fse2ResponseMapper.Map(
+        Fse2Response response = Fse2ResponseMapper.Map(
             new(200, "application/json", rawResponse),
             Guid.NewGuid(),
-            Fse2OperationCatalog.Get(Fse2Operation.ValidateCda)));
+            Fse2OperationCatalog.Get(Fse2Operation.ValidateCda));
 
-        Assert.Equal("FSE2_RESPONSE_INVALID", error.SafeCode);
-        Assert.DoesNotContain(rawWarning, error.ToString(), StringComparison.Ordinal);
-        Assert.DoesNotContain(rawResponseCanary, error.ToString(), StringComparison.Ordinal);
-        Assert.DoesNotContain(Encoding.UTF8.GetString(rawResponse), error.ToString(), StringComparison.Ordinal);
+        Assert.Equal("FSE2_UPSTREAM_WARNING", response.SafeWarning);
+        Assert.DoesNotContain(rawWarning, response.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(rawResponseCanary, response.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(Encoding.UTF8.GetString(rawResponse), response.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

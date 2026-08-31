@@ -13,6 +13,24 @@ public sealed class JwtX509ExtensionSecurityTests
 {
     private static readonly DateTimeOffset Now = new(2026, 8, 8, 10, 0, 0, TimeSpan.Zero);
 
+    [Fact]
+    public void Wave1_x5c_protected_header_preserves_standard_base64_characters()
+    {
+        MethodInfo buildHeader = typeof(Rs256JwtSigner).GetMethod(
+            "BuildProtectedHeader",
+            BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("BuildProtectedHeader not found.");
+        byte[] certificateBytes = [0xfb, 0xef, 0xff];
+
+        byte[] encoded = Assert.IsType<byte[]>(buildHeader.Invoke(
+            null,
+            [JwtCertificateHeaderMode.Leaf, new byte[][] { certificateBytes }]));
+
+        Assert.Equal("{\"alg\":\"RS256\",\"typ\":\"JWT\",\"x5c\":[\"++//\"]}", Encoding.UTF8.GetString(encoded));
+        Assert.DoesNotContain("\\u002B", Encoding.UTF8.GetString(encoded), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\\u002F", Encoding.UTF8.GetString(encoded), StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData(JwtCertificateHeaderMode.Leaf, 1)]
     [InlineData(JwtCertificateHeaderMode.Chain, 2)]

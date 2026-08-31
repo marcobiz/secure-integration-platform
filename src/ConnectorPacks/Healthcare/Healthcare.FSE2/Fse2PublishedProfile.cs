@@ -103,7 +103,7 @@ public sealed class Fse2PublishedOrganizationProfile
                 operation.Availability != Fse2OperationAvailability.ProductionAvailable)
                 throw new JsonException();
 
-            string organizationIdentifier = Fse2Validation.ValidateItalianVatNumber(RequiredString(root, "organizationIdentifier", 11));
+            string organizationIdentifier = Fse2Validation.ValidateItalianSubjectIdentifier(RequiredString(root, "organizationIdentifier", 16));
             string organizationAuthority = Fse2Validation.ValidateOid(RequiredString(root, "organizationAssigningAuthorityOid", 128));
             string organizationDescription = Fse2Validation.ValidateOrganizationName(RequiredString(root, "organizationDescription", 128));
             string organizationDomainId = SafeIdentifier(RequiredString(root, "organizationDomainId", 128));
@@ -133,7 +133,7 @@ public sealed class Fse2PublishedOrganizationProfile
                 LocalityCode = localityCode,
                 Locality = locality,
                 SubjectRole = role,
-                SubjectCx = Fse2IheFormatter.FormatOrganizationCx(organizationIdentifier, organizationAuthority),
+                SubjectCx = Fse2IheFormatter.FormatSubjectCx(organizationIdentifier, organizationAuthority),
                 ApplicationId = SafeApplicationValue(RequiredString(root, "applicationId", 128)),
                 ApplicationVendor = SafeApplicationValue(RequiredString(root, "applicationVendor", 128)),
                 ApplicationVersion = SafeApplicationValue(RequiredString(root, "applicationVersion", 128)),
