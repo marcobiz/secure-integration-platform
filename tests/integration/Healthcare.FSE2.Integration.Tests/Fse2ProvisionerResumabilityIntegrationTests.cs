@@ -414,7 +414,7 @@ public sealed class Fse2ProvisionerResumabilityIntegrationTests
                 return Value(new { items, total = items.Length, offset = 0, limit = 100 });
             }
             if (relative == VersionPath() + "/approval-review")
-                return Value(new { digestSha256 = ApprovalDigest, artifact = new { operations = new[] { new { operationId = Fse2OfficialTestCanonicalDefinition.OperationId } } } });
+                return Value(new { digestSha256 = ApprovalDigest, artifact = new { operations = new[] { new { operationId = Fse2OfficialTestCanonicalDefinition.OperationId, environment = plan.EnvironmentId.ToString("D") } } } });
             if (relative == VersionPath() + "/approvals?offset=0&limit=100")
             {
                 object[] items = State < SimulatedProvisioningState.Requested ? [] : [new

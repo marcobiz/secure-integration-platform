@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Security.Claims;
@@ -24,6 +25,18 @@ internal readonly record struct AdminRateLimitPartitionKey(
     AdminRateLimitPrincipalKind PrincipalKind,
     string Identity);
 
+internal readonly record struct AdminRateLimitObservation(
+    long Sequence,
+    long LimiterInstanceId,
+    long WindowGeneration,
+    AdminRateLimitPartitionKey Partition,
+    bool Acquired);
+
+internal interface IAdminRateLimitObserver
+{
+    void Observe(AdminRateLimitObservation observation);
+}
+
 internal static class AdminRateLimiting
 {
     internal const int AuthPermitLimit = 60;
@@ -45,11 +58,15 @@ internal static class AdminRateLimiting
     internal static PartitionedRateLimiter<HttpContext> CreateGlobalLimiter(string oidcCallbackPath) =>
         CreateGlobalLimiter(AuthPermitLimit, ApiPermitLimit, Window, oidcCallbackPath);
 
+    internal static PartitionedRateLimiter<HttpContext> CreateGlobalLimiter(IAdminRateLimitObserver observer) =>
+        CreateGlobalLimiter(AuthPermitLimit, ApiPermitLimit, Window, DefaultOidcCallbackPath, observer);
+
     internal static PartitionedRateLimiter<HttpContext> CreateGlobalLimiter(
         int authPermitLimit,
         int apiPermitLimit,
         TimeSpan window,
-        string oidcCallbackPath = DefaultOidcCallbackPath)
+        string oidcCallbackPath = DefaultOidcCallbackPath,
+        IAdminRateLimitObserver? observer = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(authPermitLimit);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(apiPermitLimit);
@@ -57,7 +74,7 @@ internal static class AdminRateLimiting
         if (string.IsNullOrWhiteSpace(oidcCallbackPath) || oidcCallbackPath[0] != '/')
             throw new ArgumentException("OIDC callback path must be absolute.", nameof(oidcCallbackPath));
 
-        return PartitionedRateLimiter.Create<HttpContext, AdminRateLimitPartitionKey>(context =>
+        PartitionedRateLimiter<HttpContext> limiter = PartitionedRateLimiter.Create<HttpContext, AdminRateLimitPartitionKey>(context =>
         {
             AdminRateLimitPartitionKey key = GetPartitionKey(context, oidcCallbackPath);
             if (context.Items.ContainsKey(PreAuthenticationCallbackLeaseItem))
@@ -69,6 +86,7 @@ internal static class AdminRateLimiting
                 key,
                 _ => CreateFixedWindowOptions(permitLimit, window));
         });
+        return observer is null ? limiter : new ObservingAdminRateLimiter(limiter, observer, window);
     }
 
     internal static AdminRateLimitPartitionKey GetPartitionKey(
@@ -214,4 +232,58 @@ internal static class AdminRateLimiting
         QueueLimit = QueueLimit,
         AutoReplenishment = AutoReplenishment
     };
+
+    private sealed class ObservingAdminRateLimiter(
+        PartitionedRateLimiter<HttpContext> inner,
+        IAdminRateLimitObserver observer,
+        TimeSpan window) : PartitionedRateLimiter<HttpContext>
+    {
+        private static long nextInstanceId;
+        private readonly long instanceId = Interlocked.Increment(ref nextInstanceId);
+        private readonly long startedTimestamp = Stopwatch.GetTimestamp();
+        private long sequence;
+
+        public override RateLimiterStatistics? GetStatistics(HttpContext resource) => inner.GetStatistics(resource);
+
+        protected override RateLimitLease AttemptAcquireCore(HttpContext resource, int permitCount)
+        {
+            RateLimitLease lease = inner.AttemptAcquire(resource, permitCount);
+            Observe(resource, lease);
+            return lease;
+        }
+
+        protected override async ValueTask<RateLimitLease> AcquireAsyncCore(HttpContext resource, int permitCount, CancellationToken cancellationToken)
+        {
+            RateLimitLease lease = await inner.AcquireAsync(resource, permitCount, cancellationToken).ConfigureAwait(false);
+            Observe(resource, lease);
+            return lease;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) inner.Dispose();
+            base.Dispose(disposing);
+        }
+
+        protected override async ValueTask DisposeAsyncCore()
+        {
+            await inner.DisposeAsync().ConfigureAwait(false);
+            await base.DisposeAsyncCore().ConfigureAwait(false);
+        }
+
+        private void Observe(HttpContext context, RateLimitLease lease)
+        {
+            // The middleware's post-callback no-limiter pass is not a lease from the
+            // configured fixed-window limiter; the explicit callback acquisition was
+            // already observed before this marker was installed.
+            if (context.Items.ContainsKey(PreAuthenticationCallbackLeaseItem)) return;
+            long generation = Stopwatch.GetElapsedTime(startedTimestamp).Ticks / window.Ticks;
+            observer.Observe(new(
+                Interlocked.Increment(ref sequence),
+                instanceId,
+                generation,
+                GetPartitionKey(context),
+                lease.IsAcquired));
+        }
+    }
 }

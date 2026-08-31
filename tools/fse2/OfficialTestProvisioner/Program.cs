@@ -444,7 +444,7 @@ internal static class Program
                     throw new ConnectorProvisioningIdentityDriftException();
                 approvalRequestId = RequiredGuid(approval, "id");
                 approvalStatus = approval.GetProperty("status").GetString();
-                review = await ReadReviewAsync(api).ConfigureAwait(false);
+                review = await ReadReviewAsync(api, context.EffectivePlan.EnvironmentId).ConfigureAwait(false);
                 if (!string.Equals(approval.GetProperty("bindingDigestSha256").GetString(), review.DigestSha256, StringComparison.Ordinal))
                     throw new ConnectorProvisioningIdentityDriftException();
                 completed.Add(ConnectorProvisioningPhase.Proposal);
@@ -571,13 +571,18 @@ internal static class Program
             throw Failure($"FSE2_OFFICIALTEST_{role}_REVISION_DRIFT");
     }
 
-    private static async Task<ApprovalReviewResult> ReadReviewAsync(IOfficialTestAdminApi api)
+    private static async Task<ApprovalReviewResult> ReadReviewAsync(IOfficialTestAdminApi api, Guid environmentId)
     {
         string path = VersionPath() + "/approval-review";
         JsonElement value = await api.GetAsync(path).ConfigureAwait(false);
         ApprovalReviewResult? review = value.Deserialize<ApprovalReviewResult>(Json);
-        if (review is null || !IsSha256(review.DigestSha256) || review.Artifact.Operations.Count != 1 ||
-            review.Artifact.Operations[0].OperationId != Fse2OfficialTestCanonicalDefinition.OperationId)
+        if (review is null || !IsSha256(review.DigestSha256) || review.Artifact.Operations.Count == 0)
+            throw Failure("FSE2_OFFICIALTEST_APPROVAL_REVIEW_INVALID");
+        ApprovalOperationReview[] matching = review.Artifact.Operations.Where(operation =>
+            string.Equals(operation.Environment, environmentId.ToString("D"), StringComparison.Ordinal) &&
+            string.Equals(operation.OperationId, Fse2OfficialTestCanonicalDefinition.OperationId, StringComparison.Ordinal)).ToArray();
+        if (matching.Length != 1 || review.Artifact.Operations.Any(operation =>
+            !string.Equals(operation.OperationId, Fse2OfficialTestCanonicalDefinition.OperationId, StringComparison.Ordinal)))
             throw Failure("FSE2_OFFICIALTEST_APPROVAL_REVIEW_INVALID");
         return review;
     }

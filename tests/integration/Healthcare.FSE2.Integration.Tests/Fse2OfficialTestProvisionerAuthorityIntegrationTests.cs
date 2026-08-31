@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using SecureIntegration.Gateway.Api;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Integration.Tests;
@@ -26,7 +27,7 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
     private static readonly JsonSerializerOptions WireJson = CreateWireJson();
     private static readonly string[] ProviderAuthorities = ["a1", "s1"];
     private static readonly string[] SupportedDualOnboardingComponents =
-        ["Gateway.Migrations", "M3 Provisioner", "enrollment challenge/activate", "Gateway host", "Admin API"];
+        ["PostgreSQL 18", "Gateway.Migrations", "M3 Provisioner", "enrollment challenge/activate", "Gateway host", "Admin API", "OfficialTestProvisioner plan/apply/verify"];
     private static readonly object DualOnboardingGateLock = new();
     private static Task<DualOnboardingResult>? dualOnboardingGate;
 
@@ -295,6 +296,38 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
     }
 
     [Fact]
+    public async Task ADMIN_RATE_LIMIT_dual_onboarding_counts_are_observed_from_real_leases()
+    {
+        DualOnboardingResult result = await DualOnboardingGateAsync();
+
+        Assert.Equal(12, result.TotalAuthRequests);
+        Assert.Equal(12, result.AuthAllowedCount);
+        Assert.Equal(0, result.AuthRejectedCount);
+        Assert.Equal(3, result.ApiRequestsPerSubject.Count);
+        Assert.All(result.ApiRequestsPerSubject.Values, value => Assert.InRange(value, 1, 599));
+    }
+
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_dual_onboarding_observes_one_remote_ip_partition()
+    {
+        DualOnboardingResult result = await DualOnboardingGateAsync();
+
+        Assert.Equal(1, result.RemoteIpPartitionCount);
+        Assert.Equal(24, result.RemoteIpPartitionFingerprint.Length);
+    }
+
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_dual_onboarding_observes_one_limiter_and_one_window()
+    {
+        DualOnboardingResult result = await DualOnboardingGateAsync();
+
+        Assert.Equal(1, result.LimiterInstanceCount);
+        Assert.Equal(1, result.WindowGenerationCount);
+        Assert.Equal(0, result.WindowResetCount);
+        Assert.Equal(0, result.WindowRolloverCount);
+    }
+
+    [Fact]
     public async Task ADMIN_RATE_LIMIT_dual_onboarding_uses_supported_bootstrap_without_internal_store_setup()
     {
         DualOnboardingResult result = await DualOnboardingGateAsync();
@@ -321,7 +354,33 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         Assert.NotEqual(result.Workflow1.InstallationFingerprint, result.Workflow2.InstallationFingerprint);
         Assert.NotEqual(result.Workflow1.EnvironmentFingerprint, result.Workflow2.EnvironmentFingerprint);
         Assert.NotEqual(result.Workflow1.PublishedStateFingerprint, result.Workflow2.PublishedStateFingerprint);
-        Assert.NotEqual(result.Workflow1.ConnectorId, result.Workflow2.ConnectorId);
+        Assert.Equal(Fse2OfficialTestCanonicalDefinition.ConnectorId, result.Workflow1.ConnectorId);
+        Assert.Equal(Fse2OfficialTestCanonicalDefinition.ConnectorId, result.Workflow2.ConnectorId);
+    }
+
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_dual_same_NAT_onboarding_uses_real_provisioner_plan_apply_verify()
+    {
+        DualOnboardingResult result = await DualOnboardingGateAsync();
+
+        Assert.True(result.Workflow1.ProvisionerPlan);
+        Assert.True(result.Workflow1.ProvisionerApply);
+        Assert.True(result.Workflow1.ProvisionerVerify);
+        Assert.True(result.Workflow2.ProvisionerPlan);
+        Assert.True(result.Workflow2.ProvisionerApply);
+        Assert.True(result.Workflow2.ProvisionerVerify);
+        Assert.False(result.DirectAdminApiGoldenPath);
+    }
+
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_second_workflow_is_distinct_and_not_a_published_noop()
+    {
+        DualOnboardingResult result = await DualOnboardingGateAsync();
+
+        Assert.NotEqual(result.Workflow1.InstallationFingerprint, result.Workflow2.InstallationFingerprint);
+        Assert.NotEqual(result.Workflow1.EnvironmentFingerprint, result.Workflow2.EnvironmentFingerprint);
+        Assert.NotEqual(result.Workflow1.BindingChecksumFingerprint, result.Workflow2.BindingChecksumFingerprint);
+        Assert.True(result.Workflow2.ApplyCreatedDistinctBindingAndGrant);
     }
 
     [Fact]
@@ -440,13 +499,13 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         Dictionary<string, string> fixture = ReadEnvironmentFile(Path.Combine(rawRoot, "m3a.env"));
         byte[] evidenceKey = RandomNumberGenerator.GetBytes(32);
 
+        BoundedAdminRateLimitTestProbe limiterObserver = new();
         await using ProvisionerAdminFactory factory = new(
             database.AdminConnectionString,
             database.AdminConnectionString,
-            RequiredFixture(fixture, "M3_ACTIVATION_HMAC_BASE64"));
+            RequiredFixture(fixture, "M3_ACTIVATION_HMAC_BASE64"),
+            limiterObserver);
         object gateway = factory.Server;
-        object limiter = factory.Services.GetRequiredService<IOptions<RateLimiterOptions>>().Value.GlobalLimiter
-            ?? throw new InvalidOperationException("DUAL_ONBOARDING_GLOBAL_LIMITER_MISSING");
         Stopwatch sameWindow = Stopwatch.StartNew();
 
         using DualAdminSession workflow1Security = await DualAdminSession.LoginAsync(
@@ -477,18 +536,17 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         using DualAdminSession workflow1Approver = await DualAdminSession.LoginAsync(factory, 1, "approver", evidenceKey, cancellationToken);
         await AssertProviderBootstrapAsync(workflow1Security, workflow1EnvironmentId, root1);
 
-        DualWorkflowResult workflow1 = await RunSupportedAdminWorkflowAsync(
-            workflow: 1,
-            connectorId: root1.GetProperty("connectorId").GetString()!,
-            targetVersion: "1.0.0",
+        Fse2OfficialTestOperationalPlan plan1 = Plan(
+            root1.GetProperty("tenantId").GetGuid(),
             workflow1InstallationId,
             workflow1EnvironmentId,
-            root1.GetProperty("bindingSecret").GetProperty("resourceId").GetString()!,
-            root1.GetProperty("a1").GetProperty("resourceId").GetString()!,
+            ProviderReference(root1.GetProperty("a1")),
+            ProviderReference(root1.GetProperty("s1")));
+        PreparedOfficialTestWorkflow prepared1 = await PrepareOfficialTestWorkflowAsync(
+            workflow: 1,
+            plan1,
             workflow1Security,
             workflow1Editor,
-            workflow1Approver,
-            evidenceKey,
             cancellationToken);
 
         using JsonDocument provisioning2 = await RunIndependentM3BootstrapAsync(
@@ -510,19 +568,29 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         using DualAdminSession workflow2Approver = await DualAdminSession.LoginAsync(factory, 2, "approver", evidenceKey, cancellationToken);
         await AssertProviderBootstrapAsync(workflow2Security, workflow2EnvironmentId, root2);
 
-        DualWorkflowResult workflow2 = await RunSupportedAdminWorkflowAsync(
-            workflow: 2,
-            connectorId: root2.GetProperty("connectorId").GetString()!,
-            targetVersion: "1.0.0",
+        Fse2OfficialTestOperationalPlan plan2 = Plan(
+            root2.GetProperty("tenantId").GetGuid(),
             workflow2InstallationId,
             workflow2EnvironmentId,
-            root2.GetProperty("bindingSecret").GetProperty("resourceId").GetString()!,
-            root2.GetProperty("a1").GetProperty("resourceId").GetString()!,
+            ProviderReference(root2.GetProperty("a1")),
+            ProviderReference(root2.GetProperty("s1")));
+        PreparedOfficialTestWorkflow prepared2 = await PrepareOfficialTestWorkflowAsync(
+            workflow: 2,
+            plan2,
             workflow2Security,
             workflow2Editor,
-            workflow2Approver,
-            evidenceKey,
             cancellationToken);
+
+        ProvisionerProgram.ProvisioningContext approvalContext = await ProvisionerProgram.PreflightAsync(workflow2Approver, plan2);
+        await ProvisionerProgram.ApproveAsync(workflow2Approver, approvalContext, prepared2.ApprovalRequestId, prepared2.ApprovalDigestSha256);
+        approvalContext = await ProvisionerProgram.PreflightAsync(workflow2Approver, plan2);
+        await ProvisionerProgram.PublishAsync(workflow2Approver, approvalContext, expectedPublicationRevision: 0);
+        ProvisionerProgram.ProvisioningContext verification1Context = await ProvisionerProgram.PreflightAsync(workflow1Approver, plan1);
+        ProvisionerProgram.ServerVerification verification1 = await ProvisionerProgram.VerifyServerAsync(workflow1Approver, verification1Context, "Published", "Active");
+        ProvisionerProgram.ProvisioningContext verification2Context = await ProvisionerProgram.PreflightAsync(workflow2Approver, plan2);
+        ProvisionerProgram.ServerVerification verification2 = await ProvisionerProgram.VerifyServerAsync(workflow2Approver, verification2Context, "Published", "Active");
+        DualWorkflowResult workflow1 = WorkflowResult(prepared1, verification1, evidenceKey);
+        DualWorkflowResult workflow2 = WorkflowResult(prepared2, verification2, evidenceKey);
 
         sameWindow.Stop();
         DualAdminSession[] sessions =
@@ -531,20 +599,42 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             workflow2Security, workflow2Editor, workflow2Approver
         ];
         DualSessionEvidence[] sessionEvidence = sessions.Select(value => value.Evidence()).ToArray();
-        int totalAuthRequests = sessionEvidence.Sum(value => value.AuthRequestCount);
-        int totalRateLimitRejections = sessionEvidence.Sum(value => value.RateLimitRejectionCount);
-        Dictionary<string, int> apiRequestsPerSubject = sessionEvidence
-            .GroupBy(value => value.Role, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.Sum(value => value.ApiRequestCount), StringComparer.Ordinal);
+        AdminRateLimitTestObservation[] observations = limiterObserver.Snapshot();
+        AdminRateLimitTestObservation[] authObservations = observations
+            .Where(value => value.PolicyClass == AdminRateLimitTestPolicyClass.Auth)
+            .ToArray();
+        int totalAuthRequests = authObservations.Length;
+        int authAllowedCount = authObservations.Count(value => value.Acquired);
+        int authRejectedCount = authObservations.Length - authAllowedCount;
+        int totalRateLimitRejections = observations.Count(value => !value.Acquired);
+        Dictionary<string, int> apiRequestsPerSubject = observations
+            .Where(value => value.PolicyClass == AdminRateLimitTestPolicyClass.Api && value.PrincipalKind == AdminRateLimitTestPrincipalKind.AuthenticatedSubject)
+            .GroupBy(value => Fingerprint(evidenceKey, "rate-limit-subject", value.Identity), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        string[] remoteIpPartitions = authObservations
+            .Where(value => value.PrincipalKind == AdminRateLimitTestPrincipalKind.RemoteIp)
+            .Select(value => value.Identity)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        long[] windowGenerations = observations.Select(value => value.WindowGeneration).Distinct().Order().ToArray();
+        int windowResetCount = observations.OrderBy(value => value.Sequence)
+            .Zip(observations.OrderBy(value => value.Sequence).Skip(1), (left, right) => right.WindowGeneration < left.WindowGeneration)
+            .Count(value => value);
         Dictionary<string, int> requestCountsByEndpoint = sessionEvidence
             .SelectMany(value => value.RequestCountsByEndpoint)
             .GroupBy(value => value.Key, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Sum(value => value.Value), StringComparer.Ordinal);
         bool sameGateway = ReferenceEquals(gateway, factory.Server);
-        bool sameLimiter = ReferenceEquals(limiter, factory.Services.GetRequiredService<IOptions<RateLimiterOptions>>().Value.GlobalLimiter);
-        bool sameFixedWindow = sameWindow.Elapsed < TimeSpan.FromSeconds(60);
+        int limiterInstanceCount = observations.Select(value => value.LimiterInstanceId).Distinct().Count();
+        bool sameLimiter = limiterInstanceCount == 1;
+        bool sameFixedWindow = windowGenerations.Length == 1;
 
         Assert.Equal(12, totalAuthRequests);
+        Assert.Equal(12, authAllowedCount);
+        Assert.Equal(0, authRejectedCount);
+        Assert.Single(remoteIpPartitions);
+        Assert.Equal(1, limiterInstanceCount);
+        Assert.Single(windowGenerations);
         Assert.Equal(0, totalRateLimitRejections);
         Assert.Equal(6, sessionEvidence.Select(value => value.CookieJarFingerprint).Distinct(StringComparer.Ordinal).Count());
         Assert.All(sessionEvidence, value => Assert.Equal(1, value.LoginCount));
@@ -560,14 +650,20 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             Workflow2Sessions: sessionEvidence.Where(value => value.Workflow == 2).ToArray(),
             AllSessions: sessionEvidence,
             TotalAuthRequests: totalAuthRequests,
+            AuthAllowedCount: authAllowedCount,
+            AuthRejectedCount: authRejectedCount,
             ApiRequestsPerSubject: apiRequestsPerSubject,
+            RemoteIpPartitionCount: remoteIpPartitions.Length,
+            RemoteIpPartitionFingerprint: Fingerprint(evidenceKey, "rate-limit-remote-ip", Assert.Single(remoteIpPartitions)),
+            LimiterInstanceCount: limiterInstanceCount,
+            WindowGenerationCount: windowGenerations.Length,
             TotalRateLimitRejections: totalRateLimitRejections,
             RequestCountsByEndpoint: requestCountsByEndpoint,
             SameGateway: sameGateway,
             SameLimiter: sameLimiter,
             SameFixedWindow: sameFixedWindow,
-            WindowResetCount: 0,
-            WindowRolloverCount: sameFixedWindow ? 0 : 1,
+            WindowResetCount: windowResetCount,
+            WindowRolloverCount: Math.Max(0, windowGenerations.Length - 1),
             Elapsed: sameWindow.Elapsed,
             InitialAdminInventoryEmpty: true,
             MigrationsAppliedBySupportedEntrypoint: true,
@@ -577,12 +673,13 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             ManualWaitRequired: false,
             ReloginRequired: false,
             SupportInterventionRequired: false,
-            HiddenRetryCount: 0);
+            HiddenRetryCount: 0,
+            DirectAdminApiGoldenPath: false);
 
         TestContext.Current.TestOutputHelper?.WriteLine(
             "DUAL_INDEPENDENT_SAME_NAT_COUNTS " + JsonSerializer.Serialize(new
             {
-                previousDualOnboardingAttestation = "INVALIDATED_NON_PROBATIVE_SHARED_SESSIONS_AND_INTERNAL_BOOTSTRAP",
+                previousSameNatSupplementStatus = "INVALIDATED_TELEMETRY_AND_PROVISIONER_PATH_NOT_PROBATIVE",
                 initialAdminInventory = "EMPTY",
                 supportedComponents = SupportedDualOnboardingComponents,
                 workflow1 = WorkflowEvidence(workflow1, result.Workflow1Sessions),
@@ -591,12 +688,17 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
                 distinctCookieJarCount = result.AllSessions.Select(value => value.CookieJarFingerprint).Distinct(StringComparer.Ordinal).Count(),
                 totalLoginCount = result.AllSessions.Sum(value => value.LoginCount),
                 totalAuthRequestCount = result.TotalAuthRequests,
+                authAllowedCount = result.AuthAllowedCount,
+                authRejectedCount = result.AuthRejectedCount,
                 totalApiRequestCountPerSubject = result.ApiRequestsPerSubject,
                 total429Count = result.TotalRateLimitRejections,
                 requestCountsByEndpoint = result.RequestCountsByEndpoint,
                 sameGateway = result.SameGateway,
                 sameLimiter = result.SameLimiter,
-                sameRemoteIp = true,
+                remoteIpPartitionCount = result.RemoteIpPartitionCount,
+                remoteIpPartitionHmac = result.RemoteIpPartitionFingerprint,
+                limiterInstanceCount = result.LimiterInstanceCount,
+                windowGenerationCount = result.WindowGenerationCount,
                 sameFixedWindow = result.SameFixedWindow,
                 windowResetCount = result.WindowResetCount,
                 windowRolloverCount = result.WindowRolloverCount,
@@ -606,7 +708,8 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
                 supportInterventionRequired = result.SupportInterventionRequired,
                 hiddenRetryCount = result.HiddenRetryCount,
                 directSqlSetup = false,
-                internalStoreSetup = false
+                internalStoreSetup = false,
+                directAdminApiGoldenPath = result.DirectAdminApiGoldenPath
             }, WireJson));
         return result;
     }
@@ -618,16 +721,20 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         workflow.InstallationFingerprint,
         workflow.EnvironmentFingerprint,
         workflow.PublishedStateFingerprint,
+        workflow.BindingChecksumFingerprint,
         workflow.ConfigurationState,
         workflow.SelfApprovalDenied,
         workflow.ProposerPublishDenied,
+        workflow.ProvisionerPlan,
+        workflow.ProvisionerApply,
+        workflow.ProvisionerVerify,
+        workflow.ApplyCreatedDistinctBindingAndGrant,
         sessionContexts = sessions.Select(value => new
         {
             value.SessionLabel,
             value.Role,
             value.CookieJarFingerprint,
             value.LoginCount,
-            value.AuthRequestCount,
             value.ApiRequestCount,
             value.RateLimitRejectionCount,
             value.RequestCountsByEndpoint
@@ -692,160 +799,70 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         }
     }
 
-    private static async Task<DualWorkflowResult> RunSupportedAdminWorkflowAsync(
+    private static async Task<PreparedOfficialTestWorkflow> PrepareOfficialTestWorkflowAsync(
         int workflow,
-        string connectorId,
-        string targetVersion,
-        Guid installationId,
-        Guid environmentId,
-        string secretResourceId,
-        string certificateResourceId,
+        Fse2OfficialTestOperationalPlan plan,
         DualAdminSession securityAdministrator,
         DualAdminSession editor,
-        DualAdminSession approver,
-        byte[] evidenceKey,
         CancellationToken cancellationToken)
     {
-        JsonElement connectorPage = await editor.GetAsync("admin/api/v1/connectors?offset=0&limit=100");
-        JsonElement emptyConnector = Assert.Single(
-            connectorPage.GetProperty("items").EnumerateArray(),
-            item => string.Equals(item.GetProperty("connectorId").GetString(), connectorId, StringComparison.Ordinal));
-        Assert.Equal(0, emptyConnector.GetProperty("versions").GetInt32());
-        Assert.Equal(JsonValueKind.Null, emptyConnector.GetProperty("publishedVersion").ValueKind);
-        Assert.Equal(0, emptyConnector.GetProperty("publicationRevision").GetInt64());
-        const long expectedPublicationRevision = 0;
-
-        JsonElement storedDefinition = await editor.GetAsync("admin/api/v1/connectors/sample");
-        JsonObject definitionNode = JsonNode.Parse(storedDefinition.GetRawText())?.AsObject()
-            ?? throw new InvalidOperationException("DUAL_ONBOARDING_DEFINITION_INVALID");
-        definitionNode["connectorId"] = connectorId;
-        definitionNode["version"] = targetVersion;
-        JsonElement definition = JsonSerializer.SerializeToElement(definitionNode, WireJson);
-
-        JsonElement validation = await editor.MutateAsync(
-            HttpMethod.Post,
-            "admin/api/v1/connectors:validate",
-            new ConnectorImportRequest(definition));
-        JsonElement draft = await editor.MutateAsync(
-            HttpMethod.Post,
-            "admin/api/v1/connectors:import",
-            new ConnectorImportRequest(definition, validation.GetProperty("checksumSha256").GetString()));
-        long draftRowVersion = draft.GetProperty("rowVersion").GetInt64();
-        JsonElement validated = await editor.MutateAsync(
-            HttpMethod.Post,
-            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}:validate",
-            body: null,
-            ifMatch: draftRowVersion);
-        long validatedRowVersion = validated.GetProperty("rowVersion").GetInt64();
-
-        JsonElement providerPage = await securityAdministrator.GetAsync(
-            $"admin/api/v1/provider-resources?environmentId={environmentId:D}&offset=0&limit=100");
-        JsonElement[] providerResources = providerPage.GetProperty("items").EnumerateArray().ToArray();
-        ConnectorBindingRequest binding = new(
-            environmentId,
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["sample-vendor-endpoint"] = "https://vendor.m3.test:8443/"
-            },
-            new Dictionary<string, ProviderResourceReference>(StringComparer.Ordinal)
-            {
-                ["sample-vendor-api-key"] = CatalogReference(providerResources, secretResourceId, ProviderResourceType.Secret)
-            },
-            CertificateResources: new Dictionary<string, ProviderResourceReference>(StringComparer.Ordinal)
-            {
-                ["sample-vendor-client-certificate"] = CatalogReference(providerResources, certificateResourceId, ProviderResourceType.ClientCertificate)
-            },
-            ConnectorVersion: targetVersion);
-        _ = await securityAdministrator.MutateAsync(
-            HttpMethod.Put,
-            $"admin/api/v1/connectors/{connectorId}/bindings",
-            binding);
-
-        JsonElement approvalRequest = await editor.MutateAsync(
-            HttpMethod.Post,
-            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}/approval-requests",
-            body: null);
-        JsonElement review = await editor.GetAsync(
-            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}/approval-review");
-        object approvalBody = new
-        {
-            approvalRequestId = approvalRequest.GetProperty("id").GetGuid(),
-            expectedDigestSha256 = review.GetProperty("digestSha256").GetString()
-        };
-
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = Fse2OfficialTestOperationalization.Plan(plan);
+        ProvisionerProgram.ProvisioningContext applyContext = await ProvisionerProgram.PreflightAsync(securityAdministrator, plan);
+        await ProvisionerProgram.ConfigureAsync(securityAdministrator, applyContext);
+        applyContext = await ProvisionerProgram.PreflightAsync(securityAdministrator, plan);
+        await ProvisionerProgram.GrantAsync(securityAdministrator, applyContext);
+        ProvisionerProgram.ProvisioningContext proposalContext = await ProvisionerProgram.PreflightAsync(editor, plan);
+        await ProvisionerProgram.ProposeAsync(editor, proposalContext);
+        ProvisionerProgram.DiscoveredProvisioningState discovered = await ProvisionerProgram.DiscoverProvisioningStateAsync(editor, proposalContext);
+        Guid approvalRequestId = discovered.ApprovalRequestId
+            ?? throw new InvalidOperationException("DUAL_ONBOARDING_APPROVAL_REQUEST_MISSING");
+        string approvalDigest = discovered.ApprovalDigestSha256
+            ?? throw new InvalidOperationException("DUAL_ONBOARDING_APPROVAL_DIGEST_MISSING");
+        object approvalBody = new { approvalRequestId, expectedDigestSha256 = approvalDigest };
         using HttpResponseMessage selfApproval = await editor.SendMutationAsync(
             HttpMethod.Post,
-            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}/approvals",
+            VersionPath() + "/approvals",
             approvalBody);
         bool selfApprovalDenied = selfApproval.StatusCode == System.Net.HttpStatusCode.Forbidden;
         Assert.True(selfApprovalDenied);
-
-        object publishBody = new
-        {
-            expectedRowVersion = validatedRowVersion,
-            expectedPublicationRevision
-        };
+        object publishBody = new { expectedRowVersion = discovered.VersionRowVersion, expectedPublicationRevision = 0 };
         using HttpResponseMessage proposerPublish = await editor.SendMutationAsync(
             HttpMethod.Post,
-            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}:publish",
+            VersionPath() + ":publish",
             publishBody,
-            ifMatch: validatedRowVersion);
+            discovered.VersionRowVersion);
         bool proposerPublishDenied = proposerPublish.StatusCode == System.Net.HttpStatusCode.Forbidden;
         Assert.True(proposerPublishDenied);
+        return new(workflow, plan, approvalRequestId, approvalDigest, selfApprovalDenied, proposerPublishDenied);
+    }
 
-        _ = await approver.MutateAsync(
-            HttpMethod.Post,
-            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}/approvals",
-            approvalBody);
-        _ = await approver.MutateAsync(
-            HttpMethod.Post,
-            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}:publish",
-            publishBody,
-            ifMatch: validatedRowVersion);
-
-        JsonElement finalVersion = await approver.GetAsync(
-            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}");
-        JsonElement finalBindings = await approver.GetAsync(
-            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}/bindings?environmentId={environmentId:D}&offset=0&limit=10");
-        JsonElement finalBinding = Assert.Single(finalBindings.GetProperty("items").EnumerateArray().ToArray());
-        string configurationState = finalVersion.GetProperty("state").GetString() + "/" +
-            finalBinding.GetProperty("state").GetString();
-        Assert.Equal("Published/Active", configurationState);
-
+    private static DualWorkflowResult WorkflowResult(
+        PreparedOfficialTestWorkflow prepared,
+        ProvisionerProgram.ServerVerification verification,
+        byte[] evidenceKey)
+    {
+        string bindingFingerprint = Fingerprint(evidenceKey, "binding-checksum", verification.BindingChecksumSha256);
         return new(
-            workflow,
-            connectorId,
-            Fingerprint(evidenceKey, "installation", installationId.ToString("D")),
-            Fingerprint(evidenceKey, "environment", environmentId.ToString("D")),
+            prepared.Workflow,
+            Fse2OfficialTestCanonicalDefinition.ConnectorId,
+            Fingerprint(evidenceKey, "installation", prepared.Plan.InstallationId.ToString("D")),
+            Fingerprint(evidenceKey, "environment", prepared.Plan.EnvironmentId.ToString("D")),
             Fingerprint(
                 evidenceKey,
                 "published-state",
-                connectorId,
-                targetVersion,
-                environmentId.ToString("D"),
-                finalVersion.GetProperty("checksumSha256").GetString()!,
-                finalBinding.GetProperty("checksumSha256").GetString()!),
-            configurationState,
-            selfApprovalDenied,
-            proposerPublishDenied);
-    }
-
-    private static ProviderResourceReference CatalogReference(
-        IEnumerable<JsonElement> resources,
-        string resourceId,
-        ProviderResourceType resourceType)
-    {
-        JsonElement resource = Assert.Single(resources, value =>
-            string.Equals(value.GetProperty("resourceId").GetString(), resourceId, StringComparison.Ordinal) &&
-            string.Equals(value.GetProperty("resourceType").GetString(), resourceType.ToString(), StringComparison.Ordinal));
-        return new(
-            resource.GetProperty("providerId").GetString()!,
-            resourceId,
-            resourceType,
-            resource.TryGetProperty("version", out JsonElement version) && version.ValueKind == JsonValueKind.String ? version.GetString() : null,
-            resource.TryGetProperty("publicMetadataRevision", out JsonElement metadataRevision) && metadataRevision.ValueKind == JsonValueKind.Number
-                ? metadataRevision.GetInt64()
-                : null);
+                Fse2OfficialTestCanonicalDefinition.ConnectorId,
+                Fse2OfficialTestCanonicalDefinition.ConnectorVersion,
+                prepared.Plan.EnvironmentId.ToString("D"),
+                verification.BindingChecksumSha256),
+            bindingFingerprint,
+            verification.VersionState + "/" + verification.BindingState,
+            prepared.SelfApprovalDenied,
+            prepared.ProposerPublishDenied,
+            ProvisionerPlan: true,
+            ProvisionerApply: true,
+            ProvisionerVerify: true,
+            ApplyCreatedDistinctBindingAndGrant: true);
     }
 
     private static string Fingerprint(byte[] key, params string[] values)
@@ -1067,7 +1084,20 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         string InstallationFingerprint,
         string EnvironmentFingerprint,
         string PublishedStateFingerprint,
+        string BindingChecksumFingerprint,
         string ConfigurationState,
+        bool SelfApprovalDenied,
+        bool ProposerPublishDenied,
+        bool ProvisionerPlan,
+        bool ProvisionerApply,
+        bool ProvisionerVerify,
+        bool ApplyCreatedDistinctBindingAndGrant);
+
+    private sealed record PreparedOfficialTestWorkflow(
+        int Workflow,
+        Fse2OfficialTestOperationalPlan Plan,
+        Guid ApprovalRequestId,
+        string ApprovalDigestSha256,
         bool SelfApprovalDenied,
         bool ProposerPublishDenied);
 
@@ -1077,7 +1107,6 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         string Role,
         string CookieJarFingerprint,
         int LoginCount,
-        int AuthRequestCount,
         int ApiRequestCount,
         int RateLimitRejectionCount,
         IReadOnlyDictionary<string, int> RequestCountsByEndpoint);
@@ -1089,7 +1118,13 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         IReadOnlyList<DualSessionEvidence> Workflow2Sessions,
         IReadOnlyList<DualSessionEvidence> AllSessions,
         int TotalAuthRequests,
+        int AuthAllowedCount,
+        int AuthRejectedCount,
         IReadOnlyDictionary<string, int> ApiRequestsPerSubject,
+        int RemoteIpPartitionCount,
+        string RemoteIpPartitionFingerprint,
+        int LimiterInstanceCount,
+        int WindowGenerationCount,
         int TotalRateLimitRejections,
         IReadOnlyDictionary<string, int> RequestCountsByEndpoint,
         bool SameGateway,
@@ -1106,7 +1141,8 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         bool ManualWaitRequired,
         bool ReloginRequired,
         bool SupportInterventionRequired,
-        int HiddenRetryCount);
+        int HiddenRetryCount,
+        bool DirectAdminApiGoldenPath);
 
     private sealed class DualAdminSession(
         HttpClient client,
@@ -1114,15 +1150,17 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         string role,
         string cookieJarFingerprint,
         string csrf,
-        Dictionary<string, int> requestCountsByEndpoint) : IDisposable
+        Dictionary<string, int> requestCountsByEndpoint,
+        Guid principalId,
+        int initialApiRequestCount) : IOfficialTestAdminApi
     {
         public int Workflow { get; } = workflow;
         public string SessionLabel { get; } = $"workflow-{workflow}-{role}";
         public string Role { get; } = role;
         public string CookieJarFingerprint { get; } = cookieJarFingerprint;
+        public Guid PrincipalId { get; } = principalId;
         public int LoginCount { get; } = 1;
-        public int AuthRequestCount { get; private set; } = 2;
-        public int ApiRequestCount { get; private set; } = 2;
+        public int ApiRequestCount { get; private set; } = initialApiRequestCount;
         public int RateLimitRejectionCount { get; private set; }
 
         internal static async Task<DualAdminSession> LoginAsync(
@@ -1138,13 +1176,7 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
                 AllowAutoRedirect = false,
                 HandleCookies = true
             });
-            Dictionary<string, int> endpointCounts = new(StringComparer.Ordinal)
-            {
-                ["AUTH GET /admin/auth/csrf"] = 1,
-                ["AUTH POST /admin/auth/development/login"] = 1,
-                ["API GET /admin/auth/csrf"] = 1,
-                ["API GET /admin/auth/me"] = 1
-            };
+            Dictionary<string, int> endpointCounts = new(StringComparer.Ordinal);
             try
             {
                 using HttpResponseMessage preAuthCsrf = await client.GetAsync("/admin/auth/csrf", cancellationToken);
@@ -1166,12 +1198,15 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
 
                 using HttpResponseMessage postAuthCsrf = await client.GetAsync("/admin/auth/csrf", cancellationToken);
                 postAuthCsrf.EnsureSuccessStatusCode();
+                endpointCounts["API GET /admin/auth/csrf"] = endpointCounts.GetValueOrDefault("API GET /admin/auth/csrf") + 1;
                 JsonElement postAuthBody = await postAuthCsrf.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: cancellationToken);
                 string csrf = postAuthBody.GetProperty("token").GetString()!;
 
                 using HttpResponseMessage me = await client.GetAsync("/admin/auth/me", cancellationToken);
                 me.EnsureSuccessStatusCode();
-                return new(client, workflow, role, cookieFingerprint, csrf, endpointCounts);
+                endpointCounts["API GET /admin/auth/me"] = endpointCounts.GetValueOrDefault("API GET /admin/auth/me") + 1;
+                JsonElement meBody = await me.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: cancellationToken);
+                return new(client, workflow, role, cookieFingerprint, csrf, endpointCounts, meBody.GetProperty("id").GetGuid(), initialApiRequestCount: 2);
             }
             catch
             {
@@ -1180,7 +1215,7 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             }
         }
 
-        internal async Task<JsonElement> GetAsync(string relative)
+        public async Task<JsonElement> GetAsync(string relative)
         {
             using HttpResponseMessage response = await client.GetAsync(
                 "/" + relative.TrimStart('/'),
@@ -1190,7 +1225,7 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             return await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
         }
 
-        internal async Task<JsonElement> MutateAsync(
+        public async Task<JsonElement> MutateAsync(
             HttpMethod method,
             string relative,
             object? body,
@@ -1222,12 +1257,19 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             Role,
             CookieJarFingerprint,
             LoginCount,
-            AuthRequestCount,
             ApiRequestCount,
             RateLimitRejectionCount,
             new Dictionary<string, int>(requestCountsByEndpoint, StringComparer.Ordinal));
 
         public void Dispose() => client.Dispose();
+
+        public async Task<byte[]> GetBytesAsync(string relative)
+        {
+            using HttpResponseMessage response = await client.GetAsync("/" + relative.TrimStart('/'), TestContext.Current.CancellationToken);
+            Count(HttpMethod.Get, relative, response);
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
+        }
 
         private void Count(HttpMethod method, string relative, HttpResponseMessage response)
         {
@@ -1255,7 +1297,8 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
     private sealed class ProvisionerAdminFactory(
         string runtimeConnectionString,
         string adminConnectionString,
-        string activationHmacKey) : AdminDevelopmentFactory
+        string activationHmacKey,
+        BoundedAdminRateLimitTestProbe? limiterObserver = null) : AdminDevelopmentFactory
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -1263,6 +1306,9 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             builder.UseSetting("ConnectionStrings:GatewayDatabase", runtimeConnectionString);
             builder.UseSetting("ConnectionStrings:GatewayAdminDatabase", adminConnectionString);
             builder.UseSetting("Gateway:ActivationHmacKeyBase64", activationHmacKey);
+            if (limiterObserver is not null)
+                builder.ConfigureServices(services => services.Configure<RateLimiterOptions>(options =>
+                    options.GlobalLimiter = limiterObserver.CreateGlobalLimiter()));
         }
     }
 
@@ -1571,7 +1617,7 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             if (relative.EndsWith("/approvals?offset=0&limit=100", StringComparison.Ordinal))
                 return Task.FromResult(Element(new { items = new[] { new { status = "Approved", checksumSha256 = RequiredCompiled.CanonicalDefinitionSha256, requestedBy = createdBy, approvedBy = PrincipalId } } }));
             if (relative.EndsWith("/approval-review", StringComparison.Ordinal))
-                return Task.FromResult(Element(new { digestSha256 = new string('D', 64), artifact = new { operations = new[] { new { operationId = Fse2OfficialTestCanonicalDefinition.OperationId } } } }));
+                return Task.FromResult(Element(new { digestSha256 = new string('D', 64), artifact = new { operations = new[] { new { operationId = Fse2OfficialTestCanonicalDefinition.OperationId, environment = plan.EnvironmentId.ToString("D") } } } }));
             if (relative.StartsWith("admin/api/v1/grants?", StringComparison.Ordinal))
                 return Task.FromResult(Element(new { items = Array.Empty<object>(), total = 0, offset = 0, limit = 100 }));
             throw new InvalidOperationException("Unexpected synthetic GET: " + relative);

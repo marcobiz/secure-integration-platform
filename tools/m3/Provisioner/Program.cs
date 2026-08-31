@@ -36,7 +36,7 @@ if (independentOnboardingWorkflow is not null)
     Guid isolatedApplicationId = Guid.NewGuid();
     Guid isolatedEnvironmentId = Guid.NewGuid();
     Guid isolatedInstallationId = Guid.NewGuid();
-    string isolatedConnectorId = "same-nat-onboarding-" + workflow;
+    const string isolatedConnectorId = "fse2-officialtest-validate-cda";
     ProvisionedActivation isolatedActivation = await provisioning.CreateInstallationAsync(
         new TenantRecord(isolatedTenantId, "same-nat-tenant-" + workflow, "Same NAT Tenant " + workflow, TenantStatus.Active, clock.UtcNow),
         new ApplicationRecord(isolatedApplicationId, "same-nat-application-" + workflow, "Same NAT Application " + workflow, ApplicationStatus.Active, "1.0.0", null, clock.UtcNow),
@@ -44,32 +44,18 @@ if (independentOnboardingWorkflow is not null)
         isolatedInstallationId,
         "m3-provisioner",
         CancellationToken.None).ConfigureAwait(false);
-    await registry.AddGrantAsync(new InstallationGrantRecord(Guid.NewGuid(), isolatedInstallationId, isolatedTenantId, isolatedConnectorId, "submit", true, clock.UtcNow), CancellationToken.None).ConfigureAwait(false);
-
-    ProviderResourceCatalogRecord isolatedSecret = await RegisterResourceAsync(
+    ProviderResourceCatalogRecord isolatedA1 = await RegisterFse2OfficialTestResourceAsync(
         isolatedEnvironmentId,
-        isolatedConnectorId,
-        "same-nat-" + workflow + "-secret",
-        ProviderResourceType.Secret,
-        "synthetic-vault://vault.m3.test/same-nat-" + workflow + "-secret",
-        null,
-        null).ConfigureAwait(false);
-    ProviderResourceCatalogRecord isolatedA1 = await RegisterResourceAsync(
-        isolatedEnvironmentId,
-        isolatedConnectorId,
         "same-nat-" + workflow + "-a1",
-        ProviderResourceType.ClientCertificate,
+        "Same NAT synthetic A1 " + workflow,
         "synthetic-vault://vault.m3.test/same-nat-" + workflow + "-a1",
-        vendorCertificate,
-        1).ConfigureAwait(false);
-    ProviderResourceCatalogRecord isolatedS1 = await RegisterResourceAsync(
+        vendorCertificate).ConfigureAwait(false);
+    ProviderResourceCatalogRecord isolatedS1 = await RegisterFse2OfficialTestResourceAsync(
         isolatedEnvironmentId,
-        isolatedConnectorId,
         "same-nat-" + workflow + "-s1",
-        ProviderResourceType.ClientCertificate,
+        "Same NAT synthetic S1 " + workflow,
         "synthetic-vault://vault.m3.test/same-nat-" + workflow + "-s1",
-        wrongVendorCertificate,
-        1).ConfigureAwait(false);
+        wrongVendorCertificate).ConfigureAwait(false);
 
     Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
     await File.WriteAllBytesAsync(outputPath, JsonSerializer.SerializeToUtf8Bytes(new
@@ -84,7 +70,6 @@ if (independentOnboardingWorkflow is not null)
         activationCodeId = isolatedActivation.ActivationCodeId,
         activationCode = isolatedActivation.ActivationCode,
         expiresAtUtc = isolatedActivation.ExpiresAt,
-        bindingSecret = ProviderAuthority(isolatedSecret),
         a1 = ProviderAuthority(isolatedA1),
         s1 = ProviderAuthority(isolatedS1)
     }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true })).ConfigureAwait(false);

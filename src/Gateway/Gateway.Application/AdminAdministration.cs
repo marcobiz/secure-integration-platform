@@ -206,6 +206,26 @@ public sealed class AdminAccessService(IAdminSecurityStore store, IAdminSessionS
         if (!allowed) throw new GatewayException("BGW-ADMIN-AUTHORIZATION", 403);
     }
 
+    /// <summary>
+    /// Authorizes role administration while allowing only an exact, already-persisted
+    /// self-assignment as an idempotent no-op. A principal cannot add a role or widen
+    /// its own tenant scope.
+    /// </summary>
+    public static bool RequireRoleAssignment(AdminAccessContext context, AdminExternalIdentity target, AdminRole role, Guid? tenantId)
+    {
+        Require(context, tenantId, AdminRole.SecurityAdministrator);
+        bool targetsSelf = string.Equals(context.Principal.Issuer, target.Issuer, StringComparison.Ordinal)
+            && string.Equals(context.Principal.Subject, target.Subject, StringComparison.Ordinal);
+        if (!targetsSelf) return false;
+
+        bool exactExistingAssignment = context.Assignments.Any(assignment =>
+            assignment.PrincipalId == context.Principal.Id
+            && assignment.Role == role
+            && assignment.TenantId == tenantId);
+        if (!exactExistingAssignment) throw new GatewayException("BGW-ADMIN-AUTHORIZATION", 403);
+        return true;
+    }
+
     /// <summary>Checks one exact role while preserving global or tenant-scoped assignment semantics.</summary>
     public static bool HasRole(AdminAccessContext context, Guid? tenantId, AdminRole role) =>
         context.Assignments.Any(assignment => assignment.Role == role &&

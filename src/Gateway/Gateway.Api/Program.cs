@@ -810,8 +810,10 @@ adminApi.MapPost("/bootstrap", async (HttpContext context, AdminAccessService ac
 adminApi.MapPost("/role-assignments", async (AdminRoleAssignmentRequest request, HttpContext context, AdminAccessService access, IAdminSecurityStore securityStore, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
-    AdminAccessService.Require(admin, request.TenantId, AdminRole.SecurityAdministrator);
-    AdminPrincipalRecord target = await securityStore.EnsurePrincipalAsync(request.Principal, cancellationToken).ConfigureAwait(false);
+    bool exactExistingSelfAssignment = AdminAccessService.RequireRoleAssignment(admin, request.Principal, request.Role, request.TenantId);
+    AdminPrincipalRecord target = exactExistingSelfAssignment
+        ? admin.Principal
+        : await securityStore.EnsurePrincipalAsync(request.Principal, cancellationToken).ConfigureAwait(false);
     AdminRoleAssignmentRecord assignment = await securityStore.AssignRoleAsync(target.Id, request.Role, request.TenantId, admin.Principal.Id, Correlation(context), DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
     return Results.Ok(assignment);
 });

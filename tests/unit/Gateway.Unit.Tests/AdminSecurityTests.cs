@@ -115,6 +115,54 @@ public sealed class AdminSecurityTests
     }
 
     [Fact]
+    public async Task ADMIN_ROLE_exact_existing_self_assignment_is_an_idempotent_noop()
+    {
+        InMemoryAdminSecurityStore store = new();
+        AdminPrincipalRecord principal = await PrincipalAsync(store, "self-admin");
+        _ = await store.AssignRoleAsync(principal.Id, AdminRole.SecurityAdministrator, null, principal.Id, Guid.NewGuid(), Now, TestContext.Current.CancellationToken);
+        AdminRoleAssignmentRecord existing = await store.AssignRoleAsync(principal.Id, AdminRole.Viewer, null, principal.Id, Guid.NewGuid(), Now, TestContext.Current.CancellationToken);
+        AdminAccessContext context = new(principal, await store.GetAssignmentsAsync(principal.Id, TestContext.Current.CancellationToken));
+
+        AdminAccessService.RequireRoleAssignment(context, new(principal.Issuer, principal.Subject, "ignored", null), AdminRole.Viewer, null);
+        AdminRoleAssignmentRecord noOp = await store.AssignRoleAsync(principal.Id, AdminRole.Viewer, null, principal.Id, Guid.NewGuid(), Now.AddMinutes(1), TestContext.Current.CancellationToken);
+
+        Assert.Equal(existing, noOp);
+        Assert.Equal(2, (await store.GetAssignmentsAsync(principal.Id, TestContext.Current.CancellationToken)).Count);
+    }
+
+    [Fact]
+    public async Task ADMIN_ROLE_self_escalation_to_new_role_is_denied()
+    {
+        InMemoryAdminSecurityStore store = new();
+        AdminPrincipalRecord principal = await PrincipalAsync(store, "self-new-role");
+        _ = await store.AssignRoleAsync(principal.Id, AdminRole.SecurityAdministrator, null, principal.Id, Guid.NewGuid(), Now, TestContext.Current.CancellationToken);
+        AdminAccessContext context = new(principal, await store.GetAssignmentsAsync(principal.Id, TestContext.Current.CancellationToken));
+
+        GatewayException denied = Assert.Throws<GatewayException>(() => AdminAccessService.RequireRoleAssignment(
+            context, new(principal.Issuer, principal.Subject, principal.DisplayName, principal.Email), AdminRole.Operator, null));
+
+        Assert.Equal("BGW-ADMIN-AUTHORIZATION", denied.Code);
+    }
+
+    [Fact]
+    public async Task ADMIN_ROLE_self_escalation_to_broader_scope_is_denied()
+    {
+        InMemoryAdminSecurityStore store = new();
+        AdminPrincipalRecord principal = await PrincipalAsync(store, "self-broader-scope");
+        Guid tenant = Guid.NewGuid();
+        _ = await store.AssignRoleAsync(principal.Id, AdminRole.SecurityAdministrator, tenant, principal.Id, Guid.NewGuid(), Now, TestContext.Current.CancellationToken);
+        AdminAccessContext context = new(principal, await store.GetAssignmentsAsync(principal.Id, TestContext.Current.CancellationToken));
+
+        GatewayException global = Assert.Throws<GatewayException>(() => AdminAccessService.RequireRoleAssignment(
+            context, new(principal.Issuer, principal.Subject, principal.DisplayName, principal.Email), AdminRole.SecurityAdministrator, null));
+        GatewayException otherTenant = Assert.Throws<GatewayException>(() => AdminAccessService.RequireRoleAssignment(
+            context, new(principal.Issuer, principal.Subject, principal.DisplayName, principal.Email), AdminRole.SecurityAdministrator, Guid.NewGuid()));
+
+        Assert.Equal("BGW-ADMIN-AUTHORIZATION", global.Code);
+        Assert.Equal("BGW-ADMIN-AUTHORIZATION", otherTenant.Code);
+    }
+
+    [Fact]
     public async Task M5_UT_Editor_or_requester_cannot_approve_own_checksum()
     {
         InMemoryAdminSecurityStore store = new();
@@ -244,6 +292,24 @@ public sealed class AdminSecurityTests
 
         _ = await security.AssignRoleAsync(secondSession.Principal.Id, AdminRole.ConnectorEditor, null, secondSession.Principal.Id, Guid.NewGuid(), Now.AddMinutes(6), TestContext.Current.CancellationToken);
         Assert.Null(await sessions.ValidateAsync(secondHandle, Now.AddMinutes(7), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task ADMIN_ROLE_real_change_or_removal_revokes_stale_sessions()
+    {
+        InMemoryAdminSecurityStore security = new();
+        InMemoryAdminSessionStore sessions = new(security);
+        AdminExternalIdentity identity = new("https://issuer.example.test", "role-change-removal", "Role change removal", null);
+        (_, AdminSessionRecord initial) = await sessions.CreateAsync(identity, Now, TimeSpan.FromHours(1), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
+        AdminRoleAssignmentRecord viewer = await security.AssignRoleAsync(initial.Principal.Id, AdminRole.Viewer, null, initial.Principal.Id, Guid.NewGuid(), Now.AddMinutes(1), TestContext.Current.CancellationToken);
+        (string changedHandle, AdminSessionRecord changed) = await sessions.CreateAsync(identity, Now.AddMinutes(2), TimeSpan.FromHours(1), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
+
+        _ = await security.AssignRoleAsync(changed.Principal.Id, AdminRole.ConnectorEditor, null, changed.Principal.Id, Guid.NewGuid(), Now.AddMinutes(3), TestContext.Current.CancellationToken);
+
+        Assert.Null(await sessions.ValidateAsync(changedHandle, Now.AddMinutes(4), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken));
+        (string removalHandle, _) = await sessions.CreateAsync(identity, Now.AddMinutes(5), TimeSpan.FromHours(1), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
+        Assert.True(await security.RevokeRoleAsync(viewer.Id, changed.Principal.Id, Guid.NewGuid(), Now.AddMinutes(6), TestContext.Current.CancellationToken));
+        Assert.Null(await sessions.ValidateAsync(removalHandle, Now.AddMinutes(7), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken));
     }
 
     [Fact]

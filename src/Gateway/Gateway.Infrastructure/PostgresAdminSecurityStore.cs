@@ -85,10 +85,13 @@ public sealed class PostgresAdminSecurityStore(AdminPostgresDataSource adminData
     public async Task<AdminRoleAssignmentRecord> AssignRoleAsync(Guid principalId, AdminRole role, Guid? tenantId, Guid grantedBy, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken)
     {
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        // READ COMMITTED gives the convergence read a fresh statement snapshot after a
+        // competing identical INSERT has committed. The expression conflict target is
+        // the exact persisted assignment tuple, so unrelated conflicts still fail.
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
         await SetTenantAsync(connection, transaction, tenantId, cancellationToken).ConfigureAwait(false);
         Guid id = Guid.NewGuid();
-        const string sql = "INSERT INTO gateway.admin_role_assignment(id,principal_id,role,tenant_id,granted_by,granted_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING RETURNING id,principal_id,role,tenant_id,granted_by,granted_at";
+        const string sql = "INSERT INTO gateway.admin_role_assignment(id,principal_id,role,tenant_id,granted_by,granted_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (principal_id,role,(coalesce(tenant_id,'00000000-0000-0000-0000-000000000000'::uuid))) DO NOTHING RETURNING id,principal_id,role,tenant_id,granted_by,granted_at";
         await using NpgsqlCommand insert = new(sql, connection, transaction);
         Add(insert, id, principalId, Role(role), tenantId, grantedBy, now);
         AdminRoleAssignmentRecord? result = null;
@@ -107,10 +110,14 @@ public sealed class PostgresAdminSecurityStore(AdminPostgresDataSource adminData
             if (!await existing.ReadAsync(cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-ADMIN-ROLE-ASSIGNMENT", 409);
             result = ReadAssignment(existing);
         }
-        faultInjector?.Check("admin.role.assign.after-state");
-        await InsertAuditAsync(connection, transaction, tenantId, grantedBy.ToString("D"), "admin.role.assign", "admin_principal", principalId.ToString("D"), correlationId, "BGW-ADMIN-ROLE-ASSIGNED", now, cancellationToken).ConfigureAwait(false);
+        if (result.PrincipalId != principalId || result.Role != role || result.TenantId != tenantId)
+            throw new GatewayException("BGW-ADMIN-ROLE-ASSIGNMENT", 409);
         if (privilegesChanged)
+        {
+            faultInjector?.Check("admin.role.assign.after-state");
+            await InsertAuditAsync(connection, transaction, tenantId, grantedBy.ToString("D"), "admin.role.assign", "admin_principal", principalId.ToString("D"), correlationId, "BGW-ADMIN-ROLE-ASSIGNED", now, cancellationToken).ConfigureAwait(false);
             await RevokeSessionsAsync(connection, transaction, principalId, now, cancellationToken).ConfigureAwait(false);
+        }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
     }

@@ -82,7 +82,7 @@ public sealed class InMemoryAdminSecurityStore(IGatewayRegistry? auditRegistry =
                 privilegesChanged = true;
             }
         }
-        if (auditRegistry is not null)
+        if (privilegesChanged && auditRegistry is not null)
             await auditRegistry.AppendAuditAsync(new(Guid.NewGuid(), now, tenantId, "administrator", grantedBy.ToString("D"), "admin.role.assign", "admin_principal", principalId.ToString("D"), correlationId, "success", "BGW-ADMIN-ROLE-ASSIGNED", new Dictionary<string, string>()), cancellationToken).ConfigureAwait(false);
         if (privilegesChanged) PrincipalPrivilegesChanged?.Invoke(principalId, now);
         return result;

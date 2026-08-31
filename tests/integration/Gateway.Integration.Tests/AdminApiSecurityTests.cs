@@ -25,6 +25,79 @@ using Xunit;
 
 namespace SecureIntegration.Gateway.Integration.Tests;
 
+public enum AdminRateLimitTestPolicyClass
+{
+    Auth,
+    Api
+}
+
+public enum AdminRateLimitTestPrincipalKind
+{
+    RemoteIp,
+    AuthenticatedSubject,
+    Unavailable
+}
+
+public sealed record AdminRateLimitTestObservation(
+    long Sequence,
+    long LimiterInstanceId,
+    long WindowGeneration,
+    AdminRateLimitTestPolicyClass PolicyClass,
+    AdminRateLimitTestPrincipalKind PrincipalKind,
+    string Identity,
+    bool Acquired);
+
+public sealed class BoundedAdminRateLimitTestProbe
+{
+    private const int MaximumObservations = 4096;
+    private readonly object sync = new();
+    private readonly List<AdminRateLimitTestObservation> observations = [];
+    private readonly ProbeObserver observer;
+
+    public BoundedAdminRateLimitTestProbe() => observer = new(this);
+
+    public PartitionedRateLimiter<HttpContext> CreateGlobalLimiter() =>
+        AdminRateLimiting.CreateGlobalLimiter(observer);
+
+    public AdminRateLimitTestObservation[] Snapshot()
+    {
+        lock (sync) return observations.ToArray();
+    }
+
+    private void Observe(AdminRateLimitObservation observation)
+    {
+        lock (sync)
+        {
+            if (observations.Count >= MaximumObservations)
+                throw new InvalidOperationException("ADMIN_RATE_LIMIT_TEST_PROBE_BOUND_EXCEEDED");
+            observations.Add(new(
+                observation.Sequence,
+                observation.LimiterInstanceId,
+                observation.WindowGeneration,
+                observation.Partition.PolicyClass switch
+                {
+                    AdminRateLimitPolicyClass.Auth => AdminRateLimitTestPolicyClass.Auth,
+                    AdminRateLimitPolicyClass.Api => AdminRateLimitTestPolicyClass.Api,
+                    _ => throw new InvalidOperationException("ADMIN_RATE_LIMIT_TEST_POLICY_CLASS_INVALID")
+                },
+                observation.Partition.PrincipalKind switch
+                {
+                    AdminRateLimitPrincipalKind.RemoteIp => AdminRateLimitTestPrincipalKind.RemoteIp,
+                    AdminRateLimitPrincipalKind.AuthenticatedSubject => AdminRateLimitTestPrincipalKind.AuthenticatedSubject,
+                    AdminRateLimitPrincipalKind.Unavailable => AdminRateLimitTestPrincipalKind.Unavailable,
+                    _ => throw new InvalidOperationException("ADMIN_RATE_LIMIT_TEST_PRINCIPAL_KIND_INVALID")
+                },
+                observation.Partition.Identity,
+                observation.Acquired));
+        }
+    }
+
+    private sealed class ProbeObserver(BoundedAdminRateLimitTestProbe owner) : IAdminRateLimitObserver
+    {
+        public void Observe(AdminRateLimitObservation observation) => owner.Observe(observation);
+    }
+}
+
 public sealed class AdminApiSecurityTests
 {
     private static readonly JsonSerializerOptions WireJson = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
@@ -521,6 +594,40 @@ public sealed class AdminApiSecurityTests
     }
 
     [Fact]
+    public async Task ADMIN_ROLE_exact_existing_self_assignment_HTTP_is_an_idempotent_noop()
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        string csrf = await LoginAsync(client, "security-admin", TestContext.Current.CancellationToken);
+        InMemoryGatewayRegistry registry = factory.Services.GetRequiredService<InMemoryGatewayRegistry>();
+        int auditCountBefore = registry.SnapshotAuditEvents().Count(value => value.Action == "admin.role.assign");
+        using HttpRequestMessage request = RoleAssignmentRequest("security-admin", "Viewer", null, csrf);
+
+        using HttpResponseMessage response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(auditCountBefore, registry.SnapshotAuditEvents().Count(value => value.Action == "admin.role.assign"));
+        using HttpResponseMessage stillAuthorized = await client.GetAsync("/admin/auth/me", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, stillAuthorized.StatusCode);
+    }
+
+    [Fact]
+    public async Task ADMIN_ROLE_self_escalation_to_new_role_HTTP_is_denied()
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        string csrf = await LoginAsync(client, "security-admin", TestContext.Current.CancellationToken);
+        using HttpRequestMessage request = RoleAssignmentRequest("security-admin", "Operator", null, csrf);
+
+        using HttpResponseMessage response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.DoesNotContain("SecurityAdministrator", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("admin_role_assignment", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task M5_IT_Canonical_connector_sample_is_served_validated_and_imported_as_Draft()
     {
         await using AdminDevelopmentFactory factory = new();
@@ -776,6 +883,21 @@ public sealed class AdminApiSecurityTests
         using HttpResponseMessage response = await client.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         return await GetCsrfAsync(client, cancellationToken);
+    }
+
+    private static HttpRequestMessage RoleAssignmentRequest(string subject, string role, Guid? tenantId, string csrf)
+    {
+        HttpRequestMessage request = new(HttpMethod.Post, "/admin/api/v1/role-assignments")
+        {
+            Content = JsonContent.Create(new
+            {
+                principal = new { issuer = "https://development.invalid", subject, displayName = subject, email = (string?)null },
+                role,
+                tenantId
+            })
+        };
+        request.Headers.Add("X-CSRF-TOKEN", csrf);
+        return request;
     }
 
     private static async Task<(string Csrf, string Cookie)> LoginAndCaptureCookieAsync(HttpClient client, string user, CancellationToken cancellationToken)
@@ -1086,6 +1208,189 @@ public sealed class AdminApiPostgreSqlSecurityTests
     [Fact]
     public Task M5_E2E_Admin_approval_publish_runtime_provider_transport_prevents_credential_exfiltration() =>
         AdminApiSecurityTests.RunPostgreSqlApprovalPublishAntiExfiltrationAsync();
+
+    [Fact]
+    public async Task ADMIN_ROLE_concurrent_identical_first_assignment_converges_to_one_row_and_two_successes()
+    {
+        await using PostgreSqlRoleRaceContext context = await PostgreSqlRoleRaceContext.CreateAsync();
+        for (int iteration = 0; iteration < 4; iteration++)
+        {
+            AdminExternalIdentity target = NewTarget("first-" + iteration);
+            (string _, AdminSessionRecord targetSession) = await context.Sessions.CreateAsync(target, DateTimeOffset.UtcNow, TimeSpan.FromHours(1), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
+            using HttpResponseMessage first = await context.SendPairAsync(context.Editor, context.EditorCsrf, context.Approver, context.ApproverCsrf, target, AdminRole.Operator);
+            using HttpResponseMessage second = context.SecondResponse!;
+            Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+            JsonElement firstBody = await first.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+            JsonElement secondBody = await second.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(firstBody.GetProperty("id").GetGuid(), secondBody.GetProperty("id").GetGuid());
+            Assert.Equal(1L, await context.ScalarAsync("SELECT count(*) FROM gateway.admin_role_assignment WHERE principal_id=$1 AND role='operator' AND tenant_id IS NULL", targetSession.Principal.Id));
+            Assert.Equal(1L, await context.ScalarAsync("SELECT count(*) FROM gateway.audit_event WHERE action='admin.role.assign' AND target_id=$1", targetSession.Principal.Id.ToString("D")));
+            Assert.Equal(1L, await context.ScalarAsync("SELECT count(*) FROM gateway.admin_session WHERE id=$1 AND revoked_at IS NOT NULL", targetSession.Id));
+        }
+    }
+
+    [Fact]
+    public async Task ADMIN_ROLE_concurrent_existing_noops_do_not_revoke_or_extend_sessions()
+    {
+        await using PostgreSqlRoleRaceContext context = await PostgreSqlRoleRaceContext.CreateAsync();
+        AdminExternalIdentity target = NewTarget("no-op");
+        (_, AdminSessionRecord original) = await context.Sessions.CreateAsync(target, DateTimeOffset.UtcNow, TimeSpan.FromHours(1), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
+        _ = await context.Security.AssignRoleAsync(original.Principal.Id, AdminRole.Viewer, null, context.EditorPrincipal.Id, Guid.NewGuid(), DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+        (_, AdminSessionRecord active) = await context.Sessions.CreateAsync(target, DateTimeOffset.UtcNow, TimeSpan.FromHours(1), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
+        long auditBefore = await context.ScalarAsync("SELECT count(*) FROM gateway.audit_event WHERE action='admin.role.assign' AND target_id=$1", active.Principal.Id.ToString("D"));
+        DateTimeOffset absoluteExpiryBefore = await context.TimestampAsync("SELECT absolute_expires_at FROM gateway.admin_session WHERE id=$1", active.Id);
+        DateTimeOffset idleExpiryBefore = await context.TimestampAsync("SELECT idle_expires_at FROM gateway.admin_session WHERE id=$1", active.Id);
+
+        using HttpResponseMessage first = await context.SendPairAsync(context.Editor, context.EditorCsrf, context.Approver, context.ApproverCsrf, target, AdminRole.Viewer);
+        using HttpResponseMessage second = context.SecondResponse!;
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        Assert.Equal(auditBefore, await context.ScalarAsync("SELECT count(*) FROM gateway.audit_event WHERE action='admin.role.assign' AND target_id=$1", active.Principal.Id.ToString("D")));
+        Assert.Equal(0L, await context.ScalarAsync("SELECT count(*) FROM gateway.admin_session WHERE id=$1 AND revoked_at IS NOT NULL", active.Id));
+        Assert.Equal(absoluteExpiryBefore, await context.TimestampAsync("SELECT absolute_expires_at FROM gateway.admin_session WHERE id=$1", active.Id));
+        Assert.Equal(idleExpiryBefore, await context.TimestampAsync("SELECT idle_expires_at FROM gateway.admin_session WHERE id=$1", active.Id));
+    }
+
+    [Fact]
+    public async Task ADMIN_ROLE_concurrent_different_assignments_remain_distinct()
+    {
+        await using PostgreSqlRoleRaceContext context = await PostgreSqlRoleRaceContext.CreateAsync();
+        AdminExternalIdentity target = NewTarget("distinct");
+        (_, AdminSessionRecord targetSession) = await context.Sessions.CreateAsync(target, DateTimeOffset.UtcNow, TimeSpan.FromHours(1), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
+        Task<HttpResponseMessage> viewer = PostgreSqlRoleRaceContext.SendAsync(context.Editor, context.EditorCsrf, target, AdminRole.Viewer, null);
+        Task<HttpResponseMessage> operatorRole = PostgreSqlRoleRaceContext.SendAsync(context.Approver, context.ApproverCsrf, target, AdminRole.Operator, null);
+        HttpResponseMessage[] responses = await Task.WhenAll(viewer, operatorRole);
+        using HttpResponseMessage first = responses[0]; using HttpResponseMessage second = responses[1];
+
+        Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
+        Assert.Equal(2L, await context.ScalarAsync("SELECT count(*) FROM gateway.admin_role_assignment WHERE principal_id=$1 AND role IN ('viewer','operator') AND tenant_id IS NULL", targetSession.Principal.Id));
+
+        Guid firstTenant = Guid.NewGuid();
+        Guid secondTenant = Guid.NewGuid();
+        await context.Registry.AddTenantAsync(new(firstTenant, "role-scope-" + firstTenant.ToString("N"), "Role scope A", TenantStatus.Active, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+        await context.Registry.AddTenantAsync(new(secondTenant, "role-scope-" + secondTenant.ToString("N"), "Role scope B", TenantStatus.Active, DateTimeOffset.UtcNow), TestContext.Current.CancellationToken);
+        Task<HttpResponseMessage> firstScope = PostgreSqlRoleRaceContext.SendAsync(context.Editor, context.EditorCsrf, target, AdminRole.Viewer, firstTenant);
+        Task<HttpResponseMessage> secondScope = PostgreSqlRoleRaceContext.SendAsync(context.Approver, context.ApproverCsrf, target, AdminRole.Viewer, secondTenant);
+        HttpResponseMessage[] scopedResponses = await Task.WhenAll(firstScope, secondScope);
+        using HttpResponseMessage firstScoped = scopedResponses[0]; using HttpResponseMessage secondScoped = scopedResponses[1];
+
+        Assert.All(scopedResponses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
+        Assert.Equal(2L, await context.ScalarAsync("SELECT count(*) FROM gateway.admin_role_assignment WHERE principal_id=$1 AND role='viewer' AND tenant_id IS NOT NULL", targetSession.Principal.Id));
+    }
+
+    private static AdminExternalIdentity NewTarget(string kind)
+    {
+        string subject = "role-race-" + kind + "-" + Guid.NewGuid().ToString("N");
+        return new("https://role-race.example.test", subject, "Role race", null);
+    }
+
+    private sealed class PostgreSqlRoleRaceContext : IAsyncDisposable
+    {
+        private readonly string adminConnectionString;
+        private readonly AdminApiSecurityTests.PostgresRuntimeRoleLease runtimeRole;
+        private readonly AntiExfiltrationFactory factory;
+
+        private PostgreSqlRoleRaceContext(string adminConnectionString, AdminApiSecurityTests.PostgresRuntimeRoleLease runtimeRole, AntiExfiltrationFactory factory, AdminPostgresDataSource dataSource, PostgresAdminSecurityStore security, PostgresAdminSessionStore sessions, AdminPrincipalRecord editorPrincipal, HttpClient editor, string editorCsrf, HttpClient approver, string approverCsrf)
+        {
+            this.adminConnectionString = adminConnectionString; this.runtimeRole = runtimeRole; this.factory = factory; DataSource = dataSource; Registry = new(dataSource.Value); Security = security; Sessions = sessions; EditorPrincipal = editorPrincipal; Editor = editor; EditorCsrf = editorCsrf; Approver = approver; ApproverCsrf = approverCsrf;
+        }
+
+        internal AdminPostgresDataSource DataSource { get; }
+        internal PostgresGatewayRegistry Registry { get; }
+        internal PostgresAdminSecurityStore Security { get; }
+        internal PostgresAdminSessionStore Sessions { get; }
+        internal AdminPrincipalRecord EditorPrincipal { get; }
+        internal HttpClient Editor { get; }
+        internal string EditorCsrf { get; }
+        internal HttpClient Approver { get; }
+        internal string ApproverCsrf { get; }
+        internal HttpResponseMessage? SecondResponse { get; private set; }
+
+        internal static async Task<PostgreSqlRoleRaceContext> CreateAsync()
+        {
+            string? adminConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+            string? migrationConnectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
+            if (string.IsNullOrWhiteSpace(adminConnectionString) || string.IsNullOrWhiteSpace(migrationConnectionString))
+                Assert.Skip("The PostgreSQL role-convergence scenario requires the dedicated PostgreSQL 18 gate.");
+            AdminPostgresDataSource dataSource = new(adminConnectionString);
+            PostgresAdminSecurityStore security = new(dataSource);
+            AdminPrincipalRecord editorPrincipal = await EnsureSecurityAdministratorAsync(security, "editor");
+            _ = await EnsureSecurityAdministratorAsync(security, "approver");
+            AdminApiSecurityTests.PostgresRuntimeRoleLease runtimeRole = await AdminApiSecurityTests.PostgresRuntimeRoleLease.CreateAsync(adminConnectionString, migrationConnectionString, TestContext.Current.CancellationToken);
+            AntiExfiltrationFactory factory = new(runtimeRole.ConnectionString, adminConnectionString);
+            HttpClient editor = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+            HttpClient approver = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+            string editorCsrf = await LoginAsync(editor, "editor");
+            string approverCsrf = await LoginAsync(approver, "approver");
+            return new(adminConnectionString, runtimeRole, factory, dataSource, security, new(dataSource, security), editorPrincipal, editor, editorCsrf, approver, approverCsrf);
+        }
+
+        internal async Task<HttpResponseMessage> SendPairAsync(HttpClient firstClient, string firstCsrf, HttpClient secondClient, string secondCsrf, AdminExternalIdentity target, AdminRole role)
+        {
+            Task<HttpResponseMessage> first = SendAsync(firstClient, firstCsrf, target, role, null);
+            Task<HttpResponseMessage> second = SendAsync(secondClient, secondCsrf, target, role, null);
+            HttpResponseMessage[] responses = await Task.WhenAll(first, second).ConfigureAwait(false);
+            SecondResponse = responses[1];
+            return responses[0];
+        }
+
+        internal static async Task<HttpResponseMessage> SendAsync(HttpClient client, string csrf, AdminExternalIdentity target, AdminRole role, Guid? tenantId)
+        {
+            using HttpRequestMessage request = new(HttpMethod.Post, "/admin/api/v1/role-assignments") { Content = JsonContent.Create(new { principal = target, role, tenantId }) };
+            request.Headers.Add("X-CSRF-TOKEN", csrf);
+            return await client.SendAsync(request, TestContext.Current.CancellationToken).ConfigureAwait(false);
+        }
+
+        internal async Task<long> ScalarAsync(string sql, object value)
+        {
+            await using NpgsqlConnection connection = new(adminConnectionString); await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await using NpgsqlCommand command = new(sql, connection); command.Parameters.AddWithValue(value);
+            return Convert.ToInt64(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken), System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        internal async Task<DateTimeOffset> TimestampAsync(string sql, object value)
+        {
+            await using NpgsqlConnection connection = new(adminConnectionString); await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await using NpgsqlCommand command = new(sql, connection); command.Parameters.AddWithValue(value);
+            object timestamp = (await command.ExecuteScalarAsync(TestContext.Current.CancellationToken))!;
+            return timestamp switch
+            {
+                DateTimeOffset offset => offset,
+                DateTime dateTime => new DateTimeOffset(DateTime.SpecifyKind(dateTime, DateTimeKind.Utc)),
+                _ => throw new InvalidOperationException("POSTGRES_ROLE_RACE_TIMESTAMP_INVALID")
+            };
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            SecondResponse?.Dispose(); Editor.Dispose(); Approver.Dispose(); await factory.DisposeAsync(); await runtimeRole.DisposeAsync(); await DataSource.DisposeAsync();
+        }
+
+        private static async Task<AdminPrincipalRecord> EnsureSecurityAdministratorAsync(PostgresAdminSecurityStore security, string subject)
+        {
+            AdminPrincipalRecord principal = await security.EnsurePrincipalAsync(new("https://development.invalid", subject, subject, subject + "@example.test"), TestContext.Current.CancellationToken);
+            _ = await security.AssignRoleAsync(principal.Id, AdminRole.SecurityAdministrator, null, principal.Id, Guid.NewGuid(), DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+            return principal;
+        }
+
+        private static async Task<string> LoginAsync(HttpClient client, string user)
+        {
+            string csrf = await GetCsrfAsync(client);
+            using HttpRequestMessage request = new(HttpMethod.Post, "/admin/auth/development/login") { Content = JsonContent.Create(new { userName = user }) };
+            request.Headers.Add("X-CSRF-TOKEN", csrf);
+            using HttpResponseMessage response = await client.SendAsync(request, TestContext.Current.CancellationToken); response.EnsureSuccessStatusCode();
+            return await GetCsrfAsync(client);
+        }
+
+        private static async Task<string> GetCsrfAsync(HttpClient client)
+        {
+            using HttpResponseMessage response = await client.GetAsync("/admin/auth/csrf", TestContext.Current.CancellationToken); response.EnsureSuccessStatusCode();
+            JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+            return body.GetProperty("token").GetString()!;
+        }
+    }
 }
 
 public class AdminDevelopmentFactory : WebApplicationFactory<Program>
