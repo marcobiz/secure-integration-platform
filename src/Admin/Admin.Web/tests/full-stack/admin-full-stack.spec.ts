@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 
 type ApiResult<T> = { status: number; body: T; etag: string | null };
 const execFileAsync = promisify(execFile);
+const csrfTokens = new WeakMap<Page, string>();
 
 async function login(context: BrowserContext, user: 'editor' | 'approver' | 'operator' | 'security-admin'): Promise<Page> {
   const baseUrl = process.env.M5_FULLSTACK_BASE_URL ?? 'https://localhost:8443/admin/';
@@ -25,14 +26,17 @@ async function login(context: BrowserContext, user: 'editor' | 'approver' | 'ope
 }
 
 async function api<T>(page: Page, path: string, method = 'GET', body?: unknown, headers: Record<string, string> = {}): Promise<ApiResult<T>> {
+  const mutation = !['GET', 'HEAD', 'OPTIONS'].includes(method);
+  if (mutation && !csrfTokens.has(page)) {
+    const token = await page.evaluate(async () => {
+      const response = await fetch('/admin/auth/csrf', { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error(`CSRF_${response.status}`);
+      return ((await response.json()) as { token: string }).token;
+    });
+    csrfTokens.set(page, token);
+  }
+  if (mutation) headers['X-CSRF-TOKEN'] = csrfTokens.get(page)!;
   return page.evaluate(async ({ path, method, body, headers }) => {
-    const mutation = !['GET', 'HEAD', 'OPTIONS'].includes(method);
-    if (mutation) {
-      const csrfResponse = await fetch('/admin/auth/csrf', { credentials: 'same-origin', headers: { Accept: 'application/json' } });
-      if (!csrfResponse.ok) throw new Error(`CSRF_${csrfResponse.status}`);
-      const csrf = await csrfResponse.json() as { token: string };
-      headers['X-CSRF-TOKEN'] = csrf.token;
-    }
     const response = await fetch(path, {
       method,
       credentials: 'same-origin',
