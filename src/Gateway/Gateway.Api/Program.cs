@@ -6,7 +6,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Runtime.Loader;
 using System.Net;
-using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -69,17 +68,11 @@ builder.AddGatewayAdminAuthentication(hostOptions.Admin);
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            context.User.FindFirst("sub")?.Value ?? context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
-            _ => new FixedWindowRateLimiterOptions { PermitLimit = context.Request.Path.StartsWithSegments("/admin/auth") ? 20 : 240, Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true }));
+    options.GlobalLimiter = AdminRateLimiting.CreateGlobalLimiter();
+    options.OnRejected = static (rejection, cancellationToken) =>
+        AdminRateLimiting.WriteSafeRejectionAsync(rejection.HttpContext, rejection.Lease, cancellationToken);
 });
-ForwardedHeadersOptions forwardedHeaders = new() { ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto };
-foreach (string configuredProxy in hostOptions.Admin.TrustedProxies)
-{
-    if (!IPAddress.TryParse(configuredProxy, out IPAddress? proxy)) throw new InvalidOperationException("Gateway Admin trusted proxy is invalid.");
-    forwardedHeaders.KnownProxies.Add(proxy);
-}
+ForwardedHeadersOptions forwardedHeaders = AdminRateLimiting.CreateForwardedHeadersOptions(hostOptions.Admin.TrustedProxies);
 bool usePlatformCertificateForwarding = hostOptions.TrustPlatformClientCertificateForwarding;
 if (usePlatformCertificateForwarding)
 {

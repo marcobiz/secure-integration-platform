@@ -57,6 +57,14 @@ public sealed class Fse2ProvisionerResumabilityIntegrationTests
     }
 
     [Fact]
+    public Task PROVISIONER_rate_limit_after_Validated_remains_resumable() =>
+        PROVISIONER_rate_limit_after_Validated_returns_bounded_resumable_state();
+
+    [Fact]
+    public Task PROVISIONER_same_plan_resume_still_reaches_Published_Active() =>
+        PROVISIONER_same_plan_resumes_from_Validated_and_reaches_Published_Active();
+
+    [Fact]
     public async Task PROVISIONER_reentry_after_Published_is_verify_only_noop()
     {
         Scenario scenario = await Scenario.CreateAsync();

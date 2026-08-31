@@ -5,11 +5,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.Extensions.DependencyInjection;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Integration.Tests;
 using SecureIntegration.Tools.Fse2.OfficialTestProvisioner;
@@ -91,7 +87,7 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
     }
 
     [Fact]
-    public async Task FSE2_OFFICIALTEST_clean_state_supported_provisioner_reaches_Published_for_authenticated_installation()
+    public async Task PROVISIONER_clean_state_completes_under_default_limits_without_429()
     {
         if (!string.Equals(Environment.GetEnvironmentVariable("REQUIRE_FSE2_POSTGRES_GATE"), "1", StringComparison.Ordinal))
             Assert.Skip("The clean-state supported-path gate runs only in the dedicated PostgreSQL 18 job.");
@@ -108,6 +104,9 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             cancellationToken);
 
         string initialActivationKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        int initialSecurityAuthRequestCount;
+        int initialSecurityApiRequestCount;
+        int initialSecurityRateLimitRejectionCount;
         await using (ProvisionerAdminFactory initialFactory = new(database.AdminConnectionString, database.AdminConnectionString, initialActivationKey))
         using (HttpAdminApi initialAdministrator = await HttpAdminApi.LoginAsync(initialFactory, "security-admin", cancellationToken))
         {
@@ -115,6 +114,9 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             await AssertEmptyPageAsync(initialAdministrator, "admin/api/v1/applications?offset=0&limit=10");
             await AssertEmptyPageAsync(initialAdministrator, "admin/api/v1/environments?offset=0&limit=10");
             await AssertEmptyPageAsync(initialAdministrator, "admin/api/v1/provider-resources?offset=0&limit=10");
+            initialSecurityAuthRequestCount = initialAdministrator.AuthRequestCount;
+            initialSecurityApiRequestCount = initialAdministrator.ApiRequestCount;
+            initialSecurityRateLimitRejectionCount = initialAdministrator.RateLimitRejectionCount;
         }
 
         string rawRoot = Path.Combine(database.TaskDirectory, "raw");
@@ -202,6 +204,39 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         JsonElement finalVersions = await approver.GetAsync($"admin/api/v1/connectors/{Fse2OfficialTestCanonicalDefinition.ConnectorId}/versions?offset=0&limit=10");
         Assert.Equal(1, finalVersions.GetProperty("total").GetInt32());
         Assert.Equal(0, editor.OfficialTestNetworkCount + securityAdministrator.OfficialTestNetworkCount + approver.OfficialTestNetworkCount);
+        Dictionary<string, int> authRequestCounts = new(StringComparer.Ordinal)
+        {
+            ["security-admin"] = initialSecurityAuthRequestCount + securityAdministrator.AuthRequestCount,
+            ["editor"] = editor.AuthRequestCount,
+            ["approver"] = approver.AuthRequestCount
+        };
+        Dictionary<string, int> apiRequestCounts = new(StringComparer.Ordinal)
+        {
+            ["security-admin"] = initialSecurityApiRequestCount + securityAdministrator.ApiRequestCount,
+            ["editor"] = editor.ApiRequestCount,
+            ["approver"] = approver.ApiRequestCount
+        };
+        int rateLimitRejectionCount = initialSecurityRateLimitRejectionCount +
+            securityAdministrator.RateLimitRejectionCount +
+            editor.RateLimitRejectionCount +
+            approver.RateLimitRejectionCount;
+        int authBucketRequestCount = authRequestCounts.Values.Sum();
+        int maximumApiRequestCount = apiRequestCounts.Values.Max();
+        Assert.InRange(authBucketRequestCount, 0, 20);
+        Assert.InRange(maximumApiRequestCount, 0, 240);
+        Assert.Equal(0, rateLimitRejectionCount);
+        Assert.True(20 - authBucketRequestCount > 0);
+        Assert.True(240 - maximumApiRequestCount > 0);
+        TestContext.Current.TestOutputHelper?.WriteLine(
+            "CLEAN_STATE_RATE_LIMIT_COUNTS " + JsonSerializer.Serialize(new
+            {
+                authRequestCountByPrincipal = authRequestCounts,
+                apiRequestCountByPrincipal = apiRequestCounts,
+                authLimitHeadroom = 20 - authBucketRequestCount,
+                apiLimitHeadroom = 240 - maximumApiRequestCount,
+                rateLimitRejectionCount,
+                configurationState = "Published/Active"
+            }, WireJson));
         timeToPublished.Stop();
         Assert.InRange(timeToPublished.Elapsed, TimeSpan.Zero, TimeSpan.FromMinutes(5));
         TestContext.Current.SendDiagnosticMessage($"FSE2 clean-state time to Published: {timeToPublished.ElapsedMilliseconds} ms");
@@ -462,15 +497,6 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             builder.UseSetting("ConnectionStrings:GatewayDatabase", runtimeConnectionString);
             builder.UseSetting("ConnectionStrings:GatewayAdminDatabase", adminConnectionString);
             builder.UseSetting("Gateway:ActivationHmacKeyBase64", activationHmacKey);
-            builder.ConfigureServices(services => services.Configure<RateLimiterOptions>(options =>
-                options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(_ =>
-                    RateLimitPartition.GetFixedWindowLimiter("fse2-provisioner", _ => new FixedWindowRateLimiterOptions
-                    {
-                        PermitLimit = 1000,
-                        Window = TimeSpan.FromMinutes(1),
-                        QueueLimit = 0,
-                        AutoReplenishment = true
-                    }))));
         }
     }
 
@@ -601,29 +627,48 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         }
     }
 
-    private sealed class HttpAdminApi(HttpClient client, string csrf, Guid principalId) : IOfficialTestAdminApi
+    private sealed class HttpAdminApi(
+        HttpClient client,
+        string csrf,
+        Guid principalId,
+        int authRequestCount,
+        int rateLimitRejectionCount) : IOfficialTestAdminApi
     {
         public Guid PrincipalId { get; } = principalId;
         public int OfficialTestNetworkCount { get; private set; }
+        public int AuthRequestCount { get; private set; } = authRequestCount;
+        public int ApiRequestCount { get; private set; }
+        public int RateLimitRejectionCount { get; private set; } = rateLimitRejectionCount;
 
         internal static async Task<HttpAdminApi> LoginAsync(ProvisionerAdminFactory factory, string user, CancellationToken cancellationToken)
         {
             HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false, HandleCookies = true });
-            string csrf = await CsrfAsync(client, cancellationToken);
+            int authRequests = 0;
+            int rateLimitRejections = 0;
+            (string csrf, bool csrfRejected) = await CsrfAsync(client, cancellationToken);
+            authRequests++;
+            if (csrfRejected) rateLimitRejections++;
             using HttpRequestMessage login = new(HttpMethod.Post, "/admin/auth/development/login") { Content = JsonContent.Create(new { userName = user }) };
             login.Headers.Add("X-CSRF-TOKEN", csrf);
             using HttpResponseMessage response = await client.SendAsync(login, cancellationToken);
+            authRequests++;
+            if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests) rateLimitRejections++;
             response.EnsureSuccessStatusCode();
-            csrf = await CsrfAsync(client, cancellationToken);
+            (csrf, csrfRejected) = await CsrfAsync(client, cancellationToken);
+            authRequests++;
+            if (csrfRejected) rateLimitRejections++;
             using HttpResponseMessage meResponse = await client.GetAsync("/admin/auth/me", cancellationToken);
+            authRequests++;
+            if (meResponse.StatusCode == System.Net.HttpStatusCode.TooManyRequests) rateLimitRejections++;
             meResponse.EnsureSuccessStatusCode();
             JsonElement me = await meResponse.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: cancellationToken);
-            return new(client, csrf, me.GetProperty("id").GetGuid());
+            return new(client, csrf, me.GetProperty("id").GetGuid(), authRequests, rateLimitRejections);
         }
 
         public async Task<JsonElement> GetAsync(string relative)
         {
             using HttpResponseMessage response = await client.GetAsync("/" + relative.TrimStart('/'), TestContext.Current.CancellationToken);
+            Count(relative, response);
             response.EnsureSuccessStatusCode();
             return await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
         }
@@ -631,6 +676,7 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         public async Task<byte[]> GetBytesAsync(string relative)
         {
             using HttpResponseMessage response = await client.GetAsync("/" + relative.TrimStart('/'), TestContext.Current.CancellationToken);
+            Count(relative, response);
             response.EnsureSuccessStatusCode();
             return await response.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
         }
@@ -642,6 +688,7 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             if (ifMatch is not null) request.Headers.TryAddWithoutValidation("If-Match", $"\"{ifMatch.Value}\"");
             if (body is not null) request.Content = JsonContent.Create(body);
             using HttpResponseMessage response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+            Count(relative, response);
             if (!response.IsSuccessStatusCode)
             {
                 JsonElement problem = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
@@ -652,12 +699,20 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
 
         public void Dispose() => client.Dispose();
 
-        private static async Task<string> CsrfAsync(HttpClient client, CancellationToken cancellationToken)
+        private void Count(string relative, HttpResponseMessage response)
+        {
+            string normalized = relative.TrimStart('/');
+            if (normalized.StartsWith("admin/auth", StringComparison.OrdinalIgnoreCase)) AuthRequestCount++;
+            if (normalized.StartsWith("admin/api", StringComparison.OrdinalIgnoreCase)) ApiRequestCount++;
+            if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests) RateLimitRejectionCount++;
+        }
+
+        private static async Task<(string Token, bool RateLimitRejected)> CsrfAsync(HttpClient client, CancellationToken cancellationToken)
         {
             using HttpResponseMessage response = await client.GetAsync("/admin/auth/csrf", cancellationToken);
             response.EnsureSuccessStatusCode();
             JsonElement value = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: cancellationToken);
-            return value.GetProperty("token").GetString()!;
+            return (value.GetProperty("token").GetString()!, response.StatusCode == System.Net.HttpStatusCode.TooManyRequests);
         }
     }
 
