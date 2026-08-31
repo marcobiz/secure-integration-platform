@@ -1,7 +1,8 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.HttpOverrides;
 
@@ -29,7 +30,9 @@ internal readonly record struct AdminRateLimitObservation(
     long Sequence,
     long LimiterInstanceId,
     long WindowGeneration,
-    AdminRateLimitPartitionKey Partition,
+    AdminRateLimitPolicyClass PolicyClass,
+    AdminRateLimitPrincipalKind PrincipalKind,
+    string PartitionFingerprint,
     bool Acquired);
 
 internal interface IAdminRateLimitObserver
@@ -62,17 +65,29 @@ internal static class AdminRateLimiting
         CreateGlobalLimiter(AuthPermitLimit, ApiPermitLimit, Window, DefaultOidcCallbackPath, observer);
 
     internal static PartitionedRateLimiter<HttpContext> CreateGlobalLimiter(
+        IAdminRateLimitObserver observer,
+        TimeProvider observationTimeProvider) =>
+        CreateGlobalLimiter(AuthPermitLimit, ApiPermitLimit, Window, DefaultOidcCallbackPath, observer, observationTimeProvider);
+
+    internal static PartitionedRateLimiter<HttpContext> CreateGlobalLimiter(
         int authPermitLimit,
         int apiPermitLimit,
         TimeSpan window,
         string oidcCallbackPath = DefaultOidcCallbackPath,
-        IAdminRateLimitObserver? observer = null)
+        IAdminRateLimitObserver? observer = null,
+        TimeProvider? observationTimeProvider = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(authPermitLimit);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(apiPermitLimit);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(window, TimeSpan.Zero);
         if (string.IsNullOrWhiteSpace(oidcCallbackPath) || oidcCallbackPath[0] != '/')
             throw new ArgumentException("OIDC callback path must be absolute.", nameof(oidcCallbackPath));
+        if (observer is null && observationTimeProvider is not null)
+            throw new ArgumentException("An observation time provider requires an observer.", nameof(observationTimeProvider));
+
+        AdminRateLimitObservationState? observationState = observer is null
+            ? null
+            : new(observer, observationTimeProvider ?? TimeProvider.System);
 
         PartitionedRateLimiter<HttpContext> limiter = PartitionedRateLimiter.Create<HttpContext, AdminRateLimitPartitionKey>(context =>
         {
@@ -82,11 +97,18 @@ internal static class AdminRateLimiting
             int permitLimit = key.PolicyClass == AdminRateLimitPolicyClass.Auth
                 ? authPermitLimit
                 : apiPermitLimit;
-            return RateLimitPartition.GetFixedWindowLimiter(
-                key,
-                _ => CreateFixedWindowOptions(permitLimit, window));
+            return observationState is null
+                ? RateLimitPartition.GetFixedWindowLimiter(
+                    key,
+                    _ => CreateFixedWindowOptions(permitLimit, window))
+                : RateLimitPartition.Get(
+                    key,
+                    partitionKey => observationState.CreatePartitionLimiter(
+                        partitionKey,
+                        CreateFixedWindowOptions(permitLimit, window),
+                        window));
         });
-        return observer is null ? limiter : new ObservingAdminRateLimiter(limiter, observer, window);
+        return observationState is null ? limiter : new ObservationOwnedAdminRateLimiter(limiter, observationState);
     }
 
     internal static AdminRateLimitPartitionKey GetPartitionKey(
@@ -233,29 +255,130 @@ internal static class AdminRateLimiting
         AutoReplenishment = AutoReplenishment
     };
 
-    private sealed class ObservingAdminRateLimiter(
-        PartitionedRateLimiter<HttpContext> inner,
-        IAdminRateLimitObserver observer,
-        TimeSpan window) : PartitionedRateLimiter<HttpContext>
+    private sealed class AdminRateLimitObservationState : IDisposable
     {
         private static long nextInstanceId;
         private readonly long instanceId = Interlocked.Increment(ref nextInstanceId);
-        private readonly long startedTimestamp = Stopwatch.GetTimestamp();
+        private readonly IAdminRateLimitObserver observer;
+        private readonly TimeProvider timeProvider;
+        private readonly byte[] fingerprintKey = RandomNumberGenerator.GetBytes(32);
         private long sequence;
+        private int disposed;
 
-        public override RateLimiterStatistics? GetStatistics(HttpContext resource) => inner.GetStatistics(resource);
-
-        protected override RateLimitLease AttemptAcquireCore(HttpContext resource, int permitCount)
+        internal AdminRateLimitObservationState(
+            IAdminRateLimitObserver observer,
+            TimeProvider timeProvider)
         {
-            RateLimitLease lease = inner.AttemptAcquire(resource, permitCount);
-            Observe(resource, lease);
+            this.observer = observer;
+            this.timeProvider = timeProvider;
+        }
+
+        internal ObservedPartitionRateLimiter CreatePartitionLimiter(
+            AdminRateLimitPartitionKey partition,
+            FixedWindowRateLimiterOptions options,
+            TimeSpan window)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
+            long partitionCreatedTimestamp = timeProvider.GetTimestamp();
+            string fingerprint = Fingerprint(partition);
+            return new ObservedPartitionRateLimiter(
+                new FixedWindowRateLimiter(options),
+                this,
+                partition.PolicyClass,
+                partition.PrincipalKind,
+                fingerprint,
+                partitionCreatedTimestamp,
+                window);
+        }
+
+        internal void Observe(
+            AdminRateLimitPolicyClass policyClass,
+            AdminRateLimitPrincipalKind principalKind,
+            string partitionFingerprint,
+            long partitionCreatedTimestamp,
+            TimeSpan window,
+            bool acquired)
+        {
+            long currentTimestamp = timeProvider.GetTimestamp();
+            TimeSpan elapsed = timeProvider.GetElapsedTime(partitionCreatedTimestamp, currentTimestamp);
+            long generation = elapsed.Ticks / window.Ticks;
+            observer.Observe(new(
+                Interlocked.Increment(ref sequence),
+                instanceId,
+                generation,
+                policyClass,
+                principalKind,
+                partitionFingerprint,
+                acquired));
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) != 0) return;
+            CryptographicOperations.ZeroMemory(fingerprintKey);
+        }
+
+        private string Fingerprint(AdminRateLimitPartitionKey partition)
+        {
+            ReadOnlySpan<byte> policy = partition.PolicyClass switch
+            {
+                AdminRateLimitPolicyClass.Auth => "AUTH"u8,
+                AdminRateLimitPolicyClass.Api => "API"u8,
+                _ => throw new InvalidOperationException("ADMIN_RATE_LIMIT_POLICY_CLASS_INVALID")
+            };
+            ReadOnlySpan<byte> principal = partition.PrincipalKind switch
+            {
+                AdminRateLimitPrincipalKind.RemoteIp => "REMOTE_IP"u8,
+                AdminRateLimitPrincipalKind.AuthenticatedSubject => "AUTHENTICATED_SUBJECT"u8,
+                AdminRateLimitPrincipalKind.Unavailable => "UNAVAILABLE"u8,
+                _ => throw new InvalidOperationException("ADMIN_RATE_LIMIT_PRINCIPAL_KIND_INVALID")
+            };
+            int identityByteCount = Encoding.UTF8.GetByteCount(partition.Identity);
+            byte[] canonical = GC.AllocateUninitializedArray<byte>(
+                policy.Length + 1 + principal.Length + 1 + identityByteCount);
+            try
+            {
+                int offset = 0;
+                policy.CopyTo(canonical.AsSpan(offset));
+                offset += policy.Length;
+                canonical[offset++] = 0x1f;
+                principal.CopyTo(canonical.AsSpan(offset));
+                offset += principal.Length;
+                canonical[offset++] = 0x1f;
+                _ = Encoding.UTF8.GetBytes(partition.Identity, canonical.AsSpan(offset));
+                return Convert.ToHexString(HMACSHA256.HashData(fingerprintKey, canonical));
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(canonical);
+            }
+        }
+    }
+
+    private sealed class ObservedPartitionRateLimiter(
+        RateLimiter inner,
+        AdminRateLimitObservationState observationState,
+        AdminRateLimitPolicyClass policyClass,
+        AdminRateLimitPrincipalKind principalKind,
+        string partitionFingerprint,
+        long partitionCreatedTimestamp,
+        TimeSpan window) : RateLimiter
+    {
+        public override TimeSpan? IdleDuration => inner.IdleDuration;
+
+        public override RateLimiterStatistics? GetStatistics() => inner.GetStatistics();
+
+        protected override RateLimitLease AttemptAcquireCore(int permitCount)
+        {
+            RateLimitLease lease = inner.AttemptAcquire(permitCount);
+            Observe(lease);
             return lease;
         }
 
-        protected override async ValueTask<RateLimitLease> AcquireAsyncCore(HttpContext resource, int permitCount, CancellationToken cancellationToken)
+        protected override async ValueTask<RateLimitLease> AcquireAsyncCore(int permitCount, CancellationToken cancellationToken)
         {
-            RateLimitLease lease = await inner.AcquireAsync(resource, permitCount, cancellationToken).ConfigureAwait(false);
-            Observe(resource, lease);
+            RateLimitLease lease = await inner.AcquireAsync(permitCount, cancellationToken).ConfigureAwait(false);
+            Observe(lease);
             return lease;
         }
 
@@ -271,19 +394,55 @@ internal static class AdminRateLimiting
             await base.DisposeAsyncCore().ConfigureAwait(false);
         }
 
-        private void Observe(HttpContext context, RateLimitLease lease)
+        private void Observe(RateLimitLease lease) => observationState.Observe(
+            policyClass,
+            principalKind,
+            partitionFingerprint,
+            partitionCreatedTimestamp,
+            window,
+            lease.IsAcquired);
+    }
+
+    private sealed class ObservationOwnedAdminRateLimiter(
+        PartitionedRateLimiter<HttpContext> inner,
+        AdminRateLimitObservationState observationState) : PartitionedRateLimiter<HttpContext>
+    {
+
+        public override RateLimiterStatistics? GetStatistics(HttpContext resource) => inner.GetStatistics(resource);
+
+        protected override RateLimitLease AttemptAcquireCore(HttpContext resource, int permitCount)
+            => inner.AttemptAcquire(resource, permitCount);
+
+        protected override async ValueTask<RateLimitLease> AcquireAsyncCore(HttpContext resource, int permitCount, CancellationToken cancellationToken)
+            => await inner.AcquireAsync(resource, permitCount, cancellationToken).ConfigureAwait(false);
+
+        protected override void Dispose(bool disposing)
         {
-            // The middleware's post-callback no-limiter pass is not a lease from the
-            // configured fixed-window limiter; the explicit callback acquisition was
-            // already observed before this marker was installed.
-            if (context.Items.ContainsKey(PreAuthenticationCallbackLeaseItem)) return;
-            long generation = Stopwatch.GetElapsedTime(startedTimestamp).Ticks / window.Ticks;
-            observer.Observe(new(
-                Interlocked.Increment(ref sequence),
-                instanceId,
-                generation,
-                GetPartitionKey(context),
-                lease.IsAcquired));
+            if (disposing)
+            {
+                try
+                {
+                    inner.Dispose();
+                }
+                finally
+                {
+                    observationState.Dispose();
+                }
+            }
+            base.Dispose(disposing);
+        }
+
+        protected override async ValueTask DisposeAsyncCore()
+        {
+            try
+            {
+                await inner.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                observationState.Dispose();
+            }
+            await base.DisposeAsyncCore().ConfigureAwait(false);
         }
     }
 }

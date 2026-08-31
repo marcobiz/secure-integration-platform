@@ -135,6 +135,100 @@ public sealed class AdminRateLimitingIntegrationTests
     }
 
     [Fact]
+    public async Task ADMIN_RATE_LIMIT_observer_uses_ephemeral_HMAC_fingerprints_without_raw_identity()
+    {
+        const string firstRawSubject = "synthetic-private-subject-a";
+        const string secondRawSubject = "synthetic-private-subject-b";
+        BoundedAdminRateLimitTestProbe probe = new();
+        using PartitionedRateLimiter<HttpContext> limiter = probe.CreateGlobalLimiter(
+            authPermitLimit: 10,
+            apiPermitLimit: 10,
+            window: TimeSpan.FromMinutes(1));
+
+        Assert.True(await AcquireAsync(limiter, Context("/admin/api/v1/connectors", firstRawSubject)));
+        Assert.True(await AcquireAsync(limiter, Context("/admin/api/v1/connectors", firstRawSubject)));
+        Assert.True(await AcquireAsync(limiter, Context("/admin/api/v1/connectors", secondRawSubject)));
+
+        AdminRateLimitTestObservation[] observations = probe.Snapshot();
+        Assert.Equal(3, observations.Length);
+        Assert.Equal(observations[0].PartitionFingerprint, observations[1].PartitionFingerprint);
+        Assert.NotEqual(observations[0].PartitionFingerprint, observations[2].PartitionFingerprint);
+        Assert.All(observations, observation =>
+        {
+            Assert.Equal(64, observation.PartitionFingerprint.Length);
+            Assert.Equal(32, Convert.FromHexString(observation.PartitionFingerprint).Length);
+            Assert.DoesNotContain(firstRawSubject, observation.PartitionFingerprint, StringComparison.Ordinal);
+            Assert.DoesNotContain(secondRawSubject, observation.PartitionFingerprint, StringComparison.Ordinal);
+        });
+
+        string[] productionProperties = typeof(AdminRateLimitObservation).GetProperties().Select(value => value.Name).ToArray();
+        string[] snapshotProperties = typeof(AdminRateLimitTestObservation).GetProperties().Select(value => value.Name).ToArray();
+        Assert.DoesNotContain("Partition", productionProperties, StringComparer.Ordinal);
+        Assert.DoesNotContain("Identity", productionProperties, StringComparer.Ordinal);
+        Assert.DoesNotContain("Identity", snapshotProperties, StringComparer.Ordinal);
+        Assert.Contains("PartitionFingerprint", productionProperties, StringComparer.Ordinal);
+        Assert.Contains("PartitionFingerprint", snapshotProperties, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_partition_window_generation_uses_each_lazy_creation_origin()
+    {
+        ManualObservationTimeProvider observationClock = new();
+        BoundedAdminRateLimitTestProbe probe = new(observationClock);
+        using PartitionedRateLimiter<HttpContext> limiter = probe.CreateGlobalLimiter(
+            authPermitLimit: 10,
+            apiPermitLimit: 10,
+            window: TimeSpan.FromMinutes(1));
+
+        Assert.True(await AcquireAsync(limiter, Context("/admin/api/v1/connectors", "synthetic-generation-a")));
+        observationClock.Advance(TimeSpan.FromSeconds(45));
+        Assert.True(await AcquireAsync(limiter, Context("/admin/api/v1/connectors", "synthetic-generation-b")));
+        observationClock.Advance(TimeSpan.FromSeconds(20));
+        Assert.True(await AcquireAsync(limiter, Context("/admin/api/v1/connectors", "synthetic-generation-a")));
+        Assert.True(await AcquireAsync(limiter, Context("/admin/api/v1/connectors", "synthetic-generation-b")));
+
+        AdminRateLimitTestObservation[] observations = probe.Snapshot();
+        Assert.Equal(4, observations.Length);
+        string firstPartition = observations[0].PartitionFingerprint;
+        string secondPartition = observations[1].PartitionFingerprint;
+        Assert.NotEqual(firstPartition, secondPartition);
+        Assert.Equal(
+            new long[] { 0, 1 },
+            observations.Where(value => value.PartitionFingerprint == firstPartition).Select(value => value.WindowGeneration).ToArray());
+        Assert.Equal(
+            new long[] { 0, 0 },
+            observations.Where(value => value.PartitionFingerprint == secondPartition).Select(value => value.WindowGeneration).ToArray());
+    }
+
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_observer_HMAC_key_is_zeroed_when_wrapper_is_disposed()
+    {
+        BoundedAdminRateLimitTestProbe probe = new();
+        PartitionedRateLimiter<HttpContext> limiter = probe.CreateGlobalLimiter(
+            authPermitLimit: 10,
+            apiPermitLimit: 10,
+            window: TimeSpan.FromMinutes(1));
+        Assert.True(await AcquireAsync(limiter, Context("/admin/auth/login")));
+
+        object observationState = Assert.Single(
+            limiter.GetType()
+                .GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                .Select(field => field.GetValue(limiter)),
+            value => value?.GetType().Name == "AdminRateLimitObservationState")!;
+        byte[] fingerprintKey = Assert.Single(
+            observationState.GetType()
+                .GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic),
+            field => field.FieldType == typeof(byte[]))
+            .GetValue(observationState) as byte[] ?? throw new InvalidOperationException("ADMIN_RATE_LIMIT_TEST_KEY_BUFFER_MISSING");
+        Assert.Equal(32, fingerprintKey.Length);
+        Assert.Contains(fingerprintKey, value => value != 0);
+
+        limiter.Dispose();
+
+        Assert.All(fingerprintKey, value => Assert.Equal(0, value));
+    }
+
+    [Fact]
     public void ADMIN_RATE_LIMIT_pre_auth_endpoints_use_AUTH_remote_ip()
     {
         string[] preAuthenticationPaths =
@@ -410,5 +504,16 @@ public sealed class AdminRateLimitingIntegrationTests
             Environment.SetEnvironmentVariable(ApiKeyVariable, null, EnvironmentVariableTarget.Process);
             GC.SuppressFinalize(this);
         }
+    }
+
+    private sealed class ManualObservationTimeProvider : TimeProvider
+    {
+        private long timestamp;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => Volatile.Read(ref timestamp);
+
+        internal void Advance(TimeSpan elapsed) => Interlocked.Add(ref timestamp, elapsed.Ticks);
     }
 }

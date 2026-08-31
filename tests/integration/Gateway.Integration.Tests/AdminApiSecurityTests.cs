@@ -44,20 +44,38 @@ public sealed record AdminRateLimitTestObservation(
     long WindowGeneration,
     AdminRateLimitTestPolicyClass PolicyClass,
     AdminRateLimitTestPrincipalKind PrincipalKind,
-    string Identity,
+    string PartitionFingerprint,
     bool Acquired);
 
 public sealed class BoundedAdminRateLimitTestProbe
 {
     private const int MaximumObservations = 4096;
     private readonly object sync = new();
-    private readonly List<AdminRateLimitTestObservation> observations = [];
+    private readonly Queue<AdminRateLimitTestObservation> observations = [];
     private readonly ProbeObserver observer;
+    private readonly TimeProvider? observationTimeProvider;
 
-    public BoundedAdminRateLimitTestProbe() => observer = new(this);
+    public BoundedAdminRateLimitTestProbe(TimeProvider? observationTimeProvider = null)
+    {
+        this.observationTimeProvider = observationTimeProvider;
+        observer = new(this);
+    }
 
     public PartitionedRateLimiter<HttpContext> CreateGlobalLimiter() =>
-        AdminRateLimiting.CreateGlobalLimiter(observer);
+        observationTimeProvider is null
+            ? AdminRateLimiting.CreateGlobalLimiter(observer)
+            : AdminRateLimiting.CreateGlobalLimiter(observer, observationTimeProvider);
+
+    public PartitionedRateLimiter<HttpContext> CreateGlobalLimiter(
+        int authPermitLimit,
+        int apiPermitLimit,
+        TimeSpan window) =>
+        AdminRateLimiting.CreateGlobalLimiter(
+            authPermitLimit,
+            apiPermitLimit,
+            window,
+            observer: observer,
+            observationTimeProvider: observationTimeProvider);
 
     public AdminRateLimitTestObservation[] Snapshot()
     {
@@ -68,26 +86,25 @@ public sealed class BoundedAdminRateLimitTestProbe
     {
         lock (sync)
         {
-            if (observations.Count >= MaximumObservations)
-                throw new InvalidOperationException("ADMIN_RATE_LIMIT_TEST_PROBE_BOUND_EXCEEDED");
-            observations.Add(new(
+            if (observations.Count == MaximumObservations) _ = observations.Dequeue();
+            observations.Enqueue(new(
                 observation.Sequence,
                 observation.LimiterInstanceId,
                 observation.WindowGeneration,
-                observation.Partition.PolicyClass switch
+                observation.PolicyClass switch
                 {
                     AdminRateLimitPolicyClass.Auth => AdminRateLimitTestPolicyClass.Auth,
                     AdminRateLimitPolicyClass.Api => AdminRateLimitTestPolicyClass.Api,
                     _ => throw new InvalidOperationException("ADMIN_RATE_LIMIT_TEST_POLICY_CLASS_INVALID")
                 },
-                observation.Partition.PrincipalKind switch
+                observation.PrincipalKind switch
                 {
                     AdminRateLimitPrincipalKind.RemoteIp => AdminRateLimitTestPrincipalKind.RemoteIp,
                     AdminRateLimitPrincipalKind.AuthenticatedSubject => AdminRateLimitTestPrincipalKind.AuthenticatedSubject,
                     AdminRateLimitPrincipalKind.Unavailable => AdminRateLimitTestPrincipalKind.Unavailable,
                     _ => throw new InvalidOperationException("ADMIN_RATE_LIMIT_TEST_PRINCIPAL_KIND_INVALID")
                 },
-                observation.Partition.Identity,
+                observation.PartitionFingerprint,
                 observation.Acquired));
         }
     }
@@ -1231,6 +1248,75 @@ public sealed class AdminApiPostgreSqlSecurityTests
     }
 
     [Fact]
+    public async Task ADMIN_ROLE_concurrent_identical_tenant_scoped_first_assignment_converges_bounded()
+    {
+        await using PostgreSqlRoleRaceContext context = await PostgreSqlRoleRaceContext.CreateAsync();
+        for (int iteration = 0; iteration < 4; iteration++)
+        {
+            Guid tenantId = Guid.NewGuid();
+            await context.Registry.AddTenantAsync(
+                new(
+                    tenantId,
+                    "role-race-tenant-" + tenantId.ToString("N"),
+                    "Role race tenant",
+                    TenantStatus.Active,
+                    DateTimeOffset.UtcNow),
+                TestContext.Current.CancellationToken);
+            AdminExternalIdentity target = NewTarget("tenant-first-" + iteration);
+            (_, AdminSessionRecord targetSession) = await context.Sessions.CreateAsync(
+                target,
+                DateTimeOffset.UtcNow,
+                TimeSpan.FromHours(1),
+                TimeSpan.FromMinutes(20),
+                TestContext.Current.CancellationToken);
+
+            using HttpResponseMessage first = await context.SendPairAsync(
+                context.Editor,
+                context.EditorCsrf,
+                context.Approver,
+                context.ApproverCsrf,
+                target,
+                AdminRole.Operator,
+                tenantId);
+            using HttpResponseMessage second = context.SecondResponse!;
+
+            Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+            string firstBody = await first.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+            string secondBody = await second.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+            AssertNoDatabaseInternals(firstBody);
+            AssertNoDatabaseInternals(secondBody);
+            using JsonDocument firstDocument = JsonDocument.Parse(firstBody);
+            using JsonDocument secondDocument = JsonDocument.Parse(secondBody);
+            Guid assignmentId = firstDocument.RootElement.GetProperty("id").GetGuid();
+            Assert.Equal(assignmentId, secondDocument.RootElement.GetProperty("id").GetGuid());
+            Assert.Equal(
+                1L,
+                await context.ScalarAsync(
+                    "SELECT count(*) FROM gateway.admin_role_assignment WHERE principal_id=$1 AND role='operator' AND tenant_id=$2",
+                    targetSession.Principal.Id,
+                    tenantId));
+            Assert.Equal(
+                1L,
+                await context.ScalarAsync(
+                    "SELECT count(*) FROM gateway.admin_role_assignment WHERE id=$1 AND principal_id=$2 AND tenant_id=$3",
+                    assignmentId,
+                    targetSession.Principal.Id,
+                    tenantId));
+            Assert.Equal(
+                1L,
+                await context.ScalarAsync(
+                    "SELECT count(*) FROM gateway.audit_event WHERE action='admin.role.assign' AND target_id=$1",
+                    targetSession.Principal.Id.ToString("D")));
+            Assert.Equal(
+                1L,
+                await context.ScalarAsync(
+                    "SELECT count(*) FROM gateway.admin_session WHERE id=$1 AND revoked_at IS NOT NULL",
+                    targetSession.Id));
+        }
+    }
+
+    [Fact]
     public async Task ADMIN_ROLE_concurrent_existing_noops_do_not_revoke_or_extend_sessions()
     {
         await using PostgreSqlRoleRaceContext context = await PostgreSqlRoleRaceContext.CreateAsync();
@@ -1286,6 +1372,15 @@ public sealed class AdminApiPostgreSqlSecurityTests
         return new("https://role-race.example.test", subject, "Role race", null);
     }
 
+    private static void AssertNoDatabaseInternals(string body)
+    {
+        Assert.DoesNotContain("23505", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("SQLSTATE", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Npgsql", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("PostgreSQL", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ux_admin_role_assignment_scope", body, StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed class PostgreSqlRoleRaceContext : IAsyncDisposable
     {
         private readonly string adminConnectionString;
@@ -1327,10 +1422,10 @@ public sealed class AdminApiPostgreSqlSecurityTests
             return new(adminConnectionString, runtimeRole, factory, dataSource, security, new(dataSource, security), editorPrincipal, editor, editorCsrf, approver, approverCsrf);
         }
 
-        internal async Task<HttpResponseMessage> SendPairAsync(HttpClient firstClient, string firstCsrf, HttpClient secondClient, string secondCsrf, AdminExternalIdentity target, AdminRole role)
+        internal async Task<HttpResponseMessage> SendPairAsync(HttpClient firstClient, string firstCsrf, HttpClient secondClient, string secondCsrf, AdminExternalIdentity target, AdminRole role, Guid? tenantId = null)
         {
-            Task<HttpResponseMessage> first = SendAsync(firstClient, firstCsrf, target, role, null);
-            Task<HttpResponseMessage> second = SendAsync(secondClient, secondCsrf, target, role, null);
+            Task<HttpResponseMessage> first = SendAsync(firstClient, firstCsrf, target, role, tenantId);
+            Task<HttpResponseMessage> second = SendAsync(secondClient, secondCsrf, target, role, tenantId);
             HttpResponseMessage[] responses = await Task.WhenAll(first, second).ConfigureAwait(false);
             SecondResponse = responses[1];
             return responses[0];
@@ -1343,10 +1438,11 @@ public sealed class AdminApiPostgreSqlSecurityTests
             return await client.SendAsync(request, TestContext.Current.CancellationToken).ConfigureAwait(false);
         }
 
-        internal async Task<long> ScalarAsync(string sql, object value)
+        internal async Task<long> ScalarAsync(string sql, params object[] values)
         {
             await using NpgsqlConnection connection = new(adminConnectionString); await connection.OpenAsync(TestContext.Current.CancellationToken);
-            await using NpgsqlCommand command = new(sql, connection); command.Parameters.AddWithValue(value);
+            await using NpgsqlCommand command = new(sql, connection);
+            foreach (object value in values) command.Parameters.AddWithValue(value);
             return Convert.ToInt64(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken), System.Globalization.CultureInfo.InvariantCulture);
         }
 

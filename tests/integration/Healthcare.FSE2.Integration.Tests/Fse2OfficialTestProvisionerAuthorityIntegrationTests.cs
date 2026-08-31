@@ -313,7 +313,8 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         DualOnboardingResult result = await DualOnboardingGateAsync();
 
         Assert.Equal(1, result.RemoteIpPartitionCount);
-        Assert.Equal(24, result.RemoteIpPartitionFingerprint.Length);
+        Assert.Equal(64, result.RemoteIpPartitionFingerprint.Length);
+        Assert.Equal(32, Convert.FromHexString(result.RemoteIpPartitionFingerprint).Length);
     }
 
     [Fact]
@@ -609,17 +610,19 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         int totalRateLimitRejections = observations.Count(value => !value.Acquired);
         Dictionary<string, int> apiRequestsPerSubject = observations
             .Where(value => value.PolicyClass == AdminRateLimitTestPolicyClass.Api && value.PrincipalKind == AdminRateLimitTestPrincipalKind.AuthenticatedSubject)
-            .GroupBy(value => Fingerprint(evidenceKey, "rate-limit-subject", value.Identity), StringComparer.Ordinal)
+            .GroupBy(value => value.PartitionFingerprint, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
         string[] remoteIpPartitions = authObservations
             .Where(value => value.PrincipalKind == AdminRateLimitTestPrincipalKind.RemoteIp)
-            .Select(value => value.Identity)
+            .Select(value => value.PartitionFingerprint)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         long[] windowGenerations = observations.Select(value => value.WindowGeneration).Distinct().Order().ToArray();
-        int windowResetCount = observations.OrderBy(value => value.Sequence)
-            .Zip(observations.OrderBy(value => value.Sequence).Skip(1), (left, right) => right.WindowGeneration < left.WindowGeneration)
-            .Count(value => value);
+        int windowResetCount = observations
+            .GroupBy(value => value.PartitionFingerprint, StringComparer.Ordinal)
+            .Sum(group => group.OrderBy(value => value.Sequence)
+                .Zip(group.OrderBy(value => value.Sequence).Skip(1), (left, right) => right.WindowGeneration < left.WindowGeneration)
+                .Count(value => value));
         Dictionary<string, int> requestCountsByEndpoint = sessionEvidence
             .SelectMany(value => value.RequestCountsByEndpoint)
             .GroupBy(value => value.Key, StringComparer.Ordinal)
@@ -654,7 +657,7 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             AuthRejectedCount: authRejectedCount,
             ApiRequestsPerSubject: apiRequestsPerSubject,
             RemoteIpPartitionCount: remoteIpPartitions.Length,
-            RemoteIpPartitionFingerprint: Fingerprint(evidenceKey, "rate-limit-remote-ip", Assert.Single(remoteIpPartitions)),
+            RemoteIpPartitionFingerprint: Assert.Single(remoteIpPartitions),
             LimiterInstanceCount: limiterInstanceCount,
             WindowGenerationCount: windowGenerations.Length,
             TotalRateLimitRejections: totalRateLimitRejections,
