@@ -258,6 +258,7 @@ public static class BackendRuntimeWireCodes
         new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-RESOURCE-REVISION-STALE"),
         new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-RESOURCE-SCOPE"),
         new(RuntimeWireCodeKind.Reason, "BGW-PROVIDER-RESOURCE-TYPE"),
+        new(RuntimeWireCodeKind.Reason, "BGW-RATE-LIMITED"),
         new(RuntimeWireCodeKind.Reason, "BGW-TENANT-CREATED"),
         new(RuntimeWireCodeKind.Reason, "BGW-TENANT-DISABLED"),
         new(RuntimeWireCodeKind.Reason, "BGW-TENANT-NOT-FOUND"),
