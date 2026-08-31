@@ -65,6 +65,27 @@ redaction, clean-state completion and reuse of the shared state machine with a n
 All negative runtime counters are zero. This is an offline product remediation only and performs no
 OfficialTest DNS/network call or access to real FSE2 material.
 
+### Shared Gateway rate-limit partition correction (2026-08-31)
+
+The residual first-request poisoning was in the shared Gateway host, not the FSE2 state machine.
+The former partition key contained only authenticated `sub` or peer IP while the fixed-window
+factory selected 20 or 240 from the path captured by the first request for that key. A typed key now
+contains the server-selected policy class, principal kind and server-side identity. AUTH uses the
+remote IP after explicit trusted-proxy handling; API uses authenticated `sub`, with remote-IP
+fallback only when absent. Forwarded-header defaults are cleared so only configured proxy addresses
+can rewrite the peer. No threshold changes: AUTH=20/min, API=240/min, window=1 minute, queue=0,
+automatic replenishment enabled.
+
+Ten shared Gateway tests prove AUTH/API separation in both orders, policy and principal exhaustion,
+tenant/Installation noisy-neighbor isolation, untrusted forwarded-header denial, exact production
+defaults and a redacted `BGW-RATE-LIMITED` Problem with bounded Retry-After. The two additional
+provisioner names re-prove Validated resume and same-plan completion. The real PostgreSQL clean-state
+gate no longer substitutes a 1000-request test limiter: it counts requests by safe role label,
+requires positive headroom against 20/240, zero 429 and final Published/Active. The pre-existing
+server-state discovery, drift denial, four-eyes, role split and same-command recovery remain
+unchanged. This qualification uses synthetic/local traffic only and claims no live-call result or
+SLO.
+
 The bounded local qualification closed with 10/10 resumability cases, 1/1 clean-state provisioner,
 1/1 PostgreSQL OfficialTest lifecycle, 3/3 PostgreSQL FSE2 round trips, 10/10 targeted runtime and
 version-policy regressions, 1/1 frozen T03 multipart, and 10/10 focused architecture checks. The

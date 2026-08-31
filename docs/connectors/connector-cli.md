@@ -40,3 +40,18 @@ endpoint, credenziali o exception text. Dopo l'attesa operativa l'operatore ripe
 stesso comando e piano: le fasi persistite vengono verificate e saltate. Uno stato già Published e
 identico è verify-only/no-op. Non esistono flag force/recovery né bypass del rate limiter, di RBAC o
 del four-eyes.
+
+## Confine rate-limit Admin
+
+Il Gateway mantiene due classi di partizione non sovrapponibili. `AUTH` usa il remote IP elaborato
+soltanto dal middleware forwarded-header e solo per proxy configurati esplicitamente; `API` usa il
+subject della sessione autenticata e ricade sul remote IP solo se quel claim non è disponibile. La
+classe e il tipo di identità fanno parte della chiave tipizzata: una prima richiesta AUTH non può
+creare il limiter API e l'ordine inverso non può ampliare il bucket AUTH. Non esiste un bucket API
+globale fra principal o fra workflow tenant/Installation distinti.
+
+I default restano AUTH 20/minuto e API 240/minuto, finestra un minuto, coda zero e replenishment
+automatico. Un 429 Gateway contiene soltanto il codice `BGW-RATE-LIMITED`, un Problem redatto e,
+quando disponibile dal lease, `Retry-After` bounded fra 0 e 3600 secondi. Il Gateway non attende e
+non ritenta. Il provisioner interpreta il rifiuto usando lo stato server-side e permette di ripetere
+lo stesso comando/piano; non sono richiesti cleanup, SQL, accesso store o un comando recovery.

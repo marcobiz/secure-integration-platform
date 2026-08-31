@@ -115,6 +115,15 @@ post-validation case the result is `Validated`, retry-safe, with next phase
 `BindingConfiguration`; re-entry does not import or validate again. Invalid or oversized
 Retry-After is omitted and never causes a hidden retry.
 
+Gateway authentication and Admin API traffic use distinct rate-limit partitions. AUTH is keyed by
+the trusted peer IP after explicit trusted-proxy processing and remains 20 requests/minute; API is
+keyed by the authenticated server-side subject (remote-IP fallback only when absent) and remains 240
+requests/minute. Both use a one-minute fixed window, queue zero and automatic replenishment. An AUTH
+request cannot consume or configure the API bucket and vice versa; no principal or tenant workflow
+shares a global API bucket. A Gateway rejection is the redacted `BGW-RATE-LIMITED` 429 with only an
+optional bounded `Retry-After`. It is consumed by the resumable behavior above, never by a hidden
+retry or manual database recovery.
+
 Run `grant` in the same Security Administrator session. It re-resolves the Installation, then
 lists grants for the server-owned Tenant. It verifies one exact enabled grant or creates one for the
 selected Installation, Connector and `validate-cda`, followed by exact read-back. It never accepts
@@ -180,7 +189,7 @@ configuration, JWTs, payloads, certificate chains, P12 material or session cooki
 ## Clean-state acceptance and recovery
 
 The dedicated release gate is
-`FSE2_OFFICIALTEST_clean_state_supported_provisioner_reaches_Published_for_authenticated_installation`.
+`PROVISIONER_clean_state_completes_under_default_limits_without_429`.
 It creates a unique labelled Docker network, container and named volume from the already-present
 `postgres:18` image, publishing PostgreSQL only on a random loopback port. The empty-state proof is
 an authenticated Admin API read-back showing zero Tenants, Applications, Environments and provider
@@ -213,12 +222,17 @@ Missing and unauthorized selections return the same non-enumerating unavailable 
 never selects the first record. All three assert zero Admin mutation, provider access, signing, DNS,
 HTTPS, transport and network effects.
 
-The shared deterministic recovery qualification consists of the ten exact `PROVISIONER_*` named
+The shared deterministic recovery qualification consists of twelve exact `PROVISIONER_*` named
 tests in `Fse2ProvisionerResumabilityIntegrationTests`. They persist a synthetic Validated state,
 inject one 429 before binding, prove one-attempt/no-loop behavior, same-plan resume through
 Published/Active, Published re-entry no-op, exact identity drift denial, unchanged four-eyes/RBAC,
 bounded redaction and connector-neutral operation. Every negative asserts zero signing, DNS, HTTPS,
 transport and external network effects.
+
+The clean-state gate does not replace the limiter with a high test-only threshold. It exercises the
+production defaults, records redacted AUTH/API request counts per role, computes headroom against
+20/240 and requires zero 429 before accepting Published/Active. Reduced limits are used only by the
+separate isolation fixture to prove exhaustion without hundreds of requests.
 
 Record elapsed time from empty database to Published. The dedicated PostgreSQL job sets
 `REQUIRE_FSE2_POSTGRES_GATE=1` and requires exactly one execution with zero failed and zero skipped;
