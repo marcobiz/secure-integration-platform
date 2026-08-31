@@ -320,6 +320,21 @@ jobs:
           test "$(sed -n 's/.* passed="\([0-9][0-9]*\)".*/\1/p' <<<"$counters")" -eq 1
           test "$(sed -n 's/.* failed="\([0-9][0-9]*\)".*/\1/p' <<<"$counters")" -eq 0
           test "$(sed -n 's/.* notExecuted="\([0-9][0-9]*\)".*/\1/p' <<<"$counters")" -eq 0
+      - name: Run independent same-NAT dual-onboarding gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          results_directory=".artifacts/test-results/independent-same-nat-dual-onboarding"
+          mkdir -p "$results_directory"
+          dotnet test tests/integration/Healthcare.FSE2.Integration.Tests/Healthcare.FSE2.Integration.Tests.csproj \
+            -c Release --no-build --no-restore \
+            --filter FullyQualifiedName~SecureIntegration.ConnectorPacks.Healthcare.FSE2.Integration.Tests.Fse2OfficialTestProvisionerAuthorityIntegrationTests.ADMIN_RATE_LIMIT_ \
+            --logger "trx;LogFileName=independent-same-nat-dual-onboarding.trx" \
+            --results-directory "$results_directory"
+          counters="$(grep -o '<Counters [^>]*/>' "$results_directory/independent-same-nat-dual-onboarding.trx" | tail -n 1)"
+          test "$(sed -n 's/.* passed="\([0-9][0-9]*\)".*/\1/p' <<<"$counters")" -eq 7
+          test "$(sed -n 's/.* failed="\([0-9][0-9]*\)".*/\1/p' <<<"$counters")" -eq 0
+          test "$(sed -n 's/.* notExecuted="\([0-9][0-9]*\)".*/\1/p' <<<"$counters")" -eq 0
       - name: Clean PostgreSQL test schema
         if: always()
         shell: bash

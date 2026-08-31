@@ -121,8 +121,9 @@ AUTH, keyed by trusted peer IP after explicit trusted-proxy processing, at 60 re
 seconds. Authenticated CSRF, me, logout and ordinary Admin APIs use API, keyed only by the
 server-validated subject, at 600 requests per 60 seconds. DevelopmentApiKey uses a constant
 server-owned API identity and does not consume browser AUTH. Both policies use queue zero and
-automatic replenishment. The provisioner must keep one session/cookie jar per role and reuse valid
-CSRF state; it does not wait for a window, relogin between phases or reset the limiter. A Gateway
+automatic replenishment. Each independent workflow must create its own session/cookie jar per role
+and then reuse valid CSRF state; sessions are not shared between workflows. It does not wait for a
+window, relogin between phases or reset the limiter. A Gateway
 rejection is the redacted `BGW-RATE-LIMITED` 429 with only an optional bounded `Retry-After`. It is
 consumed by the resumable behavior above, never by a hidden retry or manual database recovery.
 

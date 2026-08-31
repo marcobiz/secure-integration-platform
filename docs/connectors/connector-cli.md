@@ -52,14 +52,15 @@ non trusted, parametri, body, tenant, Installation e cookie non validati non sce
 Usano AUTH: `GET /admin/auth/login`, `POST /admin/auth/development/login`, la callback OIDC
 configurata, `GET /admin/auth/csrf` prima del login e gli endpoint `/admin/auth/*` sconosciuti.
 Usano API dopo autenticazione server-side: CSRF post-login, `me`, logout e le Admin API ordinarie.
-DevelopmentAuth riusa un cookie jar distinto per ruolo; DevelopmentApiKey viene validata prima del
+DevelopmentAuth usa un cookie jar distinto per ruolo e per workflow indipendente; due workflow
+concorrenti non condividono le tre sessioni tecniche. DevelopmentApiKey viene validata prima del
 limiter e usa un subject costante server-owned senza consumare AUTH; OIDC mantiene login e callback
 in AUTH e sposta le richieste di sessione successive in API. Non si fanno affermazioni sui rate limit
 dell'IdP esterno.
 
 I default sono AUTH 60 richieste per 60 secondi per remote IP attendibile e API 600 richieste per 60
-secondi per authenticated subject, con coda zero e replenishment automatico. Il workflow riusa una
-sessione per ruolo e rinnova il CSRF solo quando necessario: non attende la finestra, non ripete login
+secondi per authenticated subject, con coda zero e replenishment automatico. Ciascun workflow riusa
+la propria sessione per ruolo e rinnova il CSRF solo quando necessario: non attende la finestra, non ripete login
 e non richiede supporto tecnico sul golden path. Un 429 Gateway contiene soltanto il codice
 `BGW-RATE-LIMITED`, un Problem redatto e, quando disponibile dal lease, `Retry-After` bounded fra 0 e
 3600 secondi. Il Gateway non attende e non ritenta. Il provisioner interpreta il rifiuto usando lo

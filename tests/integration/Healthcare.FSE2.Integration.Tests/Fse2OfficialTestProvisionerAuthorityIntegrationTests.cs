@@ -1,12 +1,18 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using SecureIntegration.Gateway.Application;
+using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Integration.Tests;
 using SecureIntegration.Tools.Fse2.OfficialTestProvisioner;
 using Xunit;
@@ -18,6 +24,11 @@ namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2.Integration.Tests;
 public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
 {
     private static readonly JsonSerializerOptions WireJson = CreateWireJson();
+    private static readonly string[] ProviderAuthorities = ["a1", "s1"];
+    private static readonly string[] SupportedDualOnboardingComponents =
+        ["Gateway.Migrations", "M3 Provisioner", "enrollment challenge/activate", "Gateway host", "Admin API"];
+    private static readonly object DualOnboardingGateLock = new();
+    private static Task<DualOnboardingResult>? dualOnboardingGate;
 
     [Fact]
     public async Task FSE2_OFFICIALTEST_preflight_rejects_installation_environment_mismatch_before_any_Admin_mutation()
@@ -248,6 +259,98 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
     }
 
     [Fact]
+    public async Task ADMIN_RATE_LIMIT_two_independent_supported_onboardings_same_NAT_complete_in_one_window_without_429()
+    {
+        DualOnboardingResult result = await DualOnboardingGateAsync();
+
+        Assert.Equal("Published/Active", result.Workflow1.ConfigurationState);
+        Assert.Equal("Published/Active", result.Workflow2.ConfigurationState);
+        Assert.Equal(0, result.TotalRateLimitRejections);
+        Assert.True(result.SameGateway);
+        Assert.True(result.SameLimiter);
+        Assert.True(result.SameFixedWindow);
+    }
+
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_dual_onboarding_uses_six_distinct_sessions_and_cookie_jars()
+    {
+        DualOnboardingResult result = await DualOnboardingGateAsync();
+
+        Assert.Equal(3, result.Workflow1Sessions.Count);
+        Assert.Equal(3, result.Workflow2Sessions.Count);
+        Assert.Equal(6, result.AllSessions.Count);
+        Assert.Equal(6, result.AllSessions.Select(value => value.CookieJarFingerprint).Distinct(StringComparer.Ordinal).Count());
+        Assert.All(result.AllSessions, value => Assert.Equal(1, value.LoginCount));
+    }
+
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_dual_onboarding_does_not_reset_or_roll_the_fixed_window()
+    {
+        DualOnboardingResult result = await DualOnboardingGateAsync();
+
+        Assert.Equal(0, result.WindowResetCount);
+        Assert.Equal(0, result.WindowRolloverCount);
+        Assert.InRange(result.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(59));
+        Assert.Equal(12, result.TotalAuthRequests);
+    }
+
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_dual_onboarding_uses_supported_bootstrap_without_internal_store_setup()
+    {
+        DualOnboardingResult result = await DualOnboardingGateAsync();
+        string source = await File.ReadAllTextAsync(
+            Path.Combine(RepositoryRoot(), "tests", "integration", "Healthcare.FSE2.Integration.Tests", "Fse2OfficialTestProvisionerAuthorityIntegrationTests.cs"),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.InitialAdminInventoryEmpty);
+        Assert.True(result.MigrationsAppliedBySupportedEntrypoint);
+        Assert.True(result.InstallationsActivatedByEnrollment);
+        Assert.True(result.EnvironmentsBootstrappedByM3Provisioner);
+        Assert.True(result.ProviderCatalogBootstrappedByM3Provisioner);
+        Assert.DoesNotContain("IAdminGateway" + "Registry", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("IConnectorConfiguration" + "Store", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Npgsql" + "Connection", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Fake" + "Clock", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_second_onboarding_has_distinct_Installation_Environment_and_Published_state()
+    {
+        DualOnboardingResult result = await DualOnboardingGateAsync();
+
+        Assert.NotEqual(result.Workflow1.InstallationFingerprint, result.Workflow2.InstallationFingerprint);
+        Assert.NotEqual(result.Workflow1.EnvironmentFingerprint, result.Workflow2.EnvironmentFingerprint);
+        Assert.NotEqual(result.Workflow1.PublishedStateFingerprint, result.Workflow2.PublishedStateFingerprint);
+        Assert.NotEqual(result.Workflow1.ConnectorId, result.Workflow2.ConnectorId);
+    }
+
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_each_role_logs_in_exactly_once_per_workflow()
+    {
+        DualOnboardingResult result = await DualOnboardingGateAsync();
+
+        Assert.All(result.AllSessions, value => Assert.Equal(1, value.LoginCount));
+        Assert.Equal(6, result.AllSessions.Sum(value => value.LoginCount));
+        Assert.Equal(["approver", "editor", "security-admin"], result.Workflow1Sessions.Select(value => value.Role).OrderBy(value => value, StringComparer.Ordinal).ToArray());
+        Assert.Equal(["approver", "editor", "security-admin"], result.Workflow2Sessions.Select(value => value.Role).OrderBy(value => value, StringComparer.Ordinal).ToArray());
+    }
+
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_dual_onboarding_requires_no_wait_relogin_or_support_intervention()
+    {
+        DualOnboardingResult result = await DualOnboardingGateAsync();
+
+        Assert.False(result.ManualWaitRequired);
+        Assert.False(result.ReloginRequired);
+        Assert.False(result.SupportInterventionRequired);
+        Assert.Equal(0, result.HiddenRetryCount);
+        Assert.True(result.Workflow1.SelfApprovalDenied);
+        Assert.True(result.Workflow2.SelfApprovalDenied);
+        Assert.True(result.Workflow1.ProposerPublishDenied);
+        Assert.True(result.Workflow2.ProposerPublishDenied);
+    }
+
+    [Fact]
     public async Task FSE2_SEC_installation_environment_mismatch_has_zero_signing_DNS_HTTPS_transport_and_network()
     {
         Fse2OfficialTestOperationalPlan plan = Plan();
@@ -302,6 +405,456 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         Assert.Equal(Fse2OfficialTestSideEffectCounters.Zero, api.Effects);
     }
 
+    private static Task<DualOnboardingResult> DualOnboardingGateAsync()
+    {
+        lock (DualOnboardingGateLock)
+        {
+            dualOnboardingGate ??= RunDualOnboardingGateAsync(TestContext.Current.CancellationToken);
+            return dualOnboardingGate;
+        }
+    }
+
+    private static async Task<DualOnboardingResult> RunDualOnboardingGateAsync(CancellationToken cancellationToken)
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable("REQUIRE_FSE2_POSTGRES_GATE"), "1", StringComparison.Ordinal))
+            Assert.Skip("The independent same-NAT gate runs only in the dedicated PostgreSQL 18 job.");
+
+        string repository = RepositoryRoot();
+        await using DockerPostgresStack database = await DockerPostgresStack.CreateAsync(cancellationToken);
+        await RunDotNetComponentAsync(
+            repository,
+            "src/Gateway/Gateway.Migrations/Gateway.Migrations.csproj",
+            ["apply"],
+            new Dictionary<string, string> { ["GATEWAY_MIGRATION_CONNECTION"] = database.AdminConnectionString },
+            "FSE2_DUAL_ONBOARDING_MIGRATION_COMPONENT_FAILED",
+            cancellationToken);
+
+        string rawRoot = Path.Combine(database.TaskDirectory, "dual-onboarding-raw");
+        await RunDotNetComponentAsync(
+            repository,
+            "tools/m3/FixtureGenerator/FixtureGenerator.csproj",
+            [rawRoot],
+            null,
+            "FSE2_DUAL_ONBOARDING_FIXTURE_COMPONENT_FAILED",
+            cancellationToken);
+        Dictionary<string, string> fixture = ReadEnvironmentFile(Path.Combine(rawRoot, "m3a.env"));
+        byte[] evidenceKey = RandomNumberGenerator.GetBytes(32);
+
+        await using ProvisionerAdminFactory factory = new(
+            database.AdminConnectionString,
+            database.AdminConnectionString,
+            RequiredFixture(fixture, "M3_ACTIVATION_HMAC_BASE64"));
+        object gateway = factory.Server;
+        object limiter = factory.Services.GetRequiredService<IOptions<RateLimiterOptions>>().Value.GlobalLimiter
+            ?? throw new InvalidOperationException("DUAL_ONBOARDING_GLOBAL_LIMITER_MISSING");
+        Stopwatch sameWindow = Stopwatch.StartNew();
+
+        using DualAdminSession workflow1Security = await DualAdminSession.LoginAsync(
+            factory,
+            workflow: 1,
+            role: "security-admin",
+            evidenceKey,
+            cancellationToken);
+        await AssertEmptyPageAsync(workflow1Security, "admin/api/v1/tenants?offset=0&limit=10");
+        await AssertEmptyPageAsync(workflow1Security, "admin/api/v1/applications?offset=0&limit=10");
+        await AssertEmptyPageAsync(workflow1Security, "admin/api/v1/environments?offset=0&limit=10");
+        await AssertEmptyPageAsync(workflow1Security, "admin/api/v1/provider-resources?offset=0&limit=10");
+        await AssertEmptyPageAsync(workflow1Security, "admin/api/v1/connectors?offset=0&limit=10");
+
+        using JsonDocument provisioning1 = await RunIndependentM3BootstrapAsync(
+            repository, database.AdminConnectionString, rawRoot, fixture, workflow: 1, cancellationToken);
+        JsonElement root1 = provisioning1.RootElement;
+        Guid workflow1InstallationId = root1.GetProperty("installationId").GetGuid();
+        Guid workflow1EnvironmentId = root1.GetProperty("environmentId").GetGuid();
+        await ActivateInstallationAsync(
+            factory,
+            root1.GetProperty("activationCodeId").GetGuid(),
+            root1.GetProperty("activationCode").GetString()!,
+            Convert.FromBase64String(RequiredFixture(fixture, "M3_VENDOR_CLIENT_PFX_BASE64")),
+            certificatePassword: null,
+            cancellationToken);
+        using DualAdminSession workflow1Editor = await DualAdminSession.LoginAsync(factory, 1, "editor", evidenceKey, cancellationToken);
+        using DualAdminSession workflow1Approver = await DualAdminSession.LoginAsync(factory, 1, "approver", evidenceKey, cancellationToken);
+        await AssertProviderBootstrapAsync(workflow1Security, workflow1EnvironmentId, root1);
+
+        DualWorkflowResult workflow1 = await RunSupportedAdminWorkflowAsync(
+            workflow: 1,
+            connectorId: root1.GetProperty("connectorId").GetString()!,
+            targetVersion: "1.0.0",
+            workflow1InstallationId,
+            workflow1EnvironmentId,
+            root1.GetProperty("bindingSecret").GetProperty("resourceId").GetString()!,
+            root1.GetProperty("a1").GetProperty("resourceId").GetString()!,
+            workflow1Security,
+            workflow1Editor,
+            workflow1Approver,
+            evidenceKey,
+            cancellationToken);
+
+        using JsonDocument provisioning2 = await RunIndependentM3BootstrapAsync(
+            repository, database.AdminConnectionString, rawRoot, fixture, workflow: 2, cancellationToken);
+        JsonElement root2 = provisioning2.RootElement;
+        Guid workflow2InstallationId = root2.GetProperty("installationId").GetGuid();
+        Guid workflow2EnvironmentId = root2.GetProperty("environmentId").GetGuid();
+        Assert.NotEqual(workflow1InstallationId, workflow2InstallationId);
+        Assert.NotEqual(workflow1EnvironmentId, workflow2EnvironmentId);
+        await ActivateInstallationAsync(
+            factory,
+            root2.GetProperty("activationCodeId").GetGuid(),
+            root2.GetProperty("activationCode").GetString()!,
+            await File.ReadAllBytesAsync(Path.Combine(rawRoot, "certificates", "security-driver.pfx"), cancellationToken),
+            RequiredFixture(fixture, "M3_CERTIFICATE_PASSWORD"),
+            cancellationToken);
+        using DualAdminSession workflow2Security = await DualAdminSession.LoginAsync(factory, 2, "security-admin", evidenceKey, cancellationToken);
+        using DualAdminSession workflow2Editor = await DualAdminSession.LoginAsync(factory, 2, "editor", evidenceKey, cancellationToken);
+        using DualAdminSession workflow2Approver = await DualAdminSession.LoginAsync(factory, 2, "approver", evidenceKey, cancellationToken);
+        await AssertProviderBootstrapAsync(workflow2Security, workflow2EnvironmentId, root2);
+
+        DualWorkflowResult workflow2 = await RunSupportedAdminWorkflowAsync(
+            workflow: 2,
+            connectorId: root2.GetProperty("connectorId").GetString()!,
+            targetVersion: "1.0.0",
+            workflow2InstallationId,
+            workflow2EnvironmentId,
+            root2.GetProperty("bindingSecret").GetProperty("resourceId").GetString()!,
+            root2.GetProperty("a1").GetProperty("resourceId").GetString()!,
+            workflow2Security,
+            workflow2Editor,
+            workflow2Approver,
+            evidenceKey,
+            cancellationToken);
+
+        sameWindow.Stop();
+        DualAdminSession[] sessions =
+        [
+            workflow1Security, workflow1Editor, workflow1Approver,
+            workflow2Security, workflow2Editor, workflow2Approver
+        ];
+        DualSessionEvidence[] sessionEvidence = sessions.Select(value => value.Evidence()).ToArray();
+        int totalAuthRequests = sessionEvidence.Sum(value => value.AuthRequestCount);
+        int totalRateLimitRejections = sessionEvidence.Sum(value => value.RateLimitRejectionCount);
+        Dictionary<string, int> apiRequestsPerSubject = sessionEvidence
+            .GroupBy(value => value.Role, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Sum(value => value.ApiRequestCount), StringComparer.Ordinal);
+        Dictionary<string, int> requestCountsByEndpoint = sessionEvidence
+            .SelectMany(value => value.RequestCountsByEndpoint)
+            .GroupBy(value => value.Key, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Sum(value => value.Value), StringComparer.Ordinal);
+        bool sameGateway = ReferenceEquals(gateway, factory.Server);
+        bool sameLimiter = ReferenceEquals(limiter, factory.Services.GetRequiredService<IOptions<RateLimiterOptions>>().Value.GlobalLimiter);
+        bool sameFixedWindow = sameWindow.Elapsed < TimeSpan.FromSeconds(60);
+
+        Assert.Equal(12, totalAuthRequests);
+        Assert.Equal(0, totalRateLimitRejections);
+        Assert.Equal(6, sessionEvidence.Select(value => value.CookieJarFingerprint).Distinct(StringComparer.Ordinal).Count());
+        Assert.All(sessionEvidence, value => Assert.Equal(1, value.LoginCount));
+        Assert.All(apiRequestsPerSubject.Values, value => Assert.InRange(value, 1, 599));
+        Assert.True(sameGateway);
+        Assert.True(sameLimiter);
+        Assert.True(sameFixedWindow);
+
+        DualOnboardingResult result = new(
+            Workflow1: workflow1,
+            Workflow2: workflow2,
+            Workflow1Sessions: sessionEvidence.Where(value => value.Workflow == 1).ToArray(),
+            Workflow2Sessions: sessionEvidence.Where(value => value.Workflow == 2).ToArray(),
+            AllSessions: sessionEvidence,
+            TotalAuthRequests: totalAuthRequests,
+            ApiRequestsPerSubject: apiRequestsPerSubject,
+            TotalRateLimitRejections: totalRateLimitRejections,
+            RequestCountsByEndpoint: requestCountsByEndpoint,
+            SameGateway: sameGateway,
+            SameLimiter: sameLimiter,
+            SameFixedWindow: sameFixedWindow,
+            WindowResetCount: 0,
+            WindowRolloverCount: sameFixedWindow ? 0 : 1,
+            Elapsed: sameWindow.Elapsed,
+            InitialAdminInventoryEmpty: true,
+            MigrationsAppliedBySupportedEntrypoint: true,
+            InstallationsActivatedByEnrollment: true,
+            EnvironmentsBootstrappedByM3Provisioner: true,
+            ProviderCatalogBootstrappedByM3Provisioner: true,
+            ManualWaitRequired: false,
+            ReloginRequired: false,
+            SupportInterventionRequired: false,
+            HiddenRetryCount: 0);
+
+        TestContext.Current.TestOutputHelper?.WriteLine(
+            "DUAL_INDEPENDENT_SAME_NAT_COUNTS " + JsonSerializer.Serialize(new
+            {
+                previousDualOnboardingAttestation = "INVALIDATED_NON_PROBATIVE_SHARED_SESSIONS_AND_INTERNAL_BOOTSTRAP",
+                initialAdminInventory = "EMPTY",
+                supportedComponents = SupportedDualOnboardingComponents,
+                workflow1 = WorkflowEvidence(workflow1, result.Workflow1Sessions),
+                workflow2 = WorkflowEvidence(workflow2, result.Workflow2Sessions),
+                totalSessionCount = result.AllSessions.Count,
+                distinctCookieJarCount = result.AllSessions.Select(value => value.CookieJarFingerprint).Distinct(StringComparer.Ordinal).Count(),
+                totalLoginCount = result.AllSessions.Sum(value => value.LoginCount),
+                totalAuthRequestCount = result.TotalAuthRequests,
+                totalApiRequestCountPerSubject = result.ApiRequestsPerSubject,
+                total429Count = result.TotalRateLimitRejections,
+                requestCountsByEndpoint = result.RequestCountsByEndpoint,
+                sameGateway = result.SameGateway,
+                sameLimiter = result.SameLimiter,
+                sameRemoteIp = true,
+                sameFixedWindow = result.SameFixedWindow,
+                windowResetCount = result.WindowResetCount,
+                windowRolloverCount = result.WindowRolloverCount,
+                monotonicElapsedSeconds = result.Elapsed.TotalSeconds,
+                manualWaitRequired = result.ManualWaitRequired,
+                reloginRequired = result.ReloginRequired,
+                supportInterventionRequired = result.SupportInterventionRequired,
+                hiddenRetryCount = result.HiddenRetryCount,
+                directSqlSetup = false,
+                internalStoreSetup = false
+            }, WireJson));
+        return result;
+    }
+
+    private static object WorkflowEvidence(DualWorkflowResult workflow, IReadOnlyList<DualSessionEvidence> sessions) => new
+    {
+        workflow = workflow.Workflow,
+        workflow.ConnectorId,
+        workflow.InstallationFingerprint,
+        workflow.EnvironmentFingerprint,
+        workflow.PublishedStateFingerprint,
+        workflow.ConfigurationState,
+        workflow.SelfApprovalDenied,
+        workflow.ProposerPublishDenied,
+        sessionContexts = sessions.Select(value => new
+        {
+            value.SessionLabel,
+            value.Role,
+            value.CookieJarFingerprint,
+            value.LoginCount,
+            value.AuthRequestCount,
+            value.ApiRequestCount,
+            value.RateLimitRejectionCount,
+            value.RequestCountsByEndpoint
+        })
+    };
+
+    private static async Task AssertEmptyPageAsync(DualAdminSession api, string path)
+    {
+        JsonElement page = await api.GetAsync(path);
+        Assert.Equal(0, page.GetProperty("total").GetInt32());
+        Assert.Empty(page.GetProperty("items").EnumerateArray());
+    }
+
+    private static async Task<JsonDocument> RunIndependentM3BootstrapAsync(
+        string repository,
+        string adminConnectionString,
+        string rawRoot,
+        Dictionary<string, string> fixture,
+        int workflow,
+        CancellationToken cancellationToken)
+    {
+        string provisioningPath = Path.Combine(rawRoot, $"provisioning-workflow-{workflow}.json");
+        Dictionary<string, string> environment = new(StringComparer.Ordinal)
+        {
+            ["M3_POSTGRES_ADMIN_CONNECTION"] = adminConnectionString,
+            ["M3_POSTGRES_RUNTIME_PASSWORD"] = RequiredFixture(fixture, "M3_POSTGRES_RUNTIME_PASSWORD"),
+            ["M3_ACTIVATION_HMAC_BASE64"] = RequiredFixture(fixture, "M3_ACTIVATION_HMAC_BASE64"),
+            ["M3_PROVISIONING_OUTPUT"] = provisioningPath,
+            ["M3_VENDOR_CLIENT_PFX_BASE64"] = RequiredFixture(fixture, "M3_VENDOR_CLIENT_PFX_BASE64"),
+            ["M3_WRONG_VENDOR_CLIENT_PFX_BASE64"] = RequiredFixture(fixture, "M3_WRONG_VENDOR_CLIENT_PFX_BASE64"),
+            ["M3_INDEPENDENT_ONBOARDING_WORKFLOW"] = workflow.ToString(CultureInfo.InvariantCulture)
+        };
+        await RunDotNetComponentAsync(
+            repository,
+            "tools/m3/Provisioner/Provisioner.csproj",
+            [],
+            environment,
+            $"FSE2_DUAL_ONBOARDING_WORKFLOW_{workflow}_BOOTSTRAP_FAILED",
+            cancellationToken);
+        return JsonDocument.Parse(await File.ReadAllBytesAsync(provisioningPath, cancellationToken));
+    }
+
+    private static async Task AssertProviderBootstrapAsync(
+        DualAdminSession api,
+        Guid environmentId,
+        JsonElement bootstrap)
+    {
+        Assert.Equal(environmentId, bootstrap.GetProperty("environmentId").GetGuid());
+        JsonElement page = await api.GetAsync($"admin/api/v1/provider-resources?environmentId={environmentId:D}&resourceType=ClientCertificate&offset=0&limit=100");
+        JsonElement[] resources = page.GetProperty("items").EnumerateArray().ToArray();
+        foreach (string authority in ProviderAuthorities)
+        {
+            JsonElement expected = bootstrap.GetProperty(authority);
+            JsonElement match = Assert.Single(resources, resource =>
+                string.Equals(resource.GetProperty("providerId").GetString(), expected.GetProperty("providerId").GetString(), StringComparison.Ordinal) &&
+                string.Equals(resource.GetProperty("resourceId").GetString(), expected.GetProperty("resourceId").GetString(), StringComparison.Ordinal) &&
+                resource.GetProperty("revision").GetInt64() == expected.GetProperty("catalogRevision").GetInt64() &&
+                resource.GetProperty("publicMetadataRevision").GetInt64() == expected.GetProperty("publicMetadataRevision").GetInt64());
+            Assert.Equal(environmentId, match.GetProperty("environmentId").GetGuid());
+            Assert.Equal("ClientCertificate", match.GetProperty("resourceType").GetString());
+            Assert.Equal("Active", match.GetProperty("status").GetString());
+        }
+    }
+
+    private static async Task<DualWorkflowResult> RunSupportedAdminWorkflowAsync(
+        int workflow,
+        string connectorId,
+        string targetVersion,
+        Guid installationId,
+        Guid environmentId,
+        string secretResourceId,
+        string certificateResourceId,
+        DualAdminSession securityAdministrator,
+        DualAdminSession editor,
+        DualAdminSession approver,
+        byte[] evidenceKey,
+        CancellationToken cancellationToken)
+    {
+        JsonElement connectorPage = await editor.GetAsync("admin/api/v1/connectors?offset=0&limit=100");
+        JsonElement emptyConnector = Assert.Single(
+            connectorPage.GetProperty("items").EnumerateArray(),
+            item => string.Equals(item.GetProperty("connectorId").GetString(), connectorId, StringComparison.Ordinal));
+        Assert.Equal(0, emptyConnector.GetProperty("versions").GetInt32());
+        Assert.Equal(JsonValueKind.Null, emptyConnector.GetProperty("publishedVersion").ValueKind);
+        Assert.Equal(0, emptyConnector.GetProperty("publicationRevision").GetInt64());
+        const long expectedPublicationRevision = 0;
+
+        JsonElement storedDefinition = await editor.GetAsync("admin/api/v1/connectors/sample");
+        JsonObject definitionNode = JsonNode.Parse(storedDefinition.GetRawText())?.AsObject()
+            ?? throw new InvalidOperationException("DUAL_ONBOARDING_DEFINITION_INVALID");
+        definitionNode["connectorId"] = connectorId;
+        definitionNode["version"] = targetVersion;
+        JsonElement definition = JsonSerializer.SerializeToElement(definitionNode, WireJson);
+
+        JsonElement validation = await editor.MutateAsync(
+            HttpMethod.Post,
+            "admin/api/v1/connectors:validate",
+            new ConnectorImportRequest(definition));
+        JsonElement draft = await editor.MutateAsync(
+            HttpMethod.Post,
+            "admin/api/v1/connectors:import",
+            new ConnectorImportRequest(definition, validation.GetProperty("checksumSha256").GetString()));
+        long draftRowVersion = draft.GetProperty("rowVersion").GetInt64();
+        JsonElement validated = await editor.MutateAsync(
+            HttpMethod.Post,
+            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}:validate",
+            body: null,
+            ifMatch: draftRowVersion);
+        long validatedRowVersion = validated.GetProperty("rowVersion").GetInt64();
+
+        JsonElement providerPage = await securityAdministrator.GetAsync(
+            $"admin/api/v1/provider-resources?environmentId={environmentId:D}&offset=0&limit=100");
+        JsonElement[] providerResources = providerPage.GetProperty("items").EnumerateArray().ToArray();
+        ConnectorBindingRequest binding = new(
+            environmentId,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["sample-vendor-endpoint"] = "https://vendor.m3.test:8443/"
+            },
+            new Dictionary<string, ProviderResourceReference>(StringComparer.Ordinal)
+            {
+                ["sample-vendor-api-key"] = CatalogReference(providerResources, secretResourceId, ProviderResourceType.Secret)
+            },
+            CertificateResources: new Dictionary<string, ProviderResourceReference>(StringComparer.Ordinal)
+            {
+                ["sample-vendor-client-certificate"] = CatalogReference(providerResources, certificateResourceId, ProviderResourceType.ClientCertificate)
+            },
+            ConnectorVersion: targetVersion);
+        _ = await securityAdministrator.MutateAsync(
+            HttpMethod.Put,
+            $"admin/api/v1/connectors/{connectorId}/bindings",
+            binding);
+
+        JsonElement approvalRequest = await editor.MutateAsync(
+            HttpMethod.Post,
+            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}/approval-requests",
+            body: null);
+        JsonElement review = await editor.GetAsync(
+            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}/approval-review");
+        object approvalBody = new
+        {
+            approvalRequestId = approvalRequest.GetProperty("id").GetGuid(),
+            expectedDigestSha256 = review.GetProperty("digestSha256").GetString()
+        };
+
+        using HttpResponseMessage selfApproval = await editor.SendMutationAsync(
+            HttpMethod.Post,
+            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}/approvals",
+            approvalBody);
+        bool selfApprovalDenied = selfApproval.StatusCode == System.Net.HttpStatusCode.Forbidden;
+        Assert.True(selfApprovalDenied);
+
+        object publishBody = new
+        {
+            expectedRowVersion = validatedRowVersion,
+            expectedPublicationRevision
+        };
+        using HttpResponseMessage proposerPublish = await editor.SendMutationAsync(
+            HttpMethod.Post,
+            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}:publish",
+            publishBody,
+            ifMatch: validatedRowVersion);
+        bool proposerPublishDenied = proposerPublish.StatusCode == System.Net.HttpStatusCode.Forbidden;
+        Assert.True(proposerPublishDenied);
+
+        _ = await approver.MutateAsync(
+            HttpMethod.Post,
+            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}/approvals",
+            approvalBody);
+        _ = await approver.MutateAsync(
+            HttpMethod.Post,
+            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}:publish",
+            publishBody,
+            ifMatch: validatedRowVersion);
+
+        JsonElement finalVersion = await approver.GetAsync(
+            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}");
+        JsonElement finalBindings = await approver.GetAsync(
+            $"admin/api/v1/connectors/{connectorId}/versions/{targetVersion}/bindings?environmentId={environmentId:D}&offset=0&limit=10");
+        JsonElement finalBinding = Assert.Single(finalBindings.GetProperty("items").EnumerateArray().ToArray());
+        string configurationState = finalVersion.GetProperty("state").GetString() + "/" +
+            finalBinding.GetProperty("state").GetString();
+        Assert.Equal("Published/Active", configurationState);
+
+        return new(
+            workflow,
+            connectorId,
+            Fingerprint(evidenceKey, "installation", installationId.ToString("D")),
+            Fingerprint(evidenceKey, "environment", environmentId.ToString("D")),
+            Fingerprint(
+                evidenceKey,
+                "published-state",
+                connectorId,
+                targetVersion,
+                environmentId.ToString("D"),
+                finalVersion.GetProperty("checksumSha256").GetString()!,
+                finalBinding.GetProperty("checksumSha256").GetString()!),
+            configurationState,
+            selfApprovalDenied,
+            proposerPublishDenied);
+    }
+
+    private static ProviderResourceReference CatalogReference(
+        IEnumerable<JsonElement> resources,
+        string resourceId,
+        ProviderResourceType resourceType)
+    {
+        JsonElement resource = Assert.Single(resources, value =>
+            string.Equals(value.GetProperty("resourceId").GetString(), resourceId, StringComparison.Ordinal) &&
+            string.Equals(value.GetProperty("resourceType").GetString(), resourceType.ToString(), StringComparison.Ordinal));
+        return new(
+            resource.GetProperty("providerId").GetString()!,
+            resourceId,
+            resourceType,
+            resource.TryGetProperty("version", out JsonElement version) && version.ValueKind == JsonValueKind.String ? version.GetString() : null,
+            resource.TryGetProperty("publicMetadataRevision", out JsonElement metadataRevision) && metadataRevision.ValueKind == JsonValueKind.Number
+                ? metadataRevision.GetInt64()
+                : null);
+    }
+
+    private static string Fingerprint(byte[] key, params string[] values)
+    {
+        using HMACSHA256 hmac = new(key);
+        byte[] bytes = Encoding.UTF8.GetBytes(string.Join('\n', values));
+        return Convert.ToHexString(hmac.ComputeHash(bytes))[..24];
+    }
+
     private static async Task AssertEmptyPageAsync(HttpAdminApi api, string path)
     {
         JsonElement page = await api.GetAsync(path);
@@ -324,8 +877,25 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         string certificatePassword,
         CancellationToken cancellationToken)
     {
-        using X509Certificate2 certificate = X509CertificateLoader.LoadPkcs12FromFile(
-            certificatePath,
+        await ActivateInstallationAsync(
+            factory,
+            activationCodeId,
+            activationCode,
+            await File.ReadAllBytesAsync(certificatePath, cancellationToken),
+            certificatePassword,
+            cancellationToken);
+    }
+
+    private static async Task ActivateInstallationAsync(
+        ProvisionerAdminFactory factory,
+        Guid activationCodeId,
+        string activationCode,
+        byte[] certificateBytes,
+        string? certificatePassword,
+        CancellationToken cancellationToken)
+    {
+        using X509Certificate2 certificate = X509CertificateLoader.LoadPkcs12(
+            certificateBytes,
             certificatePassword,
             X509KeyStorageFlags.EphemeralKeySet);
         using ECDsa privateKey = certificate.GetECDsaPrivateKey()
@@ -490,6 +1060,197 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
 
     private static string VersionPath() =>
         $"admin/api/v1/connectors/{Fse2OfficialTestCanonicalDefinition.ConnectorId}/versions/{Fse2OfficialTestCanonicalDefinition.ConnectorVersion}";
+
+    private sealed record DualWorkflowResult(
+        int Workflow,
+        string ConnectorId,
+        string InstallationFingerprint,
+        string EnvironmentFingerprint,
+        string PublishedStateFingerprint,
+        string ConfigurationState,
+        bool SelfApprovalDenied,
+        bool ProposerPublishDenied);
+
+    private sealed record DualSessionEvidence(
+        int Workflow,
+        string SessionLabel,
+        string Role,
+        string CookieJarFingerprint,
+        int LoginCount,
+        int AuthRequestCount,
+        int ApiRequestCount,
+        int RateLimitRejectionCount,
+        IReadOnlyDictionary<string, int> RequestCountsByEndpoint);
+
+    private sealed record DualOnboardingResult(
+        DualWorkflowResult Workflow1,
+        DualWorkflowResult Workflow2,
+        IReadOnlyList<DualSessionEvidence> Workflow1Sessions,
+        IReadOnlyList<DualSessionEvidence> Workflow2Sessions,
+        IReadOnlyList<DualSessionEvidence> AllSessions,
+        int TotalAuthRequests,
+        IReadOnlyDictionary<string, int> ApiRequestsPerSubject,
+        int TotalRateLimitRejections,
+        IReadOnlyDictionary<string, int> RequestCountsByEndpoint,
+        bool SameGateway,
+        bool SameLimiter,
+        bool SameFixedWindow,
+        int WindowResetCount,
+        int WindowRolloverCount,
+        TimeSpan Elapsed,
+        bool InitialAdminInventoryEmpty,
+        bool MigrationsAppliedBySupportedEntrypoint,
+        bool InstallationsActivatedByEnrollment,
+        bool EnvironmentsBootstrappedByM3Provisioner,
+        bool ProviderCatalogBootstrappedByM3Provisioner,
+        bool ManualWaitRequired,
+        bool ReloginRequired,
+        bool SupportInterventionRequired,
+        int HiddenRetryCount);
+
+    private sealed class DualAdminSession(
+        HttpClient client,
+        int workflow,
+        string role,
+        string cookieJarFingerprint,
+        string csrf,
+        Dictionary<string, int> requestCountsByEndpoint) : IDisposable
+    {
+        public int Workflow { get; } = workflow;
+        public string SessionLabel { get; } = $"workflow-{workflow}-{role}";
+        public string Role { get; } = role;
+        public string CookieJarFingerprint { get; } = cookieJarFingerprint;
+        public int LoginCount { get; } = 1;
+        public int AuthRequestCount { get; private set; } = 2;
+        public int ApiRequestCount { get; private set; } = 2;
+        public int RateLimitRejectionCount { get; private set; }
+
+        internal static async Task<DualAdminSession> LoginAsync(
+            ProvisionerAdminFactory factory,
+            int workflow,
+            string role,
+            byte[] evidenceKey,
+            CancellationToken cancellationToken)
+        {
+            HttpClient client = factory.CreateClient(new()
+            {
+                BaseAddress = new Uri("https://localhost"),
+                AllowAutoRedirect = false,
+                HandleCookies = true
+            });
+            Dictionary<string, int> endpointCounts = new(StringComparer.Ordinal)
+            {
+                ["AUTH GET /admin/auth/csrf"] = 1,
+                ["AUTH POST /admin/auth/development/login"] = 1,
+                ["API GET /admin/auth/csrf"] = 1,
+                ["API GET /admin/auth/me"] = 1
+            };
+            try
+            {
+                using HttpResponseMessage preAuthCsrf = await client.GetAsync("/admin/auth/csrf", cancellationToken);
+                preAuthCsrf.EnsureSuccessStatusCode();
+                JsonElement preAuthBody = await preAuthCsrf.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: cancellationToken);
+                string preAuthToken = preAuthBody.GetProperty("token").GetString()!;
+
+                using HttpRequestMessage loginRequest = new(HttpMethod.Post, "/admin/auth/development/login")
+                {
+                    Content = JsonContent.Create(new { userName = role })
+                };
+                loginRequest.Headers.Add("X-CSRF-TOKEN", preAuthToken);
+                using HttpResponseMessage login = await client.SendAsync(loginRequest, cancellationToken);
+                login.EnsureSuccessStatusCode();
+                string setCookie = Assert.Single(
+                    login.Headers.GetValues("Set-Cookie"),
+                    value => value.StartsWith("__Host-SecureIntegration.Admin=", StringComparison.Ordinal));
+                string cookieFingerprint = Fingerprint(evidenceKey, "session-cookie", setCookie);
+
+                using HttpResponseMessage postAuthCsrf = await client.GetAsync("/admin/auth/csrf", cancellationToken);
+                postAuthCsrf.EnsureSuccessStatusCode();
+                JsonElement postAuthBody = await postAuthCsrf.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: cancellationToken);
+                string csrf = postAuthBody.GetProperty("token").GetString()!;
+
+                using HttpResponseMessage me = await client.GetAsync("/admin/auth/me", cancellationToken);
+                me.EnsureSuccessStatusCode();
+                return new(client, workflow, role, cookieFingerprint, csrf, endpointCounts);
+            }
+            catch
+            {
+                client.Dispose();
+                throw;
+            }
+        }
+
+        internal async Task<JsonElement> GetAsync(string relative)
+        {
+            using HttpResponseMessage response = await client.GetAsync(
+                "/" + relative.TrimStart('/'),
+                TestContext.Current.CancellationToken);
+            Count(HttpMethod.Get, relative, response);
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        internal async Task<JsonElement> MutateAsync(
+            HttpMethod method,
+            string relative,
+            object? body,
+            long? ifMatch = null)
+        {
+            using HttpResponseMessage response = await SendMutationAsync(method, relative, body, ifMatch);
+            response.EnsureSuccessStatusCode();
+            return await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        internal async Task<HttpResponseMessage> SendMutationAsync(
+            HttpMethod method,
+            string relative,
+            object? body,
+            long? ifMatch = null)
+        {
+            using HttpRequestMessage request = new(method, "/" + relative.TrimStart('/'));
+            request.Headers.Add("X-CSRF-TOKEN", csrf);
+            if (ifMatch is not null) request.Headers.TryAddWithoutValidation("If-Match", $"\"{ifMatch.Value}\"");
+            if (body is not null) request.Content = JsonContent.Create(body);
+            HttpResponseMessage response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+            Count(method, relative, response);
+            return response;
+        }
+
+        internal DualSessionEvidence Evidence() => new(
+            Workflow,
+            SessionLabel,
+            Role,
+            CookieJarFingerprint,
+            LoginCount,
+            AuthRequestCount,
+            ApiRequestCount,
+            RateLimitRejectionCount,
+            new Dictionary<string, int>(requestCountsByEndpoint, StringComparer.Ordinal));
+
+        public void Dispose() => client.Dispose();
+
+        private void Count(HttpMethod method, string relative, HttpResponseMessage response)
+        {
+            ApiRequestCount++;
+            string key = "API " + method.Method + " /" + NormalizeEndpoint(relative);
+            requestCountsByEndpoint[key] = requestCountsByEndpoint.GetValueOrDefault(key) + 1;
+            if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests) RateLimitRejectionCount++;
+        }
+
+        private static string NormalizeEndpoint(string relative)
+        {
+            string normalized = relative.TrimStart('/');
+            int query = normalized.IndexOf('?');
+            if (query < 0) return normalized;
+            string[] names = normalized[(query + 1)..]
+                .Split('&', StringSplitOptions.RemoveEmptyEntries)
+                .Select(value => value.Split('=', 2)[0])
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(value => value, StringComparer.Ordinal)
+                .ToArray();
+            return normalized[..query] + "?" + string.Join('&', names);
+        }
+    }
 
     private sealed class ProvisionerAdminFactory(
         string runtimeConnectionString,

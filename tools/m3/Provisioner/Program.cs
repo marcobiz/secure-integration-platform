@@ -22,8 +22,76 @@ await EnsureRuntimeRoleAsync(adminConnection, runtimePassword).ConfigureAwait(fa
 if (adminApiPassword is not null) await EnsureAdminRoleAsync(adminConnection, adminApiPassword).ConfigureAwait(false);
 await using NpgsqlDataSource dataSource = NpgsqlDataSource.Create(adminConnection);
 PostgresGatewayRegistry registry = new(dataSource);
+PostgresConnectorConfigurationStore connectorStore = new(dataSource);
 SystemGatewayClock clock = new();
 GatewayProvisioningService provisioning = new(registry, clock, new EnrollmentSecurityOptions { ActivationHmacKey = activationKey });
+string? independentOnboardingWorkflow = Optional("M3_INDEPENDENT_ONBOARDING_WORKFLOW");
+if (independentOnboardingWorkflow is not null)
+{
+    if (independentOnboardingWorkflow is not "1" and not "2")
+        throw new InvalidOperationException("M3_INDEPENDENT_ONBOARDING_WORKFLOW must be 1 or 2.");
+
+    string workflow = independentOnboardingWorkflow;
+    Guid isolatedTenantId = Guid.NewGuid();
+    Guid isolatedApplicationId = Guid.NewGuid();
+    Guid isolatedEnvironmentId = Guid.NewGuid();
+    Guid isolatedInstallationId = Guid.NewGuid();
+    string isolatedConnectorId = "same-nat-onboarding-" + workflow;
+    ProvisionedActivation isolatedActivation = await provisioning.CreateInstallationAsync(
+        new TenantRecord(isolatedTenantId, "same-nat-tenant-" + workflow, "Same NAT Tenant " + workflow, TenantStatus.Active, clock.UtcNow),
+        new ApplicationRecord(isolatedApplicationId, "same-nat-application-" + workflow, "Same NAT Application " + workflow, ApplicationStatus.Active, "1.0.0", null, clock.UtcNow),
+        new GatewayEnvironmentRecord(isolatedEnvironmentId, "same-nat-" + workflow, "Same NAT Environment " + workflow, false),
+        isolatedInstallationId,
+        "m3-provisioner",
+        CancellationToken.None).ConfigureAwait(false);
+    await registry.AddGrantAsync(new InstallationGrantRecord(Guid.NewGuid(), isolatedInstallationId, isolatedTenantId, isolatedConnectorId, "submit", true, clock.UtcNow), CancellationToken.None).ConfigureAwait(false);
+
+    ProviderResourceCatalogRecord isolatedSecret = await RegisterResourceAsync(
+        isolatedEnvironmentId,
+        isolatedConnectorId,
+        "same-nat-" + workflow + "-secret",
+        ProviderResourceType.Secret,
+        "synthetic-vault://vault.m3.test/same-nat-" + workflow + "-secret",
+        null,
+        null).ConfigureAwait(false);
+    ProviderResourceCatalogRecord isolatedA1 = await RegisterResourceAsync(
+        isolatedEnvironmentId,
+        isolatedConnectorId,
+        "same-nat-" + workflow + "-a1",
+        ProviderResourceType.ClientCertificate,
+        "synthetic-vault://vault.m3.test/same-nat-" + workflow + "-a1",
+        vendorCertificate,
+        1).ConfigureAwait(false);
+    ProviderResourceCatalogRecord isolatedS1 = await RegisterResourceAsync(
+        isolatedEnvironmentId,
+        isolatedConnectorId,
+        "same-nat-" + workflow + "-s1",
+        ProviderResourceType.ClientCertificate,
+        "synthetic-vault://vault.m3.test/same-nat-" + workflow + "-s1",
+        wrongVendorCertificate,
+        1).ConfigureAwait(false);
+
+    Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath))!);
+    await File.WriteAllBytesAsync(outputPath, JsonSerializer.SerializeToUtf8Bytes(new
+    {
+        schemaVersion = 1,
+        workflow,
+        connectorId = isolatedConnectorId,
+        tenantId = isolatedTenantId,
+        applicationId = isolatedApplicationId,
+        environmentId = isolatedEnvironmentId,
+        installationId = isolatedInstallationId,
+        activationCodeId = isolatedActivation.ActivationCodeId,
+        activationCode = isolatedActivation.ActivationCode,
+        expiresAtUtc = isolatedActivation.ExpiresAt,
+        bindingSecret = ProviderAuthority(isolatedSecret),
+        a1 = ProviderAuthority(isolatedA1),
+        s1 = ProviderAuthority(isolatedS1)
+    }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true })).ConfigureAwait(false);
+    Console.WriteLine(JsonSerializer.Serialize(new { status = "provisioned", workflow, installationId = isolatedInstallationId, activationCodeId = isolatedActivation.ActivationCodeId }));
+    return 0;
+}
+
 Guid tenantId = Guid.NewGuid();
 Guid applicationId = Guid.NewGuid();
 Guid environmentId = OptionalGuid("M3_PRIMARY_ENVIRONMENT_ID") ?? Guid.NewGuid();
@@ -81,7 +149,6 @@ string[] securityGrantedOperations = ["submit", "loopback", "private", "metadata
 foreach (string operation in securityGrantedOperations)
     await registry.AddGrantAsync(new InstallationGrantRecord(Guid.NewGuid(), securityInstallationId, securityTenantId, "m3-vendor", operation, true, clock.UtcNow), CancellationToken.None).ConfigureAwait(false);
 
-PostgresConnectorConfigurationStore connectorStore = new(dataSource);
 object? fse2OfficialTest = null;
 if (string.Equals(Optional("M3_FSE2_OFFICIALTEST_SYNTHETIC_BOOTSTRAP"), "1", StringComparison.Ordinal))
 {

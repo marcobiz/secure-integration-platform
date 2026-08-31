@@ -42,5 +42,9 @@ La four-eyes approval M5 e vincolata sia al checksum canonico della ConnectorVer
 - La UI same-origin non conserva access/refresh token in Web Storage e non abilita CORS permissivo.
 - Ogni ruolo tecnico riusa la sessione e il CSRF ancora validi fra le fasi supportate; expiry e
   validazione server-side restano invariati e non esistono reset, sleep o retry nascosti del limiter.
+- Sessioni concorrenti dello stesso principal restano valide quando l'assegnazione exact di un ruolo
+  è già presente; solo una variazione reale dei privilegi revoca tutte le sessioni del principal.
+  Il gate same-NAT usa tre nuove sessioni e tre nuovi cookie jar per ciascuno dei due workflow, non
+  tre sessioni condivise fra i workflow.
 - Le soglie sono un controllo process-local contro abuso evidente, non una difesa distribuita contro
   un attore con credenziali valide o un rate limit dell'identity provider OIDC esterno.

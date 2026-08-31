@@ -80,10 +80,23 @@ addresses can rewrite the peer.
 The pragmatic defaults are AUTH=60 requests/60 seconds and API=600 requests/60 seconds, window one
 minute, queue zero and automatic replenishment. Exact boundary tests deny request 61 and 601 while
 another IP/subject remains unaffected. DevelopmentAuth, DevelopmentApiKey and OIDC are qualified
-separately without claiming tenant/Installation partitioning or an external IdP rate limit. A real
-PostgreSQL host test runs two complete DevelopmentAuth onboarding workflows behind the same NAT with
-one session per role, distinct cookie jars, no wait or limiter reset, zero 429 and final
-Published/Active. The clean-state FSE2 gate measures the real workflow against the defaults, requires
+separately without claiming tenant/Installation partitioning or an external IdP rate limit. The
+previous dual-onboarding attestation is invalidated because it reused three sessions across both
+cycles and prepared state through internal stores. Its replacement starts from an empty task-owned
+PostgreSQL database and keeps one Gateway host and one fixed-window limiter alive while two separate
+M3 Provisioner invocations create distinct Installation, Environment and synthetic provider catalog
+state. Each workflow then creates its own Security Administrator, Connector Editor and Connector
+Approver client/cookie jar, logs each session in exactly once, and completes a distinct Admin API
+lifecycle through Published/Active. The seven named `ADMIN_RATE_LIMIT_*` host gates require six
+sessions, six cookie jars, twelve AUTH requests, zero 429, no reset/window rollover/wait/re-login or
+support intervention, and distinct redacted Installation, Environment and Published-state
+fingerprints. The first workflow completes before the second supported bootstrap begins.
+
+That probative gate exposed a separate shared-session defect: an idempotent role assignment revoked
+all sessions for the principal even when no privilege changed. Both PostgreSQL and in-memory stores
+now preserve sessions for an exact existing assignment while retaining immediate revocation for an
+actual new or removed role. No rate-limit threshold or endpoint classification changed. The
+clean-state FSE2 gate measures the real workflow against the defaults, requires
 AUTH and per-subject API use below 25%, zero 429 and final Published/Active. Existing server-state
 discovery, drift denial, four-eyes, role split and same-command recovery remain unchanged. This
 qualification uses synthetic/local traffic only and claims no live-call result or SLO.
