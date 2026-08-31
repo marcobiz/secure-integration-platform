@@ -1305,7 +1305,8 @@ public sealed class AdminApiPostgreSqlSecurityTests
                     tenantId));
             Assert.Equal(
                 1L,
-                await context.ScalarAsync(
+                await context.ScalarTenantAsync(
+                    tenantId,
                     "SELECT count(*) FROM gateway.audit_event WHERE action='admin.role.assign' AND target_id=$1",
                     targetSession.Principal.Id.ToString("D")));
             Assert.Equal(
@@ -1444,6 +1445,23 @@ public sealed class AdminApiPostgreSqlSecurityTests
             await using NpgsqlCommand command = new(sql, connection);
             foreach (object value in values) command.Parameters.AddWithValue(value);
             return Convert.ToInt64(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken), System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        internal async Task<long> ScalarTenantAsync(Guid tenantId, string sql, params object[] values)
+        {
+            await using NpgsqlConnection connection = new(adminConnectionString);
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(TestContext.Current.CancellationToken);
+            await using (NpgsqlCommand context = new("SELECT set_config('app.tenant_id',$1,true)", connection, transaction))
+            {
+                context.Parameters.AddWithValue(tenantId.ToString("D"));
+                _ = await context.ExecuteScalarAsync(TestContext.Current.CancellationToken);
+            }
+            await using NpgsqlCommand command = new(sql, connection, transaction);
+            foreach (object value in values) command.Parameters.AddWithValue(value);
+            long result = Convert.ToInt64(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken), System.Globalization.CultureInfo.InvariantCulture);
+            await transaction.CommitAsync(TestContext.Current.CancellationToken);
+            return result;
         }
 
         internal async Task<DateTimeOffset> TimestampAsync(string sql, object value)
