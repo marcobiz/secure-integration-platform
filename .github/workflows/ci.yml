@@ -313,7 +313,7 @@ jobs:
           mkdir -p "$results_directory"
           dotnet test tests/integration/Healthcare.FSE2.Integration.Tests/Healthcare.FSE2.Integration.Tests.csproj \
             -c Release --no-build --no-restore \
-            --filter FullyQualifiedName=SecureIntegration.ConnectorPacks.Healthcare.FSE2.Integration.Tests.Fse2OfficialTestProvisionerAuthorityIntegrationTests.PROVISIONER_clean_state_completes_under_default_limits_without_429 \
+            --filter FullyQualifiedName=SecureIntegration.ConnectorPacks.Healthcare.FSE2.Integration.Tests.Fse2OfficialTestProvisionerAuthorityIntegrationTests.PROVISIONER_clean_state_golden_path_stays_below_25_percent_of_each_quota \
             --logger "trx;LogFileName=fse2-officialtest-clean-state.trx" \
             --results-directory "$results_directory"
           counters="$(grep -o '<Counters [^>]*/>' "$results_directory/fse2-officialtest-clean-state.trx" | tail -n 1)"

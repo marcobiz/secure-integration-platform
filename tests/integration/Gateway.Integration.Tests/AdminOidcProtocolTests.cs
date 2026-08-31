@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.AspNetCore.WebUtilities;
@@ -14,12 +15,43 @@ using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
+using SecureIntegration.Gateway.Api;
 using Xunit;
 
 namespace SecureIntegration.Gateway.Integration.Tests;
 
 public sealed class AdminOidcProtocolTests
 {
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_OIDC_pre_and_post_auth_partitions_are_correct()
+    {
+        await using SyntheticOidcFactory factory = new(authPermitLimit: 2, apiPermitLimit: 3);
+        using HttpClient client = factory.CreateClient(new()
+        {
+            BaseAddress = new Uri("https://localhost"),
+            AllowAutoRedirect = false,
+            HandleCookies = true
+        });
+
+        (string state, string nonce, _) = await BeginAsync(client);
+        factory.Backchannel.Nonce = nonce;
+        using HttpResponseMessage callback = await CallbackAsync(client, state);
+        Assert.Equal(HttpStatusCode.Redirect, callback.StatusCode);
+
+        using HttpResponseMessage firstMe = await client.GetAsync("/admin/auth/me", TestContext.Current.CancellationToken);
+        firstMe.EnsureSuccessStatusCode();
+        using HttpResponseMessage csrf = await client.GetAsync("/admin/auth/csrf", TestContext.Current.CancellationToken);
+        csrf.EnsureSuccessStatusCode();
+
+        using HttpResponseMessage exhaustedAuth = await client.GetAsync("/admin/auth/login", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.TooManyRequests, exhaustedAuth.StatusCode);
+
+        using HttpResponseMessage secondMe = await client.GetAsync("/admin/auth/me", TestContext.Current.CancellationToken);
+        secondMe.EnsureSuccessStatusCode();
+        using HttpResponseMessage exhaustedApi = await client.GetAsync("/admin/auth/me", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.TooManyRequests, exhaustedApi.StatusCode);
+    }
+
     [Fact]
     public async Task M5_IT_AUTH_OIDC_code_PKCE_state_nonce_cookie_rotation_logout_and_replay()
     {
@@ -102,9 +134,16 @@ public sealed class AdminOidcProtocolTests
 public sealed class SyntheticOidcFactory : WebApplicationFactory<Program>
 {
     private const string SecretVariable = "M5_SYNTHETIC_OIDC_CLIENT_SECRET";
+    private readonly int? authPermitLimit;
+    private readonly int? apiPermitLimit;
     public SyntheticOidcBackchannel Backchannel { get; } = new();
 
-    public SyntheticOidcFactory() => Environment.SetEnvironmentVariable(SecretVariable, "synthetic-client-secret", EnvironmentVariableTarget.Process);
+    public SyntheticOidcFactory(int? authPermitLimit = null, int? apiPermitLimit = null)
+    {
+        this.authPermitLimit = authPermitLimit;
+        this.apiPermitLimit = apiPermitLimit;
+        Environment.SetEnvironmentVariable(SecretVariable, "synthetic-client-secret", EnvironmentVariableTarget.Process);
+    }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -114,7 +153,19 @@ public sealed class SyntheticOidcFactory : WebApplicationFactory<Program>
         builder.UseSetting("Gateway:Admin:Oidc:ClientId", "m5-admin");
         builder.UseSetting("Gateway:Admin:Oidc:ClientSecretEnvironmentVariable", SecretVariable);
         builder.UseSetting("Gateway:Admin:Oidc:CallbackPath", "/signin-oidc");
-        builder.ConfigureTestServices(services => services.AddSingleton<IPostConfigureOptions<OpenIdConnectOptions>>(new SyntheticOidcPostConfigure(Backchannel)));
+        builder.ConfigureTestServices(services =>
+        {
+            services.AddSingleton<IPostConfigureOptions<OpenIdConnectOptions>>(new SyntheticOidcPostConfigure(Backchannel));
+            if (authPermitLimit is not null && apiPermitLimit is not null)
+            {
+                services.Configure<RateLimiterOptions>(options =>
+                    options.GlobalLimiter = AdminRateLimiting.CreateGlobalLimiter(
+                        authPermitLimit.Value,
+                        apiPermitLimit.Value,
+                        TimeSpan.FromMinutes(1),
+                        "/signin-oidc"));
+            }
+        });
     }
 
     public override async ValueTask DisposeAsync()

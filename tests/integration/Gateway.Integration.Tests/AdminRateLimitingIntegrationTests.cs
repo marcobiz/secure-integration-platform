@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text.Json;
 using System.Threading.RateLimiting;
@@ -18,8 +19,8 @@ public sealed class AdminRateLimitingIntegrationTests
     [Fact]
     public async Task ADMIN_RATE_LIMIT_auth_and_api_use_distinct_partitions_for_same_identity()
     {
-        DefaultHttpContext auth = Context("/admin/auth/me", subject: SyntheticRemoteAddress.ToString());
-        DefaultHttpContext api = Context("/admin/api/v1/connectors", subject: SyntheticRemoteAddress.ToString());
+        DefaultHttpContext auth = Context("/admin/auth/login", subject: SyntheticRemoteAddress.ToString());
+        DefaultHttpContext api = Context("/admin/auth/me", subject: SyntheticRemoteAddress.ToString());
 
         AdminRateLimitPartitionKey authKey = AdminRateLimiting.GetPartitionKey(auth);
         AdminRateLimitPartitionKey apiKey = AdminRateLimiting.GetPartitionKey(api);
@@ -40,8 +41,8 @@ public sealed class AdminRateLimitingIntegrationTests
     public async Task ADMIN_RATE_LIMIT_auth_first_does_not_apply_auth_limit_to_admin_api()
     {
         using PartitionedRateLimiter<HttpContext> limiter = AdminRateLimiting.CreateGlobalLimiter(1, 3, TimeSpan.FromMinutes(1));
-        DefaultHttpContext auth = Context("/admin/auth/me", subject: SyntheticRemoteAddress.ToString());
-        DefaultHttpContext api = Context("/admin/api/v1/connectors", subject: SyntheticRemoteAddress.ToString());
+        DefaultHttpContext auth = Context("/admin/auth/login", subject: SyntheticRemoteAddress.ToString());
+        DefaultHttpContext api = Context("/admin/auth/me", subject: SyntheticRemoteAddress.ToString());
 
         Assert.True(await AcquireAsync(limiter, auth));
         Assert.False(await AcquireAsync(limiter, auth));
@@ -55,8 +56,8 @@ public sealed class AdminRateLimitingIntegrationTests
     public async Task ADMIN_RATE_LIMIT_api_first_does_not_apply_api_limit_to_auth()
     {
         using PartitionedRateLimiter<HttpContext> limiter = AdminRateLimiting.CreateGlobalLimiter(1, 3, TimeSpan.FromMinutes(1));
-        DefaultHttpContext auth = Context("/admin/auth/me", subject: SyntheticRemoteAddress.ToString());
-        DefaultHttpContext api = Context("/admin/api/v1/connectors", subject: SyntheticRemoteAddress.ToString());
+        DefaultHttpContext auth = Context("/admin/auth/login", subject: SyntheticRemoteAddress.ToString());
+        DefaultHttpContext api = Context("/admin/auth/me", subject: SyntheticRemoteAddress.ToString());
 
         Assert.True(await AcquireAsync(limiter, api));
         Assert.True(await AcquireAsync(limiter, api));
@@ -69,7 +70,7 @@ public sealed class AdminRateLimitingIntegrationTests
     public async Task ADMIN_RATE_LIMIT_auth_exhaustion_does_not_throttle_supported_provisioning()
     {
         using PartitionedRateLimiter<HttpContext> limiter = AdminRateLimiting.CreateGlobalLimiter(1, 12, TimeSpan.FromMinutes(1));
-        DefaultHttpContext auth = Context("/admin/auth/me", subject: SyntheticRemoteAddress.ToString());
+        DefaultHttpContext auth = Context("/admin/auth/login", subject: SyntheticRemoteAddress.ToString());
 
         Assert.True(await AcquireAsync(limiter, auth));
         Assert.False(await AcquireAsync(limiter, auth));
@@ -90,7 +91,7 @@ public sealed class AdminRateLimitingIntegrationTests
     {
         using PartitionedRateLimiter<HttpContext> limiter = AdminRateLimiting.CreateGlobalLimiter(1, 2, TimeSpan.FromMinutes(1));
         DefaultHttpContext api = Context("/admin/api/v1/connectors", subject: "synthetic-principal-a");
-        DefaultHttpContext auth = Context("/admin/auth/me", subject: "synthetic-principal-a");
+        DefaultHttpContext auth = Context("/admin/auth/login", subject: "synthetic-principal-a");
 
         Assert.True(await AcquireAsync(limiter, api));
         Assert.True(await AcquireAsync(limiter, api));
@@ -117,24 +118,139 @@ public sealed class AdminRateLimitingIntegrationTests
     }
 
     [Fact]
-    public async Task ADMIN_RATE_LIMIT_tenant_or_installation_isolation_has_no_shared_global_bucket()
+    public async Task ADMIN_RATE_LIMIT_distinct_authenticated_subjects_have_no_shared_global_bucket()
     {
         using PartitionedRateLimiter<HttpContext> limiter = AdminRateLimiting.CreateGlobalLimiter(1, 1, TimeSpan.FromMinutes(1));
-        DefaultHttpContext firstInstallation = Context(
-            "/admin/api/v1/installations/11111111-1111-1111-1111-111111111111",
-            subject: "synthetic-tenant-a-admin");
-        DefaultHttpContext secondInstallation = Context(
-            "/admin/api/v1/installations/22222222-2222-2222-2222-222222222222",
-            subject: "synthetic-tenant-b-admin");
+        DefaultHttpContext firstSubject = Context("/admin/api/v1/installations", subject: "synthetic-principal-a");
+        DefaultHttpContext secondSubject = Context("/admin/api/v1/installations", subject: "synthetic-principal-b");
 
         Assert.NotEqual(
-            AdminRateLimiting.GetPartitionKey(firstInstallation),
-            AdminRateLimiting.GetPartitionKey(secondInstallation));
-        Assert.True(await AcquireAsync(limiter, firstInstallation));
-        Assert.False(await AcquireAsync(limiter, firstInstallation));
-        Assert.True(await AcquireAsync(limiter, secondInstallation));
+            AdminRateLimiting.GetPartitionKey(firstSubject),
+            AdminRateLimiting.GetPartitionKey(secondSubject));
+        Assert.True(await AcquireAsync(limiter, firstSubject));
+        Assert.False(await AcquireAsync(limiter, firstSubject));
+        Assert.True(await AcquireAsync(limiter, secondSubject));
         TestContext.Current.TestOutputHelper?.WriteLine(
-            "TARGET_PRINCIPAL_429_COUNT=1; CROSS_TENANT_REJECTION_COUNT=0");
+            "TARGET_PRINCIPAL_429_COUNT=1; OTHER_SUBJECT_429_COUNT=0");
+    }
+
+    [Fact]
+    public void ADMIN_RATE_LIMIT_pre_auth_endpoints_use_AUTH_remote_ip()
+    {
+        string[] preAuthenticationPaths =
+        [
+            "/admin/auth/login",
+            "/admin/auth/development/login",
+            "/admin/auth/csrf",
+            "/signin-oidc"
+        ];
+
+        foreach (string path in preAuthenticationPaths)
+        {
+            AdminRateLimitPartitionKey key = AdminRateLimiting.GetPartitionKey(
+                Context(path),
+                oidcCallbackPath: "/signin-oidc");
+            Assert.Equal(AdminRateLimitPolicyClass.Auth, key.PolicyClass);
+            Assert.Equal(AdminRateLimitPrincipalKind.RemoteIp, key.PrincipalKind);
+            Assert.Equal(SyntheticRemoteAddress.ToString(), key.Identity);
+        }
+    }
+
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_authenticated_session_endpoints_use_API_subject()
+    {
+        string[] authenticatedPaths =
+        [
+            "/admin/auth/csrf",
+            "/admin/auth/me",
+            "/admin/auth/logout",
+            "/admin/api/v1/connectors"
+        ];
+        foreach (string path in authenticatedPaths)
+        {
+            AdminRateLimitPartitionKey key = AdminRateLimiting.GetPartitionKey(
+                Context(path, subject: "synthetic-authenticated-subject"));
+            Assert.Equal(AdminRateLimitPolicyClass.Api, key.PolicyClass);
+            Assert.Equal(AdminRateLimitPrincipalKind.AuthenticatedSubject, key.PrincipalKind);
+            Assert.Equal("synthetic-authenticated-subject", key.Identity);
+        }
+
+        await using ReducedRateLimitFactory factory = new(authPermitLimit: 4, apiPermitLimit: 1);
+        using HttpClient editor = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost"), HandleCookies = true });
+        using HttpClient approver = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost"), HandleCookies = true });
+        await LoginWithoutPostAuthenticationProbeAsync(editor, "editor");
+        await LoginWithoutPostAuthenticationProbeAsync(approver, "approver");
+
+        using HttpResponseMessage editorMe = await editor.GetAsync("/admin/auth/me", TestContext.Current.CancellationToken);
+        using HttpResponseMessage approverMe = await approver.GetAsync("/admin/auth/me", TestContext.Current.CancellationToken);
+        editorMe.EnsureSuccessStatusCode();
+        approverMe.EnsureSuccessStatusCode();
+    }
+
+    [Fact]
+    public void ADMIN_RATE_LIMIT_unknown_auth_endpoint_fails_closed()
+    {
+        AdminRateLimitPartitionKey key = AdminRateLimiting.GetPartitionKey(
+            Context("/admin/auth/future-endpoint", subject: "synthetic-authenticated-subject"));
+
+        Assert.Equal(AdminRateLimitPolicyClass.Auth, key.PolicyClass);
+        Assert.Equal(AdminRateLimitPrincipalKind.RemoteIp, key.PrincipalKind);
+        Assert.Equal(SyntheticRemoteAddress.ToString(), key.Identity);
+    }
+
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_DevelopmentApiKey_does_not_consume_browser_AUTH_quota()
+    {
+        await using DevelopmentApiKeyRateLimitFactory factory = new();
+        using HttpClient apiClient = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        apiClient.DefaultRequestHeaders.Add("X-Admin-Key", DevelopmentApiKeyRateLimitFactory.ApiKey);
+        apiClient.DefaultRequestHeaders.Add("X-Admin-Actor", "caller-selected-actor-a");
+
+        using HttpResponseMessage firstApi = await apiClient.GetAsync("/admin/v1/connectors", TestContext.Current.CancellationToken);
+        firstApi.EnsureSuccessStatusCode();
+        apiClient.DefaultRequestHeaders.Remove("X-Admin-Actor");
+        apiClient.DefaultRequestHeaders.Add("X-Admin-Actor", "caller-selected-actor-b");
+        using HttpResponseMessage secondApi = await apiClient.GetAsync("/admin/v1/connectors", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.TooManyRequests, secondApi.StatusCode);
+
+        using HttpClient invalidApiClient = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        using HttpResponseMessage invalidApi = await invalidApiClient.GetAsync("/admin/v1/connectors", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, invalidApi.StatusCode);
+        using HttpResponseMessage invalidApiExhausted = await invalidApiClient.GetAsync("/admin/v1/connectors", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.TooManyRequests, invalidApiExhausted.StatusCode);
+
+        using HttpClient browser = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        using HttpResponseMessage firstAuth = await browser.GetAsync("/admin/auth/csrf", TestContext.Current.CancellationToken);
+        firstAuth.EnsureSuccessStatusCode();
+        using HttpResponseMessage secondAuth = await browser.GetAsync("/admin/auth/csrf", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.TooManyRequests, secondAuth.StatusCode);
+    }
+
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_request_61_is_rejected_without_affecting_another_IP()
+    {
+        using PartitionedRateLimiter<HttpContext> limiter = AdminRateLimiting.CreateGlobalLimiter();
+        DefaultHttpContext target = Context("/admin/auth/login");
+        for (int request = 1; request <= 60; request++)
+            Assert.True(await AcquireAsync(limiter, target));
+        Assert.False(await AcquireAsync(limiter, target));
+
+        DefaultHttpContext other = Context("/admin/auth/login");
+        other.Connection.RemoteIpAddress = IPAddress.Parse("198.51.100.25");
+        Assert.True(await AcquireAsync(limiter, other));
+    }
+
+    [Fact]
+    public async Task ADMIN_RATE_LIMIT_request_601_is_rejected_without_affecting_another_subject()
+    {
+        using PartitionedRateLimiter<HttpContext> limiter = AdminRateLimiting.CreateGlobalLimiter();
+        DefaultHttpContext target = Context("/admin/api/v1/connectors", subject: "synthetic-principal-a");
+        for (int request = 1; request <= 600; request++)
+            Assert.True(await AcquireAsync(limiter, target));
+        Assert.False(await AcquireAsync(limiter, target));
+
+        DefaultHttpContext other = Context("/admin/api/v1/connectors", subject: "synthetic-principal-b");
+        Assert.True(await AcquireAsync(limiter, other));
     }
 
     [Fact]
@@ -181,7 +297,7 @@ public sealed class AdminRateLimitingIntegrationTests
     }
 
     [Fact]
-    public void ADMIN_RATE_LIMIT_untrusted_forwarded_headers_cannot_select_partition_identity()
+    public void ADMIN_RATE_LIMIT_untrusted_forwarded_headers_cannot_select_partition()
     {
         DefaultHttpContext context = Context("/admin/auth/development/login");
         context.Request.Headers["X-Forwarded-For"] = "127.0.0.1";
@@ -202,13 +318,13 @@ public sealed class AdminRateLimitingIntegrationTests
     }
 
     [Fact]
-    public void ADMIN_RATE_LIMIT_production_defaults_remain_20_240_one_minute_and_zero_queue()
+    public void ADMIN_RATE_LIMIT_production_defaults_remain_60_600_one_minute_and_zero_queue()
     {
         FixedWindowRateLimiterOptions auth = AdminRateLimiting.ProductionOptions(AdminRateLimitPolicyClass.Auth);
         FixedWindowRateLimiterOptions api = AdminRateLimiting.ProductionOptions(AdminRateLimitPolicyClass.Api);
 
-        Assert.Equal(20, auth.PermitLimit);
-        Assert.Equal(240, api.PermitLimit);
+        Assert.Equal(60, auth.PermitLimit);
+        Assert.Equal(600, api.PermitLimit);
         Assert.Equal(TimeSpan.FromMinutes(1), auth.Window);
         Assert.Equal(TimeSpan.FromMinutes(1), api.Window);
         Assert.Equal(0, auth.QueueLimit);
@@ -241,6 +357,20 @@ public sealed class AdminRateLimitingIntegrationTests
         return lease.IsAcquired;
     }
 
+    private static async Task LoginWithoutPostAuthenticationProbeAsync(HttpClient client, string user)
+    {
+        using HttpResponseMessage csrfResponse = await client.GetAsync("/admin/auth/csrf", TestContext.Current.CancellationToken);
+        csrfResponse.EnsureSuccessStatusCode();
+        JsonElement csrf = await csrfResponse.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+        using HttpRequestMessage login = new(HttpMethod.Post, "/admin/auth/development/login")
+        {
+            Content = JsonContent.Create(new { userName = user })
+        };
+        login.Headers.Add("X-CSRF-TOKEN", csrf.GetProperty("token").GetString());
+        using HttpResponseMessage response = await client.SendAsync(login, TestContext.Current.CancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
     private sealed class ReducedRateLimitFactory(int authPermitLimit, int apiPermitLimit) : AdminDevelopmentFactory
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -251,6 +381,34 @@ public sealed class AdminRateLimitingIntegrationTests
                     authPermitLimit,
                     apiPermitLimit,
                     TimeSpan.FromMinutes(1))));
+        }
+    }
+
+    private sealed class DevelopmentApiKeyRateLimitFactory : AdminDevelopmentFactory
+    {
+        private const string ApiKeyVariable = "GATEWAY_RATE_LIMIT_DEVELOPMENT_API_KEY";
+        internal const string ApiKey = "synthetic-development-api-key-rate-limit";
+
+        internal DevelopmentApiKeyRateLimitFactory() =>
+            Environment.SetEnvironmentVariable(ApiKeyVariable, ApiKey, EnvironmentVariableTarget.Process);
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment("Testing");
+            builder.UseSetting("Gateway:Admin:Mode", "DevelopmentApiKey");
+            builder.UseSetting("Gateway:Admin:ApiKeyEnvironmentVariable", ApiKeyVariable);
+            builder.ConfigureServices(services => services.Configure<RateLimiterOptions>(options =>
+                options.GlobalLimiter = AdminRateLimiting.CreateGlobalLimiter(
+                    authPermitLimit: 1,
+                    apiPermitLimit: 1,
+                    window: TimeSpan.FromMinutes(1))));
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            await base.DisposeAsync();
+            Environment.SetEnvironmentVariable(ApiKeyVariable, null, EnvironmentVariableTarget.Process);
+            GC.SuppressFinalize(this);
         }
     }
 }

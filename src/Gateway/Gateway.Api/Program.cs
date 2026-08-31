@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Runtime.Loader;
 using System.Net;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -68,7 +69,7 @@ builder.AddGatewayAdminAuthentication(hostOptions.Admin);
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.GlobalLimiter = AdminRateLimiting.CreateGlobalLimiter();
+    options.GlobalLimiter = AdminRateLimiting.CreateGlobalLimiter(hostOptions.Admin.Oidc.CallbackPath);
     options.OnRejected = static (rejection, cancellationToken) =>
         AdminRateLimiting.WriteSafeRejectionAsync(rejection.HttpContext, rejection.Lease, cancellationToken);
 });
@@ -320,7 +321,46 @@ app.Use(async (context, next) =>
     }
 });
 
+app.Use(async (context, next) =>
+{
+    if (!AdminRateLimiting.IsOidcCallback(context.Request.Path, hostOptions.Admin.Oidc.CallbackPath))
+    {
+        await next(context).ConfigureAwait(false);
+        return;
+    }
+
+    Microsoft.AspNetCore.RateLimiting.RateLimiterOptions options =
+        context.RequestServices.GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.RateLimiting.RateLimiterOptions>>().Value;
+    PartitionedRateLimiter<HttpContext> limiter =
+        options.GlobalLimiter ?? throw new InvalidOperationException("Gateway Admin global rate limiter is missing.");
+    using RateLimitLease lease = await limiter.AcquireAsync(context, permitCount: 1, context.RequestAborted).ConfigureAwait(false);
+    if (!lease.IsAcquired)
+    {
+        await AdminRateLimiting.WriteSafeRejectionAsync(context, lease, context.RequestAborted).ConfigureAwait(false);
+        return;
+    }
+
+    context.Items[AdminRateLimiting.PreAuthenticationCallbackLeaseItem] = true;
+    await next(context).ConfigureAwait(false);
+});
 app.UseAuthentication();
+app.Use(async (context, next) =>
+{
+    if (developmentApiKeyCompatibility && context.Request.Path.StartsWithSegments("/admin/v1"))
+    {
+        try
+        {
+            context.Items[AdminRateLimiting.DevelopmentApiKeyAuthenticationType] =
+                RequireAdmin(context, app.Environment, hostOptions);
+            context.User = AdminRateLimiting.DevelopmentApiKeyPrincipal();
+        }
+        catch (GatewayException failure) when (string.Equals(failure.Code, "BGW-ADMIN-AUTHENTICATION", StringComparison.Ordinal))
+        {
+            context.Items[AdminRateLimiting.DevelopmentApiKeyRejectedItem] = true;
+        }
+    }
+    await next(context).ConfigureAwait(false);
+});
 app.UseRateLimiter();
 app.Use(async (context, next) =>
 {
@@ -1132,6 +1172,14 @@ static async Task ServeAdminIndexAsync(HttpContext context, string adminIndexPat
 
 static string RequireAdmin(HttpContext context, IHostEnvironment environment, GatewayHostOptions options)
 {
+    if (context.Items.ContainsKey(AdminRateLimiting.DevelopmentApiKeyRejectedItem))
+        throw new GatewayException("BGW-ADMIN-AUTHENTICATION", 401);
+
+    if (context.User.Identity?.AuthenticationType == AdminRateLimiting.DevelopmentApiKeyAuthenticationType &&
+        context.Items.TryGetValue(AdminRateLimiting.DevelopmentApiKeyAuthenticationType, out object? cachedActor) &&
+        cachedActor is string actorFromAuthenticatedRequest)
+        return actorFromAuthenticatedRequest;
+
     if (!string.Equals(options.Admin.Mode, "DevelopmentApiKey", StringComparison.Ordinal) || (!environment.IsDevelopment() && !environment.IsEnvironment("Testing") && !environment.IsEnvironment("M4Testing")))
         throw new GatewayException("BGW-ADMIN-AUTHENTICATION-DISABLED", 404);
     string? expected = Environment.GetEnvironmentVariable(options.Admin.ApiKeyEnvironmentVariable, EnvironmentVariableTarget.Process);

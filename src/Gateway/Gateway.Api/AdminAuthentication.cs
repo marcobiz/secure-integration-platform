@@ -64,11 +64,23 @@ public static class AdminAuthentication
                     string? handle = context.Principal?.FindFirst("sid")?.Value;
                     IAdminSessionStore store = context.HttpContext.RequestServices.GetRequiredService<IAdminSessionStore>();
                     IGatewayClock clock = context.HttpContext.RequestServices.GetRequiredService<IGatewayClock>();
-                    if (string.IsNullOrWhiteSpace(handle) || await store.ValidateAsync(handle, clock.UtcNow, TimeSpan.FromMinutes(20), context.HttpContext.RequestAborted).ConfigureAwait(false) is null)
+                    AdminSessionRecord? session = string.IsNullOrWhiteSpace(handle)
+                        ? null
+                        : await store.ValidateAsync(handle, clock.UtcNow, TimeSpan.FromMinutes(20), context.HttpContext.RequestAborted).ConfigureAwait(false);
+                    if (session is null)
                     {
                         context.RejectPrincipal();
                         await context.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme).ConfigureAwait(false);
+                        return;
                     }
+
+                    context.ReplacePrincipal(new ClaimsPrincipal(new ClaimsIdentity(
+                    [
+                        new Claim("sid", handle!),
+                        new Claim("sub", session.Principal.Subject, ClaimValueTypes.String, session.Principal.Issuer),
+                        new Claim("iss", session.Principal.Issuer, ClaimValueTypes.String, session.Principal.Issuer),
+                        new Claim(ClaimTypes.NameIdentifier, session.Principal.Subject, ClaimValueTypes.String, session.Principal.Issuer)
+                    ], CookieAuthenticationDefaults.AuthenticationScheme, "sub", ClaimTypes.Role)));
                 };
             });
 

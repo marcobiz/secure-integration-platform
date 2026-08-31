@@ -69,22 +69,24 @@ OfficialTest DNS/network call or access to real FSE2 material.
 
 The residual first-request poisoning was in the shared Gateway host, not the FSE2 state machine.
 The former partition key contained only authenticated `sub` or peer IP while the fixed-window
-factory selected 20 or 240 from the path captured by the first request for that key. A typed key now
-contains the server-selected policy class, principal kind and server-side identity. AUTH uses the
-remote IP after explicit trusted-proxy handling; API uses authenticated `sub`, with remote-IP
-fallback only when absent. Forwarded-header defaults are cleared so only configured proxy addresses
-can rewrite the peer. No threshold changes: AUTH=20/min, API=240/min, window=1 minute, queue=0,
-automatic replenishment enabled.
+factory selected its policy from the path captured by the first request for that key. A typed key now
+contains the server-selected policy class, principal kind and server-side identity. Login,
+DevelopmentAuth login, configured OIDC callback, unauthenticated CSRF and unknown auth paths use AUTH
+with the trusted remote IP. Authenticated CSRF, me, logout and ordinary Admin APIs use API with the
+server-validated subject. DevelopmentApiKey is validated before partition selection and receives a
+constant server-owned API identity. Forwarded-header defaults are cleared so only configured proxy
+addresses can rewrite the peer.
 
-Ten shared Gateway tests prove AUTH/API separation in both orders, policy and principal exhaustion,
-tenant/Installation noisy-neighbor isolation, untrusted forwarded-header denial, exact production
-defaults and a redacted `BGW-RATE-LIMITED` Problem with bounded Retry-After. The two additional
-provisioner names re-prove Validated resume and same-plan completion. The real PostgreSQL clean-state
-gate no longer substitutes a 1000-request test limiter: it counts requests by safe role label,
-requires positive headroom against 20/240, zero 429 and final Published/Active. The pre-existing
-server-state discovery, drift denial, four-eyes, role split and same-command recovery remain
-unchanged. This qualification uses synthetic/local traffic only and claims no live-call result or
-SLO.
+The pragmatic defaults are AUTH=60 requests/60 seconds and API=600 requests/60 seconds, window one
+minute, queue zero and automatic replenishment. Exact boundary tests deny request 61 and 601 while
+another IP/subject remains unaffected. DevelopmentAuth, DevelopmentApiKey and OIDC are qualified
+separately without claiming tenant/Installation partitioning or an external IdP rate limit. A real
+PostgreSQL host test runs two complete DevelopmentAuth onboarding workflows behind the same NAT with
+one session per role, distinct cookie jars, no wait or limiter reset, zero 429 and final
+Published/Active. The clean-state FSE2 gate measures the real workflow against the defaults, requires
+AUTH and per-subject API use below 25%, zero 429 and final Published/Active. Existing server-state
+discovery, drift denial, four-eyes, role split and same-command recovery remain unchanged. This
+qualification uses synthetic/local traffic only and claims no live-call result or SLO.
 
 The bounded local qualification closed with 10/10 resumability cases, 1/1 clean-state provisioner,
 1/1 PostgreSQL OfficialTest lifecycle, 3/3 PostgreSQL FSE2 round trips, 10/10 targeted runtime and

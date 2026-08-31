@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Security.Claims;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.HttpOverrides;
 
@@ -25,29 +26,42 @@ internal readonly record struct AdminRateLimitPartitionKey(
 
 internal static class AdminRateLimiting
 {
-    internal const int AuthPermitLimit = 20;
-    internal const int ApiPermitLimit = 240;
+    internal const int AuthPermitLimit = 60;
+    internal const int ApiPermitLimit = 600;
     internal const int QueueLimit = 0;
     internal const bool AutoReplenishment = true;
     internal const string SafeRejectionCode = "BGW-RATE-LIMITED";
+    internal const string DevelopmentApiKeySubject = "development-api-key";
+    internal const string DevelopmentApiKeyAuthenticationType = "DevelopmentApiKey";
+    internal const string DevelopmentApiKeyRejectedItem = "AdminRateLimit.DevelopmentApiKeyRejected";
+    internal const string PreAuthenticationCallbackLeaseItem = "AdminRateLimit.PreAuthenticationCallbackLease";
+    internal const string DefaultOidcCallbackPath = "/admin/auth/callback";
     internal static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
     internal static readonly TimeSpan MaximumRetryAfter = TimeSpan.FromHours(1);
 
     internal static PartitionedRateLimiter<HttpContext> CreateGlobalLimiter() =>
-        CreateGlobalLimiter(AuthPermitLimit, ApiPermitLimit, Window);
+        CreateGlobalLimiter(AuthPermitLimit, ApiPermitLimit, Window, DefaultOidcCallbackPath);
+
+    internal static PartitionedRateLimiter<HttpContext> CreateGlobalLimiter(string oidcCallbackPath) =>
+        CreateGlobalLimiter(AuthPermitLimit, ApiPermitLimit, Window, oidcCallbackPath);
 
     internal static PartitionedRateLimiter<HttpContext> CreateGlobalLimiter(
         int authPermitLimit,
         int apiPermitLimit,
-        TimeSpan window)
+        TimeSpan window,
+        string oidcCallbackPath = DefaultOidcCallbackPath)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(authPermitLimit);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(apiPermitLimit);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(window, TimeSpan.Zero);
+        if (string.IsNullOrWhiteSpace(oidcCallbackPath) || oidcCallbackPath[0] != '/')
+            throw new ArgumentException("OIDC callback path must be absolute.", nameof(oidcCallbackPath));
 
         return PartitionedRateLimiter.Create<HttpContext, AdminRateLimitPartitionKey>(context =>
         {
-            AdminRateLimitPartitionKey key = GetPartitionKey(context);
+            AdminRateLimitPartitionKey key = GetPartitionKey(context, oidcCallbackPath);
+            if (context.Items.ContainsKey(PreAuthenticationCallbackLeaseItem))
+                return RateLimitPartition.GetNoLimiter(key);
             int permitLimit = key.PolicyClass == AdminRateLimitPolicyClass.Auth
                 ? authPermitLimit
                 : apiPermitLimit;
@@ -57,17 +71,21 @@ internal static class AdminRateLimiting
         });
     }
 
-    internal static AdminRateLimitPartitionKey GetPartitionKey(HttpContext context)
+    internal static AdminRateLimitPartitionKey GetPartitionKey(
+        HttpContext context,
+        string oidcCallbackPath = DefaultOidcCallbackPath)
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        if (IsAuthRequest(context.Request.Path))
+        PathString path = context.Request.Path;
+        if (IsPreAuthenticationPath(path, oidcCallbackPath) ||
+            (IsExactPath(path, "/admin/auth/csrf") && !TryGetAuthenticatedSubject(context, out _)) ||
+            IsUnknownAuthPath(path))
         {
             return RemoteIpKey(AdminRateLimitPolicyClass.Auth, context.Connection.RemoteIpAddress);
         }
 
-        string? subject = context.User.FindFirst("sub")?.Value;
-        if (!string.IsNullOrEmpty(subject))
+        if (TryGetAuthenticatedSubject(context, out string subject))
         {
             return new(
                 AdminRateLimitPolicyClass.Api,
@@ -77,6 +95,16 @@ internal static class AdminRateLimiting
 
         return RemoteIpKey(AdminRateLimitPolicyClass.Api, context.Connection.RemoteIpAddress);
     }
+
+    internal static ClaimsPrincipal DevelopmentApiKeyPrincipal() =>
+        new(new ClaimsIdentity(
+            [new Claim("sub", DevelopmentApiKeySubject)],
+            DevelopmentApiKeyAuthenticationType,
+            "sub",
+            ClaimTypes.Role));
+
+    internal static bool IsOidcCallback(PathString path, string oidcCallbackPath) =>
+        IsExactPath(path, oidcCallbackPath);
 
     internal static FixedWindowRateLimiterOptions ProductionOptions(AdminRateLimitPolicyClass policyClass) =>
         CreateFixedWindowOptions(
@@ -141,8 +169,30 @@ internal static class AdminRateLimiting
         return seconds is >= 0 and <= 3600;
     }
 
-    private static bool IsAuthRequest(PathString path) =>
-        path.StartsWithSegments("/admin/auth", StringComparison.OrdinalIgnoreCase);
+    private static bool IsPreAuthenticationPath(PathString path, string oidcCallbackPath) =>
+        IsExactPath(path, "/admin/auth/login") ||
+        IsExactPath(path, "/admin/auth/development/login") ||
+        IsOidcCallback(path, oidcCallbackPath);
+
+    private static bool IsUnknownAuthPath(PathString path) =>
+        path.StartsWithSegments("/admin/auth", StringComparison.OrdinalIgnoreCase) &&
+        !IsExactPath(path, "/admin/auth/csrf") &&
+        !IsExactPath(path, "/admin/auth/me") &&
+        !IsExactPath(path, "/admin/auth/logout") &&
+        !IsExactPath(path, "/admin/auth/login") &&
+        !IsExactPath(path, "/admin/auth/development/login");
+
+    private static bool TryGetAuthenticatedSubject(HttpContext context, out string subject)
+    {
+        string? candidate = context.User.Identity?.IsAuthenticated == true
+            ? context.User.FindFirst("sub")?.Value
+            : null;
+        subject = string.IsNullOrWhiteSpace(candidate) ? string.Empty : candidate;
+        return subject.Length > 0;
+    }
+
+    private static bool IsExactPath(PathString path, string expected) =>
+        string.Equals(path.Value, expected, StringComparison.OrdinalIgnoreCase);
 
     private static AdminRateLimitPartitionKey RemoteIpKey(
         AdminRateLimitPolicyClass policyClass,

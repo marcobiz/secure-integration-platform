@@ -44,14 +44,27 @@ del four-eyes.
 ## Confine rate-limit Admin
 
 Il Gateway mantiene due classi di partizione non sovrapponibili. `AUTH` usa il remote IP elaborato
-soltanto dal middleware forwarded-header e solo per proxy configurati esplicitamente; `API` usa il
-subject della sessione autenticata e ricade sul remote IP solo se quel claim non è disponibile. La
-classe e il tipo di identità fanno parte della chiave tipizzata: una prima richiesta AUTH non può
-creare il limiter API e l'ordine inverso non può ampliare il bucket AUTH. Non esiste un bucket API
-globale fra principal o fra workflow tenant/Installation distinti.
+soltanto dal middleware forwarded-header e solo per proxy configurati esplicitamente; `API` usa
+esclusivamente il `sub` validato dall'autenticazione server-side. Classe, tipo e identità fanno parte
+della chiave tipizzata: una prima richiesta non può avvelenare la policy dell'altra classe. Header
+non trusted, parametri, body, tenant, Installation e cookie non validati non scelgono la partizione.
 
-I default restano AUTH 20/minuto e API 240/minuto, finestra un minuto, coda zero e replenishment
-automatico. Un 429 Gateway contiene soltanto il codice `BGW-RATE-LIMITED`, un Problem redatto e,
-quando disponibile dal lease, `Retry-After` bounded fra 0 e 3600 secondi. Il Gateway non attende e
-non ritenta. Il provisioner interpreta il rifiuto usando lo stato server-side e permette di ripetere
-lo stesso comando/piano; non sono richiesti cleanup, SQL, accesso store o un comando recovery.
+Usano AUTH: `GET /admin/auth/login`, `POST /admin/auth/development/login`, la callback OIDC
+configurata, `GET /admin/auth/csrf` prima del login e gli endpoint `/admin/auth/*` sconosciuti.
+Usano API dopo autenticazione server-side: CSRF post-login, `me`, logout e le Admin API ordinarie.
+DevelopmentAuth riusa un cookie jar distinto per ruolo; DevelopmentApiKey viene validata prima del
+limiter e usa un subject costante server-owned senza consumare AUTH; OIDC mantiene login e callback
+in AUTH e sposta le richieste di sessione successive in API. Non si fanno affermazioni sui rate limit
+dell'IdP esterno.
+
+I default sono AUTH 60 richieste per 60 secondi per remote IP attendibile e API 600 richieste per 60
+secondi per authenticated subject, con coda zero e replenishment automatico. Il workflow riusa una
+sessione per ruolo e rinnova il CSRF solo quando necessario: non attende la finestra, non ripete login
+e non richiede supporto tecnico sul golden path. Un 429 Gateway contiene soltanto il codice
+`BGW-RATE-LIMITED`, un Problem redatto e, quando disponibile dal lease, `Retry-After` bounded fra 0 e
+3600 secondi. Il Gateway non attende e non ritenta. Il provisioner interpreta il rifiuto usando lo
+stato server-side e permette di ripetere lo stesso comando/piano; non sono richiesti cleanup, SQL,
+accesso store o un comando recovery.
+
+Questo limiter riguarda esclusivamente il piano Admin. Non governa il traffico tenant/data-plane e
+le stesse soglie non devono essere applicate al data plane senza capacity test dedicati.

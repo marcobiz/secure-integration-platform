@@ -65,6 +65,10 @@ public sealed class Fse2ProvisionerResumabilityIntegrationTests
         PROVISIONER_same_plan_resumes_from_Validated_and_reaches_Published_Active();
 
     [Fact]
+    public Task PROVISIONER_resume_reuses_sessions_and_reaches_Published_Active() =>
+        PROVISIONER_same_plan_resumes_from_Validated_and_reaches_Published_Active();
+
+    [Fact]
     public async Task PROVISIONER_reentry_after_Published_is_verify_only_noop()
     {
         Scenario scenario = await Scenario.CreateAsync();

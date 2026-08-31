@@ -115,14 +115,16 @@ post-validation case the result is `Validated`, retry-safe, with next phase
 `BindingConfiguration`; re-entry does not import or validate again. Invalid or oversized
 Retry-After is omitted and never causes a hidden retry.
 
-Gateway authentication and Admin API traffic use distinct rate-limit partitions. AUTH is keyed by
-the trusted peer IP after explicit trusted-proxy processing and remains 20 requests/minute; API is
-keyed by the authenticated server-side subject (remote-IP fallback only when absent) and remains 240
-requests/minute. Both use a one-minute fixed window, queue zero and automatic replenishment. An AUTH
-request cannot consume or configure the API bucket and vice versa; no principal or tenant workflow
-shares a global API bucket. A Gateway rejection is the redacted `BGW-RATE-LIMITED` 429 with only an
-optional bounded `Retry-After`. It is consumed by the resumable behavior above, never by a hidden
-retry or manual database recovery.
+Gateway authentication and Admin API traffic use distinct rate-limit partitions. Login,
+DevelopmentAuth login, the configured OIDC callback, CSRF before login and unknown auth paths use
+AUTH, keyed by trusted peer IP after explicit trusted-proxy processing, at 60 requests per 60
+seconds. Authenticated CSRF, me, logout and ordinary Admin APIs use API, keyed only by the
+server-validated subject, at 600 requests per 60 seconds. DevelopmentApiKey uses a constant
+server-owned API identity and does not consume browser AUTH. Both policies use queue zero and
+automatic replenishment. The provisioner must keep one session/cookie jar per role and reuse valid
+CSRF state; it does not wait for a window, relogin between phases or reset the limiter. A Gateway
+rejection is the redacted `BGW-RATE-LIMITED` 429 with only an optional bounded `Retry-After`. It is
+consumed by the resumable behavior above, never by a hidden retry or manual database recovery.
 
 Run `grant` in the same Security Administrator session. It re-resolves the Installation, then
 lists grants for the server-owned Tenant. It verifies one exact enabled grant or creates one for the
@@ -189,7 +191,7 @@ configuration, JWTs, payloads, certificate chains, P12 material or session cooki
 ## Clean-state acceptance and recovery
 
 The dedicated release gate is
-`PROVISIONER_clean_state_completes_under_default_limits_without_429`.
+`PROVISIONER_clean_state_golden_path_stays_below_25_percent_of_each_quota`.
 It creates a unique labelled Docker network, container and named volume from the already-present
 `postgres:18` image, publishing PostgreSQL only on a random loopback port. The empty-state proof is
 an authenticated Admin API read-back showing zero Tenants, Applications, Environments and provider
@@ -230,9 +232,12 @@ bounded redaction and connector-neutral operation. Every negative asserts zero s
 transport and external network effects.
 
 The clean-state gate does not replace the limiter with a high test-only threshold. It exercises the
-production defaults, records redacted AUTH/API request counts per role, computes headroom against
-20/240 and requires zero 429 before accepting Published/Active. Reduced limits are used only by the
-separate isolation fixture to prove exhaustion without hundreds of requests.
+production defaults, records redacted AUTH/API request counts per role, requires AUTH use at most
+15/60 and per-subject API use at most 150/600, and requires zero 429 before accepting
+Published/Active. The expected DevelopmentAuth workflow remains at most six AUTH requests. Reduced
+limits are used only by separate isolation fixtures; exact 61/601 tests prove the production
+boundaries. The Admin limiter does not govern tenant/data-plane traffic and these thresholds must not
+be extended there without capacity tests.
 
 Record elapsed time from empty database to Published. The dedicated PostgreSQL job sets
 `REQUIRE_FSE2_POSTGRES_GATE=1` and requires exactly one execution with zero failed and zero skipped;

@@ -14,6 +14,21 @@ M4 include una modalità `DevelopmentApiKey` esclusivamente per ambienti `Develo
 
 M5 usa Authorization Code Flow server-side con PKCE, state e nonce. ID token e callback sono validati dal middleware OIDC; i token non sono salvati nel browser. Il browser riceve soltanto un cookie `__Host-` HttpOnly, Secure, SameSite=Lax con scadenza/sliding window, e tutte le mutazioni richiedono antiforgery associato alla sessione.
 
+Il rate limiter Admin protegge la disponibilità senza trasformare normali burst, onboarding concorrenti
+o operatori dietro NAT in incidenti. I default server-owned sono `AUTH=60` richieste ogni 60 secondi
+per remote IP attendibile e `API=600` richieste ogni 60 secondi per subject autenticato server-side,
+con coda zero e replenishment automatico. Login, DevelopmentAuth login, callback OIDC configurato,
+CSRF pre-login ed endpoint `/admin/auth` sconosciuti usano AUTH. CSRF post-login, `me`, logout e le
+Admin API ordinarie usano API. DevelopmentApiKey viene validata server-side prima del partizionamento
+e usa una identity API server-owned; non consuma il bucket browser AUTH.
+
+La sicurezza deve prevenire abuso significativo senza trasformare normali burst, onboarding
+concorrenti o operatori dietro NAT in incidenti. Nessun golden path supportato può dipendere da
+attese della finestra, re-login o supporto tecnico. Le soglie devono lasciare almeno quattro volte il
+consumo ordinario del singolo workflow, salvo evidenza di capacità più restrittiva. Il limiter Admin
+non governa il traffico tenant/data-plane; questa configurazione non si estende al data plane senza
+capacity test dedicati.
+
 Il principal stabile è `(issuer, subject)`; email e display name non sono chiavi. Ruoli globali o tenant-scoped sono persistiti server-side. La policy four-eyes lega la decisione a version id e checksum e nega creator/requester/editor coincidenti. Production rifiuta configurazioni OIDC incomplete e DevelopmentAuth; quest'ultima usa soltanto identità sintetiche fisse, loopback/Compose e ambiente Development.
 
 ## Conseguenze
@@ -25,3 +40,7 @@ La four-eyes approval M5 e vincolata sia al checksum canonico della ConnectorVer
 - `DevelopmentApiKey` legacy e `DevelopmentAuth` non sono modalità supportate per produzione.
 - Audit, optimistic concurrency e Published immutabile restano obbligatori anche in sviluppo.
 - La UI same-origin non conserva access/refresh token in Web Storage e non abilita CORS permissivo.
+- Ogni ruolo tecnico riusa la sessione e il CSRF ancora validi fra le fasi supportate; expiry e
+  validazione server-side restano invariati e non esistono reset, sleep o retry nascosti del limiter.
+- Le soglie sono un controllo process-local contro abuso evidente, non una difesa distribuita contro
+  un attore con credenziali valide o un rate limit dell'identity provider OIDC esterno.
