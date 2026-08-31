@@ -92,8 +92,13 @@ public sealed class PostgresAdminSecurityStore(AdminPostgresDataSource adminData
         await using NpgsqlCommand insert = new(sql, connection, transaction);
         Add(insert, id, principalId, Role(role), tenantId, grantedBy, now);
         AdminRoleAssignmentRecord? result = null;
+        bool privilegesChanged = false;
         await using (NpgsqlDataReader reader = await insert.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken).ConfigureAwait(false))
-            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) result = ReadAssignment(reader);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                result = ReadAssignment(reader);
+                privilegesChanged = true;
+            }
         if (result is null)
         {
             await using NpgsqlCommand select = new("SELECT id,principal_id,role,tenant_id,granted_by,granted_at FROM gateway.admin_role_assignment WHERE principal_id=$1 AND role=$2 AND tenant_id IS NOT DISTINCT FROM $3", connection, transaction);
@@ -104,7 +109,8 @@ public sealed class PostgresAdminSecurityStore(AdminPostgresDataSource adminData
         }
         faultInjector?.Check("admin.role.assign.after-state");
         await InsertAuditAsync(connection, transaction, tenantId, grantedBy.ToString("D"), "admin.role.assign", "admin_principal", principalId.ToString("D"), correlationId, "BGW-ADMIN-ROLE-ASSIGNED", now, cancellationToken).ConfigureAwait(false);
-        await RevokeSessionsAsync(connection, transaction, principalId, now, cancellationToken).ConfigureAwait(false);
+        if (privilegesChanged)
+            await RevokeSessionsAsync(connection, transaction, principalId, now, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
     }

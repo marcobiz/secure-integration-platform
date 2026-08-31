@@ -135,7 +135,7 @@ public interface IAdminSecurityStore
     Task<AdminPage<AdminRoleAssignmentRecord>> ListAssignmentsAsync(int offset, int limit, Guid? principalId, Guid? tenantId, CancellationToken cancellationToken);
     /// <summary>Atomically claims the one-time Security Administrator bootstrap.</summary>
     Task<bool> TryBootstrapSecurityAdministratorAsync(Guid principalId, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
-    /// <summary>Assigns a role through an audited Security Administrator action.</summary>
+    /// <summary>Assigns a role through an audited Security Administrator action; an existing exact assignment is an idempotent no-op and does not revoke sessions.</summary>
     Task<AdminRoleAssignmentRecord> AssignRoleAsync(Guid principalId, AdminRole role, Guid? tenantId, Guid grantedBy, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);
     /// <summary>Revokes one exact role assignment and its active sessions in the same transaction.</summary>
     Task<bool> RevokeRoleAsync(Guid assignmentId, Guid revokedBy, Guid correlationId, DateTimeOffset now, CancellationToken cancellationToken);

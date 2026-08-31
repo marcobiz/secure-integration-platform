@@ -1245,6 +1245,12 @@ public sealed class PostgresIsolationTests
         _ = await security.AssignRoleAsync(created.Principal.Id, AdminRole.Viewer, null, created.Principal.Id, Guid.NewGuid(), now.AddMinutes(11), TestContext.Current.CancellationToken);
         Assert.Null(await sessions.ValidateAsync(handle, now.AddMinutes(12), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken));
 
+        (string parallelHandle, AdminSessionRecord parallel) = await sessions.CreateAsync(identity, now.AddMinutes(13), TimeSpan.FromHours(1), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
+        _ = await security.AssignRoleAsync(parallel.Principal.Id, AdminRole.Viewer, null, parallel.Principal.Id, Guid.NewGuid(), now.AddMinutes(14), TestContext.Current.CancellationToken);
+        Assert.NotNull(await sessions.ValidateAsync(parallelHandle, now.AddMinutes(15), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken));
+        _ = await security.AssignRoleAsync(parallel.Principal.Id, AdminRole.ConnectorEditor, null, parallel.Principal.Id, Guid.NewGuid(), now.AddMinutes(16), TestContext.Current.CancellationToken);
+        Assert.Null(await sessions.ValidateAsync(parallelHandle, now.AddMinutes(17), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken));
+
         (string idleHandle, AdminSessionRecord idle) = await sessions.CreateAsync(identity, now, TimeSpan.FromHours(8), TimeSpan.FromMinutes(1), TestContext.Current.CancellationToken);
         Assert.Null(await sessions.ValidateAsync(idleHandle, idle.IdleExpiresAt, TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken));
         (string absoluteHandle, AdminSessionRecord absolute) = await sessions.CreateAsync(identity, now, TimeSpan.FromMinutes(10), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);

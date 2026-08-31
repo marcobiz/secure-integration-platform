@@ -226,6 +226,27 @@ public sealed class AdminSecurityTests
     }
 
     [Fact]
+    public async Task ADMIN_SESSION_idempotent_role_assignment_preserves_existing_sessions_but_privilege_change_revokes_them()
+    {
+        InMemoryAdminSecurityStore security = new();
+        InMemoryAdminSessionStore sessions = new(security);
+        AdminExternalIdentity identity = new("https://issuer.example.test", "parallel-session-user", "Parallel session user", null);
+
+        (string firstHandle, AdminSessionRecord firstSession) = await sessions.CreateAsync(identity, Now, TimeSpan.FromHours(1), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
+        _ = await security.AssignRoleAsync(firstSession.Principal.Id, AdminRole.Viewer, null, firstSession.Principal.Id, Guid.NewGuid(), Now.AddMinutes(1), TestContext.Current.CancellationToken);
+        Assert.Null(await sessions.ValidateAsync(firstHandle, Now.AddMinutes(2), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken));
+
+        (string secondHandle, AdminSessionRecord secondSession) = await sessions.CreateAsync(identity, Now.AddMinutes(3), TimeSpan.FromHours(1), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
+        AdminRoleAssignmentRecord existing = await security.AssignRoleAsync(secondSession.Principal.Id, AdminRole.Viewer, null, secondSession.Principal.Id, Guid.NewGuid(), Now.AddMinutes(4), TestContext.Current.CancellationToken);
+
+        Assert.Equal(AdminRole.Viewer, existing.Role);
+        Assert.NotNull(await sessions.ValidateAsync(secondHandle, Now.AddMinutes(5), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken));
+
+        _ = await security.AssignRoleAsync(secondSession.Principal.Id, AdminRole.ConnectorEditor, null, secondSession.Principal.Id, Guid.NewGuid(), Now.AddMinutes(6), TestContext.Current.CancellationToken);
+        Assert.Null(await sessions.ValidateAsync(secondHandle, Now.AddMinutes(7), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task M5_UT_Server_session_idle_expiry_and_principal_revocation_are_fail_closed()
     {
         InMemoryAdminSecurityStore security = new();
