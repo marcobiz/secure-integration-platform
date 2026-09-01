@@ -328,11 +328,20 @@ function Test-ContainerDependencyUnavailable {
     try {
         [void](New-TestCommandShim -Directory $shimRoot -Name 'docker' `
             -WindowsBody @'
->> "%ALPHA_TEST_DOCKER_CALLS%" echo %*
+>> "%ALPHA_TEST_DOCKER_CALLS%" echo CALL
+:alpha_argument_loop
+if "%~1"=="" goto alpha_argument_end
+>> "%ALPHA_TEST_DOCKER_CALLS%" echo ARG:%~1
+shift
+goto alpha_argument_loop
+:alpha_argument_end
 exit /b 125
 '@ `
             -UnixBody @'
-printf '%s\n' "$*" >> "$ALPHA_TEST_DOCKER_CALLS"
+printf 'CALL\n' >> "$ALPHA_TEST_DOCKER_CALLS"
+for argument in "$@"; do
+    printf 'ARG:%s\n' "$argument" >> "$ALPHA_TEST_DOCKER_CALLS"
+done
 exit 125
 '@)
         $testPath = $shimRoot + [IO.Path]::PathSeparator + [Environment]::GetEnvironmentVariable('PATH', 'Process')
@@ -341,12 +350,14 @@ exit 125
             -Environment @{ PATH = $testPath; ALPHA_TEST_DOCKER_CALLS = $callsPath }
         Assert-True ($result.ExitCode -ne 0)
         $calls = @([IO.File]::ReadAllLines($callsPath))
-        Assert-True ($calls.Count -eq 1)
-        $call = [string]$calls[0]
-        Assert-True ($call.IndexOf('--pull missing', [StringComparison]::Ordinal) -ge 0)
-        Assert-True ($call.IndexOf('mcr.microsoft.com/dotnet/sdk:10.0.302@sha256:72dd743782f2ae7e5476fd64f6a460045e3998dc862218b80e6944cba79a01b0', [StringComparison]::Ordinal) -ge 0)
-        Assert-True ($call.IndexOf('--user 1657:1657', [StringComparison]::Ordinal) -ge 0)
-        Assert-True ($call.IndexOf('/var/run/docker.sock', [StringComparison]::OrdinalIgnoreCase) -lt 0)
+        Assert-True (@($calls | Where-Object { $_ -ceq 'CALL' }).Count -eq 1)
+        [string[]] $invocationArguments = @($calls | Where-Object { $_.StartsWith('ARG:', [StringComparison]::Ordinal) } | ForEach-Object { $_.Substring(4) })
+        $pullIndex = [Array]::IndexOf($invocationArguments, '--pull')
+        $userIndex = [Array]::IndexOf($invocationArguments, '--user')
+        Assert-True ($pullIndex -ge 0 -and $pullIndex + 1 -lt $invocationArguments.Length -and $invocationArguments[$pullIndex + 1] -ceq 'missing')
+        Assert-True ($invocationArguments -ccontains 'mcr.microsoft.com/dotnet/sdk:10.0.302@sha256:72dd743782f2ae7e5476fd64f6a460045e3998dc862218b80e6944cba79a01b0')
+        Assert-True ($userIndex -ge 0 -and $userIndex + 1 -lt $invocationArguments.Length -and $invocationArguments[$userIndex + 1] -ceq '1657:1657')
+        Assert-True (@($invocationArguments | Where-Object { $_.IndexOf('/var/run/docker.sock', [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count -eq 0)
     }
     finally { Remove-TestDirectory -LiteralPath $shimRoot -Prefix 'broker-gateway-alpha-docker-shim-' }
 }
