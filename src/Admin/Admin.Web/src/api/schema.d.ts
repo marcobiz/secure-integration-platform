@@ -84,6 +84,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/connectors/{connectorId}/operations/{operationId}/session-handshakes/{profileId}:acquire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Acquires or starts one server-owned Published typed session profile. The request body must be empty. */
+        post: operations["acquireTypedSessionHandshake"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/session-admissions/{intentReference}:complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Completes a bounded, opaque, single-use admission intent. The body is sensitive opaque bytes and is never returned. */
+        post: operations["completeExternalSessionAdmission"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/v1/connectors:validate": {
         parameters: {
             query?: never;
@@ -1641,6 +1675,30 @@ export interface components {
             encoding: "base64";
             data: string;
         };
+        TypedSessionHandshakeResult: {
+            /** @enum {string} */
+            kind: "Issued" | "ExternalAdmissionRequired" | "Rejected";
+            session?: components["schemas"]["OpaqueSessionReference"];
+            admissionIntent?: components["schemas"]["ExternalSessionAdmissionIntent"];
+            /** @enum {string|null} */
+            rejection?: "Rejected" | "NotEligible" | "ProfileDenied" | null;
+            /** Format: date-time */
+            expiresAt?: string | null;
+            /** @enum {string|null} */
+            provenance?: "InteractiveHandoff" | null;
+        };
+        OpaqueSessionReference: {
+            /** @description Opaque reference; never a session secret. */
+            value: string;
+        } | null;
+        ExternalSessionAdmissionIntent: {
+            reference: string;
+            profileId: string;
+            /** @enum {string} */
+            provenance: "InteractiveHandoff";
+            /** Format: date-time */
+            expiresAt: string;
+        } | null;
         ConnectorImportRequest: {
             definition: Record<string, never>;
             expectedChecksumSha256?: string | null;
@@ -1672,6 +1730,10 @@ export interface components {
         };
     };
     parameters: {
+        BgwTimestamp: string;
+        BgwNonce: string;
+        BgwContentSha256: string;
+        BgwSignature: string;
         ConnectorId: string;
         OperationId: string;
         Version: string;
@@ -1755,7 +1817,12 @@ export interface operations {
     renewInstallationCredential: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "X-BG-Timestamp": components["parameters"]["BgwTimestamp"];
+                "X-BG-Nonce": components["parameters"]["BgwNonce"];
+                "X-BG-Content-SHA256": components["parameters"]["BgwContentSha256"];
+                "X-BG-Signature": components["parameters"]["BgwSignature"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1780,7 +1847,12 @@ export interface operations {
     getBrokerPolicy: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                "X-BG-Timestamp": components["parameters"]["BgwTimestamp"];
+                "X-BG-Nonce": components["parameters"]["BgwNonce"];
+                "X-BG-Content-SHA256": components["parameters"]["BgwContentSha256"];
+                "X-BG-Signature": components["parameters"]["BgwSignature"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1800,10 +1872,10 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "X-BG-Timestamp": string;
-                "X-BG-Nonce": string;
-                "X-BG-Content-SHA256": string;
-                "X-BG-Signature": string;
+                "X-BG-Timestamp": components["parameters"]["BgwTimestamp"];
+                "X-BG-Nonce": components["parameters"]["BgwNonce"];
+                "X-BG-Content-SHA256": components["parameters"]["BgwContentSha256"];
+                "X-BG-Signature": components["parameters"]["BgwSignature"];
                 traceparent: string;
             };
             path: {
@@ -1825,6 +1897,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InvokeResponse"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    acquireTypedSessionHandshake: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-BG-Timestamp": components["parameters"]["BgwTimestamp"];
+                "X-BG-Nonce": components["parameters"]["BgwNonce"];
+                "X-BG-Content-SHA256": components["parameters"]["BgwContentSha256"];
+                "X-BG-Signature": components["parameters"]["BgwSignature"];
+            };
+            path: {
+                connectorId: components["parameters"]["ConnectorId"];
+                operationId: components["parameters"]["OperationId"];
+                profileId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Opaque issued-session metadata, an external-admission intent or a sanitized rejection. */
+            200: {
+                headers: {
+                    /** @description Always no-store. */
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TypedSessionHandshakeResult"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    completeExternalSessionAdmission: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-BG-Timestamp": components["parameters"]["BgwTimestamp"];
+                "X-BG-Nonce": components["parameters"]["BgwNonce"];
+                "X-BG-Content-SHA256": components["parameters"]["BgwContentSha256"];
+                "X-BG-Signature": components["parameters"]["BgwSignature"];
+            };
+            path: {
+                intentReference: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Opaque issued-session metadata or a sanitized rejection. */
+            200: {
+                headers: {
+                    /** @description Always no-store. */
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TypedSessionHandshakeResult"];
                 };
             };
             default: components["responses"]["Problem"];
