@@ -322,36 +322,32 @@ function Test-MissingDocker {
 }
 
 function Test-ContainerDependencyUnavailable {
-    $shimRoot = Join-Path ([IO.Path]::GetTempPath()) ('broker-gateway-alpha-docker-shim-' + [Guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $shimRoot | Out-Null
-    $callsPath = Join-Path $shimRoot 'calls.txt'
-    if ($callsPath.Contains("'")) { throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_CALL_PATH_INVALID' }
-    $unixBody = @'
-calls_path='__ALPHA_CALLS_PATH__'
-printf 'CALL\n' >> "$calls_path"
-for argument in "$@"; do
-    printf 'ARG:%s\n' "$argument" >> "$calls_path"
-done
-exit 125
-'@.Replace('__ALPHA_CALLS_PATH__', $callsPath)
+    $testRoot = Join-Path ([IO.Path]::GetTempPath()) ('broker-gateway-alpha-dependency-test-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $testRoot | Out-Null
+    $callsPath = Join-Path $testRoot 'calls.txt'
+    $wrapperPath = Join-Path $testRoot 'Invoke-DependencyFailure.ps1'
+    $state = @{
+        CallsPath = $callsPath
+        Proxy = $containerDotNet
+        Arguments = @('build', '--project', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release')
+    } | ConvertTo-Json -Compress
+    $stateBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($state))
+    $wrapper = @'
+$stateJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__ALPHA_DEPENDENCY_STATE__'))
+$global:AlphaDependencyState = $stateJson | ConvertFrom-Json
+function global:docker {
+    [string[]] $lines = @('CALL') + @($args | ForEach-Object { 'ARG:' + [string]$_ })
+    [IO.File]::AppendAllLines([string]$global:AlphaDependencyState.CallsPath, $lines, [Text.UTF8Encoding]::new($false))
+    $global:LASTEXITCODE = 125
+}
+$proxyArguments = @($global:AlphaDependencyState.Arguments | ForEach-Object { [string]$_ })
+& ([string]$global:AlphaDependencyState.Proxy) @proxyArguments
+exit $LASTEXITCODE
+'@.Replace('__ALPHA_DEPENDENCY_STATE__', $stateBase64)
+    [IO.File]::WriteAllText($wrapperPath, $wrapper, [Text.UTF8Encoding]::new($false))
     try {
-        [void](New-TestCommandShim -Directory $shimRoot -Name 'docker' `
-            -WindowsBody @'
-set "ALPHA_CALLS=%~dp0calls.txt"
->> "%ALPHA_CALLS%" echo CALL
-:alpha_argument_loop
-if "%~1"=="" goto alpha_argument_end
->> "%ALPHA_CALLS%" echo ARG:%~1
-shift
-goto alpha_argument_loop
-:alpha_argument_end
-exit /b 125
-'@ `
-            -UnixBody $unixBody)
-        $testPath = $shimRoot + [IO.Path]::PathSeparator + [Environment]::GetEnvironmentVariable('PATH', 'Process')
         $result = Invoke-Captured -File $powerShellHost `
-            -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $containerDotNet, 'build', '--project', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release') `
-            -Environment @{ PATH = $testPath }
+            -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $wrapperPath)
         if ($result.ExitCode -eq 0) { throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_EXIT_ZERO' }
         if (-not (Test-Path -LiteralPath $callsPath -PathType Leaf)) { throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_CALL_LOG_MISSING' }
         $calls = @([IO.File]::ReadAllLines($callsPath))
@@ -372,7 +368,7 @@ exit /b 125
             throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_DOCKER_SOCKET'
         }
     }
-    finally { Remove-TestDirectory -LiteralPath $shimRoot -Prefix 'broker-gateway-alpha-docker-shim-' }
+    finally { Remove-TestDirectory -LiteralPath $testRoot -Prefix 'broker-gateway-alpha-dependency-test-' }
 }
 
 function Test-StopPreservesForeignResources {
