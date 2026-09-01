@@ -77,4 +77,5 @@ non è scelto dal grant o dal client: deriva dall’Installation autenticata.
 Per esplorare l’UI dopo il [pilot locale](local-pilot.md), il laboratorio Admin può essere
 avviato con `./tools/m5/Invoke-M5Quickstart.ps1 -Phase Start` e chiuso con `-Phase Stop`.
 È un ambiente sintetico di ispezione, non un secondo pilot canonico né una configurazione
-production. Per le azioni specifiche FSE2 usare [fse2-officialtest.md](fse2-officialtest.md).
+production. Per le azioni specifiche FSE2 usare
+[fse2-officialtest.md](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-officialtest.md).

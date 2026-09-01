@@ -27,10 +27,10 @@ prevalgono su questa dashboard. `Synthetic`, `live lab`, `OfficialTest qualified
 ## Percorsi CURRENT
 
 - prodotto locale: [docs/user/local-pilot.md](docs/user/local-pilot.md);
-- FSE2 OfficialTest: [docs/user/fse2-officialtest.md](docs/user/fse2-officialtest.md);
+- FSE2 OfficialTest: [docs/user/fse2-officialtest.md](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-officialtest.md);
 - amministrazione: [docs/user/administration.md](docs/user/administration.md);
 - sviluppo Connector: [docs/connector-development/README.md](docs/connector-development/README.md);
-- regole interne: [docs/internal/README.md](docs/internal/README.md).
+- regole interne: [docs/internal/README.md](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/internal/README.md).
 
 La configurazione FSE2 dispone di un provisioner Admin resumable, ma bootstrap/provider
 operativo, acquisizione delle sessioni di ruolo e runner live adopter-facing non sono un

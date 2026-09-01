@@ -16,16 +16,17 @@ client .NET Direct. I pack healthcare sono opzionali e non diventano dipendenze 
 | Obiettivo | Inizia qui | Risultato supportato |
 |---|---|---|
 | Provare il prodotto in locale | [Quick start](docs/user/quickstart.md) → [pilot locale](docs/user/local-pilot.md) | Una chiamata Direct .NET → Gateway → Connector Published → mock HTTPS/mTLS, con risposta sanificata e audit metadata-only. |
-| Provare FSE2 OfficialTest | [Pilot FSE2 OfficialTest](docs/user/fse2-officialtest.md) | Configurazione e pubblicazione di `validate-cda`; la chiamata live è qualificata sulla baseline, ma non è ancora self-service per un nuovo adottante. |
+| Provare FSE2 OfficialTest | [Pilot FSE2 OfficialTest](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-officialtest.md) | Configurazione e pubblicazione di `validate-cda`; la chiamata live è qualificata sulla baseline, ma non è ancora self-service per un nuovo adottante. |
 | Amministrare la piattaforma | [Guida di amministrazione](docs/user/administration.md) | Ruoli, lifecycle, binding, grant, four-eyes, audit e recovery tramite superfici supportate. |
 | Sviluppare un Connector | [Guida per sviluppatori](docs/connector-development/README.md) | Definizione minima provider-neutral e golden path `plan → apply → verify → first call`. |
-| Capire stato e regole interne | [Indice interno](docs/internal/README.md) | Autorità documentali, governance della complessità e regole per agenti/contributor. |
+| Capire stato e regole interne | [Indice interno](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/internal/README.md) | Autorità documentali, governance della complessità e regole per agenti/contributor. |
 
 Limitazioni e rimedi operativi sono raccolti in
 [problemi noti](docs/user/known-limitations.md) e
 [troubleshooting](docs/user/troubleshooting.md). L’indice completo, separato per
-pubblico, è in [docs/README.md](docs/README.md); i documenti di milestone, review e gate
-precedenti sono classificati nell’[indice storico](docs/history/README.md).
+pubblico, è in [docs/README.md](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/README.md);
+i documenti di milestone, review e gate precedenti sono classificati
+nell’[indice storico](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/history/README.md).
 
 ## Pilot locale, senza cloud
 

@@ -4,6 +4,7 @@
 .gitignore
 .github/workflows/ci.yml
 .github/workflows/m5-admin-ui.yml
+AGENTS.md
 ARCHITECTURE.md
 CODE_OF_CONDUCT.md
 BrokerGateway.Core.slnx
@@ -13,6 +14,7 @@ Directory.Build.props
 Directory.Build.targets
 Directory.Packages.props
 global.json
+IMPLEMENTATION_STATUS.md
 LICENSE
 LICENSE-APACHE-2.0
 LICENSING.md
@@ -29,6 +31,7 @@ deploy/windows/
 docs/adr/
 docs/api/
 docs/architecture/
+docs/connector-development/
 docs/connectors/connector-cli.md
 docs/connectors/connector-definition.schema.json
 docs/connectors/connector-sdk.md
@@ -37,6 +40,7 @@ docs/connectors/examples/
 docs/data/
 docs/deployment/
 docs/images/
+docs/internal/complexity-governance.md
 docs/legal/
 docs/migration/
 docs/operations/M2-GATEWAY-RUNBOOK.md
@@ -49,6 +53,12 @@ docs/requirements/
 docs/releases/
 docs/security/
 docs/testing/test-strategy.md
+docs/user/README.md
+docs/user/quickstart.md
+docs/user/local-pilot.md
+docs/user/administration.md
+docs/user/troubleshooting.md
+docs/user/known-limitations.md
 eng/build.ps1
 eng/Build-AlphaReleaseArtifacts.ps1
 eng/AlphaReleaseContainerArchive.psm1

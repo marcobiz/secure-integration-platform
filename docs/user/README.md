@@ -9,7 +9,7 @@
 - [Quick start](quickstart.md): scegli tra pilot locale e FSE2 OfficialTest.
 - [Pilot locale](local-pilot.md): unico percorso canonico senza cloud o credenziali
   esterne.
-- [FSE2 OfficialTest](fse2-officialtest.md): prerequisiti, ruoli,
+- [FSE2 OfficialTest](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-officialtest.md): prerequisiti, ruoli,
   `plan → apply → verify`, invocation e blocchi correnti.
 - [Amministrazione](administration.md): lifecycle, binding, grant, four-eyes, audit e
   health.

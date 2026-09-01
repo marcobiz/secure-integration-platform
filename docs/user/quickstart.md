@@ -13,7 +13,8 @@ raggiunge un mock HTTPS/mTLS e torna con risposta sanificata e audit metadata-on
 
 ## Vuoi provare FSE2 OfficialTest?
 
-Leggi prima [FSE2 OfficialTest](fse2-officialtest.md). `validate-cda` è live-qualified
+Leggi prima [FSE2 OfficialTest](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-officialtest.md).
+`validate-cda` è live-qualified
 sulla baseline, ma il percorso non è ancora self-service: deployment/provider bootstrap,
 sessioni di ruolo e runner live adopter-facing hanno prerequisiti o gap espliciti.
 
