@@ -340,6 +340,11 @@ function global:docker {
     [IO.File]::AppendAllLines([string]$global:AlphaDependencyState.CallsPath, $lines, [Text.UTF8Encoding]::new($false))
     $global:LASTEXITCODE = 125
 }
+function global:id {
+    if ($args.Count -ne 1 -or [string]$args[0] -cnotin @('-u', '-g')) { throw 'ALPHA_TEST_ID_ARGUMENT_INVALID' }
+    '1657'
+    $global:LASTEXITCODE = 0
+}
 $proxyArguments = @($global:AlphaDependencyState.Arguments | ForEach-Object { [string]$_ })
 & ([string]$global:AlphaDependencyState.Proxy) @proxyArguments
 exit $LASTEXITCODE

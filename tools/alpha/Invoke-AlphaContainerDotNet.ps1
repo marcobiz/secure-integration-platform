@@ -47,6 +47,20 @@ function Add-ForwardedEnvironment {
     }
 }
 
+function Get-ContainerIdentity {
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { return '1657:1657' }
+    [string[]] $uidOutput = @(& id -u 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $uidOutput.Count -ne 1) { throw 'ALPHA_CONTAINER_DOTNET_HOST_IDENTITY_INVALID' }
+    [string[]] $gidOutput = @(& id -g 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $gidOutput.Count -ne 1) { throw 'ALPHA_CONTAINER_DOTNET_HOST_IDENTITY_INVALID' }
+    $uid = $uidOutput[0].Trim()
+    $gid = $gidOutput[0].Trim()
+    if ($uid -notmatch '^[1-9][0-9]*$' -or $gid -notmatch '^[0-9]+$') {
+        throw 'ALPHA_CONTAINER_DOTNET_HOST_IDENTITY_INVALID'
+    }
+    return "${uid}:${gid}"
+}
+
 try {
     if ($DotNetArguments.Count -lt 5 -or
         [string]$DotNetArguments[0] -cnotin @('build', 'run') -or
@@ -88,10 +102,11 @@ try {
         'Sample' { '/src/samples/DirectGatewayClient/DirectGatewayClient.csproj' }
     }
 
+    $containerIdentity = Get-ContainerIdentity
     $dockerArguments = New-Object 'Collections.Generic.List[string]'
     foreach ($argument in @(
         'run', '--rm', '--pull', 'missing',
-        '--user', '1657:1657',
+        '--user', $containerIdentity,
         '--read-only',
         '--cap-drop', 'ALL',
         '--security-opt', 'no-new-privileges',
