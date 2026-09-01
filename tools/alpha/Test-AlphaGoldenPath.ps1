@@ -328,26 +328,28 @@ function Test-ContainerDependencyUnavailable {
     try {
         [void](New-TestCommandShim -Directory $shimRoot -Name 'docker' `
             -WindowsBody @'
->> "%ALPHA_TEST_DOCKER_CALLS%" echo CALL
+set "ALPHA_CALLS=%~dp0calls.txt"
+>> "%ALPHA_CALLS%" echo CALL
 :alpha_argument_loop
 if "%~1"=="" goto alpha_argument_end
->> "%ALPHA_TEST_DOCKER_CALLS%" echo ARG:%~1
+>> "%ALPHA_CALLS%" echo ARG:%~1
 shift
 goto alpha_argument_loop
 :alpha_argument_end
 exit /b 125
 '@ `
             -UnixBody @'
-printf 'CALL\n' >> "$ALPHA_TEST_DOCKER_CALLS"
+calls_path="$(dirname "$0")/calls.txt"
+printf 'CALL\n' >> "$calls_path"
 for argument in "$@"; do
-    printf 'ARG:%s\n' "$argument" >> "$ALPHA_TEST_DOCKER_CALLS"
+    printf 'ARG:%s\n' "$argument" >> "$calls_path"
 done
 exit 125
 '@)
         $testPath = $shimRoot + [IO.Path]::PathSeparator + [Environment]::GetEnvironmentVariable('PATH', 'Process')
         $result = Invoke-Captured -File $powerShellHost `
             -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $containerDotNet, 'build', '--project', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release') `
-            -Environment @{ PATH = $testPath; ALPHA_TEST_DOCKER_CALLS = $callsPath }
+            -Environment @{ PATH = $testPath }
         if ($result.ExitCode -eq 0) { throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_EXIT_ZERO' }
         if (-not (Test-Path -LiteralPath $callsPath -PathType Leaf)) { throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_CALL_LOG_MISSING' }
         $calls = @([IO.File]::ReadAllLines($callsPath))
