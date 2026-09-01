@@ -218,7 +218,7 @@ jobs:
         run: ./tools/alpha/Test-AlphaGoldenPath.ps1
       - name: Exercise Direct .NET alpha golden path
         shell: pwsh
-        run: ./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Run -SkipBuild
+        run: ./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Run -SkipBuild -DotNetPath (Get-Command dotnet).Source
       - name: Stop and verify cleanup
         if: always()
         shell: pwsh
