@@ -14,7 +14,7 @@ prevalgono su questa dashboard. `Synthetic`, `live lab`, `OfficialTest qualified
 | Superficie | Stato CURRENT | Limite della claim |
 |---|---|---|
 | Core M0–M5.5 | Integrato | Local Broker, Gateway, PostgreSQL, Connector lifecycle/runtime, Admin e Direct Gateway; non equivale a installer o produzione enterprise. |
-| Pilot locale | **Disponibile — synthetic live lab** | Un percorso canonico Direct .NET → Gateway → Connector REST Published → mock HTTPS/mTLS; nessun servizio esterno o cloud. |
+| Pilot locale | **Disponibile — Docker-first synthetic live lab** | Un percorso canonico Direct .NET → Gateway → Connector REST Published → mock HTTPS/mTLS; l'host richiede soltanto Git, PowerShell e Docker Linux/Compose, non SDK applicativi o database. Nessun servizio esterno o cloud. |
 | Admin UI/API | **Integrata** | OIDC/RBAC, CSRF, four-eyes, binding/grant e audit server-side; il quickstart locale usa identità sintetiche, non una configurazione production. |
 | Authentication foundation | **Integrata** | Le primitive SOAP/session, JWT/X.509, signing e mTLS non qualificano automaticamente un servizio esterno. |
 | FSE2 `validate-cda` | **LIVE_QUALIFIED — OfficialTest** | Una chiamata applicativa bounded sulla baseline exact ha restituito Gateway 200 con A1 mTLS, dual JWT S1 e contratto CDA/`VERIFICA`; non è accreditamento né qualifica production. |
@@ -52,8 +52,8 @@ riconciliazione non dimostra il completamento verso INI/EDS. `replace`, `delete`
 `update-metadata` e `get-status-by-trace` sono successivi ad alto valore; le altre
 operazioni non entrano automaticamente in roadmap.
 
-Il prossimo gate prodotto è **time to first successful call**, black-box e da stato
-pulito. Deve misurare separatamente:
+Il gate prodotto **time to first successful call** resta black-box e da stato pulito.
+Deve misurare separatamente:
 
 - pilot locale: prerequisiti → singolo workflow → prima risposta sanificata → cleanup;
 - FSE2: prerequisiti esterni già presenti → bootstrap supportato → plan/apply/four-eyes

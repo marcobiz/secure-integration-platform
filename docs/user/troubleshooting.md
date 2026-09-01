@@ -8,8 +8,10 @@ SQL, store diretti o pubblicazione di dati sensibili.
 
 | Codice/sintomo | Causa probabile | Azione autorizzata |
 |---|---|---|
-| `ALPHA_GOLDEN_PATH_DOTNET_HOST_NOT_FOUND` | `dotnet` non avviabile. | Installare l’SDK .NET supportato e verificare `dotnet --version` dalla root. Non cambiare `global.json`. |
-| `ALPHA_GOLDEN_PATH_DOTNET_SDK_UNAVAILABLE` | Il resolver non trova `10.0.302` o patch compatibile. | Installare una patch compatibile con `latestPatch`; non usare fallback .NET 8. |
+| `ALPHA_GOLDEN_PATH_DOCKER_UNAVAILABLE` | Docker CLI/Engine assente, fermo o non raggiungibile. | Installare o avviare Docker in modalità Linux containers, quindi ripetere lo stesso `Validate`. Non installare .NET come workaround. |
+| `ALPHA_GOLDEN_PATH_DOCKER_COMPOSE_UNAVAILABLE` | Il plugin Compose non è disponibile. | Installare/abilitare Docker Compose supportato e ripetere `Validate`; non usare un orchestratore alternativo. |
+| `...COMPONENT=ContainerDotNet...` o `...CHILD_CODE=M5_QUICKSTART_COMMAND_FAILED_DOTNET` | Immagine SDK pinned, package o build container non disponibile. | Verificare rete/cache e disponibilità dell'immagine pinned, poi ripetere manualmente la stessa fase. Non esistono fallback host o retry automatici. |
+| `ALPHA_GOLDEN_PATH_DOTNET_HOST_NOT_FOUND` / `...DOTNET_SDK_UNAVAILABLE` | È stato scelto esplicitamente il percorso maintainer `-DotNetPath`, ma il resolver non è utilizzabile o compatibile. | Correggere il percorso developer o omettere `-DotNetPath` per tornare al pilot Docker-first. Non cambiare `global.json` e non usare .NET 8 come fallback. |
 | `ALPHA_GOLDEN_PATH_CHILD_EXIT_NONZERO` | Restore, build, container o child process fallito. | Verificare Docker/Compose, rete/cache e spazio; eseguire `-Phase Stop`, poi `Validate` e `Run`. Non ispezionare o modificare il database. |
 | Docker non disponibile | Engine fermo o modalità Windows containers. | Avviare Docker con Linux containers e verificare Compose. |
 | Run interrotta / risorse residue | Cleanup finale non completato. | Eseguire `./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Stop`; il comando rimuove solo risorse marker-owned. |

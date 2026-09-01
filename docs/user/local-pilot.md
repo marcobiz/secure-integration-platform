@@ -5,22 +5,19 @@
 **Risultato:** prima chiamata locale riuscita, risposta sanificata, audit metadata-only e
 cleanup ownership-checked.
 
-Questo è l’unico pilot locale canonico. Non richiede cloud, materiale FSE2, SQL, `.env`,
-Node sull’host o modifica del trust store.
+Questo è l'unico pilot locale canonico. Non richiede cloud, materiale FSE2, SQL, `.env`,
+.NET, Node, npm, PostgreSQL sull'host o modifica del trust store.
 
 ## Prerequisiti
 
 - Git per ottenere la repository;
 - Docker Engine/Desktop con Linux containers e Docker Compose;
-- SDK .NET compatibile con `global.json` (`10.0.302`, `latestPatch`);
 - PowerShell 7 o Windows PowerShell 5.1;
-- rete soltanto se SDK package, NuGet package o immagini pinned non sono già in cache.
+- rete soltanto se immagini pinned o package usati dai build Docker non sono già in
+  cache.
 
-Eseguire i comandi dalla root della repository. Verificare il resolver .NET:
-
-```powershell
-dotnet --version
-```
+Eseguire i comandi dalla root della repository. Non installare un SDK per completare
+questo pilot.
 
 ## Esecuzione
 
@@ -29,9 +26,11 @@ dotnet --version
 ./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Run
 ```
 
-`Validate` controlla i prerequisiti. `Run` costruisce e avvia PostgreSQL 18, migrazioni,
-Gateway/Admin UI, Synthetic Provider e mock HTTPS/mTLS. Crea una Installation Direct e
-un grant sintetici nell’ambiente isolato, quindi invoca
+`Validate` controlla Docker Linux/Compose e compila il sample nell'immagine SDK .NET
+10.0.302 pinned. `Run` costruisce e avvia PostgreSQL 18, migrazioni, Gateway/Admin UI,
+Synthetic Provider e mock HTTPS/mTLS. I tool .NET e Node sono eseguiti nei build o in
+container non-root; il repository è montato read-only e il Docker socket non è montato.
+La run crea una Installation Direct e un grant sintetici nell'ambiente isolato, quindi invoca
 `sample-secure-service/submit` una sola volta.
 
 Il successo termina con questi marker:
@@ -59,6 +58,10 @@ Se il processo viene interrotto, eseguire:
 `Stop` rimuove solo risorse e materiale contrassegnati come proprietà del runner. Dopo
 il cleanup, ripetere `Validate` e `Run`; non modificare container, volume o database a
 mano. La run non supporta resume intermedio.
+
+Un maintainer può ancora scegliere esplicitamente il percorso developer con
+`-DotNetPath <percorso-sdk>`. Non è il percorso adottante e richiede l'SDK compatibile
+con `global.json`; non esiste download o fallback automatico verso un SDK host diverso.
 
 Per i codici di preflight e gli errori comuni usare
 [troubleshooting.md](troubleshooting.md). I dettagli tecnici del runner sono un

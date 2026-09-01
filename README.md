@@ -30,11 +30,11 @@ nell’[indice storico](https://github.com/marcobiz/secure-integration-platform/
 
 ## Pilot locale, senza cloud
 
-Prerequisiti: Docker con Linux containers e Compose, SDK .NET risolto da `global.json`
-e PowerShell 5.1 o 7. Node non è richiesto sull’host per questo percorso.
+Prerequisiti: Git, Docker con Linux containers e Compose, e PowerShell 5.1 o 7. Il
+percorso adottante non richiede .NET, Node, npm o PostgreSQL sull'host: build e sample
+usano immagini Docker pinned.
 
 ```powershell
-dotnet --version
 ./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Validate
 ./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Run
 ```

@@ -45,7 +45,7 @@ livelli distinti.
 | Security/CoC pubblici e distinti | `SECURITY.md`, Contributor Covenant 3.0 con contact `supporto@apocert.it`; security report distinto dal conduct report | `MANUAL` independent review pending; nessuno SLA o claim production |
 | Documentazione adozione FSE2 | `docs/user/fse2-officialtest.md`, capability matrix FSE2 e dashboard CURRENT | `validate-cda=LIVE_QUALIFIED`; `delete=PRODUCT_PATH_OFFLINE_QUALIFIED`; altre nove operation `IMPLEMENTED_PARTIAL`; full Gateway coverage `NO`; pilot pubblicazione bloccato da `create + get-status-by-workflow` |
 | Riproducibilità pilot FSE2 | Audit black-box documentale e assenza di runner adopter-facing distribuito | `BLOCKED` per self-service: provisioning documentato fino a verify, ma provider/bootstrap/session acquisition/live runner restano esterni o mancanti; nessun SQL/store workaround consentito |
-| Time to first successful call | `docs/connector-development/golden-path.md` e guide utente | Prossimo gate prodotto black-box; onboarding/recovery/test con supporto specialistico ordinario è un fallimento di adozione |
+| Time to first successful call | `Invoke-AlphaGoldenPath.ps1` Docker-first, `docs/connector-development/golden-path.md` e guide utente | Pilot locale candidato black-box senza SDK host; onboarding/recovery/test con supporto specialistico ordinario resta un fallimento di adozione |
 
 ### Riconciliazione PR #29-#34
 
@@ -170,7 +170,7 @@ Le guide CURRENT sono indicizzate in `docs/README.md`.
 | Migration fresh/upgrade/no-op/RLS | migration runner fresh+no-op; M5 data upgrade backfill `broker:NULL:1.0.0`; `IT_DAT_PostgreSQL18_migration_and_RLS_isolate_tenants_when_configured`; static least-privilege assertions | PASS PostgreSQL 18 |
 | Admin API/UI public metadata only | `M5_IT_Installation_activation_is_returned_once_and_never_listed` con Broker/Direct; `M55-UI-MOCK Direct installation selection is authoritative and public metadata only` | PASS local |
 | OpenAPI e runtime wire contract | `M5_UT_Runtime_wire_contract_exports_all_stable_admin_audit_values`; `npm run check:api`; `npm run check:runtime` | PASS local; final gate pending |
-| Core alpha golden path Direct | `Invoke-AlphaGoldenPath.ps1`: sample .NET pubblico -> Gateway -> Published `sample-secure-service/submit` -> Synthetic Provider -> mock HTTPS/mTLS; SHA-256 di body/certificato e contatore outbound; audit correlato metadata-only; canary/log scan; teardown marker-owned | `AUTOMATED` — PASS sintetico locale con `POSITIVE_OUTBOUND_COUNT=1`, container/rete/volume/materiale a zero; nessuna qualifica cloud o servizio esterno |
+| Core alpha golden path Direct | `Invoke-AlphaGoldenPath.ps1`: sample .NET pubblico containerizzato -> Gateway -> Published `sample-secure-service/submit` -> Synthetic Provider -> mock HTTPS/mTLS; SDK pinned, repository read-only, non-root, nessun Docker socket; `AlphaGoldenPath_validate_does_not_invoke_host_dotnet`, missing-Docker, dependency/no-retry e foreign-resource negatives; SHA-256 di body/certificato, contatore outbound, audit correlato metadata-only, canary/log scan e teardown marker-owned | `AUTOMATED` — PASS sintetico locale Docker-first con `POSITIVE_OUTBOUND_COUNT=1`, container/rete/volume/materiale a zero; nessuna qualifica cloud o servizio esterno |
 | M6 auth contract freeze | `docs/architecture/connector-runtime-auth-contract.md`; architecture tests | Documented; independent review pending |
 
 ## M6 HTTP/OAuth outbound primitives

@@ -6,7 +6,8 @@
 ## Vuoi vedere il prodotto funzionare?
 
 Usa il [pilot locale](local-pilot.md). È il solo percorso canonico di prima adozione:
-non richiede cloud, FSE2, `.env`, SQL, accesso agli store o una CA installata sull’host.
+richiede soltanto Git, PowerShell e Docker Linux/Compose; non richiede .NET, Node,
+PostgreSQL, cloud, FSE2, `.env`, SQL, accesso agli store o una CA installata sull'host.
 
 Risultato: una chiamata Direct .NET attraversa il Gateway e un Connector Published,
 raggiunge un mock HTTPS/mTLS e torna con risposta sanificata e audit metadata-only.
