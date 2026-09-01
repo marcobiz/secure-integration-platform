@@ -53,7 +53,7 @@ public sealed partial class AdminOpenApiParityTests
     }
 
     [Fact]
-    public void Every_admin_route_is_declared_once_in_OpenAPI_and_no_documented_route_is_stale()
+    public void Every_public_http_route_is_declared_once_in_OpenAPI_and_no_documented_route_is_stale()
     {
         string program = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "Program.cs"));
         HashSet<string> implementation = [];
@@ -62,7 +62,7 @@ public sealed partial class AdminOpenApiParityTests
             string owner = match.Groups[1].Value;
             string method = match.Groups[2].Value.ToLowerInvariant();
             string route = Normalize((owner == "adminApi" ? "/admin/api/v1" : string.Empty) + match.Groups[3].Value);
-            if (route.StartsWith("/admin/auth/", StringComparison.Ordinal) || route.StartsWith("/admin/api/v1/", StringComparison.Ordinal)) implementation.Add(method + " " + route);
+            if (IsPublicContractRoute(route)) implementation.Add(method + " " + route);
         }
 
         string yaml = File.ReadAllText(Path.Combine(Root, "docs", "api", "gateway-openapi.yaml"));
@@ -73,7 +73,7 @@ public sealed partial class AdminOpenApiParityTests
             Match pathMatch = PathPattern().Match(line);
             if (pathMatch.Success) { path = Normalize(pathMatch.Groups[1].Value); continue; }
             Match methodMatch = MethodPattern().Match(line);
-            if (path is not null && methodMatch.Success && (path.StartsWith("/admin/auth/", StringComparison.Ordinal) || path.StartsWith("/admin/api/v1/", StringComparison.Ordinal))) contract.Add(methodMatch.Groups[1].Value + " " + path);
+            if (path is not null && methodMatch.Success && IsPublicContractRoute(path)) contract.Add(methodMatch.Groups[1].Value + " " + path);
         }
 
         string[] missing = implementation.Except(contract).Order().ToArray();
@@ -93,6 +93,41 @@ public sealed partial class AdminOpenApiParityTests
         Assert.True(csrfProtected.Length == 0, $"Admin mutations without CSRF contract: {string.Join(", ", csrfProtected)}");
     }
 
+    [Fact]
+    public void Every_authenticated_runtime_operation_declares_mTLS_and_BGW1_headers()
+    {
+        string program = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "Program.cs"));
+        MatchCollection routes = RoutePattern().Matches(program);
+        HashSet<string> authenticatedRuntimeRoutes = [];
+        for (int index = 0; index < routes.Count; index++)
+        {
+            Match routeMatch = routes[index];
+            string owner = routeMatch.Groups[1].Value;
+            string method = routeMatch.Groups[2].Value.ToLowerInvariant();
+            string route = Normalize((owner == "adminApi" ? "/admin/api/v1" : string.Empty) + routeMatch.Groups[3].Value);
+            int blockEnd = index + 1 < routes.Count ? routes[index + 1].Index : program.Length;
+            string implementationBlock = program[routeMatch.Index..blockEnd];
+            if (route.StartsWith("/v1/", StringComparison.Ordinal) && implementationBlock.Contains("AuthenticateAsync(", StringComparison.Ordinal))
+                authenticatedRuntimeRoutes.Add(method + " " + route);
+        }
+
+        Dictionary<string, string> operations = ContractOperations(File.ReadAllText(Path.Combine(Root, "docs", "api", "gateway-openapi.yaml")));
+        string[] requiredTokens =
+        [
+            "InstallationMutualTLS",
+            "#/components/parameters/BgwTimestamp",
+            "#/components/parameters/BgwNonce",
+            "#/components/parameters/BgwContentSha256",
+            "#/components/parameters/BgwSignature"
+        ];
+        string[] incomplete = authenticatedRuntimeRoutes
+            .Where(route => !operations.TryGetValue(route, out string? operation) || requiredTokens.Any(token => !operation.Contains(token, StringComparison.Ordinal)))
+            .Order()
+            .ToArray();
+
+        Assert.True(incomplete.Length == 0, $"Authenticated runtime operations with an incomplete OpenAPI security contract: {string.Join(", ", incomplete)}");
+    }
+
     [GeneratedRegex("\\b(app|adminApi)\\.Map(Get|Post|Put|Delete)\\(\\\"([^\\\"]+)\\\"")]
     private static partial Regex RoutePattern();
     [GeneratedRegex(@"^  (/\S+):\s*$")]
@@ -101,6 +136,10 @@ public sealed partial class AdminOpenApiParityTests
     private static partial Regex MethodPattern();
 
     private static string Normalize(string value) => Regex.Replace(value, @"\{([^}:]+):[^}]+\}", "{$1}");
+    private static bool IsPublicContractRoute(string route) =>
+        route.StartsWith("/v1/", StringComparison.Ordinal) ||
+        route.StartsWith("/admin/", StringComparison.Ordinal) ||
+        route.StartsWith("/health/", StringComparison.Ordinal);
     private static Dictionary<string, string> ContractOperations(string yaml)
     {
         Dictionary<string, string> result = [];

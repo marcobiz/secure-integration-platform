@@ -45,6 +45,11 @@ paths:
       tags: [Enrollment]
       operationId: renewInstallationCredential
       security: [{ InstallationMutualTLS: [] }]
+      parameters:
+        - $ref: '#/components/parameters/BgwTimestamp'
+        - $ref: '#/components/parameters/BgwNonce'
+        - $ref: '#/components/parameters/BgwContentSha256'
+        - $ref: '#/components/parameters/BgwSignature'
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/RenewalRequest' } } }
@@ -58,6 +63,11 @@ paths:
       tags: [Runtime]
       operationId: getBrokerPolicy
       security: [{ InstallationMutualTLS: [] }]
+      parameters:
+        - $ref: '#/components/parameters/BgwTimestamp'
+        - $ref: '#/components/parameters/BgwNonce'
+        - $ref: '#/components/parameters/BgwContentSha256'
+        - $ref: '#/components/parameters/BgwSignature'
       responses:
         '200': { description: Broker compatibility policy. }
         default: { $ref: '#/components/responses/Problem' }
@@ -69,10 +79,10 @@ paths:
       parameters:
         - $ref: '#/components/parameters/ConnectorId'
         - $ref: '#/components/parameters/OperationId'
-        - { name: X-BG-Timestamp, in: header, required: true, schema: { type: string, format: date-time } }
-        - { name: X-BG-Nonce, in: header, required: true, schema: { type: string, minLength: 20, maxLength: 128 } }
-        - { name: X-BG-Content-SHA256, in: header, required: true, schema: { type: string } }
-        - { name: X-BG-Signature, in: header, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/BgwTimestamp'
+        - $ref: '#/components/parameters/BgwNonce'
+        - $ref: '#/components/parameters/BgwContentSha256'
+        - $ref: '#/components/parameters/BgwSignature'
         - { name: traceparent, in: header, required: true, schema: { type: string } }
       requestBody:
         required: true
@@ -95,6 +105,49 @@ paths:
                       contentType: application/json; charset=utf-8
                       encoding: base64
                       data: eyJhY2NlcHRlZCI6dHJ1ZSwidmVuZG9yUmVmZXJlbmNlIjoic3ludGhldGljLW9yZGVyIn0=
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/connectors/{connectorId}/operations/{operationId}/session-handshakes/{profileId}:acquire:
+    post:
+      tags: [Runtime]
+      operationId: acquireTypedSessionHandshake
+      description: Acquires or starts one server-owned Published typed session profile. The request body must be empty.
+      security: [{ InstallationMutualTLS: [] }]
+      parameters:
+        - $ref: '#/components/parameters/ConnectorId'
+        - $ref: '#/components/parameters/OperationId'
+        - { name: profileId, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 100 } }
+        - $ref: '#/components/parameters/BgwTimestamp'
+        - $ref: '#/components/parameters/BgwNonce'
+        - $ref: '#/components/parameters/BgwContentSha256'
+        - $ref: '#/components/parameters/BgwSignature'
+      responses:
+        '200':
+          description: Opaque issued-session metadata, an external-admission intent or a sanitized rejection.
+          headers: { Cache-Control: { schema: { type: string, const: no-store }, description: Always no-store. } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/TypedSessionHandshakeResult' } } }
+        default: { $ref: '#/components/responses/Problem' }
+  /v1/session-admissions/{intentReference}:complete:
+    post:
+      tags: [Runtime]
+      operationId: completeExternalSessionAdmission
+      description: Completes a bounded, opaque, single-use admission intent. The body is sensitive opaque bytes and is never returned.
+      security: [{ InstallationMutualTLS: [] }]
+      parameters:
+        - { name: intentReference, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9_-]{40,64}$' } }
+        - $ref: '#/components/parameters/BgwTimestamp'
+        - $ref: '#/components/parameters/BgwNonce'
+        - $ref: '#/components/parameters/BgwContentSha256'
+        - $ref: '#/components/parameters/BgwSignature'
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary, minLength: 1, maxLength: 16384, description: Strict UTF-8 bytes without NUL, CR, LF or other control characters. }
+      responses:
+        '200':
+          description: Opaque issued-session metadata or a sanitized rejection.
+          headers: { Cache-Control: { schema: { type: string, const: no-store }, description: Always no-store. } }
+          content: { application/json: { schema: { $ref: '#/components/schemas/TypedSessionHandshakeResult' } } }
         default: { $ref: '#/components/responses/Problem' }
   /admin/v1/connectors:validate:
     post:
@@ -618,6 +671,10 @@ components:
       name: __Host-SecureIntegration.Admin
       description: HttpOnly same-origin session created by the server-side OIDC flow.
   parameters:
+    BgwTimestamp: { name: X-BG-Timestamp, in: header, required: true, schema: { type: string, format: date-time } }
+    BgwNonce: { name: X-BG-Nonce, in: header, required: true, schema: { type: string, minLength: 20, maxLength: 128 } }
+    BgwContentSha256: { name: X-BG-Content-SHA256, in: header, required: true, schema: { type: string } }
+    BgwSignature: { name: X-BG-Signature, in: header, required: true, schema: { type: string } }
     ConnectorId: { name: connectorId, in: path, required: true, schema: { type: string, pattern: '^[a-z0-9][a-z0-9.-]{2,99}$' } }
     OperationId: { name: operationId, in: path, required: true, schema: { type: string } }
     Version: { name: version, in: path, required: true, schema: { type: string } }
@@ -1048,6 +1105,32 @@ components:
         contentType: { type: string, minLength: 1, maxLength: 512 }
         encoding: { type: string, const: base64 }
         data: { type: string, contentEncoding: base64 }
+    TypedSessionHandshakeResult:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [Issued, ExternalAdmissionRequired, Rejected] }
+        session: { $ref: '#/components/schemas/OpaqueSessionReference' }
+        admissionIntent: { $ref: '#/components/schemas/ExternalSessionAdmissionIntent' }
+        rejection: { type: [string, 'null'], enum: [Rejected, NotEligible, ProfileDenied, null] }
+        expiresAt: { type: [string, 'null'], format: date-time }
+        provenance: { type: [string, 'null'], enum: [InteractiveHandoff, null] }
+    OpaqueSessionReference:
+      type: [object, 'null']
+      additionalProperties: false
+      required: [value]
+      properties:
+        value: { type: string, pattern: '^[A-Za-z0-9_-]{40,64}$', description: Opaque reference; never a session secret. }
+    ExternalSessionAdmissionIntent:
+      type: [object, 'null']
+      additionalProperties: false
+      required: [reference, profileId, provenance, expiresAt]
+      properties:
+        reference: { type: string, pattern: '^[A-Za-z0-9_-]{40,64}$' }
+        profileId: { type: string, minLength: 1, maxLength: 100 }
+        provenance: { type: string, enum: [InteractiveHandoff] }
+        expiresAt: { type: string, format: date-time }
     ConnectorImportRequest:
       type: object
       additionalProperties: false
