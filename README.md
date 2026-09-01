@@ -62,7 +62,9 @@ milestone come percorsi alternativi.
 
 ## Build, sicurezza e confini
 
-I controlli repository sono descritti in [AGENTS.md](AGENTS.md). L’architettura e i
+I controlli repository sono descritti in
+[AGENTS.md](https://github.com/marcobiz/secure-integration-platform/blob/main/AGENTS.md).
+L’architettura e i
 confini dell’export Core sono in [ARCHITECTURE.md](ARCHITECTURE.md) e
 [OPEN_SOURCE_BOUNDARIES.md](OPEN_SOURCE_BOUNDARIES.md). Segnalare vulnerabilità tramite
 [SECURITY.md](SECURITY.md), senza pubblicare dettagli sfruttabili, token, certificati,

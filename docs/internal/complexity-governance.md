@@ -1,7 +1,8 @@
 # Governance di adozione e complessità
 
 **Pubblico:** product owner, maintainer, reviewer e agenti.
-**Stato:** CURRENT; sintetizza le regole operative vincolanti di [AGENTS.md](../../AGENTS.md).
+**Stato:** CURRENT; sintetizza le regole operative vincolanti di
+[AGENTS.md](https://github.com/marcobiz/secure-integration-platform/blob/main/AGENTS.md).
 
 ## Outcome prima della macchina
 
