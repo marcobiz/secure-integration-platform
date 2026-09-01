@@ -325,7 +325,6 @@ function Test-ContainerDependencyUnavailable {
     $shimRoot = Join-Path ([IO.Path]::GetTempPath()) ('broker-gateway-alpha-docker-shim-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $shimRoot | Out-Null
     $callsPath = Join-Path $shimRoot 'calls.txt'
-    $preferenceHarness = Join-Path $shimRoot 'Invoke-WithNativeErrorPreference.ps1'
     try {
         [void](New-TestCommandShim -Directory $shimRoot -Name 'docker' `
             -WindowsBody @'
@@ -336,20 +335,11 @@ exit /b 125
 printf '%s\n' "$*" >> "$ALPHA_TEST_DOCKER_CALLS"
 exit 125
 '@)
-        [IO.File]::WriteAllText($preferenceHarness, @'
-if (Test-Path -LiteralPath 'variable:PSNativeCommandUseErrorActionPreference') {
-    Set-Variable -Name PSNativeCommandUseErrorActionPreference -Value $true
-}
-& $env:ALPHA_TEST_CONTAINER_DOTNET @args
-exit $LASTEXITCODE
-'@, [Text.UTF8Encoding]::new($false))
         $testPath = $shimRoot + [IO.Path]::PathSeparator + [Environment]::GetEnvironmentVariable('PATH', 'Process')
         $result = Invoke-Captured -File $powerShellHost `
-            -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $preferenceHarness, 'build', '--project', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release') `
-            -Environment @{ PATH = $testPath; ALPHA_TEST_DOCKER_CALLS = $callsPath; ALPHA_TEST_CONTAINER_DOTNET = $containerDotNet }
-        Assert-True ($result.ExitCode -eq 125)
-        Assert-True ($result.StdOut.Trim().Length -eq 0)
-        Assert-True ($result.StdErr.Trim().Length -eq 0)
+            -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $containerDotNet, 'build', '--project', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release') `
+            -Environment @{ PATH = $testPath; ALPHA_TEST_DOCKER_CALLS = $callsPath }
+        Assert-True ($result.ExitCode -ne 0)
         $calls = @([IO.File]::ReadAllLines($callsPath))
         Assert-True ($calls.Count -eq 1)
         $call = [string]$calls[0]

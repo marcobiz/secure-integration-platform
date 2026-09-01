@@ -156,19 +156,8 @@ try {
         foreach ($argument in @('--', '/artifacts/raw', $containerGatewayHost)) { $dockerArguments.Add($argument) }
     }
 
-    $nativeErrorPreference = Get-Variable -Name PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue
-    try {
-        if ($null -ne $nativeErrorPreference) {
-            Set-Variable -Name PSNativeCommandUseErrorActionPreference -Value $false
-        }
-        & docker @dockerArguments
-        $dockerExitCode = $LASTEXITCODE
-    }
-    finally {
-        if ($null -ne $nativeErrorPreference) {
-            Set-Variable -Name PSNativeCommandUseErrorActionPreference -Value ([bool]$nativeErrorPreference.Value)
-        }
-    }
+    & docker @dockerArguments
+    $dockerExitCode = $LASTEXITCODE
     if ($dockerExitCode -ne 0) { exit $dockerExitCode }
 
     if ($kind -ceq 'Fixture') {
