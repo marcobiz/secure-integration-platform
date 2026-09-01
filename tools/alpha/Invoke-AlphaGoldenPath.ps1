@@ -253,14 +253,13 @@ namespace AlphaGoldenPath
 function Get-ChildPolicy {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Docker', 'DotNet', 'ContainerDotNet', 'Curl', 'Quickstart', 'FailureProbe', 'TimeoutProbe', 'OutputLimitProbe')]
+        [ValidateSet('Docker', 'DotNet', 'ContainerDotNet', 'Quickstart', 'FailureProbe', 'TimeoutProbe', 'OutputLimitProbe')]
         [string] $Component
     )
     switch ($Component) {
         'Docker' { return [pscustomobject]@{ TimeoutMilliseconds = 300000; OutputLimitBytes = 1048576; TerminationTimeoutMilliseconds = 5000 } }
         'DotNet' { return [pscustomobject]@{ TimeoutMilliseconds = 600000; OutputLimitBytes = 1048576; TerminationTimeoutMilliseconds = 5000 } }
         'ContainerDotNet' { return [pscustomobject]@{ TimeoutMilliseconds = 600000; OutputLimitBytes = 1048576; TerminationTimeoutMilliseconds = 5000 } }
-        'Curl' { return [pscustomobject]@{ TimeoutMilliseconds = 30000; OutputLimitBytes = 262144; TerminationTimeoutMilliseconds = 5000 } }
         'Quickstart' { return [pscustomobject]@{ TimeoutMilliseconds = 1200000; OutputLimitBytes = 262144; TerminationTimeoutMilliseconds = 5000 } }
         'FailureProbe' { return [pscustomobject]@{ TimeoutMilliseconds = 30000; OutputLimitBytes = 65536; TerminationTimeoutMilliseconds = 2000 } }
         'TimeoutProbe' { return [pscustomobject]@{ TimeoutMilliseconds = 750; OutputLimitBytes = 65536; TerminationTimeoutMilliseconds = 2000 } }
@@ -273,7 +272,7 @@ function Invoke-SanitizedChild {
         [Parameter(Mandatory = $true)][string] $File,
         [Parameter(Mandatory = $true)][string[]] $Arguments,
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Docker', 'DotNet', 'ContainerDotNet', 'Curl', 'Quickstart', 'FailureProbe', 'TimeoutProbe', 'OutputLimitProbe')]
+        [ValidateSet('Docker', 'DotNet', 'ContainerDotNet', 'Quickstart', 'FailureProbe', 'TimeoutProbe', 'OutputLimitProbe')]
         [string] $Component,
         [switch] $AllowFailure
     )
@@ -320,7 +319,7 @@ function Invoke-Checked {
     param(
         [Parameter(Mandatory = $true)][string] $File,
         [Parameter(Mandatory = $true)][string[]] $Arguments,
-        [Parameter(Mandatory = $true)][ValidateSet('Docker', 'DotNet', 'ContainerDotNet', 'Curl', 'Quickstart')][string] $Component
+        [Parameter(Mandatory = $true)][ValidateSet('Docker', 'DotNet', 'ContainerDotNet', 'Quickstart')][string] $Component
     )
     return Invoke-SanitizedChild -File $File -Arguments $Arguments -Component $Component
 }
@@ -421,6 +420,93 @@ function Read-EnvironmentFile {
     return $values
 }
 
+function Initialize-ControlHttpClient {
+    if ('AlphaGoldenPath.PinnedRootCertificateValidator' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Net.Security;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+
+namespace AlphaGoldenPath
+{
+    public sealed class PinnedRootCertificateValidator : IDisposable
+    {
+        private X509Certificate2 trustedRoot;
+
+        public PinnedRootCertificateValidator(string caPath)
+        {
+            trustedRoot = (X509Certificate2)Activator.CreateInstance(
+                typeof(X509Certificate2),
+                new object[] { caPath });
+            Callback = Validate;
+        }
+
+        public RemoteCertificateValidationCallback Callback { get; private set; }
+
+        private bool Validate(
+            object sender,
+            X509Certificate certificate,
+            X509Chain peerChain,
+            SslPolicyErrors errors)
+        {
+            if (certificate == null ||
+                (errors & SslPolicyErrors.RemoteCertificateNotAvailable) != 0 ||
+                (errors & SslPolicyErrors.RemoteCertificateNameMismatch) != 0)
+                return false;
+
+            using (X509Certificate2 leaf = (X509Certificate2)Activator.CreateInstance(
+                typeof(X509Certificate2),
+                new object[] { certificate }))
+            using (X509Chain validation = new X509Chain())
+            {
+                validation.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+                validation.ChainPolicy.RevocationFlag = X509RevocationFlag.ExcludeRoot;
+                validation.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
+                validation.ChainPolicy.ApplicationPolicy.Add(new Oid("1.3.6.1.5.5.7.3.1"));
+                validation.ChainPolicy.ExtraStore.Add(trustedRoot);
+                if (peerChain != null)
+                {
+                    foreach (X509ChainElement element in peerChain.ChainElements)
+                    {
+                        if (!BytesEqual(element.Certificate.RawData, leaf.RawData))
+                            validation.ChainPolicy.ExtraStore.Add(element.Certificate);
+                    }
+                }
+
+                bool built = validation.Build(leaf);
+                foreach (X509ChainStatus status in validation.ChainStatus)
+                {
+                    if (status.Status != X509ChainStatusFlags.NoError &&
+                        status.Status != X509ChainStatusFlags.UntrustedRoot)
+                        return false;
+                }
+                if (!built && validation.ChainStatus.Length == 0) return false;
+                if (validation.ChainElements.Count < 2) return false;
+                X509Certificate2 actualRoot = validation.ChainElements[validation.ChainElements.Count - 1].Certificate;
+                return BytesEqual(actualRoot.RawData, trustedRoot.RawData);
+            }
+        }
+
+        public void Dispose()
+        {
+            Callback = null;
+            if (trustedRoot != null) trustedRoot.Dispose();
+            trustedRoot = null;
+        }
+
+        private static bool BytesEqual(byte[] left, byte[] right)
+        {
+            if (left == null || right == null || left.Length != right.Length) return false;
+            int difference = 0;
+            for (int index = 0; index < left.Length; index++) difference |= left[index] ^ right[index];
+            return difference == 0;
+        }
+    }
+}
+'@
+}
+
 function Invoke-ControlJson {
     param(
         [Parameter(Mandatory = $true)][string] $HostName,
@@ -428,15 +514,70 @@ function Invoke-ControlJson {
         [Parameter(Mandatory = $true)][string] $Path,
         [Parameter(Mandatory = $true)][string] $HeaderName,
         [Parameter(Mandatory = $true)][string] $HeaderValue,
-        [Parameter(Mandatory = $true)][string] $OutputPath,
         [Parameter(Mandatory = $true)][string] $CaPath
     )
-    $curl = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'curl.exe' } else { 'curl' }
-    $arguments = @('--fail', '--silent', '--show-error', '--max-time', '15')
-    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $arguments += '--ssl-no-revoke' }
-    $arguments += @('--cacert', $CaPath, '--resolve', "${HostName}:${Port}:127.0.0.1", '--header', ($HeaderName + ': ' + $HeaderValue), '--output', $OutputPath, "https://${HostName}:${Port}${Path}")
-    [void](Invoke-Checked -File $curl -Arguments $arguments -Component Curl)
-    return Get-Content -LiteralPath $OutputPath -Raw | ConvertFrom-Json
+    if ($HostName -cnotmatch '^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$' -or
+        $Port -lt 1 -or $Port -gt 65535 -or $Path -cnotmatch '^/[^\s\r\n]*$' -or
+        $HeaderName -cnotmatch '^[A-Za-z0-9-]{1,64}$' -or $HeaderValue -match '[\r\n]') {
+        throw 'ALPHA_GOLDEN_PATH_CONTROL_REQUEST_INVALID'
+    }
+    Initialize-ControlHttpClient
+    $validator = New-Object AlphaGoldenPath.PinnedRootCertificateValidator($CaPath)
+    $request = [Net.HttpWebRequest]::Create("https://127.0.0.1:${Port}${Path}")
+    $request.Host = "${HostName}:${Port}"
+    $request.Method = 'GET'
+    $request.Accept = 'application/json'
+    $request.AllowAutoRedirect = $false
+    $request.KeepAlive = $false
+    $request.Proxy = $null
+    $request.Timeout = 15000
+    $request.ReadWriteTimeout = 15000
+    $request.MaximumResponseHeadersLength = 16
+    $request.Headers.Add($HeaderName, $HeaderValue)
+    $request.ServerCertificateValidationCallback = $validator.Callback
+    $webResponse = $null
+    $stream = $null
+    $body = $null
+    try {
+        try {
+            $webResponse = [Net.HttpWebResponse]$request.GetResponse()
+            if ($webResponse.StatusCode -ne [Net.HttpStatusCode]::OK -or
+                [string]::IsNullOrWhiteSpace($webResponse.ContentType) -or
+                -not $webResponse.ContentType.StartsWith('application/json', [StringComparison]::OrdinalIgnoreCase) -or
+                $webResponse.ContentLength -gt 262144) {
+                throw 'invalid'
+            }
+            $stream = $webResponse.GetResponseStream()
+            $body = New-Object IO.MemoryStream
+            [byte[]]$buffer = New-Object byte[] 4096
+            try {
+                while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    if ($body.Length + $read -gt 262144) { throw 'invalid' }
+                    $body.Write($buffer, 0, $read)
+                }
+            }
+            finally { [Array]::Clear($buffer, 0, $buffer.Length) }
+            [byte[]]$response = $body.ToArray()
+        }
+        catch { throw 'ALPHA_GOLDEN_PATH_CONTROL_REQUEST_FAILED' }
+    }
+    finally {
+        if ($null -ne $body) { $body.Dispose() }
+        if ($null -ne $stream) { $stream.Dispose() }
+        if ($null -ne $webResponse) { $webResponse.Dispose() }
+        $request.ServerCertificateValidationCallback = $null
+        $validator.Dispose()
+    }
+    try {
+        try {
+            $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
+            $json = $strictUtf8.GetString($response)
+            return $json | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch { throw 'ALPHA_GOLDEN_PATH_CONTROL_RESPONSE_INVALID' }
+        finally { $json = $null }
+    }
+    finally { if ($null -ne $response) { [Array]::Clear($response, 0, $response.Length) } }
 }
 
 function Restart-GatewayAndWait {
@@ -545,7 +686,7 @@ function Get-StableAlphaFailure {
     $message = [string]$Failure.Exception.Message
     if ($message -ceq 'ALPHA_GOLDEN_PATH_DOTNET_HOST_NOT_FOUND') { return $message }
     if ($message -cmatch '^ALPHA_GOLDEN_PATH_DOTNET_SDK_UNAVAILABLE;BASELINE=[0-9]+\.[0-9]+\.[0-9]+;ROLL_FORWARD=[A-Za-z][A-Za-z0-9]{0,31}$') { return $message }
-    if ($message -cmatch '^ALPHA_GOLDEN_PATH_[A-Z0-9_]+(?:;COMPONENT=(?:Docker|DotNet|ContainerDotNet|Curl|Quickstart|FailureProbe|TimeoutProbe|OutputLimitProbe)(?:;EXIT_CODE=[0-9]{1,5})?(?:;CHILD_CODE=M5_QUICKSTART_[A-Z0-9_]+)?)?$') {
+    if ($message -cmatch '^ALPHA_GOLDEN_PATH_[A-Z0-9_]+(?:;COMPONENT=(?:Docker|DotNet|ContainerDotNet|Quickstart|FailureProbe|TimeoutProbe|OutputLimitProbe)(?:;EXIT_CODE=[0-9]{1,5})?(?:;CHILD_CODE=M5_QUICKSTART_[A-Z0-9_]+)?)?$') {
         return $message
     }
     return 'ALPHA_GOLDEN_PATH_FAILED'
@@ -676,11 +817,9 @@ while ($true) { [Console]::Out.Write($chunk) }
             throw 'ALPHA_GOLDEN_PATH_CANONICAL_CONNECTOR_DRIFT'
         }
 
-        $controlRoot = Join-Path $artifactRoot 'control'
-        New-Item -ItemType Directory -Path $controlRoot | Out-Null
         $caPath = Join-Path $rawRoot 'certificates\ca.crt'
-        $vendorBefore = Invoke-ControlJson -HostName 'vendor.m3.test' -Port 18445 -Path '/m3/stats' -HeaderName 'X-M3-Control-Token' -HeaderValue ([string]$environment.M3_VENDOR_CONTROL_TOKEN) -OutputPath (Join-Path $controlRoot 'vendor-before.json') -CaPath $caPath
-        $vaultBefore = Invoke-ControlJson -HostName 'vault.m3.test' -Port 18444 -Path '/m3/stats' -HeaderName 'X-M3-Vault-Token' -HeaderValue ([string]$environment.M3_SYNTHETIC_VAULT_TOKEN) -OutputPath (Join-Path $controlRoot 'vault-before.json') -CaPath $caPath
+        $vendorBefore = Invoke-ControlJson -HostName 'vendor.m3.test' -Port 18445 -Path '/m3/stats' -HeaderName 'X-M3-Control-Token' -HeaderValue ([string]$environment.M3_VENDOR_CONTROL_TOKEN) -CaPath $caPath
+        $vaultBefore = Invoke-ControlJson -HostName 'vault.m3.test' -Port 18444 -Path '/m3/stats' -HeaderName 'X-M3-Vault-Token' -HeaderValue ([string]$environment.M3_SYNTHETIC_VAULT_TOKEN) -CaPath $caPath
         Restart-GatewayAndWait
 
         $correlationId = [Guid]::NewGuid()
@@ -705,8 +844,8 @@ while ($true) { [Console]::Out.Write($chunk) }
         $sampleResult = $sampleLines[0] | ConvertFrom-Json
         if ($sampleResult.accepted -ne $true -or [string]$sampleResult.vendorReference -cne 'synthetic-order') { throw 'ALPHA_GOLDEN_PATH_DIRECT_SAMPLE_RESPONSE_INVALID' }
 
-        $vendorAfter = Invoke-ControlJson -HostName 'vendor.m3.test' -Port 18445 -Path '/m3/stats' -HeaderName 'X-M3-Control-Token' -HeaderValue ([string]$environment.M3_VENDOR_CONTROL_TOKEN) -OutputPath (Join-Path $controlRoot 'vendor-after.json') -CaPath $caPath
-        $vaultAfter = Invoke-ControlJson -HostName 'vault.m3.test' -Port 18444 -Path '/m3/stats' -HeaderName 'X-M3-Vault-Token' -HeaderValue ([string]$environment.M3_SYNTHETIC_VAULT_TOKEN) -OutputPath (Join-Path $controlRoot 'vault-after.json') -CaPath $caPath
+        $vendorAfter = Invoke-ControlJson -HostName 'vendor.m3.test' -Port 18445 -Path '/m3/stats' -HeaderName 'X-M3-Control-Token' -HeaderValue ([string]$environment.M3_VENDOR_CONTROL_TOKEN) -CaPath $caPath
+        $vaultAfter = Invoke-ControlJson -HostName 'vault.m3.test' -Port 18444 -Path '/m3/stats' -HeaderName 'X-M3-Vault-Token' -HeaderValue ([string]$environment.M3_SYNTHETIC_VAULT_TOKEN) -CaPath $caPath
         $outboundCount = [long]$vendorAfter.accepted - [long]$vendorBefore.accepted
         if ($outboundCount -ne 1 -or $null -eq $vendorAfter.lastAccepted) { throw 'ALPHA_GOLDEN_PATH_OUTBOUND_COUNT_INVALID' }
         [byte[]]$expectedBody = [Text.Encoding]::UTF8.GetBytes('{"message":"direct-gateway-sample"}')

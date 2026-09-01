@@ -6,7 +6,8 @@ $artifactRoot = [IO.Path]::GetFullPath((Join-Path $root '.artifacts\m5\quickstar
 $artifactMarker = Join-Path $artifactRoot '.m5-quickstart-owner'
 $artifactMarkerValue = 'secure-integration-m5-quickstart-artifacts-v1'
 $sdkImage = 'mcr.microsoft.com/dotnet/sdk:10.0.302@sha256:72dd743782f2ae7e5476fd64f6a460045e3998dc862218b80e6944cba79a01b0'
-$containerGatewayHost = 'host.docker.internal'
+$containerGatewayHost = 'gateway.m3.test'
+$quickstartNetwork = 'secure-integration-m5-quickstart_m3'
 
 function Test-ExactPath {
     param([Parameter(Mandatory = $true)][string] $Actual, [Parameter(Mandatory = $true)][string] $Expected)
@@ -112,7 +113,6 @@ try {
         '--security-opt', 'no-new-privileges',
         '--pids-limit', '256',
         '--tmpfs', '/tmp:rw,exec,nosuid,size=2g',
-        '--add-host', 'host.docker.internal:host-gateway',
         '--mount', ("type=bind,source=$root,target=/src,readonly"),
         '--workdir', '/src',
         '--env', 'DOTNET_CLI_HOME=/tmp/dotnet',
@@ -124,13 +124,19 @@ try {
 
     if ($command -ceq 'run') {
         Assert-OwnedArtifactRoot
+        if ($kind -cin @('Security', 'Sample')) {
+            $dockerArguments.Add('--network')
+            $dockerArguments.Add($quickstartNetwork)
+            $dockerArguments.Add('--add-host')
+            $dockerArguments.Add('gateway.m3.test:172.29.44.4')
+        }
         $dockerArguments.Add('--mount')
         $dockerArguments.Add("type=bind,source=$artifactRoot,target=/artifacts")
     }
 
     if ($kind -ceq 'Security') {
         foreach ($argument in @(
-            '--env', "M3_GATEWAY_BASE_ADDRESS=https://${containerGatewayHost}:18443/",
+            '--env', "M3_GATEWAY_BASE_ADDRESS=https://${containerGatewayHost}:8443/",
             '--env', 'M3_GATEWAY_CA_FILE=/artifacts/raw/certificates/ca.crt',
             '--env', 'M3_PROVISIONING_FILE=/artifacts/raw/provisioning.json',
             '--env', 'M3_SECURITY_DRIVER_PFX=/artifacts/raw/certificates/security-driver.pfx',
@@ -142,7 +148,7 @@ try {
     }
     elseif ($kind -ceq 'Sample' -and $command -ceq 'run') {
         foreach ($argument in @(
-            '--env', "DIRECT_GATEWAY_URL=https://${containerGatewayHost}:18443",
+            '--env', "DIRECT_GATEWAY_URL=https://${containerGatewayHost}:8443",
             '--env', 'DIRECT_GATEWAY_CA_FILE=/artifacts/raw/certificates/ca.crt')) {
             $dockerArguments.Add($argument)
         }

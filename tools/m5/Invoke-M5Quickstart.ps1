@@ -140,12 +140,31 @@ function Invoke-Checked {
             '^dotnet$' { 'DOTNET'; break }
             '^npm$' { 'NPM'; break }
             '^node$' { 'NODE'; break }
-            '^curl$' { 'CURL'; break }
             '^chmod$' { 'CHMOD'; break }
             default { 'COMMAND' }
         }
         throw "M5_QUICKSTART_COMMAND_FAILED_$component"
     }
+}
+
+function Invoke-ContainerAdminProbe {
+    param([Parameter(Mandatory = $true)][string] $CaPath)
+    $sdkImage = 'mcr.microsoft.com/dotnet/sdk:10.0.302@sha256:72dd743782f2ae7e5476fd64f6a460045e3998dc862218b80e6944cba79a01b0'
+    $probe = 'content="$(curl --fail --silent --show-error --max-time 15 --max-filesize 262144 --cacert /run/m5-probe/ca.crt https://gateway.m3.test:8443/admin/)" && printf ''%s'' "$content" | grep -F ''<div id="root"></div>'' >/dev/null && ! printf ''%s'' "$content" | grep -F ''__CSP_NONCE__'' >/dev/null'
+    Invoke-Checked 'docker' @(
+        'run', '--rm', '--pull', 'missing',
+        '--label', ('com.docker.compose.project=' + $project),
+        '--user', '1657:1657',
+        '--read-only',
+        '--cap-drop', 'ALL',
+        '--security-opt', 'no-new-privileges',
+        '--pids-limit', '64',
+        '--tmpfs', '/tmp:rw,nosuid,size=1m',
+        '--network', ($project + '_m3'),
+        '--add-host', 'gateway.m3.test:172.29.44.4',
+        '--mount', ("type=bind,source=$CaPath,target=/run/m5-probe/ca.crt,readonly"),
+        $sdkImage,
+        'sh', '-ec', $probe)
 }
 
 function ComposeArguments {
@@ -340,16 +359,7 @@ if (-not [string]::IsNullOrWhiteSpace($AdditionalComposeFile)) {
     if (-not $providerReady) { throw 'M5_QUICKSTART_ADDITIONAL_PROVIDER_NOT_READY' }
 }
 
-$html = Join-Path $artifactRoot 'admin-index.html'
-# Schannel otherwise attempts Internet revocation checks for the intentionally offline,
-# per-run synthetic CA. Certificate chain and hostname validation remain enabled.
-$curl = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'curl.exe' } else { 'curl' }
-$curlArguments = @('--fail', '--silent', '--show-error')
-if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { $curlArguments += '--ssl-no-revoke' }
-$curlArguments += @('--cacert', (Join-Path $rawRoot 'certificates\ca.crt'), 'https://localhost:18443/admin/', '--output', $html)
-Invoke-Checked $curl $curlArguments
-$content = Get-Content -Raw -LiteralPath $html
-if ($content -notmatch '<div id="root"></div>' -or $content.IndexOf('__CSP_NONCE__', [StringComparison]::Ordinal) -ge 0) { throw 'M5_QUICKSTART_ADMIN_UI_INVALID' }
+Invoke-ContainerAdminProbe -CaPath (Join-Path $rawRoot 'certificates\ca.crt')
 Write-Host 'M5_QUICKSTART_START_PASS'
 Write-Host 'Synthetic enrollment: Active (challenge, proof-of-possession and activation completed).'
 Write-Host 'Admin UI: https://localhost:18443/admin/'

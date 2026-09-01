@@ -9,6 +9,7 @@ param(
         'AlphaGoldenPath_missing_dotnet_host_returns_distinct_stable_error',
         'AlphaGoldenPath_sdk_preflight_does_not_expose_raw_cli_output_or_local_paths',
         'AlphaGoldenPath_validate_does_not_invoke_host_dotnet',
+        'AlphaGoldenPath_control_transport_is_native_bounded_and_curl_free',
         'AlphaGoldenPath_missing_docker_returns_single_actionable_error',
         'AlphaGoldenPath_container_dependency_failure_has_no_fallback_or_retry',
         'AlphaGoldenPath_stop_preserves_foreign_docker_resources')]
@@ -20,6 +21,7 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $runner = Join-Path $PSScriptRoot 'Invoke-AlphaGoldenPath.ps1'
 $containerDotNet = Join-Path $PSScriptRoot 'Invoke-AlphaContainerDotNet.ps1'
+$m5Quickstart = Join-Path $root 'tools\m5\Invoke-M5Quickstart.ps1'
 $artifactRoot = Join-Path $root '.artifacts\m5\quickstart'
 $project = 'secure-integration-m5-quickstart'
 $powerShellHost = try { (Get-Process -Id $PID -ErrorAction Stop).Path } catch { $null }
@@ -304,6 +306,38 @@ function Test-ValidateWithoutHostDotNet {
     finally { Remove-TestDirectory -LiteralPath $shimRoot -Prefix 'broker-gateway-alpha-dotnet-canary-' }
 }
 
+function Test-NativeBoundedControlTransport {
+    $runnerText = Get-Content -LiteralPath $runner -Raw
+    $quickstartText = Get-Content -LiteralPath $m5Quickstart -Raw
+    Assert-True (-not [regex]::IsMatch($runnerText, '(?i)(?:^|[^a-z])curl(?:\.exe)?(?:$|[^a-z])'))
+    Assert-True ($runnerText.IndexOf('RemoteCertificateNameMismatch', [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($runnerText.IndexOf('AllowUnknownCertificateAuthority', [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($runnerText.IndexOf('1.3.6.1.5.5.7.3.1', [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($runnerText.IndexOf('262144', [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($runnerText.IndexOf('15000', [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($runnerText.IndexOf('[Net.HttpWebRequest]::Create("https://127.0.0.1:', [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($runnerText.IndexOf('$request.Host = "${HostName}:${Port}"', [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($runnerText.IndexOf('$request.ServerCertificateValidationCallback = $null', [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($runnerText.IndexOf('[Array]::Clear($response', [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($runnerText.IndexOf('-OutputPath', [StringComparison]::Ordinal) -lt 0)
+    Assert-True ($quickstartText.IndexOf('curl.exe', [StringComparison]::OrdinalIgnoreCase) -lt 0)
+    Assert-True ($quickstartText.IndexOf("'docker'", [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($quickstartText.IndexOf("'run', '--rm', '--pull', 'missing'", [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($quickstartText.IndexOf("'--user', '1657:1657'", [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($quickstartText.IndexOf("'--read-only'", [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($quickstartText.IndexOf("'--cap-drop', 'ALL'", [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($quickstartText.IndexOf("'--network', (`$project + '_m3')", [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($quickstartText.IndexOf('--max-filesize 262144 --cacert', [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($quickstartText.IndexOf('--output', [StringComparison]::OrdinalIgnoreCase) -lt 0)
+    Assert-True ($quickstartText.IndexOf('docker.sock', [StringComparison]::OrdinalIgnoreCase) -lt 0)
+    Assert-True ($quickstartText.IndexOf('--insecure', [StringComparison]::OrdinalIgnoreCase) -lt 0)
+    Assert-True ($quickstartText.IndexOf("Join-Path `$artifactRoot 'admin-index.html'", [StringComparison]::Ordinal) -lt 0)
+    $containerText = Get-Content -LiteralPath $containerDotNet -Raw
+    Assert-True ($containerText.IndexOf("`$quickstartNetwork = 'secure-integration-m5-quickstart_m3'", [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($containerText.IndexOf("`$dockerArguments.Add('gateway.m3.test:172.29.44.4')", [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($containerText.IndexOf('host.docker.internal', [StringComparison]::OrdinalIgnoreCase) -lt 0)
+}
+
 function Test-MissingDocker {
     Assert-True (-not (Test-Path -LiteralPath $artifactRoot))
     $emptyPath = Join-Path ([IO.Path]::GetTempPath()) ('broker-gateway-alpha-empty-path-' + [Guid]::NewGuid().ToString('N'))
@@ -423,6 +457,7 @@ try {
             'AlphaGoldenPath_missing_dotnet_host_returns_distinct_stable_error',
             'AlphaGoldenPath_sdk_preflight_does_not_expose_raw_cli_output_or_local_paths',
             'AlphaGoldenPath_validate_does_not_invoke_host_dotnet',
+            'AlphaGoldenPath_control_transport_is_native_bounded_and_curl_free',
             'AlphaGoldenPath_missing_docker_returns_single_actionable_error',
             'AlphaGoldenPath_container_dependency_failure_has_no_fallback_or_retry',
             'AlphaGoldenPath_stop_preserves_foreign_docker_resources')
@@ -437,6 +472,7 @@ try {
             'AlphaGoldenPath_missing_dotnet_host_returns_distinct_stable_error' { Test-MissingDotNetHost }
             'AlphaGoldenPath_sdk_preflight_does_not_expose_raw_cli_output_or_local_paths' { Test-DotNetPreflightRedaction }
             'AlphaGoldenPath_validate_does_not_invoke_host_dotnet' { Test-ValidateWithoutHostDotNet }
+            'AlphaGoldenPath_control_transport_is_native_bounded_and_curl_free' { Test-NativeBoundedControlTransport }
             'AlphaGoldenPath_missing_docker_returns_single_actionable_error' { Test-MissingDocker }
             'AlphaGoldenPath_container_dependency_failure_has_no_fallback_or_retry' { Test-ContainerDependencyUnavailable }
             'AlphaGoldenPath_stop_preserves_foreign_docker_resources' { Test-StopPreservesForeignResources }
