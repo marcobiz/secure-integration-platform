@@ -325,6 +325,15 @@ function Test-ContainerDependencyUnavailable {
     $shimRoot = Join-Path ([IO.Path]::GetTempPath()) ('broker-gateway-alpha-docker-shim-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $shimRoot | Out-Null
     $callsPath = Join-Path $shimRoot 'calls.txt'
+    if ($callsPath.Contains("'")) { throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_CALL_PATH_INVALID' }
+    $unixBody = @'
+calls_path='__ALPHA_CALLS_PATH__'
+printf 'CALL\n' >> "$calls_path"
+for argument in "$@"; do
+    printf 'ARG:%s\n' "$argument" >> "$calls_path"
+done
+exit 125
+'@.Replace('__ALPHA_CALLS_PATH__', $callsPath)
     try {
         [void](New-TestCommandShim -Directory $shimRoot -Name 'docker' `
             -WindowsBody @'
@@ -338,18 +347,7 @@ goto alpha_argument_loop
 :alpha_argument_end
 exit /b 125
 '@ `
-            -UnixBody @'
-shim_path="$(command -v "$0")"
-if [ -z "$shim_path" ]; then
-    exit 126
-fi
-calls_path="$(dirname "$shim_path")/calls.txt"
-printf 'CALL\n' >> "$calls_path"
-for argument in "$@"; do
-    printf 'ARG:%s\n' "$argument" >> "$calls_path"
-done
-exit 125
-'@)
+            -UnixBody $unixBody)
         $testPath = $shimRoot + [IO.Path]::PathSeparator + [Environment]::GetEnvironmentVariable('PATH', 'Process')
         $result = Invoke-Captured -File $powerShellHost `
             -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $containerDotNet, 'build', '--project', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release') `
