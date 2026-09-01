@@ -348,16 +348,25 @@ exit 125
         $result = Invoke-Captured -File $powerShellHost `
             -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $containerDotNet, 'build', '--project', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release') `
             -Environment @{ PATH = $testPath; ALPHA_TEST_DOCKER_CALLS = $callsPath }
-        Assert-True ($result.ExitCode -ne 0)
+        if ($result.ExitCode -eq 0) { throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_EXIT_ZERO' }
+        if (-not (Test-Path -LiteralPath $callsPath -PathType Leaf)) { throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_CALL_LOG_MISSING' }
         $calls = @([IO.File]::ReadAllLines($callsPath))
-        Assert-True (@($calls | Where-Object { $_ -ceq 'CALL' }).Count -eq 1)
+        if (@($calls | Where-Object { $_ -ceq 'CALL' }).Count -ne 1) { throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_CALL_COUNT' }
         [string[]] $invocationArguments = @($calls | Where-Object { $_.StartsWith('ARG:', [StringComparison]::Ordinal) } | ForEach-Object { $_.Substring(4) })
         $pullIndex = [Array]::IndexOf($invocationArguments, '--pull')
         $userIndex = [Array]::IndexOf($invocationArguments, '--user')
-        Assert-True ($pullIndex -ge 0 -and $pullIndex + 1 -lt $invocationArguments.Length -and $invocationArguments[$pullIndex + 1] -ceq 'missing')
-        Assert-True ($invocationArguments -ccontains 'mcr.microsoft.com/dotnet/sdk:10.0.302@sha256:72dd743782f2ae7e5476fd64f6a460045e3998dc862218b80e6944cba79a01b0')
-        Assert-True ($userIndex -ge 0 -and $userIndex + 1 -lt $invocationArguments.Length -and $invocationArguments[$userIndex + 1] -ceq '1657:1657')
-        Assert-True (@($invocationArguments | Where-Object { $_.IndexOf('/var/run/docker.sock', [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count -eq 0)
+        if ($pullIndex -lt 0 -or $pullIndex + 1 -ge $invocationArguments.Length -or $invocationArguments[$pullIndex + 1] -cne 'missing') {
+            throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_PULL_POLICY'
+        }
+        if ($invocationArguments -cnotcontains 'mcr.microsoft.com/dotnet/sdk:10.0.302@sha256:72dd743782f2ae7e5476fd64f6a460045e3998dc862218b80e6944cba79a01b0') {
+            throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_IMAGE'
+        }
+        if ($userIndex -lt 0 -or $userIndex + 1 -ge $invocationArguments.Length -or $invocationArguments[$userIndex + 1] -cne '1657:1657') {
+            throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_USER'
+        }
+        if (@($invocationArguments | Where-Object { $_.IndexOf('/var/run/docker.sock', [StringComparison]::OrdinalIgnoreCase) -ge 0 }).Count -ne 0) {
+            throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_DOCKER_SOCKET'
+        }
     }
     finally { Remove-TestDirectory -LiteralPath $shimRoot -Prefix 'broker-gateway-alpha-docker-shim-' }
 }
@@ -431,6 +440,10 @@ try {
     }
 }
 catch {
-    [Console]::Error.WriteLine('ALPHA_GOLDEN_PATH_FAILURE_TEST_FAILED')
+    $failureCode = [string]$_.Exception.Message
+    if ($failureCode -cnotmatch '^ALPHA_GOLDEN_PATH_FAILURE_TEST_DEPENDENCY_[A-Z0-9_]+$') {
+        $failureCode = 'ALPHA_GOLDEN_PATH_FAILURE_TEST_FAILED'
+    }
+    [Console]::Error.WriteLine($failureCode)
     exit 1
 }
