@@ -1,161 +1,75 @@
 # Implementation dashboard
 
-Aggiornato: 2026-08-29
-Baseline CURRENT: `origin/main` = `1b207fb031313ffbd0940061a0d4f10837c84dec`
+Aggiornato: 2026-09-01
+Baseline CURRENT: `main` / `origin/main` =
+`613b28558fc9aeef13b60381b4fc49b59e2ad5c2`
 
-Questo file descrive lo stato integrato corrente. I dettagli storici restano nei tag,
-nei report di test e nelle review già versionate; non vengono ricopiati qui. I termini
-**CURRENT**, **TARGET** e **HISTORICAL** distinguono rispettivamente ciò che è integrato,
-ciò che è ancora da ottenere e l'evidenza immutabile di baseline precedenti.
+Questa pagina è l’autorità sintetica sullo stato integrato. Le guide CURRENT spiegano
+come usare ciò che esiste; piani, review e report precedenti sono HISTORICAL e non
+prevalgono su questa dashboard. `Synthetic`, `live lab`, `OfficialTest qualified` e
+`production qualified` sono livelli distinti.
 
-## Quadro CURRENT
+## Stato prodotto
 
-| Area | Stato corrente | Evidenza o limite |
+| Superficie | Stato CURRENT | Limite della claim |
 |---|---|---|
-| M0-M2 — fondamenta, Local Broker e Gateway | **Done** | Baseline e gate live storici restano attestati dai tag; non equivalgono a un installer release. |
-| M3A — vertical slice production-like | **PASS live lab** | Tag `m3a-product-gate-pass-20260805`; M3B Azure resta non qualificato live. |
-| M4 — Connector Configuration | **Done** | Lifecycle, Published runtime, PostgreSQL 18, CLI e quickstart sintetico integrati. |
-| M5 — Admin UI/API | **Done** | OIDC/RBAC/four-eyes, Admin API/UI e confini provider integrati. |
-| M5.5 — Direct Gateway Access | **Done** | Sample .NET presente; il key storage process-local resta un limite non-production. |
-| Authentication foundation / Wave 1 | **Integrata** | SOAP/session, JWT/X.509, signing slot, mTLS e moduli esterni hanno gate dedicati; nessuna primitive qualifica automaticamente un servizio esterno. |
-| Healthcare — FSE2 Organization | **Synthetic-qualified** | Profilo Organization e 11 operation implementati con dual JWT S1 `contentCommitment` e A1 mTLS distinta; nessuna chiamata FSE2 live. |
-| FSE2 Local PKCS12 e vertical image | **Integrati; synthetic lab qualified** | Provider opzionale, importer offline, overlay Compose e immagine verticale con `Healthcare.FSE2` integrati da PR #33. Il pack dichiara `SecretValues=false`; import/custody reali e OfficialTest restano aperti. |
-| Healthcare — ePrescription regionale | **Foundation soltanto** | Profili regionali `BLOCKED_BY_SPEC`; non pubblicabili. |
-| Productization `0.1.0-alpha.1` | **PUBLIC TECHNICAL PREVIEW governance candidate; non pubblicata** | REST/Direct/clean baseline chiuse e adopter simulation PASS. Licenza path-based, DCO/security/CoC e release metadata sono candidate implementate; review indipendente, integrazione e publication gate restano aperti. |
-| Produzione enterprise | **Non qualificata** | Azure live, MSI, adapter native/COM, HA/DR, restore/load/soak, pentest, firma artefatti e pilot restano fuori dal CURRENT. |
+| Core M0–M5.5 | Integrato | Local Broker, Gateway, PostgreSQL, Connector lifecycle/runtime, Admin e Direct Gateway; non equivale a installer o produzione enterprise. |
+| Pilot locale | **Disponibile — synthetic live lab** | Un percorso canonico Direct .NET → Gateway → Connector REST Published → mock HTTPS/mTLS; nessun servizio esterno o cloud. |
+| Admin UI/API | **Integrata** | OIDC/RBAC, CSRF, four-eyes, binding/grant e audit server-side; il quickstart locale usa identità sintetiche, non una configurazione production. |
+| Authentication foundation | **Integrata** | Le primitive SOAP/session, JWT/X.509, signing e mTLS non qualificano automaticamente un servizio esterno. |
+| FSE2 `validate-cda` | **LIVE_QUALIFIED — OfficialTest** | Una chiamata applicativa bounded sulla baseline exact ha restituito Gateway 200 con A1 mTLS, dual JWT S1 e contratto CDA/`VERIFICA`; non è accreditamento né qualifica production. |
+| FSE2 `delete` | **PRODUCT_PATH_OFFLINE_QUALIFIED** | Metodo/path/no-body/claim e risposta bounded attraversano il product path verso mock; nessuna qualifica live o operationalization distribuita. |
+| Altre nove operazioni FSE2 | **IMPLEMENTED_PARTIAL** | Runtime foundation sintetica; mancano a seconda dell’operazione definition/provisioning canonici, DTO/response completi, persistence o qualifica live. |
+| Copertura completa Gateway FSE 2.0 | **NO** | Solo 1/11 live-qualified; Human Actor, callback inbound, correlation durevole, accreditamento e produzione non sono coperti. |
+| Private preview | **Limitata** | Il Core e il pilot qualità CDA sono valutabili nei limiti dichiarati; non esiste una release pubblica o un impegno di stabilità API. |
+| Produzione/accreditamento | **NON QUALIFICATI** | Cloud live, MSI, HA/DR, restore/load/soak, pentest, firma artefatti, custody production e accreditamento restano fuori dal CURRENT. |
 
-## Due sole track attive
+## Percorsi CURRENT
 
-### Track A — Core `0.1.0-alpha.1`
+- prodotto locale: [docs/user/local-pilot.md](docs/user/local-pilot.md);
+- FSE2 OfficialTest: [docs/user/fse2-officialtest.md](docs/user/fse2-officialtest.md);
+- amministrazione: [docs/user/administration.md](docs/user/administration.md);
+- sviluppo Connector: [docs/connector-development/README.md](docs/connector-development/README.md);
+- regole interne: [docs/internal/README.md](docs/internal/README.md).
 
-TARGET: una developer alpha non-production, provider-neutral, con un solo percorso
-supportato e ripetibile:
+La configurazione FSE2 dispone di un provisioner Admin resumable, ma bootstrap/provider
+operativo, acquisizione delle sessioni di ruolo e runner live adopter-facing non sono un
+flusso self-service documentabile dalla repository. Per questo
+`FSE2_PILOT_REPRODUCIBLE_FROM_DOCS = NO`, pur restando vera la qualifica live di
+`validate-cda` sulla baseline.
+
+## Capacità FSE2 e prossimo gate
+
+Il pilot di qualità CDA è già disponibile con `validate-cda`. Un pilot minimo di
+pubblicazione richiede la slice coerente:
 
 ```text
-Direct .NET
-→ Gateway
-→ Connector REST Published
-→ Synthetic Provider
-→ mock HTTPS/mTLS
-→ risposta sanificata e audit metadata-only
+validate-cda → create → get-status-by-workflow
 ```
 
-FSE2, MSI, COM/C ABI, Azure live, HA/DR e stabilità API non sono promesse della release.
-Scope e gate ALPHA-01..08 sono in
-[`docs/implementation/0.1.0-alpha-scope.md`](docs/implementation/0.1.0-alpha-scope.md).
+`create` e `get-status-by-workflow` sono ancora parziali; un `202` di `create` senza
+riconciliazione non dimostra il completamento verso INI/EDS. `replace`, `delete`,
+`update-metadata` e `get-status-by-trace` sono successivi ad alto valore; le altre
+operazioni non entrano automaticamente in roadmap.
 
-### Track B — FSE2 Organization OfficialTest
+Il prossimo gate prodotto è **time to first successful call**, black-box e da stato
+pulito. Deve misurare separatamente:
 
-TARGET iniziale: `validate-cda` nell'ambiente ufficiale di test, con dataset sintetico
-autorizzato e evidence redatta. Solo dopo si affrontano `attachment_hash` sugli exact
-file bytes, create/replace, status e gli ulteriori workflow autorizzati. Questa track usa
-un pack verticale opzionale e non amplia le dipendenze del Core.
+- pilot locale: prerequisiti → singolo workflow → prima risposta sanificata → cleanup;
+- FSE2: prerequisiti esterni già presenti → bootstrap supportato → plan/apply/four-eyes
+  → verify → una `validate-cda` → audit/evidence redatti → resume terminale.
 
-Candidate non ancora integrato `FSE2-OFFICIALTEST-OPERATIONALIZATION`: source canonica per il solo
-`validate-cda`, compilatore di piano protetto, composizione A1 mTLS/S1 dual-signing e provisioner
-verticale sulle superfici Admin esistenti. Il candidate usa lookup provider esatti non paginati,
-compone il path runtime preservando l'intero prefisso OfficialTest e vincola il publish server-side
-alla sessione dell'exact `approved_by`. Il provisioner risolve l'Installation autenticata prima
-della prima mutazione e usa il suo Environment server-owned per catalogo, binding e grant; il valore
-nel piano è soltanto un'asserzione fail-closed. Il candidate non contiene configurazione reale e non
-esegue rete OfficialTest. Stato gate dichiarabile: T01/T02/T03 PASS software/offline,
-T04 `BLOCKED_PENDING_OPERATIONAL_CONFIGURATION_AND_LIVE_CALL`, T06 PARTIAL.
-
-Candidate non ancora integrato `SAFE_DIAGNOSTIC_PROPAGATION`: le sole failure FSE2 bounded sono
-persistite come campi chiusi e proiettate dal server esclusivamente a
-`SecurityAdministrator`; caller runtime e altri ruoli conservano la vista sanificata. Il reducer
-evidence accetta soltanto lo stesso DTO allowlisted. Nessuna chiamata OfficialTest o lettura di
-materiale reale fa parte della qualification di questa slice.
-
-## Candidate ALPHA-GOV-REL
-
-| Slice | Stato candidate | Limite |
-|---|---|---|
-| ALPHA-LIC | **Candidate implemented, pending independent review/integration** | MPL-2.0 default, override Apache-2.0 e dual license `OR` sono path-based e verificati; non è un publication GO. |
-| ALPHA-SEC | **Candidate implemented, pending independent review/integration** | Security contact, Contributor Covenant 3.0 e DCO 1.1 sono configurati; il required-check DCO richiede handoff di branch protection dopo integrazione. |
-| ALPHA-DOC-04 | **Candidate truth-aligned** | FSE2 resta synthetic-qualified con A1/S1, Local PKCS12 e vertical image opzionali; nessun materiale reale, OfficialTest o claim production. |
-| ALPHA-REL | **NOT CLOSED** | Nessun tag, GitHub Release, registry/NuGet publication o merge è autorizzato da questa slice. |
-
-`PUBLIC_RELEASE_GO = NO` e `PRODUCTION_READY = NO` fino a review indipendente, integrazione e publication gate sull'exact release commit.
-
-## Exact-main precheck del technical candidate
-
-L'exact main autorizzato per ALPHA-GOV-REL è `97daa565f582d575da5d61665126c50ea52be3ed`.
-General CI è **6/6 PASS** e M5/Admin CI è **15/15 PASS** sulla baseline. Il candidate
-non crea tag, release GitHub o pubblicazioni registry e mantiene
-`PUBLIC_RELEASE_GO = NO` / `PRODUCTION_READY = NO`.
-
-## PR #33 — evidence storica preservata
-
-PR #33 è stata integrata tramite fast-forward; il suo head storico coincideva con
-`eec2fa5556eccc7e8e3b47fc7d7b127bcac1ed9e`.
-
-| Controllo exact-main | Esito |
-|---|---|
-| General CI | **6/6 PASS**, run [`31677839993`](https://github.com/marcobiz/secure-integration-platform/actions/runs/31677839993) |
-| M5/Admin CI | **15/15 PASS**, run [`31677840011`](https://github.com/marcobiz/secure-integration-platform/actions/runs/31677840011) |
-| PostgreSQL 18 FSE2 canonico | **1/1 PASS**, zero skip |
-| Local PKCS12 provider | **30/30 PASS**, materiale esclusivamente sintetico |
-| Architecture | **42/42 PASS** |
-| Provider-active synthetic lab | **PASS** |
-| Security micro-review | **GO** sul perimetro sintetico di PR #33 |
-
-L'integrazione comprende provider Local PKCS12 opzionale, importer sintetico/offline,
-immagine verticale contenente `Healthcare.FSE2`, overlay Compose, provider-active lab,
-firma S1 `contentCommitment` e identità mTLS A1 distinta. L'immagine Gateway Core
-predefinita continua a non includere il pack verticale.
-
-Questi esiti **non** attestano accesso o import del materiale reale, custody reale,
-configurazione OfficialTest, chiamate FSE2, `validate-cda` live, accreditamento software,
-create/status live o qualifica production. Nessun materiale reale è stato consultato o
-importato durante PR #33 e nessuna chiamata live è stata eseguita.
-
-## Core export storico e candidate normalizzato
-
-- inventario: **431 file**;
-- allowlist/hash/byte entries: **431/431**;
-- `packs/deployment` esclusi;
-- `Healthcare` e `ConnectorPacks` esclusi;
-- SHA-256 raw del manifest della run exact-main:
-  `CC622E4F8FCACE420232C99B4F474429E22C2259DD1B2829B6C55BBD265D6234`.
-
-Il raw SHA è evidence della singola run e non è un expected cross-run, perché il manifest
-include `generatedAtUtc`. Il candidate `0.1.0-alpha.1` aggiunge
-`normalizedInventorySha256`, distinto dal manifest run-specific e calcolato su exact
-commit, file count, path ordinal normalizzati, byte count e SHA-256 per file.
-`P3-CORE-EXPORT-DIGEST` è chiuso dalla slice candidate senza reinterpretare i raw SHA
-storici.
-
-## Tassonomia delle evidenze
-
-| Classe | CURRENT | Non implica |
-|---|---|---|
-| Synthetic | Core, profilo FSE2, provider Local PKCS12, importer e vertical image hanno gate sintetici. | Accesso a un servizio esterno o custody reale. |
-| Live lab | Local Broker/M3A hanno evidenza live di laboratorio sulle baseline attestate. | Production o OfficialTest FSE2. |
-| Official-test | Nessuna configurazione o chiamata FSE2 OfficialTest è attestata. | `validate-cda`, create/status o accreditamento. |
-| Production | Nessuna qualifica production è corrente. | Readiness enterprise, HA/DR o provider production-grade. |
-
-La matrice requisito-test-evidenza canonica resta
-[`docs/traceability/requirements-traceability.md`](docs/traceability/requirements-traceability.md).
-I conteggi aggregati sopra sono checkpoint di PR #33, non sostituti dei test nominativi o
-dei gate di release.
-
-## Priorità operative
-
-1. Revisionare e integrare ALPHA-LIC, ALPHA-SEC e ALPHA-DOC-04 sull'exact candidate.
-2. Attivare il gate DCO come required check con configurazione GitHub esterna dopo integrazione.
-3. Mantenere DOC-04 e la track FSE2 separate dalla preview Core.
-4. Creare il futuro tag `v0.1.0-alpha.1` o pubblicare soltanto con nuova autorizzazione
-   dopo tutti i gate ALPHA-01..08.
-
-Il backlog operativo e la stop list sono in
-[`docs/implementation/backlog.md`](docs/implementation/backlog.md).
+Il gate fallisce se l’operatore deve conoscere la struttura della repository, usare SQL
+o store diretti, copiare cookie come procedura ordinaria, inventare una sequenza o
+richiedere intervento specialistico per onboarding, recovery o test normali.
 
 ## Regole di aggiornamento
 
-- aggiornare questa dashboard quando cambia lo stato integrato in `main` o un gate esterno
-  viene attestato;
-- conservare cronologie dettagliate, SHA candidati e remediation nei report dedicati;
-- qualificare sempre l'evidenza come synthetic, live lab, official-test o production;
-- non trasformare input del maintainer in evidence repository;
-- non versionare certificati, chiavi, token, endpoint riservati, JWT o payload sanitari.
+- Aggiornare questa dashboard solo quando cambia lo stato integrato o viene attestato un
+  gate esterno exact-head.
+- Non trasformare test sintetici, una risposta `202`, una dichiarazione del maintainer o
+  un conteggio aggregato in una claim più ampia.
+- Conservare dettagli di run, SHA storici e remediation nei report HISTORICAL; non
+  ricopiarli nelle guide utente.
+- Non versionare endpoint operativi riservati, certificati, chiavi, P12, password, token,
+  cookie, payload sanitari o risposte raw.

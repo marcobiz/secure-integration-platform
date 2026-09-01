@@ -1,131 +1,82 @@
 # FSE2 National Connector — Organization profile
 
-Status: **remediated; exact-head qualification pending**. This is neither an accreditation
-statement nor an `ACCREDITED_PRODUCTION_READY` claim.
+**Stato CURRENT:** `validate-cda` LIVE_QUALIFIED in OfficialTest sulla baseline
+`613b28558fc9aeef13b60381b4fc49b59e2ad5c2`. La claim non implica accreditamento,
+produzione o copertura completa del Gateway FSE 2.0. La procedura adopter-facing e i
+blocchi correnti sono in [docs/user/fse2-officialtest.md](../../../user/fse2-officialtest.md).
+
+## Capability matrix
+
+| Operation | Stato prodotto | Utilità/limite |
+|---|---|---|
+| `validate-cda` | `LIVE_QUALIFIED` | Pilot qualità CDA disponibile; una chiamata applicativa bounded OfficialTest ha restituito Gateway 200. |
+| `delete` | `PRODUCT_PATH_OFFLINE_QUALIFIED` | Wire/no-body/claim/ack qualificati contro mock; non productizzata né live. |
+| `validate-fhir` | `IMPLEMENTED_PARTIAL` | Foundation runtime; DTO/response e provisioning OfficialTest non qualificati. |
+| `create` | `IMPLEMENTED_PARTIAL` | Richiesta/hashing foundation; definition/provisioning canonici e qualifica live mancanti. È blocker del pilot pubblicazione. |
+| `replace` | `IMPLEMENTED_PARTIAL` | Foundation con document ID e hash; non necessaria alla prima pubblicazione. |
+| `update-metadata` | `IMPLEMENTED_PARTIAL` | JSON pass-through non qualificato contro DTO ufficiale completo. |
+| `update-metadata-chain-concealment` | `IMPLEMENTED_PARTIAL` | Test-only e contratto insufficiente per una claim operativa. |
+| `validate-and-create` | `IMPLEMENTED_PARTIAL` | Recovery eccezionale, non flusso normale. |
+| `validate-and-replace` | `IMPLEMENTED_PARTIAL` | Recovery eccezionale e documento esistente. |
+| `get-status-by-workflow` | `IMPLEMENTED_PARTIAL` | Necessaria al pilot pubblicazione; response/correlation/provisioning non completi. |
+| `get-status-by-trace` | `IMPLEMENTED_PARTIAL` | Diagnostica successiva; stessi limiti di status/correlation. |
+
+`FULL_FSE2_GATEWAY_COVERAGE = NO`. Per un pilot di pubblicazione minimo servono
+`validate-cda → create → get-status-by-workflow`; un `202` di create senza
+riconciliazione non dimostra il completamento verso INI/EDS.
 
 ## Authority model
 
-The only implemented actor profile is `ORGANIZATION`; Human Actor is deferred. Core authenticates
-the caller, resolves the grant and one immutable Published operation, verifies freshness, and then
-hands the external `healthcare-fse2` module an `AuthorizedConnectorExecution`. The pack depends only
-on `Gateway.Application`. It has no store/provider/certificate access, signing primitive,
-`HttpClient`, generic HTTP surface, direct restricted transport, IVT, or Core-internal invocation
-type.
+Il solo actor profile implementato è `ORGANIZATION`; Human Actor è differito. Core
+autentica il caller, deriva Tenant/Application/Installation/Environment, verifica grant
+e Published operation e poi consegna al modulo `healthcare-fse2` una authority bounded.
+Il pack dipende da contratti provider-neutral e non riceve store/provider access,
+`GetSecret`, signing oracle, endpoint selector o HTTP generico.
 
-The strict Published extension contains only common Organization configuration: environment,
-P.IVA and assigning authority, organization/locality, `DAP`, application identity, and the maximum
-document size. It cannot select an operation, method, path, parameter name, content type, multipart
-boundary, signing slot, key, certificate, endpoint, issuer, audience, subject, temporal profile, or
-claim policy. Unknown fields fail closed. The exact operation comes from the already-authorized
-Core context and is looked up in the frozen FSE2 catalog.
+La configurazione Published contiene identità Organization e binding logici. Metodo,
+path, content type, endpoint, audience, claim policy, signing slot, certificati e
+revisioni sono server-owned. `person_id` resta dato business validato e non diventa
+identità autenticata.
 
-P.IVA plus assigning-authority OID produce the exact fixed-subject CX. `person_id` remains a
-separate validated business CX and is never promoted to authenticated actor.
-`use_subject_as_author` is absent.
+## OfficialTest `validate-cda`
 
-## OfficialTest `validate-cda` operational source
+La source pubblica canonica è
+`Definitions/fse2-officialtest-validate-cda.connector.json` e contiene una sola
+operation. Non contiene endpoint concreto, identità organizzative operative, provider
+locator, P12, password o token. Il provisioner verticale
+`tools/fse2/OfficialTestProvisioner` usa le Admin API autenticate per
+`plan → configure/grant → propose → approve/publish → verify` e risolve A1/S1 dal
+catalogo pubblico server-side.
 
-The candidate operational slice freezes one public-safe source definition at
-`Definitions/fse2-officialtest-validate-cda.connector.json`. It contains exactly one operation,
-`validate-cda`, and only logical endpoint/A1/S1 bindings. It contains no concrete endpoint,
-organization/locality value, provider resource ID, principal, certificate, P12, password or token.
-Repository bytes and their SHA-256 are regression-tested before the deployment compiler overlays
-the protected organization/locality values and exact public A1/S1 revision metadata. The application
-identity is source-owned as `secure-integration-platform` / `ApoCert S.r.l.` /
-`0.1.0-alpha.1` and cannot be selected by a plan or runtime caller.
+Il provisioner non esegue la call live. La qualifica di `validate-cda` è stata ottenuta
+da un runner esterno controllato e redatto; un runner adopter-facing riproducibile non è
+ancora distribuito. Non sostituirlo con test integration, fixture o una request costruita
+a mano.
 
-`tools/fse2/OfficialTestProvisioner` is the supported vertical administrative path. Its `plan`
-command runs before construction of an Admin client and reports explicit zero workflow-store,
-signing, DNS, HTTPS, transport and network counters. The remaining commands reuse only the existing
-authenticated Admin validate/import/bind/approval/publish/read-back endpoints. The runtime caller
-cannot choose this driver, endpoint, provider, secret or certificate. Operational commands resolve
-public A1/S1 authority from the exact unique active `/provider-resources` Admin API entries; an
-external public-metadata file is neither required nor accepted. The full operator procedure
-and closed external-plan schema are in
-[`OFFICIALTEST-VALIDATE-CDA-RUNBOOK.md`](OFFICIALTEST-VALIDATE-CDA-RUNBOOK.md) and
-[`fse2-officialtest-operational-plan.schema.json`](fse2-officialtest-operational-plan.schema.json).
+La parity è esclusiva di `fse2-officialtest-validate-cda@1.0.1`: entrambi i JWT usano la
+sola leaf S1 in `x5c` e il body `VERIFICA` contiene soltanto `healthDataFormat=CDA` e
+`activity=VERIFICA`, senza `mode` o `attachment_hash`. La versione `1.0.0` è
+compatibilità storica immutabile, non contract-parity qualified.
 
-This source and provisioner do not perform a live invocation. Official operational configuration,
-two preauthorized human sessions and a later single-live handoff remain external gates.
+## Provider, claim e transport
 
-## Frozen operation and wire matrix
+- A1 è distinto e autorizzato per mTLS; S1 alimenta i due slot `authorization` e
+  `integrity` con RS256 e `ContentCommitment`.
+- Endpoint, origin, path composition, method, timeout, response bound, DNS/restricted
+  egress e redirect deny restano autorità Published/Core.
+- Organization/locality/application, `iss`, `aud`, `sub`, `iat`, `exp` e `jti` sono
+  server-owned; purpose/action e hash necessari sono derivati; i soli business claim
+  ammessi restano allowlisted.
+- Errori e audit conservano soltanto categorie e safe code bounded; non payload, response
+  raw, JWT, header, endpoint o certificati.
 
-| Operation ID | Availability | Method and Published `pathTemplate` | Body mode |
-|---|---|---|---|
-| `validate-cda` | Production | `POST /documents/validation` | REQUIRED multipart |
-| `validate-fhir` | Official test only | `POST /documents/fhir-validation` | REQUIRED multipart |
-| `create` | Production | `POST /documents` | REQUIRED multipart |
-| `replace` | Production | `PUT /documents/{document-id}` | REQUIRED multipart |
-| `delete` | Production | `DELETE /documents/{document-id}` | NONE |
-| `update-metadata` | Production | `PUT /documents/{document-id}/metadata-iti-57` | REQUIRED JSON |
-| `update-metadata-chain-concealment` | Official test only | `PUT /documents/{document-id}/metadata-oscuramento-catena` | REQUIRED JSON |
-| `validate-and-create` | Production | `POST /documents/validate-and-create` | REQUIRED multipart |
-| `validate-and-replace` | Production | `PUT /documents/validate-and-replace/{document-id}` | REQUIRED multipart |
-| `get-status-by-workflow` | Production | `GET /status/{workflow-instance-id}` | NONE |
-| `get-status-by-trace` | Production | `GET /status/search/{trace-id}` | NONE |
+## Workflow correlation e limiti
 
-Parameter names are catalog-owned. The caller supplies only the one opaque identifier value
-required by the selected operation. Core accepts only whole-segment Published placeholders,
-canonical bounded names, and NFC values of at most 512 UTF-8 bytes; slash, backslash, percent,
-query, fragment, dot-segment, missing, unknown, extra, and duplicate forms fail closed. There is no
-connector-side URI concatenation. Core retains scheme, host, port, origin, method, template, DNS,
-restricted-egress, redirect, timeout, and response-bound authority.
+La correlation tecnica è scoped a Tenant, Application, Installation, Environment,
+Connector/versione e profilo comune. Non conserva contenuto clinico, ma lo store corrente
+è bounded e process-local: durability cross-process/restart/scale-out non è qualificata.
+Il mapper status non proietta ancora l’intero `transactionData[]` ufficiale.
 
-`bodyMode: none` creates no `HttpContent`, body bytes, or `Content-Type` on DELETE and status GET.
-Payload operations use REQUIRED; omitting `bodyMode` retains Core's historical REQUIRED default.
-For document operations the pack creates one deterministic multipart byte sequence for restricted
-transport. Where the frozen operation requires `attachment_hash`, the claim is SHA-256 of the exact
-input file bytes, never of the multipart HTTP envelope. `validate-cda` does not emit the claim.
-
-## Exact outbound policy
-
-`Fse2OrganizationPublishedOperationExpectationProvider` supplies mandatory semantic expectations
-for `healthcare-fse2-organization`. Core compares them with the effective Published operation before
-strategy entry, capability scope, signing, DNS, HTTPS, or network:
-
-- authentication is mTLS and restricted transport is required;
-- the exact slots are `authorization` and `integrity`;
-- both require RS256, a leaf-first `x5c` chain, 300-second `iat`/`exp`, no `nbf`, and non-empty `jti`;
-- authorization projects only as `Authorization: Bearer` and permits no business claims;
-- integrity projects only as `FSE-JWT-Signature` and has the exact FSE2 claim allowlist;
-- audience is derived from the strict environment class;
-- subject is the canonical Organization CX;
-- issuers are `auth:<verified signing-certificate CN>` and
-  `integrity:<verified signing-certificate CN>`;
-- the two slots use the same verified signing identity, and each is distinct from mTLS.
-
-The pack requests two fresh opaque tokens but never reads compact JWTs or creates transport
-headers. Core owns signing/key authority, certificate validation and header projection.
-
-Claim provenance is frozen as follows:
-
-| Authority | Claims |
-|---|---|
-| Server-owned | `iss`, `aud`, `sub`, `iat`, `exp`, `jti`, organization/role/locality/application fields |
-| Business allowlisted | `person_id`, `patient_consent`, `resource_hl7_type` |
-| Derived | `purpose_of_use`, `action_id`, exact-byte `attachment_hash` |
-
-## Workflow correlation
-
-`SharedOrganizationProfileChecksumSha256` is a canonical deterministic hash of common
-Organization authority only. It excludes operation ID, method, path, path/resource parameters,
-content type, multipart boundary, payload, workflow/trace IDs, and all per-request data. It scopes
-correlation together with Tenant, Application, Installation, Environment, Connector version and
-Connector ID, allowing `create` to correlate with both status operations.
-
-`OperationProfileChecksumSha256` separately binds the originating catalog operation and is retained
-in the technical workflow record for validation/audit; it is not part of the status lookup key.
-Records contain only technical operation/action/purpose and workflow/trace values—never patient or
-document content. The current store is bounded and process-local; durable cross-process workflow
-persistence is not claimed.
-
-## Environment and deferred scope
-
-Production permits only the nine Production operations and uses audience
-`https://modipa.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1`. OfficialTest uses
-`https://modipa-val.fse.salute.gov.it/govway/rest/in/FSE/gateway/v1`. The synthetic audience and
-HTTPS origin are test-only.
-
-`HUMAN_ACTOR_PROFILE = DEFERRED`. Operational provider material, production certificate custody,
-conformance, accreditation, monitoring, and live evidence remain outside this PR. Tests use only
-ephemeral synthetic certificates and `OFFICIALTEST_NETWORK_COUNT=0`.
+Local PKCS#12 è un pack/laboratorio opzionale, non HSM/KMS o custody production.
+Accreditamento, produzione, Human Actor, callback inbound, direct FHIR publication
+confermata e full operation coverage restano fuori scope.

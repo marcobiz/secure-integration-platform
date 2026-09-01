@@ -1,75 +1,58 @@
-# Indice della documentazione
+# Documentazione
 
-Questa directory raccoglie decisioni, contratti, stato, target ed evidence storica. Gli
-ADR accettati registrano decisioni durevoli; OpenAPI/schema/migration descrivono i
-contratti eseguibili; [`IMPLEMENTATION_STATUS.md`](../IMPLEMENTATION_STATUS.md) è la
-dashboard corrente. Un piano o report legato a una vecchia baseline non prevale sullo
-stato corrente.
+Questo indice separa le procedure CURRENT dai riferimenti tecnici e dalla storia. Un
+adottante non deve leggere l’intera repository per trovare il percorso supportato.
 
-## Ordine di lettura
+## CURRENT — scegli il pubblico
 
-1. [Sintesi esecutiva](architecture/executive-architecture.md)
-2. [Requisiti e criteri di accettazione](requirements/requirements.md)
-3. [Assunzioni e questioni esterne](assumptions.md)
-4. [Inventario e analisi sanificata degli input](input-analysis.md)
-5. [Architettura e confini di fiducia](architecture/system-architecture.md)
-6. [Diagrammi di componenti e deployment](architecture/component-diagrams.md)
-7. [Diagrammi di sequenza](architecture/sequence-diagrams.md)
-8. [Security model](security/security-model.md)
-9. [Threat model STRIDE](security/threat-model.md)
-10. [Indice ADR](adr/README.md)
-11. [Specifica API Gateway](api/gateway-api.md) e [OpenAPI](api/gateway-openapi.yaml)
-12. [Protocollo IPC del Local Broker](api/broker-ipc.md)
-13. [Schema database](data/database-schema.md)
-14. [Specifica Connector](connectors/connector-specification.md), [JSON Schema](connectors/connector-definition.schema.json), [CLI](connectors/connector-cli.md) e [SDK](connectors/connector-sdk.md)
-15. [M4 local quick start](operations/M4-QUICKSTART.md)
-16. [Architettura M5 e confini provider](architecture/m5-admin-ui-and-provider-boundaries.md)
-17. [Piano M5](implementation/M5-IMPLEMENTATION-PLAN.md)
-18. [Quick start Admin UI M5](operations/M5-ADMIN-QUICKSTART.md)
-19. [Gate Review M5](reviews/M5-GATE-REVIEW.md)
-20. [Decisione licenza open source](legal/OPEN-SOURCE-LICENSE-DECISION.md)
-15. [Deployment](deployment/deployment-architecture.md) e [Operations](operations/observability.md)
-16. [Test strategy](testing/test-strategy.md)
-17. [Migrazione legacy](migration/legacy-migration.md)
-18. [Piano di implementazione](implementation/implementation-plan.md)
-19. [Backlog](implementation/backlog.md)
-20. [Definition of Done](implementation/definition-of-done.md)
-21. [Matrice di tracciabilità](traceability/requirements-traceability.md)
-22. [Gate Review M0/M1](reviews/M0-M1-GATE-REVIEW.md) e [matrice requisito-test-evidenza](reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md)
-23. [Runbook matrice live M0/M1](operations/M0-M1-LIVE-MATRIX-RUNBOOK.md)
-24. [Architettura implementata M2](architecture/m2-gateway-architecture.md)
-25. [Piano M2](implementation/M2-IMPLEMENTATION-PLAN.md), [runbook M2](operations/M2-GATEWAY-RUNBOOK.md), [report M2](testing/M2-IMPLEMENTATION-REPORT.md) e [Gate Review M2](reviews/M2-GATE-REVIEW.md)
-26. [Wave 1 typed composed SOAP authenticated dispatch](implementation/WAVE1-TYPED-COMPOSED-SOAP-DISPATCH.md)
-27. [FSE2 Wave 1 - source freeze](implementation/FSE2-WAVE1-SPEC-FREEZE.md), [profilo organizzativo](connectors/healthcare/fse2/README.md), [runbook OfficialTest validate-cda](connectors/healthcare/fse2/OFFICIALTEST-VALIDATE-CDA-RUNBOOK.md) e [report di implementazione](testing/FSE2-IMPLEMENTATION-REPORT.md); la copertura è sintetica e la chiamata OfficialTest resta aperta
-28. [Wave 1 authorized typed composed-SOAP request composition](implementation/WAVE1-AUTHORIZED-TYPED-COMPOSED-SOAP-REQUEST.md)
-29. [FSE2 local PKCS#12 provider runbook](operations/FSE2-LOCAL-PROVIDER-RUNBOOK.md)
+| Pubblico | Entry point | Autorità |
+|---|---|---|
+| Adottante / operatore | [Guida utente](user/README.md) | Procedure CURRENT per quickstart, pilot locale, FSE2, amministrazione, troubleshooting e limiti. |
+| Sviluppatore Connector | [Connector development](connector-development/README.md) | Contratto minimo, binding server-owned e golden path di prima chiamata. |
+| Maintainer / agente interno | [Documentazione interna](internal/README.md) | Stato, regole di scope, semplicità e review. |
+| Architettura / security | [ARCHITECTURE.md](../ARCHITECTURE.md), [ADR](adr/README.md), [security model](security/security-model.md), [threat model](security/threat-model.md) | Decisioni e confini; non sono runbook di adozione. |
+| API / contratti | [Gateway API](api/gateway-api.md), [OpenAPI](api/gateway-openapi.yaml), [Connector specification](connectors/connector-specification.md), [schema JSON](connectors/connector-definition.schema.json) | Contratti eseguibili; non forniscono sequenze operative mancanti. |
+| Stato e tracciabilità | [dashboard](../IMPLEMENTATION_STATUS.md), [matrice requisiti-test](traceability/requirements-traceability.md) | Stato CURRENT e mapping di evidence. |
 
-## Deliverable coperti
+## Percorsi utente supportati
 
-| Deliverable | Documento |
-|---|---|
-| Executive architecture | `architecture/executive-architecture.md` |
-| System context e trust boundaries | `architecture/system-architecture.md` |
-| Diagrammi Broker, Gateway, Connector, Admin e Azure | `architecture/component-diagrams.md` |
-| Dodici sequence diagram | `architecture/sequence-diagrams.md` |
-| Threat model | `security/threat-model.md` |
-| ADR | `adr/` |
-| API e IPC | `api/` |
-| ER diagram, tabelle, indici e retention | `data/database-schema.md` |
-| Connector schema, esempi e plugin contract | `connectors/` |
-| Roadmap e work breakdown | `implementation/` |
-| Definition of Done | `implementation/definition-of-done.md` |
-| Gate Review prima di M2 | `reviews/` |
-| Harness live M0/M1 e runbook VM | `../tools/live-matrix/`, `operations/M0-M1-LIVE-MATRIX-RUNBOOK.md` |
-| Gateway minimo M2 | `architecture/m2-gateway-architecture.md`, `implementation/M2-IMPLEMENTATION-PLAN.md`, `operations/M2-GATEWAY-RUNBOOK.md`, `testing/M2-IMPLEMENTATION-REPORT.md`, `reviews/M2-GATE-REVIEW.md` |
-| FSE2 Wave 1 | `implementation/FSE2-WAVE1-SPEC-FREEZE.md`, `connectors/healthcare/fse2/README.md`, `testing/FSE2-IMPLEMENTATION-REPORT.md` (profilo Organization coperto sinteticamente; Human Actor differito; nessuna call OfficialTest o qualifica production dichiarata) |
-| FSE2 local provider lab | `adr/0029-local-pkcs12-provider-for-offline-labs.md`, `operations/FSE2-LOCAL-PROVIDER-RUNBOOK.md`, `../packs/deployment/local-pkcs12/` (materiale operativo sempre esterno a Git; nessuna call live implicita) |
-| FSE2 OfficialTest operationalization | `adr/0031-fse2-officialtest-operational-source-and-provisioner.md`, `connectors/healthcare/fse2/OFFICIALTEST-VALIDATE-CDA-RUNBOOK.md`, `../tools/fse2/OfficialTestProvisioner/` (solo configure/four-eyes/read-back; nessuna call live) |
+1. [Prova il prodotto](user/quickstart.md).
+2. [Esegui il solo pilot locale canonico](user/local-pilot.md).
+3. [Amministra Connector, binding, grant e audit](user/administration.md).
+4. [Valuta il pilot FSE2 OfficialTest e i suoi prerequisiti esterni](user/fse2-officialtest.md).
+5. [Risolvi un errore senza SQL o accesso agli store](user/troubleshooting.md).
+
+## Riferimenti CURRENT
+
+Sono CURRENT come riferimenti, non come ordine di lettura per l’adottante:
+
+- `docs/adr/` per decisioni Accepted;
+- `docs/api/`, `docs/connectors/connector-specification.md` e
+  `docs/connectors/connector-sdk.md` per contratti pubblici;
+- `docs/architecture/` eccetto il documento M2 esplicitamente storico;
+- `docs/data/database-schema.md`, `docs/requirements/requirements.md` e
+  `docs/testing/test-strategy.md` per maintainer e reviewer;
+- `docs/implementation/0.1.0-alpha-scope.md`, `implementation-plan.md`, `backlog.md` e
+  `definition-of-done.md` come pianificazione interna, subordinata alla dashboard.
+
+I documenti non inclusi in questi gruppi non sono procedure CURRENT. Prima di usarli,
+consultare l’[indice storico](history/README.md); i documenti stale o di target restano
+non autoritativi finché non vengono riclassificati esplicitamente.
+
+## HISTORICAL
+
+L’[indice storico](history/README.md) classifica i 53 piani, report, review e runbook di
+milestone individuati dall’audit. I file non sono ancora spostati in massa: i path
+rimangono stabili, ma non devono essere usati per ricostruire lo stato o inventare una
+procedura.
 
 ## Regole di manutenzione
 
-- Ogni modifica di una decisione architetturale aggiorna o sostituisce un ADR.
-- Ogni requisito di sicurezza deve avere almeno un test e un riferimento nella matrice di tracciabilità.
-- Contratti, esempi e JSON Schema devono evolvere nello stesso change set.
-- Non inserire valori provenienti dalle appendici dei report, certificati reali, token, password, chiavi o dati sanitari/personali.
-- Gli esempi devono usare esclusivamente host riservati (`example.test`) e identità sintetiche.
+- Ogni pagina operativa dichiara pubblico, stato e risultato supportato.
+- Una sola pagina possiede la sequenza di ciascun pilot; le altre la linkano.
+- OpenAPI/schema/migration/test restano autorità eseguibili, ma non sostituiscono passaggi
+  operativi mancanti.
+- Le guide non contengono SHA di evidence, diari di PR, dettagli del laboratorio, P12,
+  token, identificatori reali, endpoint riservati o risposte raw.
+- Un problema ripetuto in due Connector è un problema del workflow condiviso, non una
+  ragione per duplicare runbook verticali.
