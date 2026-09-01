@@ -17,16 +17,14 @@ $baseCompose = Join-Path $root 'deploy\m3\docker-compose.m3a.yml'
 $overlayCompose = Join-Path $root 'deploy\m5\docker-compose.m5.yml'
 $canonicalConnector = Join-Path $root 'docs\connectors\examples\sample-secure-service.connector.json'
 $project = 'secure-integration-m5-quickstart'
-$repositoryDotNet = Join-Path $root '.dotnet\dotnet.exe'
+$useHostDotNet = -not [string]::IsNullOrWhiteSpace($DotNetPath)
 $dotnet = if (-not [string]::IsNullOrWhiteSpace($DotNetPath)) {
     [IO.Path]::GetFullPath($DotNetPath)
 }
-elseif (Test-Path -LiteralPath $repositoryDotNet -PathType Leaf) {
-    $repositoryDotNet
-}
 else {
-    'dotnet'
+    $null
 }
+$containerDotNet = Join-Path $PSScriptRoot 'Invoke-AlphaContainerDotNet.ps1'
 $powerShellHost = try { (Get-Process -Id $PID -ErrorAction Stop).Path } catch { $null }
 if ([string]::IsNullOrWhiteSpace($powerShellHost)) {
     $powerShellHost = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'powershell.exe' } else { 'pwsh' }
@@ -255,12 +253,13 @@ namespace AlphaGoldenPath
 function Get-ChildPolicy {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Docker', 'DotNet', 'Curl', 'Quickstart', 'FailureProbe', 'TimeoutProbe', 'OutputLimitProbe')]
+        [ValidateSet('Docker', 'DotNet', 'ContainerDotNet', 'Curl', 'Quickstart', 'FailureProbe', 'TimeoutProbe', 'OutputLimitProbe')]
         [string] $Component
     )
     switch ($Component) {
         'Docker' { return [pscustomobject]@{ TimeoutMilliseconds = 300000; OutputLimitBytes = 1048576; TerminationTimeoutMilliseconds = 5000 } }
         'DotNet' { return [pscustomobject]@{ TimeoutMilliseconds = 600000; OutputLimitBytes = 1048576; TerminationTimeoutMilliseconds = 5000 } }
+        'ContainerDotNet' { return [pscustomobject]@{ TimeoutMilliseconds = 600000; OutputLimitBytes = 1048576; TerminationTimeoutMilliseconds = 5000 } }
         'Curl' { return [pscustomobject]@{ TimeoutMilliseconds = 30000; OutputLimitBytes = 262144; TerminationTimeoutMilliseconds = 5000 } }
         'Quickstart' { return [pscustomobject]@{ TimeoutMilliseconds = 1200000; OutputLimitBytes = 262144; TerminationTimeoutMilliseconds = 5000 } }
         'FailureProbe' { return [pscustomobject]@{ TimeoutMilliseconds = 30000; OutputLimitBytes = 65536; TerminationTimeoutMilliseconds = 2000 } }
@@ -274,7 +273,7 @@ function Invoke-SanitizedChild {
         [Parameter(Mandatory = $true)][string] $File,
         [Parameter(Mandatory = $true)][string[]] $Arguments,
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Docker', 'DotNet', 'Curl', 'Quickstart', 'FailureProbe', 'TimeoutProbe', 'OutputLimitProbe')]
+        [ValidateSet('Docker', 'DotNet', 'ContainerDotNet', 'Curl', 'Quickstart', 'FailureProbe', 'TimeoutProbe', 'OutputLimitProbe')]
         [string] $Component,
         [switch] $AllowFailure
     )
@@ -321,7 +320,7 @@ function Invoke-Checked {
     param(
         [Parameter(Mandatory = $true)][string] $File,
         [Parameter(Mandatory = $true)][string[]] $Arguments,
-        [Parameter(Mandatory = $true)][ValidateSet('Docker', 'DotNet', 'Curl', 'Quickstart')][string] $Component
+        [Parameter(Mandatory = $true)][ValidateSet('Docker', 'DotNet', 'ContainerDotNet', 'Curl', 'Quickstart')][string] $Component
     )
     return Invoke-SanitizedChild -File $File -Arguments $Arguments -Component $Component
 }
@@ -356,11 +355,41 @@ function Assert-CompatibleDotNetSdk {
     }
 }
 
+function Assert-DockerEngine {
+    try {
+        $result = Invoke-SanitizedChild -File 'docker' -Arguments @('version') -Component Docker -AllowFailure
+    }
+    catch {
+        if ([string]$_.Exception.Message -ceq 'ALPHA_GOLDEN_PATH_CHILD_START_FAILED;COMPONENT=Docker') {
+            throw 'ALPHA_GOLDEN_PATH_DOCKER_UNAVAILABLE'
+        }
+        throw
+    }
+    if ($result.ExitCode -ne 0) { throw 'ALPHA_GOLDEN_PATH_DOCKER_UNAVAILABLE' }
+}
+
+function Assert-DockerCompose {
+    $result = Invoke-SanitizedChild -File 'docker' -Arguments @('compose', 'version') -Component Docker -AllowFailure
+    if ($result.ExitCode -ne 0) { throw 'ALPHA_GOLDEN_PATH_DOCKER_COMPOSE_UNAVAILABLE' }
+}
+
+function Invoke-ContainerDotNet {
+    param([Parameter(Mandatory = $true)][string[]] $Arguments)
+    return Invoke-Checked -File $powerShellHost -Arguments (@('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $containerDotNet) + $Arguments) -Component ContainerDotNet
+}
+
 function Invoke-Quickstart {
     param([Parameter(Mandatory = $true)][ValidateSet('Start', 'Stop')][string] $RequestedPhase)
     $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $quickstart, '-Phase', $RequestedPhase)
     if ($RequestedPhase -eq 'Start' -and $SkipBuild) { $arguments += '-SkipBuild' }
-    if ($RequestedPhase -eq 'Start' -and $dotnet -cne 'dotnet') { $arguments += @('-DotNetPath', $dotnet) }
+    if ($RequestedPhase -eq 'Start') {
+        if ($useHostDotNet) {
+            $arguments += @('-DotNetPath', $dotnet)
+        }
+        else {
+            $arguments += @('-DotNetPath', $containerDotNet)
+        }
+    }
     return Invoke-Checked -File $powerShellHost -Arguments $arguments -Component Quickstart
 }
 
@@ -516,7 +545,7 @@ function Get-StableAlphaFailure {
     $message = [string]$Failure.Exception.Message
     if ($message -ceq 'ALPHA_GOLDEN_PATH_DOTNET_HOST_NOT_FOUND') { return $message }
     if ($message -cmatch '^ALPHA_GOLDEN_PATH_DOTNET_SDK_UNAVAILABLE;BASELINE=[0-9]+\.[0-9]+\.[0-9]+;ROLL_FORWARD=[A-Za-z][A-Za-z0-9]{0,31}$') { return $message }
-    if ($message -cmatch '^ALPHA_GOLDEN_PATH_[A-Z0-9_]+(?:;COMPONENT=(?:Docker|DotNet|Curl|Quickstart|FailureProbe|TimeoutProbe|OutputLimitProbe)(?:;EXIT_CODE=[0-9]{1,5})?(?:;CHILD_CODE=M5_QUICKSTART_[A-Z0-9_]+)?)?$') {
+    if ($message -cmatch '^ALPHA_GOLDEN_PATH_[A-Z0-9_]+(?:;COMPONENT=(?:Docker|DotNet|ContainerDotNet|Curl|Quickstart|FailureProbe|TimeoutProbe|OutputLimitProbe)(?:;EXIT_CODE=[0-9]{1,5})?(?:;CHILD_CODE=M5_QUICKSTART_[A-Z0-9_]+)?)?$') {
         return $message
     }
     return 'ALPHA_GOLDEN_PATH_FAILED'
@@ -535,11 +564,16 @@ try {
         throw 'ALPHA_GOLDEN_PATH_DOTNET_SDK_PROBE_DID_NOT_FAIL'
     }
     if ($Phase -eq 'Validate') {
-        Assert-CompatibleDotNetSdk -File $dotnet
-        [void](Invoke-Checked -File 'docker' -Arguments @('version') -Component Docker)
-        [void](Invoke-Checked -File 'docker' -Arguments @('compose', 'version') -Component Docker)
-        [void](Invoke-Checked -File $dotnet -Arguments @('restore', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--locked-mode') -Component DotNet)
-        [void](Invoke-Checked -File $dotnet -Arguments @('build', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release', '--no-restore') -Component DotNet)
+        Assert-DockerEngine
+        Assert-DockerCompose
+        if ($useHostDotNet) {
+            Assert-CompatibleDotNetSdk -File $dotnet
+            [void](Invoke-Checked -File $dotnet -Arguments @('restore', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--locked-mode') -Component DotNet)
+            [void](Invoke-Checked -File $dotnet -Arguments @('build', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release', '--no-restore') -Component DotNet)
+        }
+        else {
+            [void](Invoke-ContainerDotNet -Arguments @('build', '--project', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release'))
+        }
         Write-Host 'ALPHA_GOLDEN_PATH_VALIDATE_PASS'
         exit 0
     }
@@ -552,7 +586,9 @@ try {
         exit 0
     }
 
-    if ($Phase -eq 'Run') { Assert-CompatibleDotNetSdk -File $dotnet }
+    Assert-DockerEngine
+    Assert-DockerCompose
+    if ($Phase -eq 'Run' -and $useHostDotNet) { Assert-CompatibleDotNetSdk -File $dotnet }
     Assert-ZeroProjectResources
     if (Test-Path -LiteralPath $artifactRoot) { throw 'ALPHA_GOLDEN_PATH_ARTIFACT_ROOT_NOT_CLEAN' }
     $cleanupRequired = $true
@@ -658,7 +694,12 @@ while ($true) { [Console]::Out.Write($chunk) }
         $env:DOTNET_NOLOGO = '1'
         $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
         $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
-        $sample = Invoke-Checked -File $dotnet -Arguments @('run', '--project', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release') -Component DotNet
+        $sample = if ($useHostDotNet) {
+            Invoke-Checked -File $dotnet -Arguments @('run', '--project', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release') -Component DotNet
+        }
+        else {
+            Invoke-ContainerDotNet -Arguments @('run', '--project', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release')
+        }
         $sampleLines = @($sample.StdOut -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_.StartsWith('{', [StringComparison]::Ordinal) })
         if ($sampleLines.Count -ne 1) { throw 'ALPHA_GOLDEN_PATH_DIRECT_SAMPLE_OUTPUT_INVALID' }
         $sampleResult = $sampleLines[0] | ConvertFrom-Json

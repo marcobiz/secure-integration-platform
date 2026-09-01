@@ -7,7 +7,11 @@ param(
         'AlphaGoldenPath_child_output_limit_is_bounded_and_redacted',
         'AlphaGoldenPath_missing_compatible_dotnet_sdk_returns_actionable_stable_error',
         'AlphaGoldenPath_missing_dotnet_host_returns_distinct_stable_error',
-        'AlphaGoldenPath_sdk_preflight_does_not_expose_raw_cli_output_or_local_paths')]
+        'AlphaGoldenPath_sdk_preflight_does_not_expose_raw_cli_output_or_local_paths',
+        'AlphaGoldenPath_validate_does_not_invoke_host_dotnet',
+        'AlphaGoldenPath_missing_docker_returns_single_actionable_error',
+        'AlphaGoldenPath_container_dependency_failure_has_no_fallback_or_retry',
+        'AlphaGoldenPath_stop_preserves_foreign_docker_resources')]
     [string] $TestName = 'All'
 )
 
@@ -15,6 +19,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $runner = Join-Path $PSScriptRoot 'Invoke-AlphaGoldenPath.ps1'
+$containerDotNet = Join-Path $PSScriptRoot 'Invoke-AlphaContainerDotNet.ps1'
 $artifactRoot = Join-Path $root '.artifacts\m5\quickstart'
 $project = 'secure-integration-m5-quickstart'
 $powerShellHost = try { (Get-Process -Id $PID -ErrorAction Stop).Path } catch { $null }
@@ -50,7 +55,10 @@ function ConvertTo-NativeArgument {
 }
 
 function Invoke-Captured {
-    param([Parameter(Mandatory = $true)][string] $File, [Parameter(Mandatory = $true)][string[]] $Arguments)
+    param(
+        [Parameter(Mandatory = $true)][string] $File,
+        [Parameter(Mandatory = $true)][string[]] $Arguments,
+        [Collections.IDictionary] $Environment = @{})
     $captureId = [Guid]::NewGuid().ToString('N')
     $captureRoot = Join-Path ([IO.Path]::GetTempPath()) ('broker-gateway-alpha-capture-' + $captureId)
     New-Item -ItemType Directory -Path $captureRoot | Out-Null
@@ -79,6 +87,7 @@ exit $child.ExitCode
     $start.EnvironmentVariables['ALPHA_TEST_INVOCATION'] = $invocationBase64
     $start.EnvironmentVariables['ALPHA_TEST_STDOUT'] = $stdoutPath
     $start.EnvironmentVariables['ALPHA_TEST_STDERR'] = $stderrPath
+    foreach ($name in $Environment.Keys) { $start.EnvironmentVariables[[string]$name] = [string]$Environment[$name] }
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $start
     $captureLimit = 65536
@@ -119,6 +128,36 @@ exit $child.ExitCode
         }
         if (Test-Path -LiteralPath $canonicalCaptureRoot) { Remove-Item -LiteralPath $canonicalCaptureRoot -Recurse -Force }
     }
+}
+
+function New-TestCommandShim {
+    param(
+        [Parameter(Mandatory = $true)][string] $Directory,
+        [Parameter(Mandatory = $true)][string] $Name,
+        [Parameter(Mandatory = $true)][string] $WindowsBody,
+        [Parameter(Mandatory = $true)][string] $UnixBody)
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        $path = Join-Path $Directory ($Name + '.cmd')
+        [IO.File]::WriteAllText($path, "@echo off`r`n$WindowsBody`r`n", [Text.Encoding]::ASCII)
+    }
+    else {
+        $path = Join-Path $Directory $Name
+        [IO.File]::WriteAllText($path, "#!/bin/sh`n$UnixBody`n", [Text.UTF8Encoding]::new($false))
+        & chmod 0700 $path
+        if ($LASTEXITCODE -ne 0) { throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_SHIM_CHMOD_FAILED' }
+    }
+    return $path
+}
+
+function Remove-TestDirectory {
+    param([Parameter(Mandatory = $true)][string] $LiteralPath, [Parameter(Mandatory = $true)][string] $Prefix)
+    $canonical = [IO.Path]::GetFullPath($LiteralPath)
+    $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)) + [IO.Path]::DirectorySeparatorChar
+    if (-not $canonical.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+        -not ([IO.Path]::GetFileName($canonical)).StartsWith($Prefix, [StringComparison]::Ordinal)) {
+        throw 'ALPHA_GOLDEN_PATH_FAILURE_TEST_TEMP_CLEANUP_DENIED'
+    }
+    if (Test-Path -LiteralPath $canonical) { Remove-Item -LiteralPath $canonical -Recurse -Force }
 }
 
 function Get-ProjectResourceCount {
@@ -243,6 +282,114 @@ function Test-DotNetPreflightRedaction {
         -Forbidden @('alpha-dotnet-sdk-stdout-canary-7b61d8d2', 'No compatible SDK under')
 }
 
+function Test-ValidateWithoutHostDotNet {
+    Assert-True (-not (Test-Path -LiteralPath $artifactRoot))
+    $shimRoot = Join-Path ([IO.Path]::GetTempPath()) ('broker-gateway-alpha-dotnet-canary-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $shimRoot | Out-Null
+    $canaryPath = Join-Path $shimRoot 'invoked.txt'
+    try {
+        [void](New-TestCommandShim -Directory $shimRoot -Name 'dotnet' `
+            -WindowsBody '>> "%ALPHA_TEST_DOTNET_CANARY%" echo invoked& exit /b 91' `
+            -UnixBody 'printf invoked > "$ALPHA_TEST_DOTNET_CANARY"; exit 91')
+        $testPath = $shimRoot + [IO.Path]::PathSeparator + [Environment]::GetEnvironmentVariable('PATH', 'Process')
+        $result = Invoke-Captured -File $powerShellHost `
+            -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $runner, '-Phase', 'Validate') `
+            -Environment @{ PATH = $testPath; ALPHA_TEST_DOTNET_CANARY = $canaryPath }
+        Assert-True ($result.ExitCode -eq 0)
+        Assert-True ($result.StdOut.Trim() -ceq 'ALPHA_GOLDEN_PATH_VALIDATE_PASS')
+        Assert-True ($result.StdErr.Trim().Length -eq 0)
+        Assert-True (-not (Test-Path -LiteralPath $canaryPath))
+        Assert-True (-not (Test-Path -LiteralPath $artifactRoot))
+    }
+    finally { Remove-TestDirectory -LiteralPath $shimRoot -Prefix 'broker-gateway-alpha-dotnet-canary-' }
+}
+
+function Test-MissingDocker {
+    Assert-True (-not (Test-Path -LiteralPath $artifactRoot))
+    $emptyPath = Join-Path ([IO.Path]::GetTempPath()) ('broker-gateway-alpha-empty-path-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $emptyPath | Out-Null
+    try {
+        $result = Invoke-Captured -File $powerShellHost `
+            -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $runner, '-Phase', 'Validate') `
+            -Environment @{ PATH = $emptyPath }
+        Assert-True ($result.ExitCode -ne 0)
+        Assert-True ($result.StdOut.Trim().Length -eq 0)
+        Assert-True ($result.StdErr.Trim() -ceq 'ALPHA_GOLDEN_PATH_DOCKER_UNAVAILABLE')
+        Assert-True (@($result.StdErr -split '\r?\n' | Where-Object { $_.Trim().Length -gt 0 }).Count -eq 1)
+        Assert-True (-not (Test-Path -LiteralPath $artifactRoot))
+    }
+    finally { Remove-TestDirectory -LiteralPath $emptyPath -Prefix 'broker-gateway-alpha-empty-path-' }
+}
+
+function Test-ContainerDependencyUnavailable {
+    $shimRoot = Join-Path ([IO.Path]::GetTempPath()) ('broker-gateway-alpha-docker-shim-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $shimRoot | Out-Null
+    $callsPath = Join-Path $shimRoot 'calls.txt'
+    try {
+        [void](New-TestCommandShim -Directory $shimRoot -Name 'docker' `
+            -WindowsBody @'
+>> "%ALPHA_TEST_DOCKER_CALLS%" echo %*
+exit /b 125
+'@ `
+            -UnixBody @'
+printf '%s\n' "$*" >> "$ALPHA_TEST_DOCKER_CALLS"
+exit 125
+'@)
+        $testPath = $shimRoot + [IO.Path]::PathSeparator + [Environment]::GetEnvironmentVariable('PATH', 'Process')
+        $result = Invoke-Captured -File $powerShellHost `
+            -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $containerDotNet, 'build', '--project', (Join-Path $root 'samples\DirectGatewayClient\DirectGatewayClient.csproj'), '--configuration', 'Release') `
+            -Environment @{ PATH = $testPath; ALPHA_TEST_DOCKER_CALLS = $callsPath }
+        Assert-True ($result.ExitCode -eq 125)
+        Assert-True ($result.StdOut.Trim().Length -eq 0)
+        Assert-True ($result.StdErr.Trim().Length -eq 0)
+        $calls = @([IO.File]::ReadAllLines($callsPath))
+        Assert-True ($calls.Count -eq 1)
+        $call = [string]$calls[0]
+        Assert-True ($call.IndexOf('--pull missing', [StringComparison]::Ordinal) -ge 0)
+        Assert-True ($call.IndexOf('mcr.microsoft.com/dotnet/sdk:10.0.302@sha256:72dd743782f2ae7e5476fd64f6a460045e3998dc862218b80e6944cba79a01b0', [StringComparison]::Ordinal) -ge 0)
+        Assert-True ($call.IndexOf('--user 1657:1657', [StringComparison]::Ordinal) -ge 0)
+        Assert-True ($call.IndexOf('/var/run/docker.sock', [StringComparison]::OrdinalIgnoreCase) -lt 0)
+    }
+    finally { Remove-TestDirectory -LiteralPath $shimRoot -Prefix 'broker-gateway-alpha-docker-shim-' }
+}
+
+function Test-StopPreservesForeignResources {
+    Assert-True ((Get-ProjectResourceCount) -eq 0)
+    $owner = [Guid]::NewGuid().ToString('N')
+    $networkName = 'alpha-foreign-network-' + $owner
+    $volumeName = 'alpha-foreign-volume-' + $owner
+    $networkCreated = $false
+    $volumeCreated = $false
+    try {
+        & docker network create --label "alpha.golden-path.test-owner=$owner" $networkName | Out-Null
+        Assert-True ($LASTEXITCODE -eq 0)
+        $networkCreated = $true
+        & docker volume create --label "alpha.golden-path.test-owner=$owner" $volumeName | Out-Null
+        Assert-True ($LASTEXITCODE -eq 0)
+        $volumeCreated = $true
+        $result = Invoke-Captured -File $powerShellHost -Arguments @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', $runner, '-Phase', 'Stop')
+        Assert-True ($result.ExitCode -eq 0)
+        Assert-True ($result.StdOut.Trim() -ceq 'ALPHA_GOLDEN_PATH_STOP_PASS; CONTAINERS=0; NETWORKS=0; VOLUMES=0; SYNTHETIC_MATERIAL=0')
+        & docker network inspect $networkName | Out-Null
+        Assert-True ($LASTEXITCODE -eq 0)
+        & docker volume inspect $volumeName | Out-Null
+        Assert-True ($LASTEXITCODE -eq 0)
+        Assert-True ((Get-ProjectResourceCount) -eq 0)
+    }
+    finally {
+        if ($networkCreated) {
+            $networkInspection = & docker network inspect $networkName 2>$null | ConvertFrom-Json
+            $networkOwner = if ($LASTEXITCODE -eq 0) { [string]$networkInspection[0].Labels.'alpha.golden-path.test-owner' } else { '' }
+            if ($networkOwner -ceq $owner) { & docker network rm $networkName | Out-Null }
+        }
+        if ($volumeCreated) {
+            $volumeInspection = & docker volume inspect $volumeName 2>$null | ConvertFrom-Json
+            $volumeOwner = if ($LASTEXITCODE -eq 0) { [string]$volumeInspection[0].Labels.'alpha.golden-path.test-owner' } else { '' }
+            if ($volumeOwner -ceq $owner) { & docker volume rm $volumeName | Out-Null }
+        }
+    }
+}
+
 try {
     $tests = if ($TestName -eq 'All') {
         @(
@@ -251,7 +398,11 @@ try {
             'AlphaGoldenPath_child_output_limit_is_bounded_and_redacted',
             'AlphaGoldenPath_missing_compatible_dotnet_sdk_returns_actionable_stable_error',
             'AlphaGoldenPath_missing_dotnet_host_returns_distinct_stable_error',
-            'AlphaGoldenPath_sdk_preflight_does_not_expose_raw_cli_output_or_local_paths')
+            'AlphaGoldenPath_sdk_preflight_does_not_expose_raw_cli_output_or_local_paths',
+            'AlphaGoldenPath_validate_does_not_invoke_host_dotnet',
+            'AlphaGoldenPath_missing_docker_returns_single_actionable_error',
+            'AlphaGoldenPath_container_dependency_failure_has_no_fallback_or_retry',
+            'AlphaGoldenPath_stop_preserves_foreign_docker_resources')
     }
     else { @($TestName) }
     foreach ($test in $tests) {
@@ -262,6 +413,10 @@ try {
             'AlphaGoldenPath_missing_compatible_dotnet_sdk_returns_actionable_stable_error' { Test-MissingCompatibleDotNetSdk }
             'AlphaGoldenPath_missing_dotnet_host_returns_distinct_stable_error' { Test-MissingDotNetHost }
             'AlphaGoldenPath_sdk_preflight_does_not_expose_raw_cli_output_or_local_paths' { Test-DotNetPreflightRedaction }
+            'AlphaGoldenPath_validate_does_not_invoke_host_dotnet' { Test-ValidateWithoutHostDotNet }
+            'AlphaGoldenPath_missing_docker_returns_single_actionable_error' { Test-MissingDocker }
+            'AlphaGoldenPath_container_dependency_failure_has_no_fallback_or_retry' { Test-ContainerDependencyUnavailable }
+            'AlphaGoldenPath_stop_preserves_foreign_docker_resources' { Test-StopPreservesForeignResources }
         }
         Write-Host "$test PASS"
     }
