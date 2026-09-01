@@ -339,7 +339,11 @@ goto alpha_argument_loop
 exit /b 125
 '@ `
             -UnixBody @'
-calls_path="$(dirname "$0")/calls.txt"
+shim_path="$(command -v "$0")"
+if [ -z "$shim_path" ]; then
+    exit 126
+fi
+calls_path="$(dirname "$shim_path")/calls.txt"
 printf 'CALL\n' >> "$calls_path"
 for argument in "$@"; do
     printf 'ARG:%s\n' "$argument" >> "$calls_path"
