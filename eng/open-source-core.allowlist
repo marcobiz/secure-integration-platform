@@ -4,7 +4,6 @@
 .gitignore
 .github/workflows/ci.yml
 .github/workflows/m5-admin-ui.yml
-AGENTS.md
 ARCHITECTURE.md
 CODE_OF_CONDUCT.md
 BrokerGateway.Core.slnx
