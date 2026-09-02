@@ -871,30 +871,52 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     public async Task FSE2_TRANSPORT_streaming_body_over_limit_is_bounded()
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
-        await using SyntheticFse2OrganizationServer server = await SyntheticFse2OrganizationServer.StartAsync(
+        SyntheticFse2RawResponseServer server = await SyntheticFse2RawResponseServer.StartAsync(
             material.ServerCertificate,
             material.ClientCertificateRevision1,
-            material.SigningKeyRevision1,
             material.RootCertificate,
-            TestContext.Current.CancellationToken,
-            responseStatusCode: StatusCodes.Status400BadRequest,
-            responseContentType: "application/problem+json",
-            responseBody: "{\"type\":\"https://fse.example/msg/syntax\",\"detail\":\"" + new string('x', 17 * 1024) + "\"}");
-        SystemRestrictedTransport transport = new(new X509Certificate2Collection(material.RootCertificate));
-        using HttpRequestMessage request = new(HttpMethod.Post, new Uri(server.Endpoint, "documents"));
-
-        ExternalResponse response = await transport.SendProblemDetailsAsync(
-            request,
-            [IPAddress.Loopback],
-            material.ClientCertificateRevision1,
-            TimeSpan.FromSeconds(5),
-            maximumResponseBytes: 32 * 1024,
+            SyntheticFse2RawResponseBehavior.StreamingBodyOverRetainedLimit,
             TestContext.Current.CancellationToken);
+        try
+        {
+            SystemRestrictedTransport transport = new(new X509Certificate2Collection(material.RootCertificate));
+            using HttpRequestMessage request = new(HttpMethod.Post, new Uri(server.Endpoint, "documents"));
 
-        Assert.Equal(StatusCodes.Status400BadRequest, response.StatusCode);
-        Assert.Equal("application/problem+json", response.ContentType);
-        Assert.Empty(response.Body);
-        Assert.Equal(1, server.Requests);
+            ExternalResponse response = await transport.SendProblemDetailsAsync(
+                request,
+                [IPAddress.Loopback],
+                material.ClientCertificateRevision1,
+                TimeSpan.FromSeconds(5),
+                maximumResponseBytes: 32 * 1024,
+                TestContext.Current.CancellationToken);
+            await server.WaitForPeerCloseAsync(TestContext.Current.CancellationToken);
+            await server.WaitForServerCompletionAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(StatusCodes.Status400BadRequest, response.StatusCode);
+            Assert.Equal("application/problem+json", response.ContentType);
+            Assert.Empty(response.Body);
+            Fse2ConnectorException failure = Fse2ResponseMapper.MapProblem(
+                new(response.StatusCode, response.ContentType, response.Body),
+                Fse2RetryClass.NoAutomaticRetry);
+            Assert.Equal(Fse2ErrorCategory.UpstreamRejected, failure.Category);
+            Assert.Equal("FSE2_UPSTREAM_REJECTED", failure.SafeCode);
+            Assert.Null(failure.SafeUpstreamCode);
+            Assert.False(failure.Retryable);
+            Assert.Equal(1, server.Requests);
+            Assert.True(server.ClientCertificateObserved);
+            Assert.Equal(16 * 1024 + 1, server.BodyBytesSent);
+            Assert.True(server.PeerClosed);
+            Assert.True(server.ServerTaskCompleted);
+        }
+        finally
+        {
+            await server.DisposeAsync();
+        }
+
+        Assert.True(server.ShutdownCancellationRequested);
+        Assert.True(server.DrainCompleted);
+        Assert.True(server.ListenerStopped);
+        Assert.True(server.ServerTaskCompleted);
     }
 
     [Fact]
@@ -3555,6 +3577,7 @@ internal sealed class SyntheticFse2OrganizationServer : IAsyncDisposable
 internal enum SyntheticFse2RawResponseBehavior
 {
     HeadersOnlyOversizedContentLength,
+    StreamingBodyOverRetainedLimit,
     HeadersThenWait,
     ResetDuringBody,
     ResetBeforeResponseHeaders
@@ -3568,7 +3591,12 @@ internal sealed class SyntheticFse2RawResponseServer : IAsyncDisposable
     private readonly Task serverTask;
     private readonly TaskCompletionSource requestRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource headersSent = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource peerClosed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int bodyBytesSent;
     private int clientCertificateObserved;
+    private int drainCompleted;
+    private int listenerStopped;
+    private int shutdownCancellationRequested;
     private int requests;
 
     private SyntheticFse2RawResponseServer(
@@ -3592,9 +3620,15 @@ internal sealed class SyntheticFse2RawResponseServer : IAsyncDisposable
     }
 
     internal Uri Endpoint { get; }
+    internal int BodyBytesSent => Volatile.Read(ref bodyBytesSent);
     internal bool ClientCertificateObserved => Volatile.Read(ref clientCertificateObserved) != 0;
+    internal bool DrainCompleted => Volatile.Read(ref drainCompleted) != 0;
     internal int Requests => Volatile.Read(ref requests);
     internal bool HeadersSent => headersSent.Task.IsCompletedSuccessfully;
+    internal bool ListenerStopped => Volatile.Read(ref listenerStopped) != 0;
+    internal bool PeerClosed => peerClosed.Task.IsCompletedSuccessfully;
+    internal bool ServerTaskCompleted => serverTask.IsCompletedSuccessfully;
+    internal bool ShutdownCancellationRequested => Volatile.Read(ref shutdownCancellationRequested) != 0;
 
     internal static Task<SyntheticFse2RawResponseServer> StartAsync(
         X509Certificate2 serverCertificate,
@@ -3620,6 +3654,12 @@ internal sealed class SyntheticFse2RawResponseServer : IAsyncDisposable
 
     internal Task WaitForRequestAsync(CancellationToken cancellationToken) =>
         requestRead.Task.WaitAsync(cancellationToken);
+
+    internal Task WaitForPeerCloseAsync(CancellationToken cancellationToken) =>
+        peerClosed.Task.WaitAsync(cancellationToken);
+
+    internal Task WaitForServerCompletionAsync(CancellationToken cancellationToken) =>
+        serverTask.WaitAsync(cancellationToken);
 
     private async Task ServeAsync(
         X509Certificate2 serverCertificate,
@@ -3662,6 +3702,8 @@ internal sealed class SyntheticFse2RawResponseServer : IAsyncDisposable
             {
                 SyntheticFse2RawResponseBehavior.HeadersOnlyOversizedContentLength =>
                     "HTTP/1.1 400 Bad Request\r\nContent-Type: application/problem+json\r\nContent-Length: 32768\r\nConnection: close\r\n\r\n",
+                SyntheticFse2RawResponseBehavior.StreamingBodyOverRetainedLimit =>
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/problem+json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
                 SyntheticFse2RawResponseBehavior.HeadersThenWait =>
                     "HTTP/1.1 400 Bad Request\r\nContent-Type: application/problem+json\r\nContent-Length: 1024\r\nConnection: close\r\n\r\n",
                 SyntheticFse2RawResponseBehavior.ResetDuringBody =>
@@ -3677,19 +3719,51 @@ internal sealed class SyntheticFse2RawResponseServer : IAsyncDisposable
                 client.Client.LingerState = new LingerOption(enable: true, seconds: 0);
                 return;
             }
+            if (behavior == SyntheticFse2RawResponseBehavior.StreamingBodyOverRetainedLimit)
+            {
+                byte[] retainedLimit = new byte[16 * 1024];
+                Array.Fill(retainedLimit, (byte)'x');
+                await WriteChunkAsync(tls, retainedLimit, cancellationToken);
+                Interlocked.Add(ref bodyBytesSent, retainedLimit.Length);
+                await WriteChunkAsync(tls, "x"u8.ToArray(), cancellationToken);
+                Interlocked.Increment(ref bodyBytesSent);
+                await tls.FlushAsync(cancellationToken);
+                await ObservePeerCloseAsync(tls, cancellationToken);
+                peerClosed.TrySetResult();
+                return;
+            }
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             requestRead.TrySetCanceled(cancellationToken);
             headersSent.TrySetCanceled(cancellationToken);
+            peerClosed.TrySetCanceled(cancellationToken);
         }
         catch (Exception exception)
         {
             requestRead.TrySetException(exception);
             headersSent.TrySetException(exception);
+            peerClosed.TrySetException(exception);
             throw;
         }
+    }
+
+    private static async Task WriteChunkAsync(Stream stream, ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
+    {
+        await stream.WriteAsync(Encoding.ASCII.GetBytes($"{body.Length:X}\r\n"), cancellationToken);
+        await stream.WriteAsync(body, cancellationToken);
+        await stream.WriteAsync("\r\n"u8.ToArray(), cancellationToken);
+    }
+
+    private static async Task ObservePeerCloseAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        byte[] probe = new byte[1];
+        try
+        {
+            while (await stream.ReadAsync(probe, cancellationToken) != 0) { }
+        }
+        catch (IOException) { }
     }
 
     private static async Task ReadRequestHeadersAsync(Stream stream, CancellationToken cancellationToken)
@@ -3726,10 +3800,13 @@ internal sealed class SyntheticFse2RawResponseServer : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        Interlocked.Exchange(ref shutdownCancellationRequested, 1);
         shutdown.Cancel();
         listener.Stop();
+        Interlocked.Exchange(ref listenerStopped, 1);
         try { await serverTask.ConfigureAwait(false); }
         catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { }
+        Interlocked.Exchange(ref drainCompleted, 1);
         shutdown.Dispose();
     }
 }
