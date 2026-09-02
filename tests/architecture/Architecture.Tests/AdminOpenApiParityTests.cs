@@ -53,6 +53,23 @@ public sealed partial class AdminOpenApiParityTests
     }
 
     [Fact]
+    public void Grant_creation_OpenAPI_declares_201_and_idempotent_200_with_the_same_Grant_schema()
+    {
+        Dictionary<string, string> operations = ContractOperations(File.ReadAllText(Path.Combine(Root, "docs", "api", "gateway-openapi.yaml")));
+        Assert.True(operations.TryGetValue("post /admin/api/v1/grants", out string? grantOperation), "POST /admin/api/v1/grants is missing from OpenAPI.");
+
+        foreach (string status in new[] { "200", "201" })
+        {
+            Match response = Regex.Match(
+                grantOperation,
+                $@"'{status}':\s*\{{(?<response>.*?)\}}\s*(?=,\s*(?:'\d{{3}}'|default):)",
+                RegexOptions.Singleline);
+            Assert.True(response.Success, $"POST /admin/api/v1/grants is missing the {status} response.");
+            Assert.Contains("schema: { $ref: '#/components/schemas/Grant' }", response.Groups["response"].Value, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void Every_public_http_route_is_declared_once_in_OpenAPI_and_no_documented_route_is_stale()
     {
         string program = File.ReadAllText(Path.Combine(Root, "src", "Gateway", "Gateway.Api", "Program.cs"));

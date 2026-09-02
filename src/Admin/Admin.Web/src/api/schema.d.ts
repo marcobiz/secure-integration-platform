@@ -2851,6 +2851,15 @@ export interface operations {
             };
         };
         responses: {
+            /** @description Existing grant returned idempotently */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Grant"];
+                };
+            };
             /** @description Grant and audit committed atomically */
             201: {
                 headers: {

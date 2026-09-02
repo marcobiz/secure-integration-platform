@@ -438,7 +438,7 @@ paths:
       security: [{ AdminSession: [] }]
       parameters: [{ $ref: '#/components/parameters/Csrf' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateGrant' } } } }
-      responses: { '201': { description: Grant and audit committed atomically, content: { application/json: { schema: { $ref: '#/components/schemas/Grant' } } } }, default: { $ref: '#/components/responses/Problem' } }
+      responses: { '200': { description: Existing grant returned idempotently, content: { application/json: { schema: { $ref: '#/components/schemas/Grant' } } } }, '201': { description: Grant and audit committed atomically, content: { application/json: { schema: { $ref: '#/components/schemas/Grant' } } } }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/audit:
     get:
       tags: [Administration]
