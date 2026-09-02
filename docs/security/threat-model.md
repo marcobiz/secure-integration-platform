@@ -49,7 +49,7 @@
 | TM-016 | E | Modulo/plugin malevolo. | As-built: allowlist deployment per path/assembly identity/MVID e responsabilità ACL; target release: manifest hash, CMS, publisher allowlist e review. | Parziale: firma/provenance non sono ancora implementate e ogni modulo in-process è full-trust. |
 | TM-017 | T/E | Update o MSI manomesso/rollback. | Signature, manifest, anti-rollback e secure updater. | MVP manuale; completo in hardening. |
 | TM-018 | I/R | Secret o PII nei log. | Structured redaction, prohibited-field tests e scanning. | Mitigato; nuove integrazioni richiedono test. |
-| TM-019 | E | Insider pubblica endpoint o binding malevolo. | RBAC, four-eyes, security validation e audit applicativo metadata-only. | Collusione privilegiata resta residua; `gateway_admin` conserva una grant UPDATE storica sulle tabelle audit. |
+| TM-019 | E | Insider pubblica endpoint o binding malevolo. | RBAC, four-eyes, security validation, audit applicativo metadata-only e record evento append-only per i ruoli applicativi. | Collusione privilegiata e owner/migration, host o DBA privilegiati restano nella TCB. |
 | TM-020 | D | Flood IPC o Gateway. | Concurrency, size/time/rate limits e circuit breaker. | DDoS volumetrico richiede protezione infrastrutturale. |
 | TM-021 | R | Operator nega un'operazione. | Correlation e audit metadata. | Non equivale a firma legale dell'Operator. |
 | TM-022 | I | Backup rubato. | Stesse protezioni del dato, Vault escluso dal DB, backup encryption. | Metadata exposure residua. |
@@ -65,7 +65,7 @@
 | TM-032 | E/R | Bypass four-eyes o self-approval. | Approval separata checksum-specific; creator/editor/requester distinti; publish ricontrolla in application service. | Collusione fra due account privilegiati non è eliminata. |
 | TM-033 | E/I | Tenant scope bypass tramite query/body. | Scope verificato server-side su ogni risorsa; test cross-tenant; RLS defense in depth. | Nuove API richiedono la stessa review. |
 | TM-034 | I | Export/audit/UI espongono secret, cookie o activation code. | DTO allowlist, activation one-time/no-store, audit metadata-only, canary/secret scans. | Compromissione memoria del Gateway/browser resta fuori dalla garanzia. |
-| TM-035 | T/R | Audit alterato o operazione non auditata. | Il codice e `gateway_runtime` emettono solo INSERT metadata-only e usano correlation ID per le mutazioni. | `gateway_admin` eredita UPDATE dalla migration 0001: append-only DB completo è deferred. DBA/host privilegiato resta nella TCB; firma notarile fuori scope. |
+| TM-035 | T/R | Audit alterato o operazione non auditata. | Il codice emette INSERT metadata-only e usa correlation ID per le mutazioni; la migration 0017 revoca la modifica di record evento esistenti ai ruoli applicativi e i test PostgreSQL 18 verificano privilegi, denial `42501`, record invariati e RLS. | Owner/migration, DBA e host privilegiati restano nella TCB; non esistono firma o notarizzazione dell'audit. |
 | TM-036 | T/D | Connector JSON malevolo o oversized. | Limiti body, JSON Schema 2020-12, canonicalization, no executable content, stable errors. | Parser/runtime dependencies devono restare aggiornati. |
 | TM-037 | E | Operator usa il test connector come proxy arbitrario. | API accetta solo connector/environment/operation id e risolve Published binding server-side. | Un binding amministrativo già compromesso resta utilizzabile. |
 | TM-038 | E | Autorizzazione stale dopo revoca ruolo. | Assignment riletto server-side per richiesta e sessione breve. | Finestra di cookie/OIDC provider e cache future da rivalutare. |
@@ -158,6 +158,14 @@ La firma prova provenienza, non innocuità. Un plugin approvato viene trattato c
 ### Insider amministrativo
 
 M5 applica OIDC provider-neutral, RBAC server-side, tenant scope, optimistic concurrency, four-eyes checksum-specific e audit redatto. Un amministratore autorizzato dei binding può comunque configurare una destinazione approvata errata e due account privilegiati possono colludere: review operativa e audit restano necessari.
+
+`SEC-DAT-APPEND-001` mappa `TM-019`/`TM-035` sui test
+`SEC_DAT_PostgreSQL18_event_table_privilege_matrix_is_minimal_and_append_only_when_configured`,
+`SEC_DAT_PostgreSQL18_gateway_admin_can_append_and_read_audit_but_cannot_mutate_event_rows_when_configured`,
+`SEC_DAT_PostgreSQL18_gateway_runtime_can_append_but_cannot_read_or_mutate_event_rows_when_configured`,
+`SEC_DAT_PostgreSQL18_gateway_readonly_cannot_read_or_mutate_event_rows_when_configured` e
+`SEC_DAT_PostgreSQL18_event_RLS_preserves_tenant_isolation_and_global_audit_semantics_when_configured`.
+Il controllo è una revoca diretta di privilegi, senza trigger o nuovo audit layer.
 
 ### Direct client endpoint
 

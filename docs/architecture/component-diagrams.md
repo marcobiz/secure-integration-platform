@@ -120,9 +120,10 @@ dei binding. La pubblicazione rende la nuova versione `Published`, la precedente
 `Superseded` e aggiorna il puntatore attivo. Il rollback riattiva una versione
 `Superseded` già pubblicata senza copiarne o modificarne i byte.
 
-Il runtime e l'Admin plane producono record metadata-only. Il comportamento applicativo
-è append-only, ma `gateway_admin` conserva una grant UPDATE storica sulle tabelle audit;
-la claim di immutabilità DB completa resta deferred fino a migration e test di privilege.
+Il runtime e l'Admin plane producono record metadata-only. La migration 0017 revoca ai
+ruoli applicativi la modifica di record evento esistenti: runtime conserva solo INSERT su
+audit/invocation e Admin solo SELECT/INSERT su audit. Owner/migration e amministratori
+host/DB restano nella TCB; non sono introdotte firma o notarizzazione.
 
 ## CURRENT — laboratorio locale no-cloud
 

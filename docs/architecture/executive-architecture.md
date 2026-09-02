@@ -72,9 +72,10 @@ pubblico, cloud, HA/DR, provider reale o servizio esterno qualificato.
 - Il Gateway/provider è nella TCB e osserva temporaneamente il materiale necessario.
 - Il Local PKCS#12 pack è qualificato solo con materiale sintetico per-run; non è HSM/KMS,
   import operativo o custody production.
-- L'audit applicativo è metadata-only e il runtime può solo inserire eventi. Il ruolo
-  `gateway_admin` conserva però una grant UPDATE storica sulle tabelle audit: append-only
-  DB completo è deferred, non PASS.
+- L'audit applicativo è metadata-only. La migration 0017 rende audit/invocation
+  append-only rispetto ai ruoli applicativi; `gateway_admin` conserva SELECT/INSERT solo
+  sull'audit. Owner/migration e amministratori host/DB restano nella TCB e non esistono
+  firma o notarizzazione.
 - Cache OAuth/session e workflow verticali correnti sono process-local, non distribuiti
   o durevoli attraverso restart.
 - Il sample Direct mantiene la chiave client in memoria e non è una strategia di custody

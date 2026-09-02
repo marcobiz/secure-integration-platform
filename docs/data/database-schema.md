@@ -1,6 +1,6 @@
 # PostgreSQL schema as-built
 
-Baseline: migration runner e migration additive `0001`..`0014` su PostgreSQL 18.
+Baseline: migration runner e migration additive `0001`..`0017` su PostgreSQL 18.
 Le migration SQL sono la fonte eseguibile; questo documento non promuove modelli target
 a stato corrente.
 
@@ -16,10 +16,12 @@ a stato corrente.
   distinte.
 - Migrazioni additive con nome e checksum registrati in `gateway.schema_migration`.
 
-Le tabelle audit/invocation sono ordinarie, non partizionate. Il codice e il ruolo
-`gateway_runtime` scrivono solo in append, ma `gateway_admin` eredita oggi `UPDATE` dalla
-grant ampia della migration 0001. L'append-only enforcement DB completo è un finding
-deferred: richiede migration additiva e test di privilege, non è PASS sulla baseline.
+Le tabelle audit/invocation sono ordinarie, non partizionate. La migration 0017 rende i
+record append-only rispetto ai ruoli applicativi: `gateway_runtime` conserva solo INSERT
+su entrambe; `gateway_admin` conserva SELECT e INSERT su `audit_event` e non ha privilegi
+su `invocation_event`, che non ha un consumer Admin prodotto. Owner/migration e
+amministratori host/DB privilegiati restano nella TCB: non esistono firma, notarizzazione
+o protezione assoluta contro il DBA.
 
 ## ER corrente
 
@@ -155,13 +157,14 @@ retention job nella baseline.
 |---|---|
 | owner che esegue le migration | DDL e bootstrap; le migration non creano un ruolo nominato `migration_owner`. |
 | `gateway_runtime` | Runtime/enrollment, replay, letture autorizzate e INSERT audit/invocation secondo grant/RLS. |
-| `gateway_admin` | Directory e amministrazione; la grant storica `SELECT, INSERT, UPDATE ON ALL TABLES` include oggi le tabelle audit. |
+| `gateway_admin` | Directory e amministrazione; su `audit_event` conserva solo SELECT/INSERT, mentre non ha privilegi su `invocation_event`. |
 | `gateway_readonly` | Subset di metadata sanificato. |
 | `gateway_locator_owner` | Owner NOLOGIN delle funzioni locator; CREATE sullo schema viene revocato dopo la definizione. |
 
 RLS è `ENABLE` e `FORCE` sulle tabelle tenant-scoped. Le transazioni impostano il Tenant
-server-derived; le funzioni cross-scope hanno superficie stretta e grant espliciti. RLS
-non sostituisce la correzione della grant UPDATE amministrativa sull'audit.
+server-derived; le funzioni cross-scope hanno superficie stretta e grant espliciti. La
+revoca 0017 non modifica la tenant policy né la semantica degli audit globali con
+`tenant_id IS NULL`.
 
 ## Vincoli e indici rilevanti
 
@@ -185,7 +188,7 @@ Sono inoltre target, non claim correnti:
 - deployment revision multi-environment dedicato;
 - workflow/session durability PostgreSQL;
 - backup/PITR/restore e HA qualificati;
-- append-only DB completo per audit dopo revoca dei privilegi UPDATE/DELETE non necessari.
+- firma/notarizzazione dell'audit o protezione da owner/migration e DBA privilegiati.
 
 Ogni adozione richiede migration additiva, fresh/upgrade/no-op, privilege/RLS test,
 documentazione e rollback application-compatible. Connector rollback non implica

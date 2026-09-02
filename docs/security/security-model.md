@@ -113,13 +113,20 @@ le funzioni locator `SECURITY DEFINER` hanno owner NOLOGIN e predicati operation
 
 Audit e invocation event sono metadata-only: nessun body, Authorization/Cookie, token,
 password, private key o response raw. Il codice e `gateway_runtime` emettono solo INSERT.
-La migration 0001 concede però a `gateway_admin` `UPDATE` sulle tabelle dello schema,
-incluse quelle audit. Di conseguenza:
+La migration additiva 0017 corregge la grant ampia della 0001: revoca UPDATE/DELETE/
+TRUNCATE su `audit_event` e tutti i privilegi Admin non richiesti su `invocation_event`.
+Di conseguenza:
 
 - metadata-only audit è **CURRENT** e testato;
-- runtime append-only è **CURRENT**;
-- append-only DB completo contro il ruolo admin è **DEFERRED**, non PASS;
-- DBA/owner/host privilegiati restano comunque nella TCB.
+- runtime/admin applicativi sono **CURRENT** append-only;
+- `gateway_admin` conserva solo SELECT/INSERT su `audit_event`; il read-back
+  SecurityAdministrator e gli insert Admin restano invariati;
+- `gateway_runtime` conserva INSERT su entrambe le tabelle e nessuna SELECT implicita;
+- `gateway_readonly` non riceve privilegi evento nuovi;
+- owner/migration e DBA/host privilegiati restano nella TCB.
+
+Questo controllo è la matrice dei privilegi PostgreSQL, non un trigger di immutabilità.
+Non introduce firma o notarizzazione e non costituisce protezione assoluta contro un DBA.
 
 Partizionamento, retention job, backup/PITR e restore non sono implementati/qualificati
 dalla sola presenza delle tabelle.

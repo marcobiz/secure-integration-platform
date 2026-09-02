@@ -446,6 +446,195 @@ public sealed class PostgresIsolationTests
         Assert.DoesNotContain("DROP FUNCTION", typedComposedLocatorSql, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("BYPASSRLS", typedComposedLocatorSql, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("secret_value", typedComposedLocatorSql, StringComparison.OrdinalIgnoreCase);
+        string appendOnlySql = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "Gateway", "Gateway.Infrastructure", "Persistence", "Migrations", "0017_event_tables_append_only.sql"));
+        Assert.Contains("REVOKE UPDATE, DELETE, TRUNCATE ON TABLE gateway.audit_event FROM gateway_admin", appendOnlySql, StringComparison.Ordinal);
+        Assert.Contains("REVOKE ALL PRIVILEGES ON TABLE gateway.invocation_event FROM gateway_admin", appendOnlySql, StringComparison.Ordinal);
+        Assert.DoesNotContain("CREATE TRIGGER", appendOnlySql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\nGRANT ", appendOnlySql, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SEC_DAT_PostgreSQL18_event_table_privilege_matrix_is_minimal_and_append_only_when_configured()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION")
+            ?? Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("The dedicated PostgreSQL 18 gate must provide the migration/admin connection.");
+
+        await using NpgsqlConnection owner = new(connectionString);
+        await owner.OpenAsync(TestContext.Current.CancellationToken);
+        Assert.StartsWith("18.", owner.PostgreSqlVersion.ToString(), StringComparison.Ordinal);
+        await ApplyMigrationAsync(owner);
+
+        string[] privileges = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER", "MAINTAIN"];
+        foreach (string privilege in privileges)
+        {
+            Assert.Equal(privilege is "SELECT" or "INSERT", await HasTablePrivilegeAsync(owner, "gateway_admin", "gateway.audit_event", privilege));
+            Assert.False(await HasTablePrivilegeAsync(owner, "gateway_admin", "gateway.invocation_event", privilege));
+            Assert.Equal(privilege == "INSERT", await HasTablePrivilegeAsync(owner, "gateway_runtime", "gateway.audit_event", privilege));
+            Assert.Equal(privilege == "INSERT", await HasTablePrivilegeAsync(owner, "gateway_runtime", "gateway.invocation_event", privilege));
+            Assert.False(await HasTablePrivilegeAsync(owner, "gateway_readonly", "gateway.audit_event", privilege));
+            Assert.False(await HasTablePrivilegeAsync(owner, "gateway_readonly", "gateway.invocation_event", privilege));
+        }
+    }
+
+    [Fact]
+    public async Task SEC_DAT_PostgreSQL18_gateway_admin_can_append_and_read_audit_but_cannot_mutate_event_rows_when_configured()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION")
+            ?? Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("The dedicated PostgreSQL 18 gate must provide the migration/admin connection.");
+
+        await using NpgsqlConnection owner = new(connectionString);
+        await owner.OpenAsync(TestContext.Current.CancellationToken);
+        await ApplyMigrationAsync(owner);
+        EventPrivilegeFixture fixture = await CreateEventPrivilegeFixtureAsync(owner);
+        Guid appendedAuditId = Guid.NewGuid();
+        try
+        {
+            await ExecuteAsRoleAsync(
+                owner,
+                "gateway_admin",
+                fixture.TenantA,
+                "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,now(),$2,'administrator','append-only-test','security.append-only','audit_event',$3,$4,'success','ADMIN-APPEND','{}'::jsonb)",
+                appendedAuditId,
+                fixture.TenantA,
+                fixture.Marker,
+                Guid.NewGuid());
+            Assert.Equal(
+                "ADMIN-APPEND",
+                await ScalarAsRoleAsync<string>(owner, "gateway_admin", fixture.TenantA, "SELECT reason_code FROM gateway.audit_event WHERE id=$1", appendedAuditId));
+
+            await AssertRoleDeniedAsync(owner, "gateway_admin", fixture.TenantA, "UPDATE gateway.audit_event SET reason_code='MUTATED' WHERE id=$1", fixture.AuditId);
+            await AssertEventRowsUnchangedAsync(owner, fixture);
+            await AssertRoleDeniedAsync(owner, "gateway_admin", fixture.TenantA, "DELETE FROM gateway.audit_event WHERE id=$1", fixture.AuditId);
+            await AssertEventRowsUnchangedAsync(owner, fixture);
+            await AssertRoleDeniedAsync(owner, "gateway_admin", fixture.TenantA, "TRUNCATE TABLE gateway.audit_event");
+            await AssertEventRowsUnchangedAsync(owner, fixture);
+
+            await AssertRoleDeniedAsync(owner, "gateway_admin", fixture.TenantA, "UPDATE gateway.invocation_event SET outcome='failure' WHERE id=$1", fixture.InvocationId);
+            await AssertEventRowsUnchangedAsync(owner, fixture);
+            await AssertRoleDeniedAsync(owner, "gateway_admin", fixture.TenantA, "DELETE FROM gateway.invocation_event WHERE id=$1", fixture.InvocationId);
+            await AssertEventRowsUnchangedAsync(owner, fixture);
+            await AssertRoleDeniedAsync(owner, "gateway_admin", fixture.TenantA, "TRUNCATE TABLE gateway.invocation_event");
+            await AssertEventRowsUnchangedAsync(owner, fixture);
+        }
+        finally
+        {
+            await CleanupEventPrivilegeFixtureAsync(owner, fixture);
+        }
+    }
+
+    [Fact]
+    public async Task SEC_DAT_PostgreSQL18_gateway_runtime_can_append_but_cannot_read_or_mutate_event_rows_when_configured()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION")
+            ?? Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("The dedicated PostgreSQL 18 gate must provide the migration/admin connection.");
+
+        await using NpgsqlConnection owner = new(connectionString);
+        await owner.OpenAsync(TestContext.Current.CancellationToken);
+        await ApplyMigrationAsync(owner);
+        EventPrivilegeFixture fixture = await CreateEventPrivilegeFixtureAsync(owner);
+        Guid auditId = Guid.NewGuid();
+        Guid invocationId = Guid.NewGuid();
+        try
+        {
+            await ExecuteAsRoleAsync(
+                owner,
+                "gateway_runtime",
+                fixture.TenantA,
+                "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,now(),$2,'installation','append-only-test','security.append-only','audit_event',$3,$4,'success','RUNTIME-APPEND','{}'::jsonb)",
+                auditId,
+                fixture.TenantA,
+                fixture.Marker,
+                Guid.NewGuid());
+            await ExecuteAsRoleAsync(
+                owner,
+                "gateway_runtime",
+                fixture.TenantA,
+                "INSERT INTO gateway.invocation_event(id,occurred_at,tenant_id,installation_id,connector_id,operation_id,correlation_id,outcome,duration_ms,payload_bytes) VALUES($1,now(),$2,$3,$4,$5,$6,'success',1,0)",
+                invocationId,
+                fixture.TenantA,
+                fixture.InstallationA,
+                fixture.ConnectorId,
+                fixture.Marker,
+                Guid.NewGuid());
+            Assert.Equal(1L, await ScalarOwnerAsync<long>(owner, "SELECT count(*) FROM gateway.audit_event WHERE id=$1", auditId));
+            Assert.Equal(1L, await ScalarOwnerAsync<long>(owner, "SELECT count(*) FROM gateway.invocation_event WHERE id=$1", invocationId));
+
+            foreach ((string table, Guid id) in new[] { ("audit_event", auditId), ("invocation_event", invocationId) })
+            {
+                await AssertRoleDeniedAsync(owner, "gateway_runtime", fixture.TenantA, $"SELECT id FROM gateway.{table} WHERE id=$1", id);
+                await AssertRoleDeniedAsync(owner, "gateway_runtime", fixture.TenantA, $"UPDATE gateway.{table} SET outcome='failure' WHERE id=$1", id);
+                await AssertRoleDeniedAsync(owner, "gateway_runtime", fixture.TenantA, $"DELETE FROM gateway.{table} WHERE id=$1", id);
+                await AssertRoleDeniedAsync(owner, "gateway_runtime", fixture.TenantA, $"TRUNCATE TABLE gateway.{table}");
+            }
+            Assert.Equal("success", await ScalarOwnerAsync<string>(owner, "SELECT outcome FROM gateway.audit_event WHERE id=$1", auditId));
+            Assert.Equal("success", await ScalarOwnerAsync<string>(owner, "SELECT outcome FROM gateway.invocation_event WHERE id=$1", invocationId));
+        }
+        finally
+        {
+            await CleanupEventPrivilegeFixtureAsync(owner, fixture);
+        }
+    }
+
+    [Fact]
+    public async Task SEC_DAT_PostgreSQL18_gateway_readonly_cannot_read_or_mutate_event_rows_when_configured()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION")
+            ?? Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("The dedicated PostgreSQL 18 gate must provide the migration/admin connection.");
+
+        await using NpgsqlConnection owner = new(connectionString);
+        await owner.OpenAsync(TestContext.Current.CancellationToken);
+        await ApplyMigrationAsync(owner);
+        EventPrivilegeFixture fixture = await CreateEventPrivilegeFixtureAsync(owner);
+        try
+        {
+            foreach ((string table, Guid id) in new[] { ("audit_event", fixture.AuditId), ("invocation_event", fixture.InvocationId) })
+            {
+                await AssertRoleDeniedAsync(owner, "gateway_readonly", fixture.TenantA, $"SELECT id FROM gateway.{table} WHERE id=$1", id);
+                await AssertRoleDeniedAsync(owner, "gateway_readonly", fixture.TenantA, $"INSERT INTO gateway.{table} SELECT * FROM gateway.{table} WHERE false");
+                await AssertRoleDeniedAsync(owner, "gateway_readonly", fixture.TenantA, $"UPDATE gateway.{table} SET outcome='failure' WHERE id=$1", id);
+                await AssertRoleDeniedAsync(owner, "gateway_readonly", fixture.TenantA, $"DELETE FROM gateway.{table} WHERE id=$1", id);
+                await AssertRoleDeniedAsync(owner, "gateway_readonly", fixture.TenantA, $"TRUNCATE TABLE gateway.{table}");
+            }
+            await AssertEventRowsUnchangedAsync(owner, fixture);
+        }
+        finally
+        {
+            await CleanupEventPrivilegeFixtureAsync(owner, fixture);
+        }
+    }
+
+    [Fact]
+    public async Task SEC_DAT_PostgreSQL18_event_RLS_preserves_tenant_isolation_and_global_audit_semantics_when_configured()
+    {
+        string? connectionString = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION")
+            ?? Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connectionString)) Assert.Skip("The dedicated PostgreSQL 18 gate must provide the migration/admin connection.");
+
+        await using NpgsqlConnection owner = new(connectionString);
+        await owner.OpenAsync(TestContext.Current.CancellationToken);
+        await ApplyMigrationAsync(owner);
+        EventPrivilegeFixture fixture = await CreateEventPrivilegeFixtureAsync(owner);
+        try
+        {
+            await ExecuteOwnerAsync(owner, "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,now(),$2,'administrator','append-only-test','security.append-only','audit_event',$3,$4,'success','TENANT-B','{}'::jsonb),($5,now(),NULL,'administrator','append-only-test','security.append-only','audit_event',$3,$6,'success','GLOBAL','{}'::jsonb)", Guid.NewGuid(), fixture.TenantB, fixture.Marker, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+
+            Assert.Equal(2L, await ScalarAsRoleAsync<long>(owner, "gateway_admin", fixture.TenantA, "SELECT count(*) FROM gateway.audit_event WHERE target_id=$1", fixture.Marker));
+            await AssertRlsDeniedAsync(owner, "gateway_admin", fixture.TenantA, "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,now(),$2,'administrator','append-only-test','security.append-only','audit_event',$3,$4,'success','CROSS-TENANT','{}'::jsonb)", Guid.NewGuid(), fixture.TenantB, fixture.Marker, Guid.NewGuid());
+            await AssertRlsDeniedAsync(owner, "gateway_runtime", fixture.TenantA, "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,now(),$2,'installation','append-only-test','security.append-only','audit_event',$3,$4,'success','CROSS-TENANT','{}'::jsonb)", Guid.NewGuid(), fixture.TenantB, fixture.Marker, Guid.NewGuid());
+            await AssertRlsDeniedAsync(owner, "gateway_runtime", fixture.TenantA, "INSERT INTO gateway.invocation_event(id,occurred_at,tenant_id,installation_id,connector_id,operation_id,correlation_id,outcome,duration_ms,payload_bytes) VALUES($1,now(),$2,$3,$4,$5,$6,'success',1,0)", Guid.NewGuid(), fixture.TenantB, fixture.InstallationB, fixture.ConnectorId, fixture.Marker, Guid.NewGuid());
+
+            await ExecuteAsRoleAsync(owner, "gateway_admin", fixture.TenantA, "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,now(),NULL,'administrator','append-only-test','security.append-only','audit_event',$2,$3,'success','ADMIN-GLOBAL','{}'::jsonb)", Guid.NewGuid(), fixture.Marker, Guid.NewGuid());
+            await ExecuteAsRoleAsync(owner, "gateway_runtime", fixture.TenantA, "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,now(),NULL,'installation','append-only-test','security.append-only','audit_event',$2,$3,'success','RUNTIME-GLOBAL','{}'::jsonb)", Guid.NewGuid(), fixture.Marker, Guid.NewGuid());
+            Assert.Equal(5L, await ScalarOwnerAsync<long>(owner, "SELECT count(*) FROM gateway.audit_event WHERE target_id=$1", fixture.Marker));
+        }
+        finally
+        {
+            await CleanupEventPrivilegeFixtureAsync(owner, fixture);
+        }
     }
 
     [Fact]
@@ -1377,6 +1566,132 @@ public sealed class PostgresIsolationTests
         foreach (object value in values) command.Parameters.AddWithValue(value);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
+
+    private static async Task<bool> HasTablePrivilegeAsync(NpgsqlConnection owner, string role, string table, string privilege)
+    {
+        await using NpgsqlCommand command = new("SELECT has_table_privilege($1,$2,$3)", owner);
+        command.Parameters.AddWithValue(role);
+        command.Parameters.AddWithValue(table);
+        command.Parameters.AddWithValue(privilege);
+        return Assert.IsType<bool>(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken));
+    }
+
+    private static async Task ExecuteAsRoleAsync(NpgsqlConnection owner, string role, Guid tenantId, string sql, params object[] values)
+    {
+        await using NpgsqlTransaction transaction = await owner.BeginTransactionAsync(TestContext.Current.CancellationToken);
+        await SetRoleAndTenantAsync(owner, transaction, role, tenantId);
+        await using NpgsqlCommand command = new(sql, owner, transaction);
+        foreach (object value in values) command.Parameters.AddWithValue(value);
+        await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        await transaction.CommitAsync(TestContext.Current.CancellationToken);
+    }
+
+    private static async Task<T> ScalarAsRoleAsync<T>(NpgsqlConnection owner, string role, Guid tenantId, string sql, params object[] values)
+    {
+        await using NpgsqlTransaction transaction = await owner.BeginTransactionAsync(TestContext.Current.CancellationToken);
+        await SetRoleAndTenantAsync(owner, transaction, role, tenantId);
+        await using NpgsqlCommand command = new(sql, owner, transaction);
+        foreach (object value in values) command.Parameters.AddWithValue(value);
+        object? result = await command.ExecuteScalarAsync(TestContext.Current.CancellationToken);
+        await transaction.RollbackAsync(TestContext.Current.CancellationToken);
+        return Assert.IsType<T>(result);
+    }
+
+    private static async Task<T> ScalarOwnerAsync<T>(NpgsqlConnection owner, string sql, params object[] values)
+    {
+        await using NpgsqlCommand command = new(sql, owner);
+        foreach (object value in values) command.Parameters.AddWithValue(value);
+        return Assert.IsType<T>(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken));
+    }
+
+    private static async Task ExecuteOwnerAsync(NpgsqlConnection owner, string sql, params object[] values)
+    {
+        await using NpgsqlCommand command = new(sql, owner);
+        foreach (object value in values) command.Parameters.AddWithValue(value);
+        await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+    }
+
+    private static async Task AssertRoleDeniedAsync(NpgsqlConnection owner, string role, Guid tenantId, string sql, params object[] values) =>
+        await AssertSqlStateAsync(owner, role, tenantId, sql, PostgresErrorCodes.InsufficientPrivilege, values);
+
+    private static async Task AssertRlsDeniedAsync(NpgsqlConnection owner, string role, Guid tenantId, string sql, params object[] values) =>
+        await AssertSqlStateAsync(owner, role, tenantId, sql, PostgresErrorCodes.InsufficientPrivilege, values);
+
+    private static async Task AssertSqlStateAsync(NpgsqlConnection owner, string role, Guid tenantId, string sql, string expectedSqlState, params object[] values)
+    {
+        await using NpgsqlTransaction transaction = await owner.BeginTransactionAsync(TestContext.Current.CancellationToken);
+        await SetRoleAndTenantAsync(owner, transaction, role, tenantId);
+        await using NpgsqlCommand command = new(sql, owner, transaction);
+        foreach (object value in values) command.Parameters.AddWithValue(value);
+        PostgresException failure = await Assert.ThrowsAsync<PostgresException>(() => command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(expectedSqlState, failure.SqlState);
+        await transaction.RollbackAsync(TestContext.Current.CancellationToken);
+    }
+
+    private static async Task SetRoleAndTenantAsync(NpgsqlConnection owner, NpgsqlTransaction transaction, string role, Guid tenantId)
+    {
+        Assert.True(role is "gateway_admin" or "gateway_runtime" or "gateway_readonly");
+        await using (NpgsqlCommand setRole = new($"SET LOCAL ROLE {role}", owner, transaction))
+            await setRole.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+        await using NpgsqlCommand setTenant = new("SELECT set_config('app.tenant_id',$1,true)", owner, transaction);
+        setTenant.Parameters.AddWithValue(tenantId.ToString("D"));
+        await setTenant.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
+    }
+
+    private static async Task<EventPrivilegeFixture> CreateEventPrivilegeFixtureAsync(NpgsqlConnection owner)
+    {
+        string marker = "append-" + Guid.NewGuid().ToString("N");
+        EventPrivilegeFixture fixture = new(
+            marker,
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid());
+        await using NpgsqlTransaction transaction = await owner.BeginTransactionAsync(TestContext.Current.CancellationToken);
+        await ExecuteAsync(owner, transaction, "INSERT INTO gateway.tenant(id,code,display_name,status,created_at) VALUES($1,$2,'Append tenant A','active',now()),($3,$4,'Append tenant B','active',now())", fixture.TenantA, "ta-" + marker, fixture.TenantB, "tb-" + marker);
+        await ExecuteAsync(owner, transaction, "INSERT INTO gateway.application(id,code,display_name,status,minimum_broker_version,created_at) VALUES($1,$2,'Append application','active','1.0.0',now())", fixture.ApplicationId, "app-" + marker);
+        await ExecuteAsync(owner, transaction, "INSERT INTO gateway.environment(id,code,display_name,production_controls) VALUES($1,$2,'Append environment',false)", fixture.EnvironmentId, "env-" + marker[..20]);
+        await ExecuteAsync(owner, transaction, "INSERT INTO gateway.installation(id,tenant_id,application_id,environment_id,status,created_at) VALUES($1,$2,$3,$4,'active',now()),($5,$6,$3,$4,'active',now())", fixture.InstallationA, fixture.TenantA, fixture.ApplicationId, fixture.EnvironmentId, fixture.InstallationB, fixture.TenantB);
+        await ExecuteAsync(owner, transaction, "INSERT INTO gateway.audit_event(id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted) VALUES($1,now(),$2,'administrator','append-only-test','security.append-only','audit_event',$3,$4,'success','AUDIT-ORIGINAL','{}'::jsonb)", fixture.AuditId, fixture.TenantA, fixture.Marker, Guid.NewGuid());
+        await ExecuteAsync(owner, transaction, "INSERT INTO gateway.invocation_event(id,occurred_at,tenant_id,installation_id,connector_id,operation_id,correlation_id,outcome,duration_ms,payload_bytes) VALUES($1,now(),$2,$3,$4,$5,$6,'success',1,0)", fixture.InvocationId, fixture.TenantA, fixture.InstallationA, fixture.ConnectorId, fixture.Marker, Guid.NewGuid());
+        await transaction.CommitAsync(TestContext.Current.CancellationToken);
+        return fixture;
+    }
+
+    private static async Task AssertEventRowsUnchangedAsync(NpgsqlConnection owner, EventPrivilegeFixture fixture)
+    {
+        Assert.Equal("AUDIT-ORIGINAL", await ScalarOwnerAsync<string>(owner, "SELECT reason_code FROM gateway.audit_event WHERE id=$1", fixture.AuditId));
+        Assert.Equal("success", await ScalarOwnerAsync<string>(owner, "SELECT outcome FROM gateway.invocation_event WHERE id=$1", fixture.InvocationId));
+    }
+
+    private static async Task CleanupEventPrivilegeFixtureAsync(NpgsqlConnection owner, EventPrivilegeFixture fixture)
+    {
+        await using NpgsqlTransaction transaction = await owner.BeginTransactionAsync(CancellationToken.None);
+        await ExecuteAsync(owner, transaction, "DELETE FROM gateway.audit_event WHERE target_id=$1", fixture.Marker);
+        await ExecuteAsync(owner, transaction, "DELETE FROM gateway.invocation_event WHERE operation_id=$1", fixture.Marker);
+        await ExecuteAsync(owner, transaction, "DELETE FROM gateway.installation WHERE id IN ($1,$2)", fixture.InstallationA, fixture.InstallationB);
+        await ExecuteAsync(owner, transaction, "DELETE FROM gateway.application WHERE id=$1", fixture.ApplicationId);
+        await ExecuteAsync(owner, transaction, "DELETE FROM gateway.environment WHERE id=$1", fixture.EnvironmentId);
+        await ExecuteAsync(owner, transaction, "DELETE FROM gateway.tenant WHERE id IN ($1,$2)", fixture.TenantA, fixture.TenantB);
+        await transaction.CommitAsync(CancellationToken.None);
+    }
+
+    private sealed record EventPrivilegeFixture(
+        string Marker,
+        Guid TenantA,
+        Guid TenantB,
+        Guid ApplicationId,
+        Guid EnvironmentId,
+        Guid InstallationA,
+        Guid InstallationB,
+        Guid ConnectorId,
+        Guid AuditId,
+        Guid InvocationId);
 
     private static async Task<(uint Oid, string Definition)> ReadDiagnosticCodeConstraintAsync(string connectionString)
     {
