@@ -582,6 +582,14 @@ paths:
       security: [{ AdminSession: [] }]
       parameters: [{ $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }, { name: environmentId, in: query, schema: { type: string, format: uuid } }, { name: resourceType, in: query, schema: { $ref: '#/components/schemas/ProviderResourceType' } }]
       responses: { '200': { description: Read-only server-owned logical resource catalog; physical references and values are absent., content: { application/json: { schema: { $ref: '#/components/schemas/ProviderResourceCatalogPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/endpoint-resources:
+    get:
+      tags: [ConnectorsAdmin]
+      operationId: listEndpointResources
+      description: Lists deployment-owned HTTPS destinations selectable by the Security Administrator. The browser-supplied identifier, revision and checksum are assertions; the server resolves the effective URI.
+      security: [{ AdminSession: [] }]
+      parameters: [{ name: environmentId, in: query, required: true, schema: { type: string, format: uuid } }, { name: connectorId, in: query, required: true, schema: { type: string, maxLength: 100 } }]
+      responses: { '200': { description: Read-only server-owned endpoint catalog., content: { application/json: { schema: { $ref: '#/components/schemas/EndpointResourceCatalogPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/provider-resources:resolve:
     get:
       tags: [ConnectorsAdmin]
@@ -918,6 +926,7 @@ components:
         environmentId: { type: string, format: uuid }
         connectorVersion: { type: [string, 'null'] }
         endpoints: { type: object, additionalProperties: { type: string, format: uri } }
+        endpointResources: { type: object, description: Logical binding names mapped to deployment-owned endpoint catalog assertions. Cannot be combined with non-empty endpoints., additionalProperties: { $ref: '#/components/schemas/EndpointResourceReference' } }
         secretResources: { type: object, additionalProperties: { $ref: '#/components/schemas/ProviderResourceReference' } }
         certificateResources: { type: object, additionalProperties: { $ref: '#/components/schemas/ProviderResourceReference' } }
         expectedRevision: { type: [integer, 'null'], deprecated: true, description: If-Match is authoritative. }
@@ -928,11 +937,23 @@ components:
     ProviderResourceType:
       type: string
       enum: [Secret, ClientCertificate]
+    EndpointResourceReference:
+      type: object
+      additionalProperties: false
+      required: [endpointId, revision, checksumSha256]
+      properties: { endpointId: { type: string, pattern: '^[A-Za-z0-9_.-]{1,128}$' }, revision: { type: integer, format: int64, minimum: 1 }, checksumSha256: { type: string, pattern: '^[A-F0-9]{64}$' } }
+    EndpointResourceCatalog:
+      type: object
+      additionalProperties: false
+      required: [endpointId, displayName, environmentId, connectorScope, operationScope, logicalBindingId, endpoint, revision, checksumSha256]
+      properties: { endpointId: { type: string }, displayName: { type: string }, environmentId: { type: string, format: uuid }, connectorScope: { type: string }, operationScope: { type: string }, logicalBindingId: { type: string }, endpoint: { type: string, format: uri }, revision: { type: integer, format: int64, minimum: 1 }, checksumSha256: { type: string, pattern: '^[A-F0-9]{64}$' } }
+    EndpointResourceCatalogPage:
+      allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/EndpointResourceCatalog' } } } }]
     ProviderResourceReference:
       type: object
       additionalProperties: false
       required: [providerId, resourceId, resourceType]
-      properties: { providerId: { type: string, pattern: '^[A-Za-z0-9_.-]{1,128}$' }, resourceId: { type: string, pattern: '^[A-Za-z0-9_.-]{1,128}$' }, resourceType: { $ref: '#/components/schemas/ProviderResourceType' }, version: { type: [string, 'null'], pattern: '^[A-Za-z0-9_.-]{1,128}$' }, publicMetadataRevision: { type: [integer, 'null'], minimum: 1 } }
+      properties: { providerId: { type: string, pattern: '^[A-Za-z0-9_.-]{1,128}$' }, resourceId: { type: string, pattern: '^[A-Za-z0-9_.-]{1,128}$' }, resourceType: { $ref: '#/components/schemas/ProviderResourceType' }, version: { type: [string, 'null'], pattern: '^[A-Za-z0-9_.-]{1,128}$' }, publicMetadataRevision: { type: [integer, 'null'], minimum: 1 }, catalogRevision: { type: [integer, 'null'], minimum: 1 }, catalogChecksumSha256: { type: [string, 'null'], pattern: '^[A-F0-9]{64}$' } }
     ProviderResourceBinding:
       type: object
       additionalProperties: false

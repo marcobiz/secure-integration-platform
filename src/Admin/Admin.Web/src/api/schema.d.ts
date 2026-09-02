@@ -886,6 +886,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/api/v1/endpoint-resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Lists deployment-owned HTTPS destinations selectable by the Security Administrator. The browser-supplied identifier, revision and checksum are assertions; the server resolves the effective URI. */
+        get: operations["listEndpointResources"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/api/v1/provider-resources:resolve": {
         parameters: {
             query?: never;
@@ -1344,6 +1361,10 @@ export interface components {
             endpoints: {
                 [key: string]: string;
             };
+            /** @description Logical binding names mapped to deployment-owned endpoint catalog assertions. Cannot be combined with non-empty endpoints. */
+            endpointResources?: {
+                [key: string]: components["schemas"]["EndpointResourceReference"];
+            };
             secretResources: {
                 [key: string]: components["schemas"]["ProviderResourceReference"];
             };
@@ -1388,12 +1409,37 @@ export interface components {
         };
         /** @enum {string} */
         ProviderResourceType: "Secret" | "ClientCertificate";
+        EndpointResourceReference: {
+            endpointId: string;
+            /** Format: int64 */
+            revision: number;
+            checksumSha256: string;
+        };
+        EndpointResourceCatalog: {
+            endpointId: string;
+            displayName: string;
+            /** Format: uuid */
+            environmentId: string;
+            connectorScope: string;
+            operationScope: string;
+            logicalBindingId: string;
+            /** Format: uri */
+            endpoint: string;
+            /** Format: int64 */
+            revision: number;
+            checksumSha256: string;
+        };
+        EndpointResourceCatalogPage: components["schemas"]["Page"] & {
+            items?: components["schemas"]["EndpointResourceCatalog"][];
+        };
         ProviderResourceReference: {
             providerId: string;
             resourceId: string;
             resourceType: components["schemas"]["ProviderResourceType"];
             version?: string | null;
             publicMetadataRevision?: number | null;
+            catalogRevision?: number | null;
+            catalogChecksumSha256?: string | null;
         };
         ProviderResourceBinding: {
             providerId: string;
@@ -3319,6 +3365,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderResourceCatalogPage"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    listEndpointResources: {
+        parameters: {
+            query: {
+                environmentId: string;
+                connectorId: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Read-only server-owned endpoint catalog. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EndpointResourceCatalogPage"];
                 };
             };
             default: components["responses"]["Problem"];

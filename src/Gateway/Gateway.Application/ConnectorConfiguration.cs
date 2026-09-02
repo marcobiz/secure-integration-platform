@@ -46,7 +46,107 @@ public sealed record ConnectorBindingRequest(
     IReadOnlyDictionary<string, ProviderResourceReference> SecretResources,
     long? ExpectedRevision = null,
     IReadOnlyDictionary<string, ProviderResourceReference>? CertificateResources = null,
-    string? ConnectorVersion = null);
+    string? ConnectorVersion = null,
+    IReadOnlyDictionary<string, EndpointResourceReference>? EndpointResources = null);
+
+/// <summary>Versioned assertion for one deployment-owned endpoint selection.</summary>
+public sealed record EndpointResourceReference(string EndpointId, long Revision, string ChecksumSha256);
+
+/// <summary>Public, non-secret endpoint metadata loaded from deployment configuration.</summary>
+public sealed record EndpointResourceCatalogRecord(
+    string EndpointId,
+    string DisplayName,
+    Guid EnvironmentId,
+    string ConnectorScope,
+    string OperationScope,
+    string LogicalBindingId,
+    Uri Endpoint,
+    long Revision,
+    string ChecksumSha256)
+{
+    /// <summary>Creates a validated record and binds every authority dimension into its checksum.</summary>
+    public static EndpointResourceCatalogRecord Create(
+        string endpointId,
+        string displayName,
+        Guid environmentId,
+        string connectorScope,
+        string operationScope,
+        string logicalBindingId,
+        string endpoint,
+        long revision)
+    {
+        ValidateIdentifier(endpointId, false);
+        ValidateIdentifier(connectorScope, true);
+        ValidateIdentifier(operationScope, true);
+        ValidateIdentifier(logicalBindingId, false);
+        if (string.IsNullOrWhiteSpace(displayName) || displayName.Length > 200 || displayName.Any(char.IsControl) || environmentId == Guid.Empty || revision < 1 ||
+            !Uri.TryCreate(endpoint, UriKind.Absolute, out Uri? parsed) || parsed.Scheme != Uri.UriSchemeHttps || !string.IsNullOrEmpty(parsed.UserInfo) ||
+            !string.IsNullOrEmpty(parsed.Query) || !string.IsNullOrEmpty(parsed.Fragment) || IPAddress.TryParse(parsed.DnsSafeHost, out _))
+            throw new InvalidOperationException("Configured endpoint resource is invalid.");
+        string checksum = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            endpointId,
+            displayName,
+            environmentId = environmentId.ToString("D"),
+            connectorScope,
+            operationScope,
+            logicalBindingId,
+            endpoint = parsed.AbsoluteUri,
+            revision
+        })));
+        return new(endpointId, displayName, environmentId, connectorScope, operationScope, logicalBindingId, parsed, revision, checksum);
+    }
+
+    private static void ValidateIdentifier(string value, bool wildcard)
+    {
+        if (wildcard && value == "*") return;
+        if (string.IsNullOrWhiteSpace(value) || value.Length > 128 || value.Any(character => !(char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.')))
+            throw new InvalidOperationException("Configured endpoint resource identifier is invalid.");
+    }
+}
+
+/// <summary>Bounded deployment-owned endpoint catalog used by Admin reads and binding resolution.</summary>
+public sealed class EndpointResourceCatalog
+{
+    private readonly EndpointResourceCatalogRecord[] resources;
+
+    /// <summary>Creates an immutable catalog and rejects ambiguous stable identifiers.</summary>
+    public EndpointResourceCatalog(IEnumerable<EndpointResourceCatalogRecord> resources)
+    {
+        this.resources = resources?.ToArray() ?? throw new ArgumentNullException(nameof(resources));
+        if (this.resources.Length > 256 || this.resources.GroupBy(value => value.EndpointId, StringComparer.Ordinal).Any(group => group.Count() != 1))
+            throw new InvalidOperationException("Configured endpoint resource catalog is ambiguous or exceeds its bound.");
+    }
+
+    /// <summary>Lists only resources selectable for the exact Environment and Connector.</summary>
+    public IReadOnlyList<EndpointResourceCatalogRecord> List(Guid environmentId, string connectorId) => resources
+        .Where(value => value.EnvironmentId == environmentId && (value.ConnectorScope == "*" || string.Equals(value.ConnectorScope, connectorId, StringComparison.Ordinal)))
+        .OrderBy(value => value.LogicalBindingId, StringComparer.Ordinal)
+        .ThenBy(value => value.DisplayName, StringComparer.Ordinal)
+        .ThenBy(value => value.EndpointId, StringComparer.Ordinal)
+        .ToArray();
+
+    /// <summary>Resolves an exact current assertion and denies scope or revision drift.</summary>
+    public EndpointResourceCatalogRecord Resolve(
+        EndpointResourceReference reference,
+        Guid environmentId,
+        string connectorId,
+        string logicalBindingId,
+        IReadOnlyCollection<string> operationIds)
+    {
+        if (string.IsNullOrWhiteSpace(reference.EndpointId) || reference.EndpointId.Length > 128 || reference.EndpointId.Any(character => !(char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '.')) ||
+            reference.Revision < 1 || reference.ChecksumSha256.Length != 64 || !reference.ChecksumSha256.All(Uri.IsHexDigit))
+            throw new GatewayException("BGW-ENDPOINT-RESOURCE-REFERENCE-DENIED", 400);
+        EndpointResourceCatalogRecord? selected = resources.SingleOrDefault(value => string.Equals(value.EndpointId, reference.EndpointId, StringComparison.Ordinal));
+        if (selected is null || selected.EnvironmentId != environmentId || !string.Equals(selected.LogicalBindingId, logicalBindingId, StringComparison.Ordinal) ||
+            selected.ConnectorScope != "*" && !string.Equals(selected.ConnectorScope, connectorId, StringComparison.Ordinal) ||
+            selected.OperationScope != "*" && (operationIds.Count != 1 || !operationIds.Contains(selected.OperationScope, StringComparer.Ordinal)))
+            throw new GatewayException("BGW-ENDPOINT-RESOURCE-NOT-FOUND", 404);
+        if (selected.Revision != reference.Revision || !string.Equals(selected.ChecksumSha256, reference.ChecksumSha256, StringComparison.Ordinal))
+            throw new GatewayException("BGW-ENDPOINT-RESOURCE-DRIFT", 409);
+        return selected;
+    }
+}
 
 /// <summary>Non-destructive contract test of one Published operation and Environment binding.</summary>
 public sealed record ConnectorTestRequest(Guid EnvironmentId, string OperationId);
@@ -62,6 +162,9 @@ public static class ProviderResourceReferenceValidator
         ValidateIdentifier(reference.ProviderId);
         ValidateIdentifier(reference.ResourceId);
         if (reference.Version is not null) ValidateIdentifier(reference.Version);
+        if ((reference.CatalogRevision is null) != (reference.CatalogChecksumSha256 is null) || reference.CatalogRevision is < 1 ||
+            reference.CatalogChecksumSha256 is not null && (reference.CatalogChecksumSha256.Length != 64 || !reference.CatalogChecksumSha256.All(Uri.IsHexDigit)))
+            throw new GatewayException("BGW-PROVIDER-RESOURCE-REFERENCE-DENIED", 400);
         if (reference.ResourceId.Contains("://", StringComparison.Ordinal) || reference.ResourceId.Contains("-----BEGIN", StringComparison.OrdinalIgnoreCase) ||
             reference.ResourceId.Contains("base64", StringComparison.OrdinalIgnoreCase) || reference.ResourceId.Contains("password=", StringComparison.OrdinalIgnoreCase) ||
             reference.ResourceId.Contains("user id=", StringComparison.OrdinalIgnoreCase) || reference.ResourceId.Contains("accountkey=", StringComparison.OrdinalIgnoreCase))
@@ -914,7 +1017,8 @@ public sealed class ConnectorAdministrationService(
     IGatewayOperationCatalog runtimeCatalog,
     IGatewayRegistry registry,
     IGatewayClock clock,
-    IConnectorApprovalPolicy approvalPolicy)
+    IConnectorApprovalPolicy approvalPolicy,
+    EndpointResourceCatalog? endpointCatalog = null)
 {
     /// <summary>Validates without persisting a definition.</summary>
     public ConnectorValidationResult Validate(JsonElement definition) => validator.Validate(definition);
@@ -976,7 +1080,10 @@ public sealed class ConnectorAdministrationService(
             ? versions.FirstOrDefault(value => value.State == ConnectorVersionState.Validated) ?? throw new GatewayException("BGW-CONNECTOR-BINDING-REQUIRES-VALIDATED-VERSION", 409)
             : versions.SingleOrDefault(value => string.Equals(value.Version, request.ConnectorVersion, StringComparison.Ordinal)) ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
         if (reference.State != ConnectorVersionState.Validated) throw new GatewayException("BGW-CONNECTOR-BINDING-REQUIRES-VALIDATED-VERSION", 409);
+        Dictionary<string, EndpointResourceReference> requestedEndpointResources = request.EndpointResources is null ? [] : new(request.EndpointResources, StringComparer.Ordinal);
         Dictionary<string, Uri> endpoints = new(StringComparer.Ordinal);
+        if (requestedEndpointResources.Count > 0 && request.Endpoints.Count > 0)
+            throw new GatewayException("BGW-ENDPOINT-RESOURCE-REFERENCE-DENIED", 400);
         foreach ((string name, string value) in request.Endpoints)
         {
             if (!Uri.TryCreate(value, UriKind.Absolute, out Uri? endpoint) || endpoint.Scheme != Uri.UriSchemeHttps || !string.IsNullOrEmpty(endpoint.UserInfo) || !string.IsNullOrEmpty(endpoint.Query) || !string.IsNullOrEmpty(endpoint.Fragment) || IPAddress.TryParse(endpoint.DnsSafeHost, out _))
@@ -986,24 +1093,39 @@ public sealed class ConnectorAdministrationService(
         Dictionary<string, ProviderResourceReference> requestedSecrets = new(request.SecretResources, StringComparer.Ordinal);
         Dictionary<string, ProviderResourceReference> requestedCertificates = request.CertificateResources is null ? [] : new(request.CertificateResources, StringComparer.Ordinal);
         Dictionary<string, HashSet<string>> operationScopes = new(StringComparer.Ordinal);
+        Dictionary<string, HashSet<string>> endpointOperationScopes = new(StringComparer.Ordinal);
         using (JsonDocument document = JsonDocument.Parse(reference.CanonicalJson))
         {
             HashSet<string> requiredEndpoints = document.RootElement.GetProperty("bindings").GetProperty("endpoints").EnumerateArray().Select(value => value.GetProperty("name").GetString()!).ToHashSet(StringComparer.Ordinal);
             Dictionary<string, string> requiredSecrets = document.RootElement.GetProperty("bindings").GetProperty("secrets").EnumerateArray().ToDictionary(value => value.GetProperty("name").GetString()!, value => value.GetProperty("kind").GetString()!, StringComparer.Ordinal);
             HashSet<string> ordinarySecrets = requiredSecrets.Where(value => value.Value != "clientCertificate").Select(value => value.Key).ToHashSet(StringComparer.Ordinal);
             HashSet<string> certificateSecrets = requiredSecrets.Where(value => value.Value == "clientCertificate").Select(value => value.Key).ToHashSet(StringComparer.Ordinal);
-            if (!requiredEndpoints.SetEquals(endpoints.Keys) || !ordinarySecrets.SetEquals(requestedSecrets.Keys) || !certificateSecrets.SetEquals(requestedCertificates.Keys))
+            bool endpointKeysComplete = requestedEndpointResources.Count > 0
+                ? requiredEndpoints.SetEquals(requestedEndpointResources.Keys)
+                : requiredEndpoints.SetEquals(endpoints.Keys);
+            if (!endpointKeysComplete || !ordinarySecrets.SetEquals(requestedSecrets.Keys) || !certificateSecrets.SetEquals(requestedCertificates.Keys))
                 throw new GatewayException("BGW-CONNECTOR-BINDING-SCOPE", 400);
             foreach (JsonElement operation in document.RootElement.GetProperty("operations").EnumerateArray())
             {
                 string operationId = operation.GetProperty("operationId").GetString()!;
-                JsonElement authentication = operation.GetProperty("authentication");
                 OperationBindingDependencies dependencies = ConnectorOperationBindings.Required(reference.CanonicalJson, operationId);
+                foreach (string logical in new[] { dependencies.EndpointBindingId }.Concat(dependencies.AuthorityEndpointBindingIds))
+                {
+                    if (!endpointOperationScopes.TryGetValue(logical, out HashSet<string>? scopes)) endpointOperationScopes.Add(logical, scopes = new(StringComparer.Ordinal));
+                    scopes.Add(operationId);
+                }
                 foreach (string logical in dependencies.SecretBindingIds.Concat(dependencies.CertificateBindingIds))
                 {
                     if (!operationScopes.TryGetValue(logical, out HashSet<string>? scopes)) operationScopes.Add(logical, scopes = new(StringComparer.Ordinal));
                     scopes.Add(operationId);
                 }
+            }
+            if (requestedEndpointResources.Count > 0)
+            {
+                if (endpointCatalog is null)
+                    throw new GatewayException("BGW-CONNECTOR-BINDING-SCOPE", 400);
+                foreach ((string logical, EndpointResourceReference requested) in requestedEndpointResources)
+                    endpoints.Add(logical, endpointCatalog.Resolve(requested, request.EnvironmentId, connectorId, logical, endpointOperationScopes[logical]).Endpoint);
             }
         }
         Dictionary<string, ProviderResourceBinding> secretResources = new(StringComparer.Ordinal);

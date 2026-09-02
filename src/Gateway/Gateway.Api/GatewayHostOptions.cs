@@ -22,10 +22,33 @@ public sealed class GatewayHostOptions
     public List<GatewayOperationConfiguration> Operations { get; init; } = [];
     /// <summary>Explicit deployment-owned execution modules loaded once during startup.</summary>
     public List<GatewayExecutionModuleOptions> ExecutionModules { get; init; } = [];
+    /// <summary>Deployment-owned HTTPS destinations selectable by guided Admin workflows.</summary>
+    public List<GatewayEndpointResourceOptions> EndpointResources { get; init; } = [];
     /// <summary>Published Connector cache TTL. A store stamp is still checked on every invocation.</summary>
     public int ConnectorCacheTtlSeconds { get; init; } = 30;
     /// <summary>Authentication configuration for the provider-neutral Admin API.</summary>
     public GatewayAdminOptions Admin { get; init; } = new();
+}
+
+/// <summary>One bounded server-owned destination exposed as non-secret Admin catalog metadata.</summary>
+public sealed class GatewayEndpointResourceOptions
+{
+    /// <summary>Stable logical catalog identifier.</summary>
+    public required string EndpointId { get; init; }
+    /// <summary>Non-secret operator-facing name.</summary>
+    public required string DisplayName { get; init; }
+    /// <summary>Exact server-owned Environment scope.</summary>
+    public required Guid EnvironmentId { get; init; }
+    /// <summary>Exact Connector slug or *.</summary>
+    public string ConnectorScope { get; init; } = "*";
+    /// <summary>Exact operation identifier or *.</summary>
+    public string OperationScope { get; init; } = "*";
+    /// <summary>Exact logical endpoint binding in the Connector Definition.</summary>
+    public required string LogicalBindingId { get; init; }
+    /// <summary>Exact HTTPS destination resolved only on the server.</summary>
+    public required string Endpoint { get; init; }
+    /// <summary>Deployment-owned immutable revision asserted by the browser.</summary>
+    public long Revision { get; init; } = 1;
 }
 
 /// <summary>Exact startup allowlist entry for one trusted Connector execution module.</summary>

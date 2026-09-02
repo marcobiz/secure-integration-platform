@@ -51,6 +51,8 @@ public sealed class InMemoryConnectorConfigurationStore(
             if (!providerResources.TryGetValue(key, out List<ProviderResourceCatalogRecord>? revisions) || revisions.Count == 0) throw new GatewayException("BGW-PROVIDER-RESOURCE-NOT-FOUND", 400);
             ProviderResourceCatalogRecord resource = revisions[^1];
             EnsureResourceScope(resource, reference, environmentId, connectorId, operationIds);
+            if (reference.CatalogRevision is not null && (resource.Revision != reference.CatalogRevision || !string.Equals(resource.ChecksumSha256, reference.CatalogChecksumSha256, StringComparison.Ordinal)))
+                throw new GatewayException("BGW-PROVIDER-RESOURCE-REVISION-STALE", 409);
             return Task.FromResult(resource);
         }
     }

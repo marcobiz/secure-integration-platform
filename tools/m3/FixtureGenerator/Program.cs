@@ -31,6 +31,8 @@ using X509Certificate2 vendorServer = CreateIssued("CN=vendor.m3.test", ["vendor
 using X509Certificate2 vendorClient = CreateIssued("CN=M3 Synthetic Vendor Client", [], true, ca, now);
 using X509Certificate2 wrongVendorClient = CreateIssued("CN=M3 Wrong Vendor Client", [], true, ca, now);
 using X509Certificate2 securityDriver = CreateIssued("CN=M3 Security Driver Installation", [], true, ca, now);
+using X509Certificate2 onboardingDriver = CreateIssued("CN=M5 Guided Onboarding Installation", [], true, ca, now);
+Guid primaryEnvironmentId = Guid.NewGuid();
 
 await File.WriteAllTextAsync(Path.Combine(certificateDirectory, "ca.crt"), ca.ExportCertificatePem()).ConfigureAwait(false);
 await File.WriteAllBytesAsync(Path.Combine(certificateDirectory, "gateway.pfx"), gateway.Export(X509ContentType.Pkcs12, certificatePassword)).ConfigureAwait(false);
@@ -40,6 +42,9 @@ await File.WriteAllBytesAsync(Path.Combine(certificateDirectory, "security-drive
 await File.WriteAllTextAsync(Path.Combine(certificateDirectory, "security-driver.crt"), securityDriver.ExportCertificatePem()).ConfigureAwait(false);
 using (ECDsa securityDriverKey = securityDriver.GetECDsaPrivateKey() ?? throw new InvalidOperationException("Synthetic installation key is missing."))
     await File.WriteAllTextAsync(Path.Combine(certificateDirectory, "security-driver.key"), securityDriverKey.ExportPkcs8PrivateKeyPem()).ConfigureAwait(false);
+await File.WriteAllTextAsync(Path.Combine(certificateDirectory, "onboarding-driver.crt"), onboardingDriver.ExportCertificatePem()).ConfigureAwait(false);
+using (ECDsa onboardingDriverKey = onboardingDriver.GetECDsaPrivateKey() ?? throw new InvalidOperationException("Synthetic onboarding key is missing."))
+    await File.WriteAllTextAsync(Path.Combine(certificateDirectory, "onboarding-driver.key"), onboardingDriverKey.ExportPkcs8PrivateKeyPem()).ConfigureAwait(false);
 
 Dictionary<string, string> values = new(StringComparer.Ordinal)
 {
@@ -53,8 +58,9 @@ Dictionary<string, string> values = new(StringComparer.Ordinal)
     ["M3_VENDOR_API_KEY"] = vendorApiKey,
     ["M3_VENDOR_CONTROL_TOKEN"] = vendorControlToken,
     ["M3_VENDOR_CLIENT_THUMBPRINT"] = vendorClient.Thumbprint,
-    ["M3_VENDOR_CLIENT_PFX_BASE64"] = Convert.ToBase64String(vendorClient.Export(X509ContentType.Pkcs12))
-    ,["M3_WRONG_VENDOR_CLIENT_PFX_BASE64"] = Convert.ToBase64String(wrongVendorClient.Export(X509ContentType.Pkcs12))
+    ["M3_VENDOR_CLIENT_PFX_BASE64"] = Convert.ToBase64String(vendorClient.Export(X509ContentType.Pkcs12)),
+    ["M3_WRONG_VENDOR_CLIENT_PFX_BASE64"] = Convert.ToBase64String(wrongVendorClient.Export(X509ContentType.Pkcs12)),
+    ["M3_PRIMARY_ENVIRONMENT_ID"] = primaryEnvironmentId.ToString("D")
 };
 string environmentPath = Path.Combine(rawDirectory, "m3a.env");
 await File.WriteAllLinesAsync(environmentPath, values.Select(pair => pair.Key + "=" + pair.Value)).ConfigureAwait(false);
@@ -70,7 +76,9 @@ await File.WriteAllTextAsync(Path.Combine(rawDirectory, "fixture-public.json"), 
     vendorServerCertificateSha256 = Convert.ToHexString(SHA256.HashData(vendorServer.RawData)),
     vendorClientCertificateSha256 = Convert.ToHexString(SHA256.HashData(vendorClient.RawData)),
     vendorClientThumbprint = vendorClient.Thumbprint,
-    securityDriverCertificateSha256 = Convert.ToHexString(SHA256.HashData(securityDriver.RawData))
+    securityDriverCertificateSha256 = Convert.ToHexString(SHA256.HashData(securityDriver.RawData)),
+    onboardingDriverCertificateSha256 = Convert.ToHexString(SHA256.HashData(onboardingDriver.RawData)),
+    primaryEnvironmentId
 }, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true })).ConfigureAwait(false);
 Console.WriteLine(JsonSerializer.Serialize(new { status = "generated", rawDirectory, environmentPath }));
 

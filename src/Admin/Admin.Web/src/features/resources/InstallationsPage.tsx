@@ -1,4 +1,4 @@
-import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, FormControl, InputLabel, MenuItem, Select, Stack, TextField } from '@mui/material';
+import { Button, FormControl, InputLabel, MenuItem, Select, Stack, TextField } from '@mui/material';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -9,6 +9,7 @@ import { DataTable } from '../../components/DataTable';
 import { PageTitle } from '../../components/PageTitle';
 import { PaginationControls } from '../../components/PaginationControls';
 import { PagedSelector } from '../../components/PagedSelector';
+import { ActivationHandoffDialog } from '../../components/ActivationHandoffDialog';
 import { runtimeLabel } from '../../i18n/runtimeValues';
 
 export function InstallationsPage() {
@@ -44,7 +45,7 @@ export function InstallationsPage() {
     </Stack>
     {installations.isPending && tenant ? <LoadingState /> : installations.error ? <ErrorState error={installations.error} retry={() => void installations.refetch()} /> : <><DataTable rows={rows} label={t('installations')} columns={[{ key: 'id', label: t('id'), render: (row: Installation) => row.id }, { key: 'kind', label: t('installationType'), render: row => row.installationKind === 'Direct' ? t('directInstallation') : t('brokerInstallation') }, { key: 'status', label: t('status'), render: row => runtimeLabel(t, 'status', row.status) }, { key: 'app', label: t('application'), render: row => row.applicationId }, { key: 'version', label: t('clientVersion'), render: row => row.clientVersion ?? row.brokerVersion ?? '—' }, { key: 'credential', label: t('publicKeyFingerprint'), render: row => row.credential?.spkiSha256 ?? '—' }, { key: 'created', label: t('created'), render: row => new Intl.DateTimeFormat(i18n.language, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(row.createdAt)) }, { key: 'seen', label: t('lastSeen'), render: row => row.lastSeenAt ? new Intl.DateTimeFormat(i18n.language, { dateStyle: 'short', timeStyle: 'short' }).format(new Date(row.lastSeenAt)) : '—' }, { key: 'action', label: t('action'), render: row => canAdmin && row.status !== 'Revoked' ? <Button color="error" size="small" onClick={() => revoke.mutate(row.id)}>{t('revoke')}</Button> : null }]} />{installations.data && <PaginationControls page={installations.data} onOffset={setOffset} />}</>}
     {(create.error || revoke.error) && <ErrorState error={create.error ?? revoke.error} />}
-    <Dialog open={Boolean(activation)} onClose={() => setActivation(undefined)}><DialogTitle>{t('activationCodeTitle')}</DialogTitle><DialogContent><Alert severity="warning" sx={{ mb: 2 }}>{t('activationCodeOnce')}</Alert><TextField fullWidth label={t('activationCode')} value={activation?.activationCode ?? ''} slotProps={{ input: { readOnly: true } }} /><TextField fullWidth sx={{ mt: 2 }} label={t('expires')} value={activation ? new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'long' }).format(new Date(activation.expiresAt)) : ''} slotProps={{ input: { readOnly: true } }} /></DialogContent><DialogActions><Button onClick={() => setActivation(undefined)}>{t('close')}</Button></DialogActions></Dialog>
+    <ActivationHandoffDialog activation={activation} onClose={() => setActivation(undefined)} />
     <TextField sx={{ display: 'none' }} aria-hidden label={t('reason')} value={reason} onChange={event => setReason(event.target.value)} />
   </>;
 }

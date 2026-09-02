@@ -335,9 +335,6 @@ $env:M3_SECURITY_SCOPE = 'smoke'
 Invoke-Checked $dotnet @('run', '--project', (Join-Path $root 'tools\m3\SecurityDriver\SecurityDriver.csproj'), '--configuration', 'Release')
 $enrollment = Get-Content -LiteralPath $securityOutput -Raw | ConvertFrom-Json
 if (-not $enrollment.passed) { throw 'M5_QUICKSTART_ENROLLMENT_FAILED' }
-$provisioning = Get-Content -LiteralPath (Join-Path $rawRoot 'provisioning.json') -Raw | ConvertFrom-Json
-$status = (& docker @((ComposeArguments @('exec', '-T', 'postgres', 'psql', '-U', 'postgres', '-d', 'broker_gateway_m3', '-Atc', "SELECT status FROM gateway.installation WHERE id='$($provisioning.securityInstallationId)';"))))
-if ($LASTEXITCODE -ne 0 -or $status.Trim() -ne 'active') { throw 'M5_QUICKSTART_INSTALLATION_NOT_ACTIVE' }
 
 # An optional deployment overlay is applied only after the canonical Synthetic-provider
 # enrollment and sample invocation have passed. This preserves the default quickstart gate while

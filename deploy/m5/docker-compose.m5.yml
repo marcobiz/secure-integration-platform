@@ -9,4 +9,12 @@ services:
       ASPNETCORE_ENVIRONMENT: M5Testing
       Gateway__Admin__Mode: DevelopmentAuth
       Gateway__Admin__RequireFourEyes: "true"
+      Gateway__EndpointResources__0__EndpointId: m3-sample-vendor
+      Gateway__EndpointResources__0__DisplayName: M3 synthetic vendor
+      Gateway__EndpointResources__0__EnvironmentId: ${M3_PRIMARY_ENVIRONMENT_ID:?required}
+      Gateway__EndpointResources__0__ConnectorScope: sample-secure-service
+      Gateway__EndpointResources__0__OperationScope: submit
+      Gateway__EndpointResources__0__LogicalBindingId: sample-vendor-endpoint
+      Gateway__EndpointResources__0__Endpoint: https://vendor.m3.test:8443/
+      Gateway__EndpointResources__0__Revision: "1"
       ConnectionStrings__GatewayAdminDatabase: Host=postgres;Port=5432;Database=broker_gateway_m3;Username=m5_gateway_admin;Password=${M5_POSTGRES_ADMIN_API_PASSWORD:?required};SSL Mode=Disable;GSS Encryption Mode=Disable

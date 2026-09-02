@@ -59,6 +59,15 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 GatewayHostOptions hostOptions = builder.Configuration.GetSection("Gateway").Get<GatewayHostOptions>() ?? new();
+EndpointResourceCatalog endpointCatalog = new(hostOptions.EndpointResources.Select(value => EndpointResourceCatalogRecord.Create(
+    value.EndpointId,
+    value.DisplayName,
+    value.EnvironmentId,
+    value.ConnectorScope,
+    value.OperationScope,
+    value.LogicalBindingId,
+    value.Endpoint,
+    value.Revision)));
 bool developmentApiKeyCompatibility = string.Equals(hostOptions.Admin.Mode, "DevelopmentApiKey", StringComparison.Ordinal);
 bool explicitLoopbackDevelopment = string.Equals(hostOptions.Admin.Mode, "DevelopmentAuth", StringComparison.Ordinal) && (builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing"));
 if (string.Equals(hostOptions.Admin.Mode, "Oidc", StringComparison.Ordinal) && !hostOptions.Admin.RequireFourEyes)
@@ -82,6 +91,7 @@ if (usePlatformCertificateForwarding)
     builder.Services.AddCertificateForwarding(options => options.CertificateHeader = "X-ARR-ClientCert");
 }
 builder.Services.AddSingleton(hostOptions);
+builder.Services.AddSingleton(endpointCatalog);
 builder.Services.AddSingleton<IGatewayClock, SystemGatewayClock>();
 builder.Services.AddSingleton<IEnrollmentChallengeStore, InMemoryEnrollmentChallengeStore>();
 builder.Services.AddSingleton<IHostResolver, SystemHostResolver>();
@@ -975,6 +985,15 @@ adminApi.MapGet("/provider-resources", async (Guid? environmentId, ProviderResou
     (int pageOffset, int pageLimit) = PageArgs(offset, limit, null);
     AdminPage<ProviderResourceCatalogRecord> page = await store.ListProviderResourcesPageAsync(pageOffset, pageLimit, environmentId, resourceType, cancellationToken).ConfigureAwait(false);
     return Results.Ok(new AdminPage<ProviderResourceCatalogResource>(page.Items.Select(ProviderResource).ToArray(), page.Offset, page.Limit, page.Total));
+});
+
+adminApi.MapGet("/endpoint-resources", async (Guid environmentId, string connectorId, HttpContext context, AdminAccessService access, EndpointResourceCatalog catalog, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, null, AdminRole.SecurityAdministrator);
+    ValidateAdminCode(connectorId, 100);
+    IReadOnlyList<EndpointResourceCatalogRecord> resources = catalog.List(environmentId, connectorId);
+    return Results.Ok(new AdminPage<EndpointResourceCatalogRecord>(resources, 0, 100, resources.Count));
 });
 
 adminApi.MapGet("/provider-resources:resolve", async (Guid environmentId, ProviderResourceType resourceType, string providerId, string resourceId, string? version, long revision, long? publicMetadataRevision, HttpContext context, AdminAccessService access, IConnectorConfigurationStore store, CancellationToken cancellationToken) =>

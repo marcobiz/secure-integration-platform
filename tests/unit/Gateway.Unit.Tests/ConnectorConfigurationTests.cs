@@ -52,6 +52,64 @@ public sealed class ConnectorConfigurationTests
         Assert.Equal("BGW-CONNECTOR-ENDPOINT-BINDING", denied.Code);
     }
 
+    [Fact]
+    public void M5_UT_guided_endpoint_catalog_resolves_only_the_exact_server_owned_scope_and_revision()
+    {
+        Guid environmentId = Guid.NewGuid();
+        EndpointResourceCatalogRecord resource = EndpointResourceCatalogRecord.Create(
+            "sample-vendor-endpoint", "Synthetic vendor", environmentId, "sample-secure-service", "submit",
+            "sample-vendor-endpoint", "https://vendor.example.test/", 7);
+        EndpointResourceCatalog catalog = new([resource]);
+        EndpointResourceReference exact = new(resource.EndpointId, resource.Revision, resource.ChecksumSha256);
+
+        Assert.Equal(resource.Endpoint, catalog.Resolve(exact, environmentId, "sample-secure-service", "sample-vendor-endpoint", ["submit"]).Endpoint);
+        Assert.Equal(resource.EndpointId, Assert.Single(catalog.List(environmentId, "sample-secure-service")).EndpointId);
+        Assert.Empty(catalog.List(Guid.NewGuid(), "sample-secure-service"));
+        Assert.Empty(catalog.List(environmentId, "another-connector"));
+
+        GatewayException wrongEnvironment = Assert.Throws<GatewayException>(() => catalog.Resolve(exact, Guid.NewGuid(), "sample-secure-service", "sample-vendor-endpoint", ["submit"]));
+        GatewayException wrongConnector = Assert.Throws<GatewayException>(() => catalog.Resolve(exact, environmentId, "another-connector", "sample-vendor-endpoint", ["submit"]));
+        GatewayException wrongBinding = Assert.Throws<GatewayException>(() => catalog.Resolve(exact, environmentId, "sample-secure-service", "attacker-binding", ["submit"]));
+        GatewayException wrongOperation = Assert.Throws<GatewayException>(() => catalog.Resolve(exact, environmentId, "sample-secure-service", "sample-vendor-endpoint", ["delete"]));
+        GatewayException staleRevision = Assert.Throws<GatewayException>(() => catalog.Resolve(exact with { Revision = exact.Revision + 1 }, environmentId, "sample-secure-service", "sample-vendor-endpoint", ["submit"]));
+        GatewayException staleChecksum = Assert.Throws<GatewayException>(() => catalog.Resolve(exact with { ChecksumSha256 = new string('A', 64) }, environmentId, "sample-secure-service", "sample-vendor-endpoint", ["submit"]));
+
+        Assert.All([wrongEnvironment, wrongConnector, wrongBinding, wrongOperation], error => Assert.Equal("BGW-ENDPOINT-RESOURCE-NOT-FOUND", error.Code));
+        Assert.All([staleRevision, staleChecksum], error => Assert.Equal("BGW-ENDPOINT-RESOURCE-DRIFT", error.Code));
+    }
+
+    [Fact]
+    public async Task M5_UT_guided_binding_resolves_endpoint_and_provider_catalog_assertions_server_side()
+    {
+        Fixture fixture = new();
+        using JsonDocument sample = Sample();
+        ConnectorVersionResource version = await fixture.ImportAsync(sample);
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        EndpointResourceCatalogRecord endpoint = EndpointResourceCatalogRecord.Create(
+            "sample-vendor-endpoint", "Synthetic vendor", fixture.EnvironmentId, version.ConnectorId, "submit",
+            "sample-vendor-endpoint", "https://vendor.example.test/", 1);
+        ConnectorAdministrationService guidedAdmin = new(fixture.Store, fixture.Validator, fixture.Catalog, fixture.Registry, fixture.Clock, new DevelopmentConnectorApprovalPolicy(), new([endpoint]));
+        ProviderResourceCatalogRecord secret = await fixture.Store.ResolveProviderResourceAsync(SecretReference(), fixture.EnvironmentId, version.ConnectorId, ["submit"], TestContext.Current.CancellationToken);
+        ProviderResourceCatalogRecord certificate = await fixture.Store.ResolveProviderResourceAsync(CertificateReference(), fixture.EnvironmentId, version.ConnectorId, ["submit"], TestContext.Current.CancellationToken);
+
+        _ = await guidedAdmin.PutBindingsAsync(version.ConnectorId, new(
+            fixture.EnvironmentId,
+            new Dictionary<string, string>(),
+            new Dictionary<string, ProviderResourceReference> { ["sample-vendor-api-key"] = SecretReference() with { CatalogRevision = secret.Revision, CatalogChecksumSha256 = secret.ChecksumSha256 } },
+            CertificateResources: new Dictionary<string, ProviderResourceReference> { ["sample-vendor-client-certificate"] = CertificateReference() with { CatalogRevision = certificate.Revision, CatalogChecksumSha256 = certificate.ChecksumSha256 } },
+            ConnectorVersion: version.Version,
+            EndpointResources: new Dictionary<string, EndpointResourceReference> { ["sample-vendor-endpoint"] = new(endpoint.EndpointId, endpoint.Revision, endpoint.ChecksumSha256) }),
+            "security-admin", Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        ConnectorVersionRecord stored = Assert.Single(await fixture.Store.ListVersionsAsync(version.ConnectorId, TestContext.Current.CancellationToken));
+        ConnectorBindingSet binding = Assert.Single((await fixture.Store.ListBindingsPageAsync(stored.Id, 0, 100, fixture.EnvironmentId, TestContext.Current.CancellationToken)).Items);
+        Assert.Equal("https://vendor.example.test/", binding.Endpoints["sample-vendor-endpoint"].AbsoluteUri);
+
+        ProviderResourceReference staleSecret = SecretReference() with { CatalogRevision = secret.Revision + 1, CatalogChecksumSha256 = secret.ChecksumSha256 };
+        GatewayException drift = await Assert.ThrowsAsync<GatewayException>(() => fixture.Store.ResolveProviderResourceAsync(staleSecret, fixture.EnvironmentId, version.ConnectorId, ["submit"], TestContext.Current.CancellationToken));
+        Assert.Equal("BGW-PROVIDER-RESOURCE-REVISION-STALE", drift.Code);
+    }
+
     [Theory]
     [InlineData("/documents/validation?caller=true")]
     [InlineData("/documents/validation#caller")]

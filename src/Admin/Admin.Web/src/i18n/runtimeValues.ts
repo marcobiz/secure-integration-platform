@@ -28,6 +28,8 @@ const explicitLabels: Readonly<Partial<Record<RuntimeValueKind, Readonly<Record<
     'BGW-CONCURRENCY-PRECONDITION': 'runtime.reasonConcurrencyPrecondition', 'BGW-ADMIN-AUTHORIZATION': 'runtime.reasonAuthorizationDenied',
     'BGW-PROVIDER-RESOURCE-NOT-FOUND': 'runtime.reasonResourceNotFound', 'BGW-PROVIDER-RESOURCE-SCOPE': 'runtime.reasonResourceScope',
     'BGW-PROVIDER-RESOURCE-REVISION-STALE': 'runtime.reasonResourceStale', 'BGW-AUTH-SIGNING-SLOT-DENIED': 'runtime.reasonSigningSlotDenied',
+    'BGW-ENDPOINT-RESOURCE-NOT-FOUND': 'runtime.reasonEndpointNotFound', 'BGW-ENDPOINT-RESOURCE-REFERENCE-DENIED': 'runtime.reasonEndpointDenied',
+    'BGW-ENDPOINT-RESOURCE-DRIFT': 'runtime.reasonEndpointStale',
     'BGW-CONNECTOR-SIGNING-MODE-AMBIGUOUS': 'runtime.reasonSigningModeAmbiguous', 'BGW-CONNECTOR-SIGNING-SLOT-DUPLICATE': 'runtime.reasonSigningSlotDuplicate',
     'BGW-CONNECTOR-SIGNING-PROFILE-DUPLICATE': 'runtime.reasonSigningProfileDuplicate', 'BGW-CONNECTOR-SIGNING-AUTHORIZATION-DUPLICATE': 'runtime.reasonSigningAuthorizationDuplicate',
     'BGW-CONNECTOR-SIGNING-HEADER-FORBIDDEN': 'runtime.reasonSigningHeaderForbidden', 'BGW-CONNECTOR-SIGNING-HEADER-DUPLICATE': 'runtime.reasonSigningHeaderDuplicate'

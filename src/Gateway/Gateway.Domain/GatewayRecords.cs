@@ -389,7 +389,9 @@ public sealed record ProviderResourceReference(
     string ResourceId,
     ProviderResourceType ResourceType,
     string? Version = null,
-    long? PublicMetadataRevision = null);
+    long? PublicMetadataRevision = null,
+    long? CatalogRevision = null,
+    string? CatalogChecksumSha256 = null);
 
 /// <summary>Public certificate metadata safe to show to an approver.</summary>
 public sealed record CertificatePublicMetadata(

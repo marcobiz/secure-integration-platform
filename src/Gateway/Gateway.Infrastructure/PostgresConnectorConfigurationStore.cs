@@ -51,6 +51,8 @@ public sealed class PostgresConnectorConfigurationStore(
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         ProviderResourceCatalogRecord resource = await ReadCurrentResourceMetadataAsync(connection, null, reference, cancellationToken).ConfigureAwait(false);
         EnsureResourceScope(resource, reference, environmentId, connectorId, operationIds);
+        if (reference.CatalogRevision is not null && (resource.Revision != reference.CatalogRevision || !string.Equals(resource.ChecksumSha256, reference.CatalogChecksumSha256, StringComparison.Ordinal)))
+            throw new GatewayException("BGW-PROVIDER-RESOURCE-REVISION-STALE", 409);
         return resource;
     }
 
