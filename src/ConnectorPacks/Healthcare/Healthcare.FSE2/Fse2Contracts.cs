@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2;
 
@@ -179,10 +180,13 @@ public sealed class Fse2Request
         using (Utf8JsonWriter writer = new(output))
         {
             writer.WriteStartObject();
-            writer.WriteString("personId", ClinicalClaims?.PersonId);
-            writer.WriteBoolean("patientConsent", ClinicalClaims?.PatientConsent ?? false);
-            if (ClinicalClaims?.ResourceHl7Type is not null)
-                writer.WriteString("resourceHl7Type", ClinicalClaims.ResourceHl7Type);
+            if (ClinicalClaims is not null)
+            {
+                writer.WriteString("personId", ClinicalClaims.PersonId);
+                writer.WriteBoolean("patientConsent", ClinicalClaims.PatientConsent);
+                if (ClinicalClaims.ResourceHl7Type is not null)
+                    writer.WriteString("resourceHl7Type", ClinicalClaims.ResourceHl7Type);
+            }
             if (document.Length > 0)
                 writer.WriteBase64String("documentBase64", document);
             if (requestBody.Length > 0)
@@ -223,9 +227,9 @@ public sealed class Fse2Request
     public static Fse2Request ValidateAndReplace(string documentId, ReadOnlyMemory<byte> document, ReadOnlyMemory<byte> requestBody, Fse2ClinicalClaims claims) =>
         DocumentRequest(Fse2Operation.ValidateAndReplace, document, requestBody, "application/pdf", Fse2Validation.ValidateDocumentId(documentId), claims);
 
-    public static Fse2Request GetStatusByWorkflow(string workflowInstanceId, Fse2ClinicalClaims claims) =>
-        new(Fse2Operation.GetStatusByWorkflow, default, default, null, Fse2Validation.ValidateWorkflowId(workflowInstanceId),
-            claims ?? throw new ArgumentNullException(nameof(claims)));
+    public static Fse2Request GetStatusByWorkflow(string workflowInstanceId) =>
+        new(Fse2Operation.GetStatusByWorkflow, default, default, null,
+            Fse2Validation.ValidateWorkflowId(workflowInstanceId), null);
 
     public static Fse2Request GetStatusByTrace(string traceId, Fse2ClinicalClaims claims) =>
         new(Fse2Operation.GetStatusByTrace, default, default, null, Fse2Validation.ValidateTraceId(traceId),
@@ -248,6 +252,38 @@ public sealed class Fse2Request
     }
 }
 
+/// <summary>Closed workflow event vocabulary exposed by the FSE2 status vertical.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<Fse2WorkflowEventType>))]
+public enum Fse2WorkflowEventType
+{
+    [JsonStringEnumMemberName("VALIDATION")]
+    Validation,
+    [JsonStringEnumMemberName("PUBLICATION")]
+    Publication,
+    [JsonStringEnumMemberName("SEND_TO_INI")]
+    SendToIni,
+    [JsonStringEnumMemberName("SEND_TO_UAR")]
+    SendToUar,
+    [JsonStringEnumMemberName("UAR_FINAL_STATUS")]
+    UarFinalStatus
+}
+
+/// <summary>Closed workflow outcome vocabulary exposed by the FSE2 status vertical.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<Fse2WorkflowEventOutcome>))]
+public enum Fse2WorkflowEventOutcome
+{
+    [JsonStringEnumMemberName("SUCCESS")]
+    Success,
+    [JsonStringEnumMemberName("BLOCKING_ERROR")]
+    BlockingError
+}
+
+/// <summary>Bounded status event with no patient, document, message, issuer or raw upstream data.</summary>
+public sealed record Fse2WorkflowEvent(
+    Fse2WorkflowEventType EventType,
+    DateTimeOffset EventTimestamp,
+    Fse2WorkflowEventOutcome Outcome);
+
 /// <summary>Technical-only normalized response.</summary>
 public sealed record Fse2Response(
     int StatusCode,
@@ -256,4 +292,5 @@ public sealed record Fse2Response(
     string? TraceId,
     string? SpanId,
     string? SafeWarning,
-    Fse2RetryClass RetryClass);
+    Fse2RetryClass RetryClass,
+    IReadOnlyList<Fse2WorkflowEvent> WorkflowEvents);

@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -65,6 +66,9 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
     private static readonly string[] ValidateCdaOfficialTestIntegrityClaims = IntegrityClaims
         .Where(value => !string.Equals(value, "attachment_hash", StringComparison.Ordinal))
         .ToArray();
+    private static readonly string[] WorkflowStatusIntegrityClaims = IntegrityClaims
+        .Where(value => value is not ("person_id" or "patient_consent" or "resource_hl7_type" or "attachment_hash"))
+        .ToArray();
 
     public IReadOnlySet<ConnectorExecutionStrategyKey> SupportedExecutionStrategies => StrategyKeys;
 
@@ -116,7 +120,9 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
             AuthorizedSigningTokenProjectionExpectation.SignedTokenHeader(Fse2PublishedOrganizationProfile.IntegrityHeaderName),
             profile.Audience,
             profile.SubjectCx,
-            officialTestValidateCda ? ValidateCdaOfficialTestIntegrityClaims : IntegrityClaims,
+            profile.Operation.Operation == Fse2Operation.GetStatusByWorkflow
+                ? WorkflowStatusIntegrityClaims
+                : officialTestValidateCda ? ValidateCdaOfficialTestIntegrityClaims : IntegrityClaims,
             Fse2PublishedOrganizationProfile.TokenLifetimeSeconds,
             AuthorizedSigningTemporalMode.IssuedAtExpiration,
             jtiRequired: true,
@@ -216,6 +222,8 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
             execution.Capabilities.RejectRestrictedTransportResponseMapping(upstream, exception.SafeCode);
             throw;
         }
+        if (profile.Operation.Operation == Fse2Operation.GetStatusByWorkflow)
+            normalized = normalized with { WorkflowInstanceId = inbound.ResourceIdentifier };
         if (profile.Operation.Operation is not (Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace) &&
             (normalized.WorkflowInstanceId is not null || normalized.TraceId is not null))
         {
@@ -240,6 +248,8 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
         Fse2OperationDescriptor operation = profile.Operation;
         if (operation.Action is Fse2Action action && operation.PurposeOfUse is Fse2PurposeOfUse purpose)
         {
+            if (inbound.ClinicalClaims is null)
+                throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_CLINICAL_CLAIMS_REQUIRED");
             if (operation.Operation != Fse2Operation.Delete && inbound.ClinicalClaims.ResourceHl7Type is null)
                 throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_RESOURCE_HL7_TYPE_REQUIRED");
             Fse2OperationCatalog.ValidateOrganizationCombination(profile.SubjectRole, operation.OperationId, purpose, action);
@@ -274,7 +284,9 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
                 stored.OriginatingOperationId,
                 resolvedPurpose,
                 resolvedAction);
-            return new(resolvedAction, resolvedPurpose, inbound.ClinicalClaims, stored.OriginatingOperationId);
+            return new(resolvedAction, resolvedPurpose,
+                profile.Operation.Operation == Fse2Operation.GetStatusByWorkflow ? null : inbound.ClinicalClaims,
+                stored.OriginatingOperationId);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Fse2ConnectorException) { throw; }
@@ -302,6 +314,9 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
         Fse2ValidateCdaPublishedContract validateCdaContract)
     {
         Fse2OperationDescriptor operation = profile.Operation;
+        bool workflowStatus = operation.Operation == Fse2Operation.GetStatusByWorkflow;
+        if (workflowStatus == (inbound.ClinicalClaims is not null))
+            throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_REQUEST_SHAPE_DENIED");
         if (inbound.Document.Length > profile.MaximumDocumentBytes ||
             operation.HasDocument != !inbound.Document.IsEmpty ||
             operation.HasJsonBody != !inbound.RequestBody.IsEmpty ||
@@ -347,15 +362,18 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
             ["subject_organization"] = JsonSerializer.SerializeToElement(profile.OrganizationDescription),
             ["subject_organization_id"] = JsonSerializer.SerializeToElement(profile.OrganizationDomainId),
             ["locality"] = JsonSerializer.SerializeToElement(profile.Locality),
-            ["person_id"] = JsonSerializer.SerializeToElement(security.ClinicalClaims.PersonId),
-            ["patient_consent"] = JsonSerializer.SerializeToElement(security.ClinicalClaims.PatientConsent),
             ["action_id"] = JsonSerializer.SerializeToElement(Fse2OperationCatalog.ClaimValue(security.Action)),
             ["subject_application_id"] = JsonSerializer.SerializeToElement(profile.ApplicationId),
             ["subject_application_vendor"] = JsonSerializer.SerializeToElement(profile.ApplicationVendor),
             ["subject_application_version"] = JsonSerializer.SerializeToElement(profile.ApplicationVersion)
         };
-        if (security.ClinicalClaims.ResourceHl7Type is not null)
-            claims["resource_hl7_type"] = JsonSerializer.SerializeToElement(security.ClinicalClaims.ResourceHl7Type);
+        if (security.ClinicalClaims is not null)
+        {
+            claims["person_id"] = JsonSerializer.SerializeToElement(security.ClinicalClaims.PersonId);
+            claims["patient_consent"] = JsonSerializer.SerializeToElement(security.ClinicalClaims.PatientConsent);
+            if (security.ClinicalClaims.ResourceHl7Type is not null)
+                claims["resource_hl7_type"] = JsonSerializer.SerializeToElement(security.ClinicalClaims.ResourceHl7Type);
+        }
         if (exactAttachmentHash is not null)
             claims["attachment_hash"] = JsonSerializer.SerializeToElement(exactAttachmentHash);
         return claims.ToFrozenDictionary(StringComparer.Ordinal);
@@ -366,7 +384,7 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
     private sealed record Fse2WorkflowExecutionContext(
         Fse2Action Action,
         Fse2PurposeOfUse PurposeOfUse,
-        Fse2ClinicalClaims ClinicalClaims,
+        Fse2ClinicalClaims? ClinicalClaims,
         string OperationReference);
 }
 
@@ -375,7 +393,7 @@ internal sealed record Fse2InboundPayload(
     ReadOnlyMemory<byte> RequestBody,
     string? DocumentContentType,
     string? ResourceIdentifier,
-    Fse2ClinicalClaims ClinicalClaims)
+    Fse2ClinicalClaims? ClinicalClaims)
 {
     private static readonly HashSet<string> AllowedProperties = new(StringComparer.Ordinal)
     {
@@ -400,12 +418,16 @@ internal sealed record Fse2InboundPayload(
             HashSet<string> observed = new(StringComparer.Ordinal);
             foreach (JsonProperty property in root.EnumerateObject())
                 if (!AllowedProperties.Contains(property.Name) || !observed.Add(property.Name)) throw new JsonException();
-            if (!observed.Contains("personId") || !observed.Contains("patientConsent")) throw new JsonException();
-
-            string personId = String(root, "personId", 512)!;
-            bool consent = root.GetProperty("patientConsent").GetBoolean();
-            string? resourceType = String(root, "resourceHl7Type", 256);
-            Fse2ClinicalClaims clinical = Fse2ClinicalClaims.CreateCanonicalPerson(personId, consent, resourceType);
+            bool hasPerson = observed.Contains("personId");
+            bool hasConsent = observed.Contains("patientConsent");
+            bool hasResourceType = observed.Contains("resourceHl7Type");
+            if (hasPerson != hasConsent || !hasPerson && hasResourceType) throw new JsonException();
+            Fse2ClinicalClaims? clinical = hasPerson
+                ? Fse2ClinicalClaims.CreateCanonicalPerson(
+                    String(root, "personId", 512)!,
+                    root.GetProperty("patientConsent").GetBoolean(),
+                    String(root, "resourceHl7Type", 256))
+                : null;
             byte[] documentBytes = Decode(root, "documentBase64");
             byte[] requestBytes = Decode(root, "requestBodyBase64");
             return new(documentBytes, requestBytes, String(root, "documentContentType", 128),
@@ -470,6 +492,7 @@ public static class Fse2ResponseMapper
 {
     private const int MaximumProblemBytes = 16 * 1024;
     private const int MaximumProblemContentTypeCharacters = 512;
+    private const int MaximumWorkflowEvents = 1000;
     private static readonly FrozenSet<string> OfficialProblemCodes = new[]
     {
         "cda-element", "cda-extraction", "cda-match", "cda-validation", "document-hash",
@@ -489,15 +512,76 @@ public static class Fse2ResponseMapper
             using JsonDocument document = JsonDocument.Parse(response.Body, new JsonDocumentOptions { MaxDepth = 16 });
             JsonElement root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object) throw new JsonException();
+            string? workflowInstanceId = Safe(root, "workflowInstanceId", Fse2OfficialIdentifierBounds.WorkflowInstanceIdMaximumLength, workflow: true);
+            string? traceId = Safe(root, "traceID", Fse2OfficialIdentifierBounds.TraceIdMaximumLength);
+            if (operation.Operation == Fse2Operation.Create && (workflowInstanceId is null || traceId is null))
+                throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
+            IReadOnlyList<Fse2WorkflowEvent> workflowEvents = operation.Operation == Fse2Operation.GetStatusByWorkflow
+                ? MapWorkflowEvents(root)
+                : [];
             return new(response.StatusCode, correlationId,
-                Safe(root, "workflowInstanceId", Fse2OfficialIdentifierBounds.WorkflowInstanceIdMaximumLength, workflow: true),
-                Safe(root, "traceID", Fse2OfficialIdentifierBounds.TraceIdMaximumLength),
+                workflowInstanceId,
+                traceId,
                 Safe(root, "spanID", Fse2OfficialIdentifierBounds.SpanIdMaximumLength),
-                SafeWarning(root), operation.RetryClass);
+                SafeWarning(root), operation.RetryClass, workflowEvents);
         }
         catch (Fse2ConnectorException) { throw; }
         catch (Exception) { throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID"); }
     }
+
+    private static List<Fse2WorkflowEvent> MapWorkflowEvents(JsonElement root)
+    {
+        if (!root.TryGetProperty("transactionData", out JsonElement transactionData) ||
+            transactionData.ValueKind != JsonValueKind.Array ||
+            transactionData.GetArrayLength() > MaximumWorkflowEvents)
+            throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
+
+        List<Fse2WorkflowEvent> events = new(transactionData.GetArrayLength());
+        DateTimeOffset? previous = null;
+        foreach (JsonElement item in transactionData.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
+            Fse2WorkflowEventType type = RequiredText(item, "eventType", 100) switch
+            {
+                "VALIDATION" => Fse2WorkflowEventType.Validation,
+                "PUBLICATION" => Fse2WorkflowEventType.Publication,
+                "SEND_TO_INI" => Fse2WorkflowEventType.SendToIni,
+                "SEND_TO_UAR" => Fse2WorkflowEventType.SendToUar,
+                "UAR_FINAL_STATUS" => Fse2WorkflowEventType.UarFinalStatus,
+                _ => throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID")
+            };
+            Fse2WorkflowEventOutcome outcome = RequiredText(item, "eventStatus", 100) switch
+            {
+                "SUCCESS" => Fse2WorkflowEventOutcome.Success,
+                "BLOCKING_ERROR" => Fse2WorkflowEventOutcome.BlockingError,
+                _ => throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID")
+            };
+            string rawTimestamp = RequiredText(item, "eventDate", 100);
+            string normalizedTimestamp = NormalizeOffset(rawTimestamp);
+            if (!DateTimeOffset.TryParseExact(normalizedTimestamp, "yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK",
+                    CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTimeOffset timestamp) ||
+                previous is DateTimeOffset earlier && timestamp < earlier)
+                throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
+            previous = timestamp;
+            events.Add(new(type, timestamp, outcome));
+        }
+        return events;
+    }
+
+    private static string RequiredText(JsonElement root, string name, int maximumLength)
+    {
+        string? value = Safe(root, name, maximumLength, workflow: true);
+        return value is not null && string.Equals(value, value.Trim(), StringComparison.Ordinal)
+            ? value
+            : throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
+    }
+
+    private static string NormalizeOffset(string value) =>
+        value.Length >= 5 && value[^5] is '+' or '-' &&
+        value.AsSpan(value.Length - 4).IndexOfAnyExceptInRange('0', '9') < 0
+            ? value.Insert(value.Length - 2, ":")
+            : value;
 
     public static Fse2ConnectorException MapProblem(QualifiedGatewayExecutionResult response, Fse2RetryClass retryClass)
     {

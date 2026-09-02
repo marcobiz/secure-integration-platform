@@ -12,18 +12,19 @@ blocchi correnti sono in [docs/user/fse2-officialtest.md](../../../user/fse2-off
 | `validate-cda` | `LIVE_QUALIFIED` | Pilot qualità CDA disponibile; una chiamata applicativa bounded OfficialTest ha restituito Gateway 200. |
 | `delete` | `PRODUCT_PATH_OFFLINE_QUALIFIED` | Wire/no-body/claim/ack qualificati contro mock; non productizzata né live. |
 | `validate-fhir` | `IMPLEMENTED_PARTIAL` | Foundation runtime; DTO/response e provisioning OfficialTest non qualificati. |
-| `create` | `IMPLEMENTED_PARTIAL` | Richiesta/hashing foundation; definition/provisioning canonici e qualifica live mancanti. È blocker del pilot pubblicazione. |
+| `create` | `PRODUCT_PATH_OFFLINE_QUALIFIED` | Published path, exact PDF/CDA, A1/S1, risposta bounded e correlazione durevole qualificati contro upstream sintetico; nessuna qualifica live. |
 | `replace` | `IMPLEMENTED_PARTIAL` | Foundation con document ID e hash; non necessaria alla prima pubblicazione. |
 | `update-metadata` | `IMPLEMENTED_PARTIAL` | JSON pass-through non qualificato contro DTO ufficiale completo. |
 | `update-metadata-chain-concealment` | `IMPLEMENTED_PARTIAL` | Test-only e contratto insufficiente per una claim operativa. |
 | `validate-and-create` | `IMPLEMENTED_PARTIAL` | Recovery eccezionale, non flusso normale. |
 | `validate-and-replace` | `IMPLEMENTED_PARTIAL` | Recovery eccezionale e documento esistente. |
-| `get-status-by-workflow` | `IMPLEMENTED_PARTIAL` | Necessaria al pilot pubblicazione; response/correlation/provisioning non completi. |
+| `get-status-by-workflow` | `PRODUCT_PATH_OFFLINE_QUALIFIED` | Risolve il workflow durevole prima degli effetti e restituisce solo eventi tecnici bounded; nessuna qualifica live. |
 | `get-status-by-trace` | `IMPLEMENTED_PARTIAL` | Diagnostica successiva; stessi limiti di status/correlation. |
 
-`FULL_FSE2_GATEWAY_COVERAGE = NO`. Per un pilot di pubblicazione minimo servono
-`validate-cda → create → get-status-by-workflow`; un `202` di create senza
-riconciliazione non dimostra il completamento verso INI/EDS.
+`FULL_FSE2_GATEWAY_COVERAGE = NO`. Il product path offline copre ora
+`validate-cda → create → get-status-by-workflow`; un `202` di create senza lo status
+successivo non dimostra il completamento verso INI/EDS, e nessuna call create/status
+OfficialTest è qualificata da questa copertura sintetica.
 
 ## Authority model
 
@@ -72,10 +73,42 @@ compatibilità storica immutabile, non contract-parity qualified.
 
 ## Workflow correlation e limiti
 
-La correlation tecnica è scoped a Tenant, Application, Installation, Environment,
-Connector/versione e profilo comune. Non conserva contenuto clinico, ma lo store corrente
-è bounded e process-local: durability cross-process/restart/scale-out non è qualificata.
-Il mapper status non proietta ancora l’intero `transactionData[]` ufficiale.
+La correlation tecnica PostgreSQL è scoped esattamente a Tenant, Application,
+Installation, Environment, Connector/versione e configurazione Published. Conserva solo
+operation originaria, action, purpose, checksum profilo, workflow/trace e timestamp
+tecnico; non conserva contenuto clinico. Restart e repliche condividono lo stesso stato.
+
+Il mapper status non espone l’intero `transactionData[]` ufficiale: è una riduzione di
+sicurezza intenzionale. Accetta al massimo 1.000 eventi ordinati e soltanto i tipi
+`VALIDATION`, `PUBLICATION`, `SEND_TO_INI`, `SEND_TO_UAR`, `UAR_FINAL_STATUS`, con esito
+`SUCCESS` o `BLOCKING_ERROR` e timestamp valido. Message, subject, document ID, issuer,
+extra e response raw vengono scartati; valori sconosciuti o malformati falliscono chiusi.
+
+## Esempio minimo create → status
+
+Con Installation, grant e configurazione Published già attivi, il payload applicativo
+`create` resta quello canonico già usato dal client Gateway:
+
+```csharp
+byte[] createPayload = Fse2Request.Create(
+    pdfBytes,
+    publicationRequestJson,
+    clinicalClaims).SerializeAuthorizedPayload();
+```
+
+Dalla risposta normalizzata conservare `workflowInstanceId`. La richiesta status non
+richiede di reinviare patient, action, purpose, profilo o scope:
+
+```csharp
+byte[] statusPayload = Fse2Request
+    .GetStatusByWorkflow(workflowInstanceId)
+    .SerializeAuthorizedPayload();
+// JSON prodotto: {"resourceIdentifier":"<workflowInstanceId>"}
+```
+
+Inviare entrambi i payload al normale endpoint Published del Gateway con
+l'autenticazione runtime già prevista. Non servono nuovo login, binding, grant, SQL,
+accesso store o comando di recovery tra le due invocazioni.
 
 Local PKCS#12 è un pack/laboratorio opzionale, non HSM/KMS o custody production.
 Accreditamento, produzione, Human Actor, callback inbound, direct FHIR publication

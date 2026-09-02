@@ -567,6 +567,103 @@ public sealed class Fse2FoundationTests
         Assert.DoesNotContain(Encoding.UTF8.GetString(rawResponse), response.ToString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("{\"traceID\":\"trace-1\"}")]
+    [InlineData("{\"workflowInstanceId\":\"workflow-1\"}")]
+    public void FSE2_RESPONSE_create_requires_workflow_and_trace_identifiers(string body)
+    {
+        Fse2ConnectorException error = Assert.Throws<Fse2ConnectorException>(() => Fse2ResponseMapper.Map(
+            new(202, "application/json", Encoding.UTF8.GetBytes(body)),
+            Guid.NewGuid(),
+            Fse2OperationCatalog.Get(Fse2Operation.Create)));
+
+        Assert.Equal(Fse2ErrorCategory.ResponseInvalid, error.Category);
+        Assert.Equal("FSE2_RESPONSE_INVALID", error.SafeCode);
+    }
+
+    [Fact]
+    public void FSE2_RESPONSE_status_projects_only_closed_bounded_events()
+    {
+        const string rawCanary = "raw-status-data-must-not-escape";
+        byte[] body = Encoding.UTF8.GetBytes($$"""
+            {
+              "traceID":"trace-1",
+              "spanID":"span-1",
+              "transactionData":[
+                {
+                  "eventType":"VALIDATION",
+                  "eventDate":"2024-10-23T12:26:06.971+0200",
+                  "eventStatus":"SUCCESS",
+                  "message":"{{rawCanary}}",
+                  "subject":"{{rawCanary}}",
+                  "identificativoDocumento":"{{rawCanary}}",
+                  "extra":"{{rawCanary}}"
+                },
+                {
+                  "eventType":"SEND_TO_INI",
+                  "eventDate":"2024-10-23T12:27:06.971+02:00",
+                  "eventStatus":"BLOCKING_ERROR"
+                }
+              ]
+            }
+            """);
+
+        Fse2Response response = Fse2ResponseMapper.Map(
+            new(200, "application/json", body),
+            Guid.NewGuid(),
+            Fse2OperationCatalog.Get(Fse2Operation.GetStatusByWorkflow));
+
+        Assert.Equal(2, response.WorkflowEvents.Count);
+        Assert.Equal(Fse2WorkflowEventType.Validation, response.WorkflowEvents[0].EventType);
+        Assert.Equal(Fse2WorkflowEventOutcome.Success, response.WorkflowEvents[0].Outcome);
+        Assert.Equal(Fse2WorkflowEventType.SendToIni, response.WorkflowEvents[1].EventType);
+        Assert.Equal(Fse2WorkflowEventOutcome.BlockingError, response.WorkflowEvents[1].Outcome);
+        Assert.DoesNotContain(rawCanary, JsonSerializer.Serialize(response), StringComparison.Ordinal);
+        Assert.DoesNotContain(rawCanary, response.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"transactionData\":null}")]
+    [InlineData("{\"transactionData\":[7]}")]
+    [InlineData("{\"transactionData\":[{\"eventType\":\"UNKNOWN\",\"eventDate\":\"2024-10-23T12:26:06Z\",\"eventStatus\":\"SUCCESS\"}]}")]
+    [InlineData("{\"transactionData\":[{\"eventType\":\"VALIDATION\",\"eventDate\":\"not-a-date\",\"eventStatus\":\"SUCCESS\"}]}")]
+    [InlineData("{\"transactionData\":[{\"eventType\":\"VALIDATION\",\"eventDate\":\"2024-10-23T12:26:06Z\",\"eventStatus\":\"UNKNOWN\"}]}")]
+    public void FSE2_RESPONSE_status_unknown_or_malformed_is_rejected_without_raw_data(string body)
+    {
+        Fse2ConnectorException error = Assert.Throws<Fse2ConnectorException>(() => Fse2ResponseMapper.Map(
+            new(200, "application/json", Encoding.UTF8.GetBytes(body)),
+            Guid.NewGuid(),
+            Fse2OperationCatalog.Get(Fse2Operation.GetStatusByWorkflow)));
+
+        Assert.Equal(Fse2ErrorCategory.ResponseInvalid, error.Category);
+        Assert.Equal("FSE2_RESPONSE_INVALID", error.SafeCode);
+        Assert.DoesNotContain(body, error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FSE2_RESPONSE_status_event_limit_and_chronology_are_fail_closed()
+    {
+        const string eventJson =
+            "{\"eventType\":\"VALIDATION\",\"eventDate\":\"2024-10-23T12:26:06Z\",\"eventStatus\":\"SUCCESS\"}";
+        string[] bodies =
+        [
+            "{\"transactionData\":[" + string.Join(',', Enumerable.Repeat(eventJson, 1001)) + "]}",
+            "{\"transactionData\":[" + eventJson +
+                ",{\"eventType\":\"PUBLICATION\",\"eventDate\":\"2024-10-23T12:25:06Z\",\"eventStatus\":\"SUCCESS\"}]}"
+        ];
+
+        foreach (string body in bodies)
+        {
+            Fse2ConnectorException error = Assert.Throws<Fse2ConnectorException>(() => Fse2ResponseMapper.Map(
+                new(200, "application/json", Encoding.UTF8.GetBytes(body)),
+                Guid.NewGuid(),
+                Fse2OperationCatalog.Get(Fse2Operation.GetStatusByWorkflow)));
+            Assert.Equal("FSE2_RESPONSE_INVALID", error.SafeCode);
+            Assert.DoesNotContain("transactionData", error.ToString(), StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public void FSE2_REQUEST_status_traceID_100_is_accepted_and_101_is_rejected()
     {
@@ -581,8 +678,12 @@ public sealed class Fse2FoundationTests
     {
         string exactMaximum = new('w', 256);
 
-        Assert.Equal(exactMaximum, Fse2Request.GetStatusByWorkflow(exactMaximum, Claims()).ResourceIdentifier);
-        Assert.Throws<ArgumentException>(() => Fse2Request.GetStatusByWorkflow(new string('w', 257), Claims()));
+        Fse2Request request = Fse2Request.GetStatusByWorkflow(exactMaximum);
+        Assert.Equal(exactMaximum, request.ResourceIdentifier);
+        Assert.Null(request.ClinicalClaims);
+        using JsonDocument payload = JsonDocument.Parse(request.SerializeAuthorizedPayload());
+        Assert.Equal(["resourceIdentifier"], payload.RootElement.EnumerateObject().Select(value => value.Name));
+        Assert.Throws<ArgumentException>(() => Fse2Request.GetStatusByWorkflow(new string('w', 257)));
     }
 
     private static Fse2ClinicalClaims Claims() => Fse2ClinicalClaims.CreatePerson(

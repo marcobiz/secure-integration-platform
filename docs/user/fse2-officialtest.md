@@ -13,8 +13,9 @@ produzione o accreditamento.
 ## Prima di iniziare: risultato e hard stop
 
 Il pilot disponibile verifica la qualità di un CDA con una singola `validate-cda`. Non
-pubblica un documento. Per un pilot di pubblicazione servono almeno `create` e
-`get-status-by-workflow`, oggi **IMPLEMENTED_PARTIAL**.
+pubblica un documento. `create + get-status-by-workflow` sono qualificati offline sul
+product path con correlazione PostgreSQL durevole, ma non sono inclusi nella definition
+OfficialTest canonica né in una qualifica live.
 
 Fermarsi se manca anche uno solo di questi elementi:
 

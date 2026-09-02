@@ -2569,10 +2569,13 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         };
         Dictionary<string, object?> payload = new(StringComparer.Ordinal)
         {
-            ["personId"] = PersonId,
-            ["patientConsent"] = true,
-            ["resourceHl7Type"] = "('11502-2^^2.16.840.1.113883.6.1')"
         };
+        if (operation.Operation != Fse2Operation.GetStatusByWorkflow)
+        {
+            payload["personId"] = PersonId;
+            payload["patientConsent"] = true;
+            payload["resourceHl7Type"] = "('11502-2^^2.16.840.1.113883.6.1')";
+        }
         if (operation.HasDocument)
         {
             payload["documentBase64"] = Convert.ToBase64String(documentBytes ?? DocumentBytes());
@@ -3019,6 +3022,9 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             ? $"multipart/form-data; boundary={multipartBoundary}"
             : "application/json";
         string bodyMode = operation.HasDocument || operation.HasJsonBody ? "required" : "none";
+        string integrityClaims = operation.Operation == Fse2Operation.GetStatusByWorkflow
+            ? "\"subject_role\",\"purpose_of_use\",\"subject_organization\",\"subject_organization_id\",\"locality\",\"action_id\",\"subject_application_id\",\"subject_application_vendor\",\"subject_application_version\""
+            : "\"subject_role\",\"purpose_of_use\",\"subject_organization\",\"subject_organization_id\",\"locality\",\"person_id\",\"patient_consent\",\"resource_hl7_type\",\"action_id\",\"attachment_hash\",\"subject_application_id\",\"subject_application_vendor\",\"subject_application_version\"";
         return $$$"""
           {
             "operationId":"{{{operation.OperationId}}}","endpointBinding":"service","method":"{{{operation.Method.Method}}}","pathTemplate":"{{{operation.PathTemplate}}}",
@@ -3041,7 +3047,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
                 },
                 {
                   "slot":"integrity","required":true,
-                  "signing":{"profileId":"fse2-integrity","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"{{{IntegrityIssuer}}}","audience":"{{{Audience}}}","subject":"fixed","fixedSubject":"{{{Subject}}}","allowedClaims":["subject_role","purpose_of_use","subject_organization","subject_organization_id","locality","person_id","patient_consent","resource_hl7_type","action_id","attachment_hash","subject_application_id","subject_application_vendor","subject_application_version"],"tokenLifetimeSeconds":{{{TokenLifetimeSeconds}}},"clockSkewSeconds":30,"certificateKeyUsage":"contentCommitment","certificateHeader":"chain","temporalClaims":"iat-exp","minimumRsaKeySize":2048},
+                  "signing":{"profileId":"fse2-integrity","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"{{{IntegrityIssuer}}}","audience":"{{{Audience}}}","subject":"fixed","fixedSubject":"{{{Subject}}}","allowedClaims":[{{{integrityClaims}}}],"tokenLifetimeSeconds":{{{TokenLifetimeSeconds}}},"clockSkewSeconds":30,"certificateKeyUsage":"contentCommitment","certificateHeader":"chain","temporalClaims":"iat-exp","minimumRsaKeySize":2048},
                   "projection":{"kind":"signedTokenHeader","headerName":"FSE-JWT-Signature"}
                 }
               ],
@@ -3224,10 +3230,14 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
 
         context.Response.StatusCode = operation.SuccessStatusCodes.Min();
         context.Response.ContentType = "application/json";
-        string response = operation.Operation == Fse2Operation.Create ||
-            replaceReturnsWorkflowContext && operation.Operation == Fse2Operation.Replace
-            ? "{\"workflowInstanceId\":\"workflow-fse2-1\",\"traceID\":\"trace-fse2-1\",\"spanID\":\"span-fse2-1\"}"
-            : "{}";
+        string response = operation.Operation switch
+        {
+            Fse2Operation.Create => "{\"workflowInstanceId\":\"workflow-fse2-1\",\"traceID\":\"trace-fse2-1\",\"spanID\":\"span-fse2-1\"}",
+            Fse2Operation.Replace when replaceReturnsWorkflowContext => "{\"workflowInstanceId\":\"workflow-fse2-1\",\"traceID\":\"trace-fse2-1\",\"spanID\":\"span-fse2-1\"}",
+            Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace =>
+                "{\"traceID\":\"trace-status-1\",\"spanID\":\"span-status-1\",\"transactionData\":[{\"eventType\":\"VALIDATION\",\"eventDate\":\"2024-10-23T12:26:06.971+02:00\",\"eventStatus\":\"SUCCESS\",\"message\":\"raw-status-message-not-exposed\"},{\"eventType\":\"SEND_TO_INI\",\"eventDate\":\"2024-10-23T12:27:06.971+02:00\",\"eventStatus\":\"SUCCESS\"}]}",
+            _ => "{}"
+        };
         await context.Response.WriteAsync(response, context.RequestAborted);
     }
 
@@ -3278,6 +3288,13 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
             "resource_hl7_type", "action_id", "subject_application_id", "subject_application_vendor",
             "subject_application_version"
         ];
+        bool workflowStatus = operation.Operation == Fse2Operation.GetStatusByWorkflow;
+        if (workflowStatus)
+        {
+            expected.Remove("person_id");
+            expected.Remove("patient_consent");
+            expected.Remove("resource_hl7_type");
+        }
         if (operation.RequiresAttachmentHash) expected.Add("attachment_hash");
         Fse2PurposeOfUse purpose = operation.PurposeOfUse ?? Fse2PurposeOfUse.Treatment;
         Fse2Action action = operation.Action ?? Fse2Action.Create;
@@ -3287,8 +3304,9 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
             string.Equals(payload.GetProperty("action_id").GetString(), Fse2OperationCatalog.ClaimValue(action), StringComparison.Ordinal) &&
             string.Equals(payload.GetProperty("subject_organization").GetString(), "ASL Roma 1", StringComparison.Ordinal) &&
             string.Equals(payload.GetProperty("subject_organization_id").GetString(), "asl-roma-1", StringComparison.Ordinal) &&
-            string.Equals(payload.GetProperty("person_id").GetString(), Fse2OrganizationHostedIntegrationTests.PersonId, StringComparison.Ordinal) &&
-            payload.GetProperty("patient_consent").GetBoolean() &&
+            (workflowStatus ||
+             string.Equals(payload.GetProperty("person_id").GetString(), Fse2OrganizationHostedIntegrationTests.PersonId, StringComparison.Ordinal) &&
+             payload.GetProperty("patient_consent").GetBoolean()) &&
             string.Equals(payload.GetProperty("subject_application_id").GetString(), expectedApplicationId, StringComparison.Ordinal) &&
             string.Equals(payload.GetProperty("subject_application_vendor").GetString(), expectedApplicationVendor, StringComparison.Ordinal) &&
             string.Equals(payload.GetProperty("subject_application_version").GetString(), expectedApplicationVersion, StringComparison.Ordinal);

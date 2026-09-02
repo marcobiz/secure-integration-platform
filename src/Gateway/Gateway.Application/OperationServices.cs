@@ -140,9 +140,17 @@ public sealed class RestrictedEgressService
             throw new GatewayException("BGW-IDEMPOTENCY-KEY", 400);
         RegisteredInstallationIdentity identity = authenticated.Identity;
         if (identity.TenantStatus != TenantStatus.Active || identity.ApplicationStatus != ApplicationStatus.Active || identity.InstallationStatus != InstallationStatus.Active)
+        {
+            await AppendInvocationFailureAuditAsync(
+                identity, connectorId, operationId, request.CorrelationId, "BGW-INSTALLATION-REVOKED", null, cancellationToken).ConfigureAwait(false);
             throw new GatewayException("BGW-INSTALLATION-REVOKED", 403);
+        }
         if (!await registry.IsGrantedAsync(identity.InstallationId, identity.TenantId, connectorId, operationId, clock.UtcNow, cancellationToken).ConfigureAwait(false))
+        {
+            await AppendInvocationFailureAuditAsync(
+                identity, connectorId, operationId, request.CorrelationId, "BGW-AUTHZ-OPERATION-DENIED", null, cancellationToken).ConfigureAwait(false);
             throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403);
+        }
         PublishedConnectorAccessContext access = new(identity.InstallationId, identity.TenantId, identity.ApplicationId, operationId);
         AuthorizedPublishedOperation? published = catalog is IAuthorizedPublishedOperationCatalog authoritative
             ? await authoritative.GetRequiredAuthorizedAsync(connectorId, operationId, identity.EnvironmentId, access, cancellationToken).ConfigureAwait(false)
@@ -228,18 +236,11 @@ public sealed class RestrictedEgressService
         }
         catch (AuthorizedConnectorCapabilityFailureException exception) when (execution.Owns(exception))
         {
-            if (exception.Failure.Diagnostics is SafeUpstreamFailureDiagnostics diagnostics)
-            {
-                Dictionary<string, string> metadata = new(StringComparer.Ordinal)
-                {
-                    ["connectorVersion"] = operation.Version,
-                    ["callerKind"] = identity.InstallationKind.ToString()
-                };
-                await registry.AppendAuditAsync(new GatewayAuditEvent(
-                    Guid.NewGuid(), clock.UtcNow, identity.TenantId, "installation", identity.InstallationId.ToString("D"),
-                    "operation.invoke", "operation", connectorId + "/" + operationId, request.CorrelationId,
-                    "failure", exception.Failure.Code, metadata, diagnostics.ToAuditDiagnostics()), cancellationToken).ConfigureAwait(false);
-            }
+            GatewayAuditFailureDiagnostics? diagnostics =
+                (exception.Failure.Diagnostics as SafeUpstreamFailureDiagnostics)?.ToAuditDiagnostics();
+            await AppendInvocationFailureAuditAsync(
+                identity, connectorId, operationId, request.CorrelationId, exception.Failure.Code,
+                operation.Version, cancellationToken, diagnostics).ConfigureAwait(false);
             throw exception.Failure;
         }
         catch (CoreProviderExecutionException exception)
@@ -247,7 +248,13 @@ public sealed class RestrictedEgressService
             throw new ProviderAccessException(exception.Code, exception.Retryable);
         }
         catch (GatewayException) when (registration.PreservesCoreFailures) { throw; }
-        catch (Exception) { throw new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502); }
+        catch (Exception)
+        {
+            await AppendInvocationFailureAuditAsync(
+                identity, connectorId, operationId, request.CorrelationId, "BGW-EGRESS-UPSTREAM-REJECTED",
+                operation.Version, cancellationToken).ConfigureAwait(false);
+            throw new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502);
+        }
 
         if (result is null || result.Body is null || result.StatusCode is < 100 or > 599 || string.IsNullOrWhiteSpace(result.ContentType) ||
             result.ContentType.Length > 512 || result.Body.LongLength > operation.MaximumResponseBytes)
@@ -255,6 +262,28 @@ public sealed class RestrictedEgressService
         byte[] responseBody = result.Body.ToArray();
         await registry.AppendAuditAsync(new GatewayAuditEvent(Guid.NewGuid(), clock.UtcNow, identity.TenantId, "installation", identity.InstallationId.ToString("D"), "operation.invoke", "operation", connectorId + "/" + operationId, request.CorrelationId, "success", "BGW-OPERATION-OK", new Dictionary<string, string> { ["connectorVersion"] = operation.Version, ["statusCategory"] = (result.StatusCode / 100).ToString(System.Globalization.CultureInfo.InvariantCulture) + "xx", ["callerKind"] = identity.InstallationKind.ToString() }), cancellationToken).ConfigureAwait(false);
         return new GatewayInvokeResponse(request.CorrelationId, operation.Version, new GatewayPayload(result.ContentType, "base64", Convert.ToBase64String(responseBody)));
+    }
+
+    private Task AppendInvocationFailureAuditAsync(
+        RegisteredInstallationIdentity identity,
+        string connectorId,
+        string operationId,
+        Guid correlationId,
+        string reasonCode,
+        string? connectorVersion,
+        CancellationToken cancellationToken,
+        GatewayAuditFailureDiagnostics? diagnostics = null)
+    {
+        Dictionary<string, string> metadata = new(StringComparer.Ordinal)
+        {
+            ["callerKind"] = identity.InstallationKind.ToString()
+        };
+        if (connectorVersion is not null)
+            metadata["connectorVersion"] = connectorVersion;
+        return registry.AppendAuditAsync(new GatewayAuditEvent(
+            Guid.NewGuid(), clock.UtcNow, identity.TenantId, "installation", identity.InstallationId.ToString("D"),
+            "operation.invoke", "operation", connectorId + "/" + operationId, correlationId,
+            "failure", reasonCode, metadata, diagnostics), cancellationToken);
     }
 
     private static bool HasExactPublishedAuthority(

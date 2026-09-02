@@ -2,7 +2,7 @@
 
 Aggiornato: 2026-09-02
 Baseline CURRENT: `main` / `origin/main` =
-`313fa5aa8e6efa4dba7d123d87802705cf45ae81`
+`0437ab13ac4092f1fe7a8c3ec768d44edf689dbf`
 
 Questa pagina è l’autorità sintetica sullo stato integrato. Le guide CURRENT spiegano
 come usare ciò che esiste; piani, review e report precedenti sono HISTORICAL e non
@@ -19,8 +19,9 @@ prevalgono su questa dashboard. `Synthetic`, `live lab`, `OfficialTest qualified
 | Authentication foundation | **Integrata** | Le primitive SOAP/session, JWT/X.509, signing e mTLS non qualificano automaticamente un servizio esterno. |
 | FSE2 `validate-cda` | **LIVE_QUALIFIED — OfficialTest** | Una chiamata applicativa bounded sulla baseline exact ha restituito Gateway 200 con A1 mTLS, dual JWT S1 e contratto CDA/`VERIFICA`; non è accreditamento né qualifica production. |
 | FSE2 `delete` | **PRODUCT_PATH_OFFLINE_QUALIFIED** | Metodo/path/no-body/claim e risposta bounded attraversano il product path verso mock; nessuna qualifica live o operationalization distribuita. |
-| Altre nove operazioni FSE2 | **IMPLEMENTED_PARTIAL** | Runtime foundation sintetica; mancano a seconda dell’operazione definition/provisioning canonici, DTO/response completi, persistence o qualifica live. |
-| Copertura completa Gateway FSE 2.0 | **NO** | Solo 1/11 live-qualified; Human Actor, callback inbound, correlation durevole, accreditamento e produzione non sono coperti. |
+| FSE2 `create + get-status-by-workflow` | **PRODUCT_PATH_OFFLINE_QUALIFIED** | Un E2E Gateway/PostgreSQL 18 prova exact create, correlazione durevole, restart/replica e status tecnico bounded; nessuna call live o qualifica OfficialTest/production. |
+| Altre sette operazioni FSE2 | **IMPLEMENTED_PARTIAL** | Runtime foundation sintetica; mancano a seconda dell’operazione definition/provisioning canonici, DTO/response completi o qualifica live. |
+| Copertura completa Gateway FSE 2.0 | **NO** | Solo 1/11 live-qualified; Human Actor, callback inbound, accreditamento e produzione non sono coperti. |
 | Private preview | **Limitata** | Il Core e il pilot qualità CDA sono valutabili nei limiti dichiarati; non esiste una release pubblica o un impegno di stabilità API. |
 | Produzione/accreditamento | **NON QUALIFICATI** | Cloud live, MSI, HA/DR, restore/load/soak, pentest, firma artefatti, custody production e accreditamento restano fuori dal CURRENT. |
 
@@ -47,8 +48,9 @@ pubblicazione richiede la slice coerente:
 validate-cda → create → get-status-by-workflow
 ```
 
-`create` e `get-status-by-workflow` sono ancora parziali; un `202` di `create` senza
-riconciliazione non dimostra il completamento verso INI/EDS. `replace`, `delete`,
+`create` e `get-status-by-workflow` sono qualificati offline sul product path, inclusi
+restart e replica; non sono qualificati live. Un `202` di `create` senza riconciliazione
+non dimostra il completamento verso INI/EDS. `replace`, `delete`,
 `update-metadata` e `get-status-by-trace` sono successivi ad alto valore; le altre
 operazioni non entrano automaticamente in roadmap.
 
