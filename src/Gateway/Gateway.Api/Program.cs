@@ -782,15 +782,20 @@ adminApi.MapGet("/grants", async (Guid tenantId, int? offset, int? limit, HttpCo
     return Results.Ok(await directory.ListGrantsAsync(tenantId, offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
 });
 
-adminApi.MapPost("/grants", async (CreateGrantRequest request, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, IAdminGatewayRegistry registry, CancellationToken cancellationToken) =>
+adminApi.MapPost("/grants", async (CreateGrantRequest request, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, IAdminGatewayRegistry registry, IConnectorConfigurationStore connectors, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
     AdminAccessService.Require(admin, request.TenantId, AdminRole.SecurityAdministrator);
     if (await directory.GetInstallationAsync(request.TenantId, request.InstallationId, cancellationToken).ConfigureAwait(false) is null) throw new GatewayException("BGW-INSTALLATION-NOT-FOUND", 404);
-    ValidateAdminCode(request.ConnectorId, 100); ValidateAdminCode(request.OperationId, 100);
+    ValidateAdminCode(request.ConnectorId, 100); ValidateAdminCode(request.ConnectorVersion, 64); ValidateAdminCode(request.OperationId, 100);
+    ConnectorVersionRecord connectorVersion = await connectors.GetVersionAsync(request.ConnectorId, request.ConnectorVersion, cancellationToken).ConfigureAwait(false)
+        ?? throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
+    ConnectorGrantAuthority.Validate(connectorVersion, request.ConnectorId, request.OperationId);
     InstallationGrantRecord grant = new(Guid.NewGuid(), request.InstallationId, request.TenantId, request.ConnectorId, request.OperationId, true, DateTimeOffset.UtcNow, request.ValidUntil);
-    await registry.AddGrantWithAuditAsync(grant, AdminAudit(context, admin, request.TenantId, "grant.create", "installation_grant", grant.Id.ToString("D"), "success", "BGW-GRANT-CREATED"), cancellationToken).ConfigureAwait(false);
-    return Results.Created($"/admin/api/v1/grants/{grant.Id:D}", grant);
+    GrantCreationResult result = await registry.AddGrantWithAuditAsync(grant, connectorVersion, AdminAudit(context, admin, request.TenantId, "grant.create", "installation_grant", grant.Id.ToString("D"), "success", "BGW-GRANT-CREATED"), cancellationToken).ConfigureAwait(false);
+    return result.Created
+        ? Results.Created($"/admin/api/v1/grants/{result.Grant.Id:D}", result.Grant)
+        : Results.Ok(result.Grant);
 });
 
 adminApi.MapGet("/audit", async (Guid tenantId, int? offset, int? limit, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, CancellationToken cancellationToken) =>

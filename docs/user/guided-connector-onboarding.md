@@ -20,7 +20,7 @@ La pagina legge sempre lo stato autorevole e mostra:
 |---|---|---|---|
 | 1 | Security Administrator | Selezionare Tenant, Application ed Environment per nome e creare l’Installation. | Compare il passaggio di enrollment monouso. |
 | 2 | Connector Editor | Scegliere un normale file `.json` e premere **Valida e importa**. | Il Gateway calcola e verifica ID, versione e checksum, poi conserva una versione `Validated`. |
-| 3 | Security Administrator | Scegliere, se necessario, endpoint e credenziali dal catalogo e premere **Configura binding e autorizzazioni**. | Binding completo e grant mancanti vengono creati da selezioni server-owned. |
+| 3 | Security Administrator | Scegliere, se necessario, endpoint e credenziali dal catalogo e premere **Configura binding e autorizzazioni**. | Binding completo e grant esatti vengono creati da selezioni server-owned per la versione riletta dal server. |
 | 4 | Connector Editor | Premere **Richiedi approvazione**. | Viene congelata la richiesta per la versione e il digest di binding esatti. |
 | 5 | Connector Approver | Leggere la review effettiva e premere **Verifica, approva e pubblica**. | Lo stesso Approver approva e pubblica quella versione esatta. |
 
@@ -48,7 +48,11 @@ Ogni azione rilegge lo stato server-side prima di mutare. Se una richiesta si in
 2. verificare stato, prerequisito e ruolo mostrati;
 3. ripetere soltanto la stessa azione indicata.
 
-Il retry non ricrea un binding già presente e aggiunge soltanto i grant mancanti. Non
+Il retry non ricrea un binding già presente. La pagina rilegge la versione autorevole e
+presenta di nuovo ogni grant canonico alla Admin API: una tupla identica già enabled con
+la stessa scadenza è un no-op, non una seconda mutazione o un secondo audit. Una versione
+mancante, diversa, `Draft`/`Retired` o un’operation non canonica viene negata prima della
+mutazione. Non
 attendere una finestra, non rifare login e non ripartire dall’inizio salvo che la pagina
 segnali una sessione realmente scaduta. Un drift di endpoint o risorsa provider viene
 negato: ricaricare il catalogo autorevole e sottoporre una nuova configurazione alla

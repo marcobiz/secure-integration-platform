@@ -183,17 +183,13 @@ internal static class Program
         {
             discovered = await DiscoverProvisioningStateAsync(api, context).ConfigureAwait(false);
             RequireCompleted(discovered.Snapshot, ConnectorProvisioningPhase.BindingConfiguration);
-            if (HasCompleted(discovered.Snapshot, ConnectorProvisioningPhase.Grant))
-            {
-                Print(new { status = "grant-verified", installationId = context.Installation.Id, environmentId = context.Installation.EnvironmentId });
-                return;
-            }
 
             JsonElement created = await api.MutateAsync(HttpMethod.Post, "admin/api/v1/grants", new
             {
                 tenantId = context.Installation.TenantId,
                 installationId = context.Installation.Id,
                 connectorId = Fse2OfficialTestCanonicalDefinition.ConnectorId,
+                connectorVersion = Fse2OfficialTestCanonicalDefinition.ConnectorVersion,
                 operationId = Fse2OfficialTestCanonicalDefinition.OperationId,
                 validUntil = (DateTimeOffset?)null
             }).ConfigureAwait(false);

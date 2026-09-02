@@ -47,8 +47,8 @@ public interface IGatewayRegistry
     Task AddInstallationActivationWithAuditAsync(InstallationRecord installation, ActivationCodeRecord activationCode, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Adds an operation grant.</summary>
     Task AddGrantAsync(InstallationGrantRecord grant, CancellationToken cancellationToken);
-    /// <summary>Persists a grant and its audit event atomically.</summary>
-    Task AddGrantWithAuditAsync(InstallationGrantRecord grant, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
+    /// <summary>Validates exact Connector-version authority and creates or reads back one grant atomically.</summary>
+    Task<GrantCreationResult> AddGrantWithAuditAsync(InstallationGrantRecord grant, ConnectorVersionRecord connectorVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken);
     /// <summary>Finds activation metadata by its opaque identifier.</summary>
     Task<ActivationCodeRecord?> FindActivationCodeAsync(Guid activationCodeId, CancellationToken cancellationToken);
     /// <summary>Records a denied activation attempt.</summary>
@@ -78,6 +78,9 @@ public interface IGatewayRegistry
 /// non-superuser admin data source and must never be resolved by runtime request paths.
 /// </summary>
 public interface IAdminGatewayRegistry : IGatewayRegistry;
+
+/// <summary>Authoritative result of an idempotent grant creation.</summary>
+public sealed record GrantCreationResult(InstallationGrantRecord Grant, bool Created);
 
 /// <summary>Short-lived enrollment challenge storage. Challenges are never persisted with secret values.</summary>
 public interface IEnrollmentChallengeStore

@@ -1281,9 +1281,16 @@ public sealed class PostgresIsolationTests
 
         Guid activeInstallation = Guid.NewGuid();
         await setupRegistry.AddInstallationAsync(new(activeInstallation, tenantId, applicationId, environmentId, InstallationStatus.Pending, null, now), TestContext.Current.CancellationToken);
+        using JsonDocument grantSource = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(FindRepositoryRoot(), "docs", "connectors", "examples", "sample-secure-service.connector.json"), TestContext.Current.CancellationToken));
+        string grantConnectorId = "fault-grant-" + Guid.NewGuid().ToString("N");
+        using JsonDocument grantDefinition = JsonDocument.Parse(grantSource.RootElement.GetRawText().Replace("sample-secure-service", grantConnectorId, StringComparison.Ordinal));
+        ValidatedConnectorDefinition grantCanonical = new ConnectorDefinitionValidator().ValidateRequired(grantDefinition.RootElement);
+        PostgresConnectorConfigurationStore grantConnectorStore = new(storePool.Value);
+        ConnectorVersionRecord grantDraft = await grantConnectorStore.CreateDraftAsync(new(Guid.NewGuid(), Guid.Empty, grantConnectorId, grantCanonical.Version, grantCanonical.SchemaVersion, ConnectorVersionState.Draft, grantCanonical.CanonicalJson, Convert.FromHexString(grantCanonical.ChecksumSha256), "fault-test", now, 0), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord grantVersion = await grantConnectorStore.MarkValidatedAsync(grantDraft.Id, grantDraft.RowVersion, now, TestContext.Current.CancellationToken);
         Guid grantId = Guid.NewGuid(); Guid grantCorrelation = Guid.NewGuid();
         PostgresGatewayRegistry faultedGrant = new(storePool.Value, new ThrowingFaultInjector("grant.create.after-state"));
-        await Assert.ThrowsAsync<InjectedFailureException>(() => faultedGrant.AddGrantWithAuditAsync(new(grantId, activeInstallation, tenantId, "fault-connector", "send", true, now), Audit(tenantId, grantCorrelation, "grant.create", grantId.ToString("D"), now), TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<InjectedFailureException>(() => faultedGrant.AddGrantWithAuditAsync(new(grantId, activeInstallation, tenantId, grantConnectorId, "submit", true, now), grantVersion, Audit(tenantId, grantCorrelation, "grant.create", grantId.ToString("D"), now), TestContext.Current.CancellationToken));
         Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.installation_connector_grant WHERE id=$1", grantId));
         Assert.Equal(0L, await ScalarAsync(adminPool.Value, "SELECT count(*) FROM gateway.audit_event WHERE correlation_id=$1", grantCorrelation));
 

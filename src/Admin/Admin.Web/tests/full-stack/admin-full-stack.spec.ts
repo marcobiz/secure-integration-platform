@@ -191,7 +191,7 @@ test('FULLSTACK-01 production Admin build persists and governs the connector lif
   expect(controlledTest.status).toBe(200);
   expect(controlledTest.body).toMatchObject({ status: 'valid', connectorVersion: '2.0.0' });
 
-  const grant = await api<Record<string, unknown>>(security, '/admin/api/v1/grants', 'POST', { tenantId, installationId: enrolled!.id, connectorId: 'sample-secure-service', operationId: 'submit' });
+  const grant = await api<Record<string, unknown>>(security, '/admin/api/v1/grants', 'POST', { tenantId, installationId: enrolled!.id, connectorId: 'sample-secure-service', connectorVersion: '2.0.0', operationId: 'submit' });
   expect(grant.status).toBe(201);
 
   const correlationId = randomUUID();
@@ -351,7 +351,7 @@ test('FULLSTACK-02 guided onboarding reaches one real invocation in five resumab
   const tenants = await api<{ items: Array<{ id: string }> }>(security, '/admin/api/v1/tenants?offset=0&limit=50');
   const otherTenant = tenants.body.items.find(value => value.id !== tenantId);
   expect(otherTenant).toBeTruthy();
-  const crossTenantGrant = await api<Record<string, unknown>>(security, '/admin/api/v1/grants', 'POST', { tenantId: otherTenant!.id, installationId, connectorId: 'sample-secure-service', operationId: 'submit' });
+  const crossTenantGrant = await api<Record<string, unknown>>(security, '/admin/api/v1/grants', 'POST', { tenantId: otherTenant!.id, installationId, connectorId: 'sample-secure-service', connectorVersion: '3.0.0', operationId: 'submit' });
   expect(crossTenantGrant.status).toBe(404);
 
   await editor.goto(configuredTargetUrl);

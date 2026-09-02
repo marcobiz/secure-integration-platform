@@ -860,8 +860,8 @@ components:
     CreateGrant:
       type: object
       additionalProperties: false
-      required: [tenantId, installationId, connectorId, operationId]
-      properties: { tenantId: { type: string, format: uuid }, installationId: { type: string, format: uuid }, connectorId: { type: string }, operationId: { type: string }, validUntil: { type: [string, 'null'], format: date-time } }
+      required: [tenantId, installationId, connectorId, connectorVersion, operationId]
+      properties: { tenantId: { type: string, format: uuid }, installationId: { type: string, format: uuid }, connectorId: { type: string }, connectorVersion: { type: string }, operationId: { type: string }, validUntil: { type: [string, 'null'], format: date-time } }
     AuditEvent:
       type: object
       additionalProperties: false

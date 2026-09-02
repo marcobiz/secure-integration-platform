@@ -67,8 +67,13 @@ effettiva. Secret retrieval, certificato client,
 signing e health sono capability separate. Il browser e il client runtime non ricevono
 secret value, chiavi private, P12, provider locator o URL arbitrari.
 
-Il grant è deny-by-default e lega una Installation a Connector/operation. L’Environment
-non è scelto dal grant o dal client: deriva dall’Installation autenticata.
+Il grant è deny-by-default e lega una Installation a Connector/operation. La richiesta
+indica anche l’esatta `connectorVersion`, che il server rilegge dal configuration store:
+solo una versione `Validated` o `Published` e un’operation canonica della sua definition
+possono autorizzare la creazione. L’Environment non è scelto dal grant o dal client:
+deriva dall’Installation autenticata. Il retry dell’identica tupla enabled con la stessa
+scadenza è un no-op 200; la prima creazione è 201. Un retry non richiede una GET preventiva
+e non produce righe o audit duplicati, anche quando due richieste arrivano insieme.
 
 ## Audit, health e recovery
 

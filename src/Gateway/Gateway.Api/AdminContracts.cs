@@ -23,7 +23,7 @@ public sealed record CreateInstallationRequest(Guid TenantId, Guid ApplicationId
 public sealed record RevokeInstallationRequest(string Reason);
 
 /// <summary>Creates one deny-by-default operation grant.</summary>
-public sealed record CreateGrantRequest(Guid TenantId, Guid InstallationId, string ConnectorId, string OperationId, DateTimeOffset? ValidUntil);
+public sealed record CreateGrantRequest(Guid TenantId, Guid InstallationId, string ConnectorId, string ConnectorVersion, string OperationId, DateTimeOffset? ValidUntil);
 
 /// <summary>Explicit closed failure diagnostics. No generic metadata or upstream content is present.</summary>
 public sealed record SafeFailureDiagnosticsResource(

@@ -673,6 +673,75 @@ public sealed class AdminApiSecurityTests
     }
 
     [Fact]
+    public async Task M5_SEC_grant_creation_denies_missing_wrong_draft_retired_version_and_unknown_operation_before_mutation()
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        string csrf = await LoginAsync(client, "security-admin", TestContext.Current.CancellationToken);
+        (Guid tenantId, Guid installationId, ConnectorVersionRecord validated) = await SeedGrantContextAsync(factory, client, csrf);
+        IConnectorConfigurationStore store = factory.Services.GetRequiredService<IConnectorConfigurationStore>();
+        ConnectorVersionRecord draft = await CreateGrantVersionAsync(store, validated, "2.0.0", ConnectorVersionState.Draft);
+        ConnectorVersionRecord retired = await CreateGrantVersionAsync(store, validated, "3.0.0", ConnectorVersionState.Retired);
+        int connectorCount = (await store.ListConnectorsAsync(TestContext.Current.CancellationToken)).Count;
+
+        object[] invalidRequests =
+        [
+            new { tenantId, installationId, connectorId = validated.ConnectorSlug, operationId = "submit" },
+            new { tenantId, installationId, connectorId = validated.ConnectorSlug, connectorVersion = "9.9.9", operationId = "submit" },
+            new { tenantId, installationId, connectorId = "missing-connector", connectorVersion = validated.Version, operationId = "submit" },
+            new { tenantId, installationId, connectorId = validated.ConnectorSlug, connectorVersion = draft.Version, operationId = "submit" },
+            new { tenantId, installationId, connectorId = validated.ConnectorSlug, connectorVersion = retired.Version, operationId = "submit" },
+            new { tenantId, installationId, connectorId = validated.ConnectorSlug, connectorVersion = validated.Version, operationId = "not-in-definition" }
+        ];
+        HttpStatusCode[] expected = [HttpStatusCode.BadRequest, HttpStatusCode.NotFound, HttpStatusCode.NotFound, HttpStatusCode.Conflict, HttpStatusCode.Conflict, HttpStatusCode.NotFound];
+        for (int index = 0; index < invalidRequests.Length; index++)
+        {
+            using HttpResponseMessage response = await PostGrantAsync(client, csrf, invalidRequests[index]);
+            Assert.Equal(expected[index], response.StatusCode);
+        }
+
+        InMemoryGatewayRegistry registry = factory.Services.GetRequiredService<InMemoryGatewayRegistry>();
+        Assert.Empty(registry.SnapshotDirectory().Grants);
+        Assert.DoesNotContain(registry.SnapshotAuditEvents(), value => string.Equals(value.Action, "grant.create", StringComparison.Ordinal));
+        Assert.Equal(connectorCount, (await store.ListConnectorsAsync(TestContext.Current.CancellationToken)).Count);
+        Assert.DoesNotContain(await store.ListConnectorsAsync(TestContext.Current.CancellationToken), value => string.Equals(value.ConnectorId, "missing-connector", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task M5_IT_grant_creation_is_sequentially_idempotent_and_revalidates_existing_noop_authority()
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        string csrf = await LoginAsync(client, "security-admin", TestContext.Current.CancellationToken);
+        (Guid tenantId, Guid installationId, ConnectorVersionRecord version) = await SeedGrantContextAsync(factory, client, csrf);
+        object request = new { tenantId, installationId, connectorId = version.ConnectorSlug, connectorVersion = version.Version, operationId = "submit" };
+
+        using HttpResponseMessage first = await PostGrantAsync(client, csrf, request);
+        using HttpResponseMessage second = await PostGrantAsync(client, csrf, request);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        JsonElement firstBody = await first.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+        JsonElement secondBody = await second.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(firstBody.GetProperty("id").GetGuid(), secondBody.GetProperty("id").GetGuid());
+
+        InMemoryGatewayRegistry registry = factory.Services.GetRequiredService<InMemoryGatewayRegistry>();
+        Assert.Single(registry.SnapshotDirectory().Grants);
+        Assert.Single(registry.SnapshotAuditEvents(), value => string.Equals(value.Action, "grant.create", StringComparison.Ordinal));
+
+        using HttpResponseMessage changedExpiry = await PostGrantAsync(client, csrf, new { tenantId, installationId, connectorId = version.ConnectorSlug, connectorVersion = version.Version, operationId = "submit", validUntil = DateTimeOffset.UtcNow.AddDays(1) });
+        Assert.Equal(HttpStatusCode.Conflict, changedExpiry.StatusCode);
+        Assert.Single(registry.SnapshotDirectory().Grants);
+        Assert.Single(registry.SnapshotAuditEvents(), value => string.Equals(value.Action, "grant.create", StringComparison.Ordinal));
+
+        IConnectorConfigurationStore store = factory.Services.GetRequiredService<IConnectorConfigurationStore>();
+        _ = await store.RetireAsync(version.Id, version.RowVersion, "security-admin", Guid.NewGuid(), DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+        using HttpResponseMessage invalidNoop = await PostGrantAsync(client, csrf, request);
+        Assert.Equal(HttpStatusCode.Conflict, invalidNoop.StatusCode);
+        Assert.Single(registry.SnapshotDirectory().Grants);
+        Assert.Single(registry.SnapshotAuditEvents(), value => string.Equals(value.Action, "grant.create", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task M5_IT_Binding_update_requires_current_IfMatch_and_precondition_failures_do_not_mutate()
     {
         await using AdminDevelopmentFactory factory = new();
@@ -890,6 +959,40 @@ public sealed class AdminApiSecurityTests
         request.Headers.Add("X-CSRF-TOKEN", csrf);
         using HttpResponseMessage response = await client.SendAsync(request, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    private static async Task<(Guid TenantId, Guid InstallationId, ConnectorVersionRecord Version)> SeedGrantContextAsync(AdminDevelopmentFactory factory, HttpClient client, string csrf)
+    {
+        Guid tenantId = Guid.NewGuid(); Guid applicationId = Guid.NewGuid(); Guid environmentId = Guid.NewGuid(); Guid installationId = Guid.NewGuid();
+        IAdminGatewayRegistry registry = factory.Services.GetRequiredService<IAdminGatewayRegistry>();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        await registry.AddTenantAsync(new(tenantId, "grant-" + tenantId.ToString("N"), "Grant tenant", TenantStatus.Active, now), TestContext.Current.CancellationToken);
+        await registry.AddApplicationAsync(new(applicationId, "grant-" + applicationId.ToString("N"), "Grant application", ApplicationStatus.Active, "1.0.0", null, now), TestContext.Current.CancellationToken);
+        await registry.AddEnvironmentAsync(new(environmentId, "grant-" + environmentId.ToString("N")[..20], "Grant environment", false), TestContext.Current.CancellationToken);
+        await registry.AddInstallationAsync(new(installationId, tenantId, applicationId, environmentId, InstallationStatus.Active, "1.0.0", now), TestContext.Current.CancellationToken);
+        ConnectorVersionResource resource = await ImportAndValidateSampleAsync(client, csrf, TestContext.Current.CancellationToken);
+        ConnectorVersionRecord version = await factory.Services.GetRequiredService<IConnectorConfigurationStore>().GetVersionAsync(resource.ConnectorId, resource.Version, TestContext.Current.CancellationToken)
+            ?? throw new InvalidOperationException("Validated grant test Connector version was not persisted.");
+        return (tenantId, installationId, version);
+    }
+
+    private static async Task<ConnectorVersionRecord> CreateGrantVersionAsync(IConnectorConfigurationStore store, ConnectorVersionRecord source, string version, ConnectorVersionState targetState)
+    {
+        using JsonDocument definition = JsonDocument.Parse(source.CanonicalJson.Replace($"\"version\":\"{source.Version}\"", $"\"version\":\"{version}\"", StringComparison.Ordinal));
+        ValidatedConnectorDefinition canonical = new ConnectorDefinitionValidator().ValidateRequired(definition.RootElement);
+        ConnectorVersionRecord draft = await store.CreateDraftAsync(new(Guid.NewGuid(), Guid.Empty, source.ConnectorSlug, canonical.Version, canonical.SchemaVersion, ConnectorVersionState.Draft, canonical.CanonicalJson, Convert.FromHexString(canonical.ChecksumSha256), "grant-test", DateTimeOffset.UtcNow, 0), TestContext.Current.CancellationToken);
+        if (targetState == ConnectorVersionState.Draft) return draft;
+        ConnectorVersionRecord validated = await store.MarkValidatedAsync(draft.Id, draft.RowVersion, DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+        return targetState == ConnectorVersionState.Retired
+            ? await store.RetireAsync(validated.Id, validated.RowVersion, "grant-test", Guid.NewGuid(), DateTimeOffset.UtcNow, TestContext.Current.CancellationToken)
+            : validated;
+    }
+
+    private static async Task<HttpResponseMessage> PostGrantAsync(HttpClient client, string csrf, object body)
+    {
+        using HttpRequestMessage request = new(HttpMethod.Post, "/admin/api/v1/grants") { Content = JsonContent.Create(body) };
+        request.Headers.Add("X-CSRF-TOKEN", csrf);
+        return await client.SendAsync(request, TestContext.Current.CancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<string> LoginAsync(HttpClient client, string user, CancellationToken cancellationToken)
@@ -1227,6 +1330,34 @@ public sealed class AdminApiPostgreSqlSecurityTests
         AdminApiSecurityTests.RunPostgreSqlApprovalPublishAntiExfiltrationAsync();
 
     [Fact]
+    public async Task M5_IT_DAT_PostgreSQL18_concurrent_identical_grant_posts_converge_to_one_row_and_audit()
+    {
+        await using PostgreSqlRoleRaceContext context = await PostgreSqlRoleRaceContext.CreateAsync();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        Guid tenantId = Guid.NewGuid(); Guid applicationId = Guid.NewGuid(); Guid environmentId = Guid.NewGuid(); Guid installationId = Guid.NewGuid();
+        await context.Registry.AddTenantAsync(new(tenantId, "grant-" + tenantId.ToString("N"), "Grant tenant", TenantStatus.Active, now), TestContext.Current.CancellationToken);
+        await context.Registry.AddApplicationAsync(new(applicationId, "grant-" + applicationId.ToString("N"), "Grant application", ApplicationStatus.Active, "1.0.0", null, now), TestContext.Current.CancellationToken);
+        await context.Registry.AddEnvironmentAsync(new(environmentId, "grant-" + environmentId.ToString("N")[..20], "Grant environment", false), TestContext.Current.CancellationToken);
+        await context.Registry.AddInstallationAsync(new(installationId, tenantId, applicationId, environmentId, InstallationStatus.Active, "1.0.0", now), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord version = await context.CreateValidatedGrantVersionAsync("grant-" + Guid.NewGuid().ToString("N"));
+        object body = new { tenantId, installationId, connectorId = version.ConnectorSlug, connectorVersion = version.Version, operationId = "submit" };
+
+        (HttpResponseMessage first, HttpResponseMessage second) = await context.SendGrantPairAsync(body);
+        using (first)
+        using (second)
+        {
+            Assert.All(new[] { first, second }, response => Assert.True(response.IsSuccessStatusCode));
+            Assert.Equal([HttpStatusCode.OK, HttpStatusCode.Created], new[] { first.StatusCode, second.StatusCode }.Order().ToArray());
+            JsonElement firstBody = await first.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+            JsonElement secondBody = await second.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(firstBody.GetProperty("id").GetGuid(), secondBody.GetProperty("id").GetGuid());
+            Guid grantId = firstBody.GetProperty("id").GetGuid();
+            Assert.Equal(1L, await context.ScalarTenantAsync(tenantId, "SELECT count(*) FROM gateway.installation_connector_grant g JOIN gateway.connector_definition c ON c.id=g.connector_id WHERE g.installation_id=$1 AND c.slug=$2 AND g.operation_id=$3", installationId, version.ConnectorSlug, "submit"));
+            Assert.Equal(1L, await context.ScalarTenantAsync(tenantId, "SELECT count(*) FROM gateway.audit_event WHERE tenant_id=$1 AND action='grant.create' AND target_id=$2", tenantId, grantId.ToString("D")));
+        }
+    }
+
+    [Fact]
     public async Task ADMIN_ROLE_concurrent_identical_first_assignment_converges_to_one_row_and_two_successes()
     {
         await using PostgreSqlRoleRaceContext context = await PostgreSqlRoleRaceContext.CreateAsync();
@@ -1432,9 +1563,37 @@ public sealed class AdminApiPostgreSqlSecurityTests
             return responses[0];
         }
 
+        internal async Task<(HttpResponseMessage First, HttpResponseMessage Second)> SendGrantPairAsync(object body)
+        {
+            Task<HttpResponseMessage> first = SendGrantAsync(Editor, EditorCsrf, body);
+            Task<HttpResponseMessage> second = SendGrantAsync(Approver, ApproverCsrf, body);
+            HttpResponseMessage[] responses = await Task.WhenAll(first, second).ConfigureAwait(false);
+            return (responses[0], responses[1]);
+        }
+
+        internal async Task<ConnectorVersionRecord> CreateValidatedGrantVersionAsync(string connectorId)
+        {
+            DirectoryInfo? directory = new(AppContext.BaseDirectory);
+            while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "BrokerGateway.slnx"))) directory = directory.Parent;
+            string root = directory?.FullName ?? throw new InvalidOperationException("Repository root not found.");
+            using JsonDocument source = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "docs", "connectors", "examples", "sample-secure-service.connector.json"), TestContext.Current.CancellationToken));
+            using JsonDocument definition = JsonDocument.Parse(source.RootElement.GetRawText().Replace("sample-secure-service", connectorId, StringComparison.Ordinal));
+            ValidatedConnectorDefinition canonical = new ConnectorDefinitionValidator().ValidateRequired(definition.RootElement);
+            PostgresConnectorConfigurationStore store = new(DataSource.Value);
+            ConnectorVersionRecord draft = await store.CreateDraftAsync(new(Guid.NewGuid(), Guid.Empty, connectorId, canonical.Version, canonical.SchemaVersion, ConnectorVersionState.Draft, canonical.CanonicalJson, Convert.FromHexString(canonical.ChecksumSha256), "grant-test", DateTimeOffset.UtcNow, 0), TestContext.Current.CancellationToken);
+            return await store.MarkValidatedAsync(draft.Id, draft.RowVersion, DateTimeOffset.UtcNow, TestContext.Current.CancellationToken);
+        }
+
         internal static async Task<HttpResponseMessage> SendAsync(HttpClient client, string csrf, AdminExternalIdentity target, AdminRole role, Guid? tenantId)
         {
             using HttpRequestMessage request = new(HttpMethod.Post, "/admin/api/v1/role-assignments") { Content = JsonContent.Create(new { principal = target, role, tenantId }) };
+            request.Headers.Add("X-CSRF-TOKEN", csrf);
+            return await client.SendAsync(request, TestContext.Current.CancellationToken).ConfigureAwait(false);
+        }
+
+        private static async Task<HttpResponseMessage> SendGrantAsync(HttpClient client, string csrf, object body)
+        {
+            using HttpRequestMessage request = new(HttpMethod.Post, "/admin/api/v1/grants") { Content = JsonContent.Create(body) };
             request.Headers.Add("X-CSRF-TOKEN", csrf);
             return await client.SendAsync(request, TestContext.Current.CancellationToken).ConfigureAwait(false);
         }

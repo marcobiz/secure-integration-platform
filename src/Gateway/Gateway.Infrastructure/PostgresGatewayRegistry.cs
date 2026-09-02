@@ -178,17 +178,58 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
     }
 
     /// <inheritdoc />
-    public async Task AddGrantWithAuditAsync(InstallationGrantRecord grant, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    public async Task<GrantCreationResult> AddGrantWithAuditAsync(InstallationGrantRecord grant, ConnectorVersionRecord connectorVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
     {
+        if (auditEvent.TenantId != grant.TenantId) throw new ArgumentException("Administrative grant aggregate is inconsistent.");
         await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken).ConfigureAwait(false);
         await SetTenantAsync(connection, transaction, grant.TenantId, cancellationToken).ConfigureAwait(false);
-        Guid connectorId = Guid.NewGuid();
-        await ExecuteAsync(connection, transaction, "INSERT INTO gateway.connector_definition(id,slug,display_name,status,created_at,created_by) VALUES($1,$2,$2,'active',now(),'gateway-provisioning') ON CONFLICT(slug) DO NOTHING", cancellationToken, connectorId, grant.ConnectorId).ConfigureAwait(false);
-        await ExecuteAsync(connection, transaction, "INSERT INTO gateway.installation_connector_grant(id,installation_id,tenant_id,connector_id,operation_id,enabled,valid_from,valid_until) SELECT $1,$2,$3,id,$4,$5,$6,$7 FROM gateway.connector_definition WHERE slug=$8", cancellationToken, grant.Id, grant.InstallationId, grant.TenantId, grant.OperationId, grant.Enabled, grant.ValidFrom, grant.ValidUntil, grant.ConnectorId).ConfigureAwait(false);
-        faultInjector?.Check("grant.create.after-state");
-        await InsertAuditAsync(connection, transaction, auditEvent, cancellationToken).ConfigureAwait(false);
+
+        ConnectorVersionRecord authoritative;
+        await using (NpgsqlCommand authority = new("SELECT v.id,v.connector_id,c.slug,v.version,v.schema_version,v.state,v.configuration_json::text,v.checksum_sha256,v.created_by,v.created_at,v.row_version,v.validated_at,v.published_at,v.retired_at FROM gateway.connector_version v JOIN gateway.connector_definition c ON c.id=v.connector_id WHERE v.id=$1 AND c.slug=$2 AND v.version=$3 FOR SHARE OF v,c", connection, transaction))
+        {
+            authority.Parameters.AddWithValue(connectorVersion.Id);
+            authority.Parameters.AddWithValue(grant.ConnectorId);
+            authority.Parameters.AddWithValue(connectorVersion.Version);
+            await using NpgsqlDataReader reader = await authority.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
+            authoritative = ReadConnectorVersion(reader);
+        }
+        ConnectorGrantAuthority.Validate(authoritative, grant.ConnectorId, grant.OperationId);
+
+        bool created;
+        await using (NpgsqlCommand insert = new("INSERT INTO gateway.installation_connector_grant(id,installation_id,tenant_id,connector_id,operation_id,enabled,valid_from,valid_until) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (installation_id,connector_id,operation_id) DO NOTHING RETURNING id", connection, transaction))
+        {
+            insert.Parameters.AddWithValue(grant.Id);
+            insert.Parameters.AddWithValue(grant.InstallationId);
+            insert.Parameters.AddWithValue(grant.TenantId);
+            insert.Parameters.AddWithValue(authoritative.ConnectorId);
+            insert.Parameters.AddWithValue(grant.OperationId);
+            insert.Parameters.AddWithValue(grant.Enabled);
+            insert.Parameters.AddWithValue(grant.ValidFrom);
+            insert.Parameters.AddWithValue(grant.ValidUntil is null ? DBNull.Value : grant.ValidUntil.Value);
+            created = await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is Guid;
+        }
+
+        InstallationGrantRecord persisted;
+        await using (NpgsqlCommand readBack = new("SELECT g.id,g.installation_id,g.tenant_id,c.slug,g.operation_id,g.enabled,g.valid_from,g.valid_until FROM gateway.installation_connector_grant g JOIN gateway.connector_definition c ON c.id=g.connector_id WHERE g.installation_id=$1 AND g.tenant_id=$2 AND g.connector_id=$3 AND g.operation_id=$4", connection, transaction))
+        {
+            readBack.Parameters.AddWithValue(grant.InstallationId);
+            readBack.Parameters.AddWithValue(grant.TenantId);
+            readBack.Parameters.AddWithValue(authoritative.ConnectorId);
+            readBack.Parameters.AddWithValue(grant.OperationId);
+            await using NpgsqlDataReader reader = await readBack.ExecuteReaderAsync(CommandBehavior.SingleRow, cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false)) throw new GatewayException("BGW-AUTHZ-GRANT-DUPLICATE", 409);
+            persisted = new(reader.GetGuid(0), reader.GetGuid(1), reader.GetGuid(2), reader.GetString(3), reader.GetString(4), reader.GetBoolean(5), reader.GetFieldValue<DateTimeOffset>(6), reader.IsDBNull(7) ? null : reader.GetFieldValue<DateTimeOffset>(7));
+        }
+        if (!persisted.Enabled || !SamePostgresTimestamp(persisted.ValidUntil, grant.ValidUntil)) throw new GatewayException("BGW-AUTHZ-GRANT-DUPLICATE", 409);
+        if (created)
+        {
+            faultInjector?.Check("grant.create.after-state");
+            await InsertAuditAsync(connection, transaction, auditEvent, cancellationToken).ConfigureAwait(false);
+        }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new(persisted, created);
     }
 
     /// <inheritdoc />
@@ -410,6 +451,19 @@ public sealed class PostgresGatewayRegistry(NpgsqlDataSource dataSource, IAdminT
         NpgsqlCommand command = new(sql, connection, transaction);
         foreach (object? value in values) command.Parameters.AddWithValue(value ?? DBNull.Value);
         return command;
+    }
+
+    private static ConnectorVersionRecord ReadConnectorVersion(NpgsqlDataReader reader) => new(
+        reader.GetGuid(0), reader.GetGuid(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), Parse<ConnectorVersionState>(reader.GetString(5)),
+        reader.GetString(6), reader.GetFieldValue<byte[]>(7), reader.GetString(8), reader.GetFieldValue<DateTimeOffset>(9), reader.GetInt64(10),
+        reader.IsDBNull(11) ? null : reader.GetFieldValue<DateTimeOffset>(11), reader.IsDBNull(12) ? null : reader.GetFieldValue<DateTimeOffset>(12), reader.IsDBNull(13) ? null : reader.GetFieldValue<DateTimeOffset>(13));
+
+    private static bool SamePostgresTimestamp(DateTimeOffset? left, DateTimeOffset? right)
+    {
+        if (left is null || right is null) return left is null && right is null;
+        long leftMicroseconds = left.Value.UtcTicks / TimeSpan.TicksPerMicrosecond;
+        long rightMicroseconds = right.Value.UtcTicks / TimeSpan.TicksPerMicrosecond;
+        return leftMicroseconds == rightMicroseconds;
     }
 
     private static string Db<T>(T value) where T : struct, Enum => value.ToString().ToLowerInvariant();

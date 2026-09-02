@@ -478,9 +478,15 @@ public sealed class Fse2ProvisionerResumabilityIntegrationTests
             if (relative == "admin/api/v1/grants")
             {
                 RequireRole(role, "security");
-                RequireState(SimulatedProvisioningState.Bound);
-                State = SimulatedProvisioningState.Granted;
-                SuccessfulMutationCount++;
+                if (State < SimulatedProvisioningState.Bound) throw new InvalidOperationException("Synthetic grant prerequisite is missing.");
+                JsonElement request = JsonSerializer.SerializeToElement(body);
+                if (!string.Equals(request.GetProperty("connectorVersion").GetString(), Fse2OfficialTestCanonicalDefinition.ConnectorVersion, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Synthetic grant request did not carry the authoritative Connector version.");
+                if (State == SimulatedProvisioningState.Bound)
+                {
+                    State = SimulatedProvisioningState.Granted;
+                    SuccessfulMutationCount++;
+                }
                 return Value(new
                 {
                     id = Guid.Parse("BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"), installationId = plan.InstallationId, tenantId = plan.TenantId,

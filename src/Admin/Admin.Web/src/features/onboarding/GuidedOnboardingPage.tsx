@@ -163,10 +163,8 @@ export function GuidedOnboardingPage() {
           certificateResources: Object.fromEntries(info.secretBindings.filter(item => item.kind === 'clientCertificate').map(item => [item.name, resources[item.name]]))
         });
       }
-      const authoritativeGrants = await adminApi.grants(tenantId, 0, 100);
       for (const operationId of info.operations) {
-        if (!authoritativeGrants.items.some(item => item.installationId === installationId && item.connectorId === connectorId && item.operationId === operationId && item.enabled))
-          await adminApi.createGrant({ tenantId, installationId, connectorId, operationId });
+        await adminApi.createGrant({ tenantId, installationId, connectorId, connectorVersion: authoritativeVersion.version, operationId });
       }
     },
     onSuccess: refresh

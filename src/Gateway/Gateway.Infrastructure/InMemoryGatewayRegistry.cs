@@ -201,16 +201,23 @@ public sealed class InMemoryGatewayRegistry(IGatewayClock? clock = null, IAdminT
     }
 
     /// <inheritdoc />
-    public Task AddGrantWithAuditAsync(InstallationGrantRecord grant, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
+    public Task<GrantCreationResult> AddGrantWithAuditAsync(InstallationGrantRecord grant, ConnectorVersionRecord connectorVersion, GatewayAuditEvent auditEvent, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (gate)
         {
+            ConnectorGrantAuthority.Validate(connectorVersion, grant.ConnectorId, grant.OperationId);
             if (!installations.TryGetValue(grant.InstallationId, out InstallationRecord? installation) || installation.TenantId != grant.TenantId) throw new GatewayException("BGW-AUTHZ-CROSS-TENANT-GRANT", 403);
-            if (grants.Values.Any(item => item.InstallationId == grant.InstallationId && item.ConnectorId == grant.ConnectorId && item.OperationId == grant.OperationId) || !grants.TryAdd(grant.Id, grant)) throw new GatewayException("BGW-AUTHZ-GRANT-DUPLICATE", 409);
+            InstallationGrantRecord? existing = grants.Values.SingleOrDefault(item => item.InstallationId == grant.InstallationId && string.Equals(item.ConnectorId, grant.ConnectorId, StringComparison.Ordinal) && string.Equals(item.OperationId, grant.OperationId, StringComparison.Ordinal));
+            if (existing is not null)
+            {
+                if (!existing.Enabled || existing.ValidUntil != grant.ValidUntil) throw new GatewayException("BGW-AUTHZ-GRANT-DUPLICATE", 409);
+                return Task.FromResult(new GrantCreationResult(existing, false));
+            }
+            if (!grants.TryAdd(grant.Id, grant)) throw new GatewayException("BGW-AUTHZ-GRANT-DUPLICATE", 409);
             auditEvents.Add(auditEvent);
+            return Task.FromResult(new GrantCreationResult(grant, true));
         }
-        return Task.CompletedTask;
     }
 
     /// <inheritdoc />

@@ -1286,6 +1286,7 @@ export interface components {
             /** Format: uuid */
             installationId: string;
             connectorId: string;
+            connectorVersion: string;
             operationId: string;
             /** Format: date-time */
             validUntil?: string | null;

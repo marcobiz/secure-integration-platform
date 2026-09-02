@@ -380,10 +380,13 @@ public static class ConnectorOperationBindings
     public static OperationBindingDependencies Required(string canonicalJson, string operationId)
     {
         using JsonDocument document = JsonDocument.Parse(canonicalJson);
-        JsonElement operation = document.RootElement.GetProperty("operations").EnumerateArray()
-            .SingleOrDefault(value => string.Equals(value.GetProperty("operationId").GetString(), operationId, StringComparison.Ordinal));
-        if (operation.ValueKind == JsonValueKind.Undefined) throw new GatewayException("BGW-OPERATION-NOT-FOUND", 404);
-        return From(operation);
+        JsonElement[] operations = document.RootElement.GetProperty("operations").EnumerateArray()
+            .Where(value => string.Equals(value.GetProperty("operationId").GetString(), operationId, StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        if (operations.Length == 0) throw new GatewayException("BGW-OPERATION-NOT-FOUND", 404);
+        if (operations.Length != 1) throw new GatewayException("BGW-CONNECTOR-VALIDATION", 409);
+        return From(operations[0]);
     }
 
     /// <summary>Returns every operation dependency set in stable operation-id order.</summary>
@@ -434,6 +437,20 @@ public static class ConnectorOperationBindings
             if (!container.TryGetProperty("serverOwnedInputs", out JsonElement inputs)) return;
             foreach (JsonElement input in inputs.EnumerateArray()) target.Add(input.GetProperty("secretBinding").GetString()!);
         }
+    }
+}
+
+/// <summary>Exact Connector-version and canonical-operation authority required before grant creation.</summary>
+public static class ConnectorGrantAuthority
+{
+    /// <summary>Rejects any non-usable, mismatched or non-canonical grant target.</summary>
+    public static void Validate(ConnectorVersionRecord version, string connectorId, string operationId)
+    {
+        if (!string.Equals(version.ConnectorSlug, connectorId, StringComparison.Ordinal))
+            throw new GatewayException("BGW-CONNECTOR-VERSION-NOT-FOUND", 404);
+        if (version.State is not ConnectorVersionState.Validated and not ConnectorVersionState.Published)
+            throw new GatewayException("BGW-CONNECTOR-STATE", 409);
+        _ = ConnectorOperationBindings.Required(version.CanonicalJson, operationId);
     }
 }
 
