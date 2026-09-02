@@ -17,7 +17,7 @@ client .NET Direct. I pack healthcare sono opzionali e non diventano dipendenze 
 |---|---|---|
 | Provare il prodotto in locale | [Quick start](docs/user/quickstart.md) → [pilot locale](docs/user/local-pilot.md) | Una chiamata Direct .NET → Gateway → Connector Published → mock HTTPS/mTLS, con risposta sanificata e audit metadata-only. |
 | Provare FSE2 OfficialTest | [Pilot FSE2 OfficialTest](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-officialtest.md) | Configurazione e pubblicazione di `validate-cda`; la chiamata live è qualificata sulla baseline, ma non è ancora self-service per un nuovo adottante. |
-| Amministrare la piattaforma | [Guida di amministrazione](docs/user/administration.md) | Ruoli, lifecycle, binding, grant, four-eyes, audit e recovery tramite superfici supportate. |
+| Amministrare la piattaforma | [Onboarding guidato Connector](docs/user/guided-connector-onboarding.md) → [guida di amministrazione](docs/user/administration.md) | Cinque azioni su tre ruoli per Installation, definition, binding/grant, four-eyes, publish e prima invocation tramite superfici supportate. |
 | Sviluppare un Connector | [Guida per sviluppatori](docs/connector-development/README.md) | Definizione minima provider-neutral e golden path `plan → apply → verify → first call`. |
 | Capire stato e regole interne | [Indice interno](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/internal/README.md) | Autorità documentali, governance della complessità e regole per agenti/contributor. |
 

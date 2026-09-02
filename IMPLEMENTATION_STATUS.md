@@ -1,8 +1,8 @@
 # Implementation dashboard
 
-Aggiornato: 2026-09-01
+Aggiornato: 2026-09-02
 Baseline CURRENT: `main` / `origin/main` =
-`613b28558fc9aeef13b60381b4fc49b59e2ad5c2`
+`313fa5aa8e6efa4dba7d123d87802705cf45ae81`
 
 Questa pagina è l’autorità sintetica sullo stato integrato. Le guide CURRENT spiegano
 come usare ciò che esiste; piani, review e report precedenti sono HISTORICAL e non
@@ -15,7 +15,7 @@ prevalgono su questa dashboard. `Synthetic`, `live lab`, `OfficialTest qualified
 |---|---|---|
 | Core M0–M5.5 | Integrato | Local Broker, Gateway, PostgreSQL, Connector lifecycle/runtime, Admin e Direct Gateway; non equivale a installer o produzione enterprise. |
 | Pilot locale | **Disponibile — Docker-first synthetic live lab** | Un percorso canonico Direct .NET → Gateway → Connector REST Published → mock HTTPS/mTLS; l'host richiede soltanto Git, PowerShell e Docker Linux/Compose, non SDK applicativi o database. Nessun servizio esterno o cloud. |
-| Admin UI/API | **Integrata** | OIDC/RBAC, CSRF, four-eyes, binding/grant e audit server-side; il quickstart locale usa identità sintetiche, non una configurazione production. |
+| Admin UI/API | **Integrata — onboarding Connector guidato** | Cinque azioni su tre ruoli coprono Installation/enrollment, file validate/import, selettori server-owned per binding/grant, richiesta e approve/publish esatti; `FULLSTACK-02` prova reload/resume e prima invocation su PostgreSQL 18. Il quickstart locale usa identità sintetiche, non una configurazione production. |
 | Authentication foundation | **Integrata** | Le primitive SOAP/session, JWT/X.509, signing e mTLS non qualificano automaticamente un servizio esterno. |
 | FSE2 `validate-cda` | **LIVE_QUALIFIED — OfficialTest** | Una chiamata applicativa bounded sulla baseline exact ha restituito Gateway 200 con A1 mTLS, dual JWT S1 e contratto CDA/`VERIFICA`; non è accreditamento né qualifica production. |
 | FSE2 `delete` | **PRODUCT_PATH_OFFLINE_QUALIFIED** | Metodo/path/no-body/claim e risposta bounded attraversano il product path verso mock; nessuna qualifica live o operationalization distribuita. |

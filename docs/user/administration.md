@@ -23,6 +23,11 @@ four-eyes sono sempre applicati dal server.
 
 ## Ordine canonico di onboarding
 
+Per un nuovo Connector usare la pagina **Onboarding guidato** e la procedura a cinque
+azioni in [Onboarding guidato di un Connector](guided-connector-onboarding.md). La pagina
+seleziona le autorità server-owned, mostra il ruolo successivo e riprende dallo stato
+persistito senza chiedere UUID, checksum o JSON di binding.
+
 ```text
 deployment/provider bootstrap
 → Environment e Installation enrollment
@@ -55,8 +60,10 @@ Published o valori recuperati dai log.
 
 ## Binding, provider e grant
 
-Una definition contiene solo nomi logici. L’amministratore associa per Environment
-endpoint HTTPS e riferimenti provider opachi. Secret retrieval, certificato client,
+Una definition contiene solo nomi logici. L’amministratore sceglie per Environment
+endpoint HTTPS e risorse provider dai cataloghi server-owned; il browser invia soltanto
+identificatore, revisione e checksum come assertion, mentre il server risolve l’autorità
+effettiva. Secret retrieval, certificato client,
 signing e health sono capability separate. Il browser e il client runtime non ricevono
 secret value, chiavi private, P12, provider locator o URL arbitrari.
 

@@ -13,6 +13,8 @@
   `plan → apply → verify`, invocation e blocchi correnti.
 - [Amministrazione](administration.md): lifecycle, binding, grant, four-eyes, audit e
   health.
+- [Onboarding guidato Connector](guided-connector-onboarding.md): cinque azioni su tre
+  ruoli, handoff monouso, ripresa sicura e prima invocation.
 - [Troubleshooting](troubleshooting.md): codice → causa probabile → azione autorizzata.
 - [Limitazioni note](known-limitations.md): cosa non è promesso dalla private preview.
 
