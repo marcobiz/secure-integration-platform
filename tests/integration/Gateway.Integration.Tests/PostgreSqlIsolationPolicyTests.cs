@@ -20,6 +20,7 @@ public sealed class PostgreSqlIsolationPolicyTests
             nameof(AdminApiPostgreSqlSecurityTests),
             nameof(AuthorizedVerticalCapabilityHostedIntegrationTests),
             nameof(ConnectorExecutionSeamHostedIntegrationTests),
+            nameof(ConnectorWorkflowContextPostgresTests),
             nameof(PostgresIsolationTests),
             nameof(ProductionComposedSoapRuntimeIntegrationTests),
             nameof(TypedSessionHandshakeHostedIntegrationTests),
