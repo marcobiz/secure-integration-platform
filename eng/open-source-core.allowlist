@@ -56,6 +56,7 @@ docs/user/README.md
 docs/user/quickstart.md
 docs/user/local-pilot.md
 docs/user/administration.md
+docs/user/guided-connector-onboarding.md
 docs/user/troubleshooting.md
 docs/user/known-limitations.md
 eng/build.ps1

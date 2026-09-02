@@ -57,7 +57,7 @@ public sealed class AdminSecurityTests
         Assert.Contains("BGW-PROVIDER-RESOURCE-AMBIGUOUS", catalog.Reason);
         Assert.Contains("BGW-PROVIDER-RESOURCE-INTEGRITY", catalog.Reason);
         Assert.Contains("BGW-RATE-LIMITED", catalog.Reason);
-        Assert.Equal(176, catalog.Reason.Count);
+        Assert.Equal(179, catalog.Reason.Count);
         Assert.DoesNotContain("grant.revoke", catalog.AuditAction);
         Assert.DoesNotContain("BGW-GRANT-REVOKED", catalog.Reason);
         Assert.Contains(BackendRuntimeWireCodes.Reserved, value => value == new RuntimeWireCode(RuntimeWireCodeKind.AuditAction, "grant.revoke"));
