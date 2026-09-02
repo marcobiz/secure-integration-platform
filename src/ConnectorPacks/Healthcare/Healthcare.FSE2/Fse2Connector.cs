@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using System.Net;
 using System.Text;
@@ -45,7 +44,6 @@ public sealed class Fse2OrganizationExecutionModule : IConnectorExecutionModule
     public void RegisterExecutionStrategies(IConnectorExecutionStrategyRegistrar registrar)
     {
         ArgumentNullException.ThrowIfNull(registrar);
-        registrar.AddSingleton<IFse2WorkflowCorrelationStore, InMemoryFse2WorkflowCorrelationStore>();
         registrar.AddAuthorizedPublishedOperationExpectationProvider<Fse2OrganizationPublishedOperationExpectationProvider>();
         registrar.AddStrategy<Fse2OrganizationExecutionStrategy>();
     }
@@ -139,8 +137,7 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
 /// Connector-local FSE2 composition. Core has already authenticated, granted and resolved Published
 /// A; the strategy receives no store, provider, endpoint, certificate, key, token or HttpClient.
 /// </summary>
-public sealed class Fse2OrganizationExecutionStrategy(
-    IFse2WorkflowCorrelationStore workflowStore) : IConnectorExecutionStrategy
+public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrategy
 {
     private static readonly ConnectorExecutionStrategyKey StrategyKey =
         ConnectorExecutionStrategyKey.Parse("healthcare-fse2-organization");
@@ -222,12 +219,10 @@ public sealed class Fse2OrganizationExecutionStrategy(
         if (profile.Operation.Operation is not (Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace) &&
             (normalized.WorkflowInstanceId is not null || normalized.TraceId is not null))
         {
-            await workflowStore.RecordAsync(execution.CorrelationId, new(
-                WorkflowScope(execution, profile),
-                profile.Operation.Operation,
+            await execution.Capabilities.RecordWorkflowContextAsync(new(
                 security.OperationReference,
-                security.Action,
-                security.PurposeOfUse,
+                Fse2OperationCatalog.ClaimValue(security.Action),
+                Fse2OperationCatalog.ClaimValue(security.PurposeOfUse),
                 profile.OperationProfileChecksumSha256,
                 normalized.WorkflowInstanceId,
                 normalized.TraceId), cancellationToken).ConfigureAwait(false);
@@ -236,7 +231,7 @@ public sealed class Fse2OrganizationExecutionStrategy(
         return new(upstream.StatusCode, "application/json", JsonSerializer.SerializeToUtf8Bytes(normalized, ResponseJson));
     }
 
-    private async Task<Fse2WorkflowExecutionContext> ResolveSecurityContextAsync(
+    private static async Task<Fse2WorkflowExecutionContext> ResolveSecurityContextAsync(
         AuthorizedConnectorExecution execution,
         Fse2PublishedOrganizationProfile profile,
         Fse2InboundPayload inbound,
@@ -253,29 +248,53 @@ public sealed class Fse2OrganizationExecutionStrategy(
 
         try
         {
-            Fse2WorkflowAuthorityScope scope = WorkflowScope(execution, profile);
-            Fse2WorkflowRecord stored = await workflowStore.ResolveAsync(
-                scope,
-                operation.Operation,
-                inbound.ResourceIdentifier!,
-                cancellationToken).ConfigureAwait(false);
-            Fse2OperationDescriptor origin = Fse2OperationCatalog.Get(stored.OriginatingOperation);
-            if (stored.Authority != scope ||
-                !string.Equals(origin.OperationId, stored.OriginatingOperationId, StringComparison.Ordinal) ||
+            ConnectorWorkflowIdentifierKind identifierKind = operation.Operation == Fse2Operation.GetStatusByWorkflow
+                ? ConnectorWorkflowIdentifierKind.WorkflowInstanceId
+                : ConnectorWorkflowIdentifierKind.TraceId;
+            AuthorizedConnectorWorkflowContext stored = await execution.Capabilities.ResolveWorkflowContextAsync(
+                new(identifierKind, inbound.ResourceIdentifier!), cancellationToken).ConfigureAwait(false);
+            Fse2OperationDescriptor origin = Fse2OperationCatalog.Get(stored.OriginatingOperationId);
+            Fse2Action resolvedAction = ParseAction(stored.ActionCode);
+            Fse2PurposeOfUse resolvedPurpose = ParsePurposeOfUse(stored.PurposeOfUseCode);
+            if (!string.Equals(origin.OperationId, stored.OriginatingOperationId, StringComparison.Ordinal) ||
                 !string.Equals(stored.OperationProfileChecksumSha256,
                     profile.CalculateOperationProfileChecksum(origin), StringComparison.Ordinal))
+                throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_WORKFLOW_CONTEXT_DENIED");
+            if (stored.WorkflowInstanceId is not null)
+                _ = Fse2Validation.ValidateWorkflowId(stored.WorkflowInstanceId);
+            if (stored.TraceId is not null)
+                _ = Fse2Validation.ValidateTraceId(stored.TraceId);
+            if (identifierKind == ConnectorWorkflowIdentifierKind.WorkflowInstanceId &&
+                !string.Equals(stored.WorkflowInstanceId, inbound.ResourceIdentifier, StringComparison.Ordinal) ||
+                identifierKind == ConnectorWorkflowIdentifierKind.TraceId &&
+                !string.Equals(stored.TraceId, inbound.ResourceIdentifier, StringComparison.Ordinal))
                 throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_WORKFLOW_CONTEXT_DENIED");
             Fse2OperationCatalog.ValidateOrganizationCombination(
                 profile.SubjectRole,
                 stored.OriginatingOperationId,
-                stored.PurposeOfUse,
-                stored.Action);
-            return new(stored.Action, stored.PurposeOfUse, inbound.ClinicalClaims, stored.OriginatingOperationId);
+                resolvedPurpose,
+                resolvedAction);
+            return new(resolvedAction, resolvedPurpose, inbound.ClinicalClaims, stored.OriginatingOperationId);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Fse2ConnectorException) { throw; }
-        catch (Exception) { throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_WORKFLOW_CONTEXT_NOT_FOUND"); }
     }
+
+    private static Fse2Action ParseAction(string value) => value switch
+    {
+        "CREATE" => Fse2Action.Create,
+        "UPDATE" => Fse2Action.Update,
+        "DELETE" => Fse2Action.Delete,
+        _ => throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_WORKFLOW_CONTEXT_DENIED")
+    };
+
+    private static Fse2PurposeOfUse ParsePurposeOfUse(string value) => value switch
+    {
+        "TREATMENT" => Fse2PurposeOfUse.Treatment,
+        "UPDATE" => Fse2PurposeOfUse.Update,
+        "ACCESS UPDATE" => Fse2PurposeOfUse.AccessUpdate,
+        _ => throw Denied(Fse2ErrorCategory.PolicyDenied, "FSE2_WORKFLOW_CONTEXT_DENIED")
+    };
 
     private static void ValidateRequest(
         Fse2PublishedOrganizationProfile profile,
@@ -342,17 +361,6 @@ public sealed class Fse2OrganizationExecutionStrategy(
         return claims.ToFrozenDictionary(StringComparer.Ordinal);
     }
 
-    private static Fse2WorkflowAuthorityScope WorkflowScope(
-        AuthorizedConnectorExecution execution,
-        Fse2PublishedOrganizationProfile profile) => new(
-            execution.TenantId,
-            execution.ApplicationId,
-            execution.InstallationId,
-            execution.EnvironmentId,
-            execution.ConnectorVersion,
-            execution.ConnectorId,
-            profile.SharedOrganizationProfileChecksumSha256);
-
     private static Fse2ConnectorException Denied(Fse2ErrorCategory category, string code) => new(category, code);
 
     private sealed record Fse2WorkflowExecutionContext(
@@ -360,47 +368,6 @@ public sealed class Fse2OrganizationExecutionStrategy(
         Fse2PurposeOfUse PurposeOfUse,
         Fse2ClinicalClaims ClinicalClaims,
         string OperationReference);
-}
-
-/// <summary>Bounded, process-local technical correlation store owned by the FSE2 module.</summary>
-public sealed class InMemoryFse2WorkflowCorrelationStore : IFse2WorkflowCorrelationStore
-{
-    private const int MaximumRecords = 10_000;
-    private readonly ConcurrentDictionary<(Fse2WorkflowAuthorityScope Authority, string Identifier), Fse2WorkflowRecord> records = new();
-
-    public Task RecordAsync(Guid correlationId, Fse2WorkflowRecord record, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        ArgumentNullException.ThrowIfNull(record);
-        if (correlationId == Guid.Empty || records.Count >= MaximumRecords ||
-            record.WorkflowInstanceId is null && record.TraceId is null)
-            throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_WORKFLOW_RECORD_FAILED");
-        Add(record.WorkflowInstanceId);
-        Add(record.TraceId);
-        return Task.CompletedTask;
-
-        void Add(string? identifier)
-        {
-            if (identifier is null) return;
-            if (!records.TryAdd((record.Authority, identifier), record))
-                throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_WORKFLOW_RECORD_FAILED");
-        }
-    }
-
-    public Task<Fse2WorkflowRecord> ResolveAsync(
-        Fse2WorkflowAuthorityScope authority,
-        Fse2Operation statusOperation,
-        string resourceIdentifier,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (statusOperation is not (Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace) ||
-            !records.TryGetValue((authority, resourceIdentifier), out Fse2WorkflowRecord? record) ||
-            statusOperation == Fse2Operation.GetStatusByWorkflow && !string.Equals(record.WorkflowInstanceId, resourceIdentifier, StringComparison.Ordinal) ||
-            statusOperation == Fse2Operation.GetStatusByTrace && !string.Equals(record.TraceId, resourceIdentifier, StringComparison.Ordinal))
-            throw new Fse2ConnectorException(Fse2ErrorCategory.PolicyDenied, "FSE2_WORKFLOW_CONTEXT_NOT_FOUND");
-        return Task.FromResult(record);
-    }
 }
 
 internal sealed record Fse2InboundPayload(

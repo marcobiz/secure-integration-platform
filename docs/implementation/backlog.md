@@ -58,7 +58,7 @@ slice sotto coprono solo il percorso ancora aperto verso OfficialTest. Il pack r
 | FSE2-HASH | Calcolare `attachment_hash` sugli exact input-file bytes per create/replace e coprire file ≠ multipart con regression. | Candidate implemented, pending exact-head CI/review | Hash truth ministeriale congelata e addendum operativo | FSE2-T05 | `validate-cda`, create/replace live o qualifica OfficialTest. |
 | FSE2-STATUS | Mappare soltanto outcome status tecnici bounded/redatti e dichiarare i limiti di persistenza. | Todo | FSE2-LIVE-VAL, piano workflow | FSE2-T05/06 | Status live o durata cross-process. |
 | FSE2-LIVE-WF | Eseguire create/replace e status soltanto se autorizzati, con hash e outcome verificati. | Todo | FSE2-HASH, FSE2-STATUS | FSE2-T05/06 | Tutte le 11 operation live-qualified o production. |
-| FSE2-DUR | Aggiungere persistenza workflow cross-process/cross-node solo su requisito dimostrato. | Deferred | Evidenza operativa successiva | Gate futuro | Non blocca il primo `validate-cda`; nessuna durata è oggi promessa. |
+| FSE2-DUR | Persistenza workflow cross-process/cross-node per `create + get-status-by-workflow`. | Candidate implemented locally; integration pending | Rebase dopo remediation main FSE2 streaming | `FSE2_DUR_*` PostgreSQL 18 + final exact-head gate | Nessun dato clinico, Admin read-back, retention o qualifica OfficialTest/production. |
 | FSE2-HUMAN | Implementare Human Actor solo con requisito e piano ufficiale autorizzati. | Deferred | Specifica e autorizzazione future | Gate futuro | Organization profile o Human Actor production. |
 
 `FSE2-HASH` e `FSE2-STATUS` non sono prerequisiti di `validate-cda`. Diventano necessari

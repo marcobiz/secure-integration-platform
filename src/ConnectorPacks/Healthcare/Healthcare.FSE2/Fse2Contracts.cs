@@ -257,32 +257,3 @@ public sealed record Fse2Response(
     string? SpanId,
     string? SafeWarning,
     Fse2RetryClass RetryClass);
-
-/// <summary>Full immutable authority prefix shared by workflow record and status lookup.</summary>
-public sealed record Fse2WorkflowAuthorityScope(
-    Guid TenantId,
-    Guid ApplicationId,
-    Guid InstallationId,
-    Guid EnvironmentId,
-    string ConnectorVersion,
-    string ConnectorId,
-    string SharedOrganizationProfileChecksumSha256);
-
-/// <summary>Technical-only persisted reconciliation record. It contains no patient or document data.</summary>
-public sealed record Fse2WorkflowRecord(
-    Fse2WorkflowAuthorityScope Authority,
-    Fse2Operation OriginatingOperation,
-    string OriginatingOperationId,
-    Fse2Action Action,
-    Fse2PurposeOfUse PurposeOfUse,
-    string OperationProfileChecksumSha256,
-    string? WorkflowInstanceId,
-    string? TraceId);
-
-/// <summary>Technical correlation persistence; clinical payloads are outside this contract.</summary>
-public interface IFse2WorkflowCorrelationStore
-{
-    Task RecordAsync(Guid correlationId, Fse2WorkflowRecord record, CancellationToken cancellationToken);
-    Task<Fse2WorkflowRecord> ResolveAsync(Fse2WorkflowAuthorityScope authority, Fse2Operation statusOperation,
-        string resourceIdentifier, CancellationToken cancellationToken);
-}

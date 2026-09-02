@@ -212,6 +212,8 @@ public sealed class AuthorizedConnectorExecution
         private const int TypedSessionHandshakeCapability = 1;
         private const int ComposedSoapCapability = 2;
         private const int RestrictedTransportCapability = 4;
+        private const int RecordWorkflowContextCapability = 8;
+        private const int ResolveWorkflowContextCapability = 16;
 
         public Task<QualifiedGatewayExecutionResult> ExecuteTypedSessionHandshakeAsync(CancellationToken cancellationToken) =>
             StartOperation(TypedSessionHandshakeCapability,
@@ -271,6 +273,25 @@ public sealed class AuthorizedConnectorExecution
                     handoff, request, snapshot, token).ConfigureAwait(false);
                 lock (synchronization) restrictedTransportResult = result;
                 return result;
+            }, cancellationToken);
+
+        public Task RecordWorkflowContextAsync(
+            ConnectorWorkflowContextRecord context,
+            CancellationToken cancellationToken) =>
+            StartOperation(RecordWorkflowContextCapability, async (value, handoff, token) =>
+            {
+                ArgumentNullException.ThrowIfNull(context);
+                await value.RecordWorkflowContextAsync(handoff, context, token).ConfigureAwait(false);
+                return true;
+            }, cancellationToken);
+
+        public Task<AuthorizedConnectorWorkflowContext> ResolveWorkflowContextAsync(
+            ConnectorWorkflowContextLookup lookup,
+            CancellationToken cancellationToken) =>
+            StartOperation(ResolveWorkflowContextCapability, (value, handoff, token) =>
+            {
+                ArgumentNullException.ThrowIfNull(lookup);
+                return value.ResolveWorkflowContextAsync(handoff, lookup, token);
             }, cancellationToken);
 
         public void RejectRestrictedTransportResponse(QualifiedGatewayExecutionResult response, string? safeProblemCode)
@@ -554,6 +575,20 @@ public interface IAuthorizedConnectorCapabilityBridge
         AuthorizedConnectorRestrictedTransportRequest request,
         CancellationToken cancellationToken);
     /// <summary>
+    /// Records one bounded technical workflow context under the current authenticated and exact
+    /// Published authority. No scope, storage or retention selector is accepted.
+    /// </summary>
+    Task RecordWorkflowContextAsync(
+        ConnectorWorkflowContextRecord context,
+        CancellationToken cancellationToken);
+    /// <summary>
+    /// Resolves one workflow or trace identifier only under the current authenticated and exact
+    /// Published authority. No tenant, installation, Connector or configuration selector exists.
+    /// </summary>
+    Task<AuthorizedConnectorWorkflowContext> ResolveWorkflowContextAsync(
+        ConnectorWorkflowContextLookup lookup,
+        CancellationToken cancellationToken);
+    /// <summary>
     /// Rejects the exact non-success result returned by this invocation after connector-local safe
     /// problem mapping. No body, title, detail, endpoint or arbitrary metadata can be supplied.
     /// </summary>
@@ -790,6 +825,16 @@ internal interface IAuthorizedConnectorCapabilityDispatcher
         AuthorizedConnectorExecution execution,
         AuthorizedConnectorRestrictedTransportRequest request,
         IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> signedTokens,
+        CancellationToken cancellationToken);
+
+    Task RecordWorkflowContextAsync(
+        AuthorizedConnectorExecution execution,
+        ConnectorWorkflowContextRecord context,
+        CancellationToken cancellationToken);
+
+    Task<AuthorizedConnectorWorkflowContext> ResolveWorkflowContextAsync(
+        AuthorizedConnectorExecution execution,
+        ConnectorWorkflowContextLookup lookup,
         CancellationToken cancellationToken);
 }
 

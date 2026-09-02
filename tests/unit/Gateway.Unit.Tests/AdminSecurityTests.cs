@@ -53,11 +53,14 @@ public sealed class AdminSecurityTests
         Assert.Contains("BGW-CONNECTOR-PATH-TEMPLATE-CAPABILITY-REQUIRED", catalog.Reason);
         Assert.Contains("BGW-CONNECTOR-PATH-TEMPLATE-INVALID", catalog.Reason);
         Assert.Contains("BGW-CONNECTOR-RESTRICTED-BODY-NONE-METHOD", catalog.Reason);
+        Assert.Contains("BGW-CONNECTOR-WORKFLOW-CONTEXT-CONFLICT", catalog.Reason);
+        Assert.Contains("BGW-CONNECTOR-WORKFLOW-CONTEXT-NOT-FOUND", catalog.Reason);
+        Assert.Contains("BGW-CONNECTOR-WORKFLOW-CONTEXT-UNAVAILABLE", catalog.Reason);
         Assert.Contains("BGW-PROVIDER-PUBLIC-MATERIAL-INVALID", catalog.Reason);
         Assert.Contains("BGW-PROVIDER-RESOURCE-AMBIGUOUS", catalog.Reason);
         Assert.Contains("BGW-PROVIDER-RESOURCE-INTEGRITY", catalog.Reason);
         Assert.Contains("BGW-RATE-LIMITED", catalog.Reason);
-        Assert.Equal(179, catalog.Reason.Count);
+        Assert.Equal(182, catalog.Reason.Count);
         Assert.DoesNotContain("grant.revoke", catalog.AuditAction);
         Assert.DoesNotContain("BGW-GRANT-REVOKED", catalog.Reason);
         Assert.Contains(BackendRuntimeWireCodes.Reserved, value => value == new RuntimeWireCode(RuntimeWireCodeKind.AuditAction, "grant.revoke"));

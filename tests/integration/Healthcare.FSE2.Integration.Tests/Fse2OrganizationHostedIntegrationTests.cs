@@ -2218,7 +2218,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Assert.Equal(1, fixture.GenericTransportRequests);
     }
 
-    private static InMemoryProvider Provider(SyntheticAuthenticationMaterial material) => new(
+    internal static InMemoryProvider Provider(SyntheticAuthenticationMaterial material) => new(
         new Dictionary<string, string>(),
         certificateHandles: new Dictionary<string, X509Certificate2>(StringComparer.Ordinal)
         {
@@ -2526,7 +2526,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         return root.ToJsonString();
     }
 
-    private static HostedExecutionModuleConfiguration Module()
+    internal static HostedExecutionModuleConfiguration Module()
     {
         string path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "SecureIntegration.ConnectorPacks.Healthcare.FSE2.dll"));
         string fullName = System.Reflection.AssemblyName.GetAssemblyName(path).FullName
@@ -2555,7 +2555,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         }
         """;
 
-    private static string PayloadFor(
+    internal static string PayloadFor(
         Fse2OperationDescriptor operation,
         string? requestBodyJson = null,
         byte[]? documentBytes = null)
@@ -2973,12 +2973,12 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             ["role"] = JsonSerializer.SerializeToElement("caller-role")
         });
 
-    private static byte[] InvokeRequest(string payload, Guid? correlationId = null) =>
+    internal static byte[] InvokeRequest(string payload, Guid? correlationId = null) =>
         JsonSerializer.SerializeToUtf8Bytes(Request(payload, correlationId), WebJson);
 
     internal static byte[] DocumentBytes() => [0x00, 0x0d, 0x0a, 0xc3, 0xa8, 0xff, 0x42, 0x47, 0x57];
 
-    private static string SpkiSha256(X509Certificate2 certificate)
+    internal static string SpkiSha256(X509Certificate2 certificate)
     {
         using RSA rsa = certificate.GetRSAPublicKey() ?? throw new InvalidOperationException("Synthetic RSA public key is unavailable.");
         return Convert.ToHexString(SHA256.HashData(rsa.ExportSubjectPublicKeyInfo()));
@@ -2993,7 +2993,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             connectorId, version, signingSpki, clientSpki, applicationVersion,
             [Fse2OperationCatalog.Get(Fse2Operation.Create)]);
 
-    private static string DefinitionForOperations(
+    internal static string DefinitionForOperations(
         string connectorId,
         string version,
         string signingSpki,
@@ -3064,6 +3064,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
     private readonly string expectedApplicationVendor;
     private readonly string expectedApplicationVersion;
     private readonly bool expectLeafOnlyX5c;
+    private readonly bool replaceReturnsWorkflowContext;
     private readonly List<Observation> observations = [];
     private readonly object observationGate = new();
     private int requests;
@@ -3078,7 +3079,8 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         string expectedApplicationId,
         string expectedApplicationVendor,
         string expectedApplicationVersion,
-        bool expectLeafOnlyX5c)
+        bool expectLeafOnlyX5c,
+        bool replaceReturnsWorkflowContext)
     {
         this.application = application;
         Endpoint = endpoint;
@@ -3090,6 +3092,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         this.expectedApplicationVendor = expectedApplicationVendor;
         this.expectedApplicationVersion = expectedApplicationVersion;
         this.expectLeafOnlyX5c = expectLeafOnlyX5c;
+        this.replaceReturnsWorkflowContext = replaceReturnsWorkflowContext;
     }
 
     internal Uri Endpoint { get; }
@@ -3109,7 +3112,8 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         string expectedApplicationId = "broker-gateway",
         string expectedApplicationVendor = "Secure Integration",
         string expectedApplicationVersion = "1.0.0",
-        bool expectLeafOnlyX5c = false)
+        bool expectLeafOnlyX5c = false,
+        bool replaceReturnsWorkflowContext = false)
     {
         WebApplicationBuilder builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.ConfigureKestrel(options => options.Listen(IPAddress.Loopback, 0, listen => listen.UseHttps(https =>
@@ -3137,7 +3141,8 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
             expectedApplicationId,
             expectedApplicationVendor,
             expectedApplicationVersion,
-            expectLeafOnlyX5c);
+            expectLeafOnlyX5c,
+            replaceReturnsWorkflowContext);
         return server;
     }
 
@@ -3219,7 +3224,8 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
 
         context.Response.StatusCode = operation.SuccessStatusCodes.Min();
         context.Response.ContentType = "application/json";
-        string response = operation.Operation == Fse2Operation.Create
+        string response = operation.Operation == Fse2Operation.Create ||
+            replaceReturnsWorkflowContext && operation.Operation == Fse2Operation.Replace
             ? "{\"workflowInstanceId\":\"workflow-fse2-1\",\"traceID\":\"trace-fse2-1\",\"spanID\":\"span-fse2-1\"}"
             : "{}";
         await context.Response.WriteAsync(response, context.RequestAborted);

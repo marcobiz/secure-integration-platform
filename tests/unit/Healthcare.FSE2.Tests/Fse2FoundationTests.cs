@@ -46,10 +46,10 @@ public sealed class Fse2FoundationTests
         RecordingRegistrar registrar = new();
         Fse2OrganizationExecutionModule module = new();
         module.RegisterExecutionStrategies(registrar);
-        Fse2OrganizationExecutionStrategy strategy = new(new InMemoryFse2WorkflowCorrelationStore());
+        Fse2OrganizationExecutionStrategy strategy = new();
 
         Assert.Equal("healthcare-fse2", module.Id.Value);
-        Assert.Equal([typeof(IFse2WorkflowCorrelationStore), typeof(InMemoryFse2WorkflowCorrelationStore)], registrar.Singleton);
+        Assert.Null(registrar.Singleton);
         Assert.Equal(typeof(Fse2OrganizationExecutionStrategy), registrar.Strategy);
         Assert.Equal(typeof(Fse2OrganizationPublishedOperationExpectationProvider), registrar.ExpectationProvider);
         Assert.Equal("healthcare-fse2-organization", strategy.Key.Value);
@@ -155,45 +155,32 @@ public sealed class Fse2FoundationTests
     }
 
     [Fact]
-    public async Task FSE2_WORKFLOW_correlation_is_bound_to_every_shared_authority_dimension()
+    public void FSE2_WORKFLOW_bridge_record_is_closed_technical_only_and_has_no_scope_or_clinical_fields()
     {
-        InMemoryFse2WorkflowCorrelationStore store = new();
-        Guid tenant = Guid.NewGuid();
-        Guid application = Guid.NewGuid();
-        Guid installation = Guid.NewGuid();
-        Guid environment = Guid.NewGuid();
-        Fse2WorkflowAuthorityScope exact = new(
-            tenant, application, installation, environment, "1.0.0", "fse2", new string('a', 64));
-        Fse2WorkflowRecord record = new(
-            exact,
-            Fse2Operation.Create,
+        ConnectorWorkflowContextRecord record = new(
             "create",
-            Fse2Action.Create,
-            Fse2PurposeOfUse.Treatment,
+            "CREATE",
+            "TREATMENT",
             new string('b', 64),
             "workflow-1",
             "trace-1");
-        await store.RecordAsync(Guid.NewGuid(), record, TestContext.Current.CancellationToken);
-        Assert.Equal(record, await store.ResolveAsync(
-            exact, Fse2Operation.GetStatusByWorkflow, "workflow-1", TestContext.Current.CancellationToken));
-        Assert.Equal(record, await store.ResolveAsync(
-            exact, Fse2Operation.GetStatusByTrace, "trace-1", TestContext.Current.CancellationToken));
 
-        Fse2WorkflowAuthorityScope[] denied =
-        [
-            exact with { TenantId = Guid.NewGuid() },
-            exact with { ApplicationId = Guid.NewGuid() },
-            exact with { InstallationId = Guid.NewGuid() },
-            exact with { EnvironmentId = Guid.NewGuid() },
-            exact with { ConnectorVersion = "2.0.0" },
-            exact with { ConnectorId = "other-fse2" },
-            exact with { SharedOrganizationProfileChecksumSha256 = new string('c', 64) }
-        ];
-        foreach (Fse2WorkflowAuthorityScope scope in denied)
-            await Assert.ThrowsAsync<Fse2ConnectorException>(() => store.ResolveAsync(
-                scope, Fse2Operation.GetStatusByWorkflow, "workflow-1", TestContext.Current.CancellationToken));
-        await Assert.ThrowsAsync<Fse2ConnectorException>(() => store.ResolveAsync(
-            exact, Fse2Operation.GetStatusByWorkflow, "unknown", TestContext.Current.CancellationToken));
+        Assert.Equal("create", record.OriginatingOperationId);
+        Assert.Equal("CREATE", record.ActionCode);
+        Assert.Equal("TREATMENT", record.PurposeOfUseCode);
+        Assert.Equal("workflow-1", record.WorkflowInstanceId);
+        Assert.Equal("trace-1", record.TraceId);
+        Assert.Equal(
+            ["ActionCode", "OperationProfileChecksumSha256", "OriginatingOperationId", "PurposeOfUseCode", "TraceId", "WorkflowInstanceId"],
+            typeof(ConnectorWorkflowContextRecord).GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                .Select(value => value.Name).Order(StringComparer.Ordinal).ToArray());
+        string[] forbidden = ["Tenant", "Application", "Installation", "Environment", "Connector", "Binding", "Published", "Person", "Patient", "Payload", "Body", "Jwt", "Certificate", "Endpoint", "Header", "Metadata"];
+        Assert.DoesNotContain(typeof(ConnectorWorkflowContextRecord).GetProperties(), property =>
+            forbidden.Any(value => property.Name.Contains(value, StringComparison.OrdinalIgnoreCase)));
+        Assert.Throws<ArgumentException>(() => new ConnectorWorkflowContextRecord(
+            "create", "CREATE", "TREATMENT", new string('b', 64), null, null));
+        Assert.Throws<ArgumentException>(() => new ConnectorWorkflowContextRecord(
+            "create", "CREATE", "patient=raw", new string('b', 64), "workflow-1", null));
     }
 
     [Fact]

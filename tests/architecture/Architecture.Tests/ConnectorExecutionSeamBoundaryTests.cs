@@ -319,6 +319,7 @@ public sealed class ConnectorExecutionSeamBoundaryTests
         string[] files =
         [
             Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"),
+            Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorWorkflowContextContracts.cs"),
             Path.Combine(Root, "src", "Gateway", "Gateway.Application", "OperationServices.cs"),
             Path.Combine(Root, "src", "Gateway", "Gateway.Api", "ConnectorExecutionModuleLoader.cs"),
             Path.Combine(Root, "src", "Gateway", "Gateway.Api", "GatewayHostOptions.cs"),

@@ -939,6 +939,11 @@ internal sealed class TypedSessionHostFactory : WebApplicationFactory<Program>
         }
         builder.ConfigureTestServices(services =>
         {
+            if (runtimeConnection is null)
+            {
+                services.RemoveAll<IConnectorWorkflowContextStore>();
+                services.AddSingleton<IConnectorWorkflowContextStore, TestConnectorWorkflowContextStore>();
+            }
             services.RemoveAll<IHostResolver>();
             services.AddSingleton<LoopbackResolver>(_ => new LoopbackResolver(cancellationToken =>
                 BeforeHostResolution?.Invoke(cancellationToken) ?? Task.CompletedTask));

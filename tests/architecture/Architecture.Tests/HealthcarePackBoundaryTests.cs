@@ -182,6 +182,34 @@ public sealed class HealthcarePackBoundaryTests
     }
 
     [Fact]
+    public void HC_W1_ARCH_FSE2_durable_workflow_uses_only_the_closed_provider_neutral_Core_bridge()
+    {
+        string coreContract = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Application", "ConnectorWorkflowContextContracts.cs"));
+        string executionContract = File.ReadAllText(Path.Combine(
+            Root, "src", "Gateway", "Gateway.Application", "ConnectorExecutionContracts.cs"));
+        string strategy = File.ReadAllText(Path.Combine(
+            Root, "src", "ConnectorPacks", "Healthcare", "Healthcare.FSE2", "Fse2Connector.cs"));
+
+        Assert.DoesNotContain("FSE2", coreContract, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("RecordWorkflowContextAsync", executionContract, StringComparison.Ordinal);
+        Assert.Contains("ResolveWorkflowContextAsync", executionContract, StringComparison.Ordinal);
+        Assert.Contains("execution.Capabilities.RecordWorkflowContextAsync", strategy, StringComparison.Ordinal);
+        Assert.Contains("execution.Capabilities.ResolveWorkflowContextAsync", strategy, StringComparison.Ordinal);
+        Assert.DoesNotContain("IConnectorWorkflowContextStore", strategy, StringComparison.Ordinal);
+        Assert.DoesNotContain("InMemoryFse2WorkflowCorrelationStore", strategy, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConcurrentDictionary", strategy, StringComparison.Ordinal);
+        string publicContract = coreContract[..coreContract.IndexOf(
+            "internal sealed record ConnectorWorkflowContextAuthorityScope", StringComparison.Ordinal)];
+        foreach (string selector in new[]
+        {
+            "TenantId", "ApplicationId", "InstallationId", "EnvironmentId", "ConnectorId",
+            "ConnectorVersion", "BindingId"
+        })
+            Assert.DoesNotContain(selector, publicContract, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void HC_W1_ARCH_FSE2_caller_surface_cannot_select_actor_or_authentication_authority()
     {
         string packRoot = Path.Combine(Root, "src", "ConnectorPacks", "Healthcare", "Healthcare.FSE2");

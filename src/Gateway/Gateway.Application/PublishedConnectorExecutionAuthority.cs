@@ -77,6 +77,29 @@ internal sealed record AuthorizedPublishedExecutionStamp(
         }
     }
 
+    internal byte[] WorkflowContextConfigurationSha256()
+    {
+        using MemoryStream buffer = new();
+        using (Utf8JsonWriter writer = new(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("connectorId", ConnectorId);
+            writer.WriteString("environmentId", EnvironmentId);
+            writer.WriteString("connectorVersion", ConnectorVersion);
+            writer.WriteString("versionId", VersionId);
+            writer.WriteNumber("publicationRevision", PublicationRevision);
+            writer.WriteString("canonicalChecksumSha256", CanonicalChecksumSha256);
+            writer.WriteString("bindingId", BindingId);
+            writer.WriteNumber("bindingRevision", BindingRevision);
+            writer.WriteString("bindingChecksumSha256", BindingChecksumSha256);
+            writer.WriteString("resourceStampSha256", ResourceStampSha256);
+            writer.WriteString("authenticationKind", AuthenticationKind.ToString());
+            writer.WriteString("executionStrategyKey", ExecutionStrategyKey.Value);
+            writer.WriteEndObject();
+        }
+        return SHA256.HashData(buffer.GetBuffer().AsSpan(0, checked((int)buffer.Length)));
+    }
+
     private static JsonElement RequiredOperation(PublishedConnectorSnapshot snapshot, string operationId)
     {
         using JsonDocument document = JsonDocument.Parse(snapshot.Version.CanonicalJson, new JsonDocumentOptions { MaxDepth = 32 });

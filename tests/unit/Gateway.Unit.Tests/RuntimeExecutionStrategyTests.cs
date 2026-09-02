@@ -148,8 +148,10 @@ public sealed class RuntimeExecutionStrategyTests
             [nameof(IAuthorizedConnectorCapabilityBridge.CreateSignedTokenAsync), nameof(IAuthorizedConnectorCapabilityBridge.CreateSignedTokenAsync),
                 nameof(IAuthorizedConnectorCapabilityBridge.ExecuteComposedSoapAsync),
                 nameof(IAuthorizedConnectorCapabilityBridge.ExecuteRestrictedTransportAsync), nameof(IAuthorizedConnectorCapabilityBridge.ExecuteTypedSessionHandshakeAsync),
+                nameof(IAuthorizedConnectorCapabilityBridge.RecordWorkflowContextAsync),
                 nameof(IAuthorizedConnectorCapabilityBridge.RejectRestrictedTransportResponse),
-                nameof(IAuthorizedConnectorCapabilityBridge.RejectRestrictedTransportResponseMapping)],
+                nameof(IAuthorizedConnectorCapabilityBridge.RejectRestrictedTransportResponseMapping),
+                nameof(IAuthorizedConnectorCapabilityBridge.ResolveWorkflowContextAsync)],
             typeof(IAuthorizedConnectorCapabilityBridge).GetMethods().Select(method => method.Name).Order(StringComparer.Ordinal).ToArray());
         MethodInfo slotSigning = Assert.Single(typeof(IAuthorizedConnectorCapabilityBridge).GetMethods(), method =>
             method.Name == nameof(IAuthorizedConnectorCapabilityBridge.CreateSignedTokenAsync) &&
@@ -158,6 +160,8 @@ public sealed class RuntimeExecutionStrategyTests
             slotSigning.GetParameters().Select(value => value.ParameterType));
         Assert.Equal(typeof(Task<AuthorizedConnectorSignedToken>), slotSigning.ReturnType);
         Assert.Equal(typeof(Task<QualifiedGatewayExecutionResult>), typeof(IAuthorizedConnectorCapabilityBridge).GetMethod(nameof(IAuthorizedConnectorCapabilityBridge.ExecuteRestrictedTransportAsync))!.ReturnType);
+        Assert.Equal(typeof(Task), typeof(IAuthorizedConnectorCapabilityBridge).GetMethod(nameof(IAuthorizedConnectorCapabilityBridge.RecordWorkflowContextAsync))!.ReturnType);
+        Assert.Equal(typeof(Task<AuthorizedConnectorWorkflowContext>), typeof(IAuthorizedConnectorCapabilityBridge).GetMethod(nameof(IAuthorizedConnectorCapabilityBridge.ResolveWorkflowContextAsync))!.ReturnType);
         Assert.Empty(typeof(ConnectorSigningSlotKey).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
         Assert.Equal([nameof(ConnectorSigningSlotKey.Value)],
             typeof(ConnectorSigningSlotKey).GetProperties(BindingFlags.Public | BindingFlags.Instance).Select(value => value.Name));
@@ -578,6 +582,10 @@ public sealed class RuntimeExecutionStrategyTests
         public Task<string> CreateSignedTokenAsync(AuthorizedConnectorExecution execution, ConnectorSigningSlotKey signingSlot, IReadOnlyDictionary<string, JsonElement> claims, CancellationToken cancellationToken) =>
             throw new InvalidOperationException();
         public Task<QualifiedGatewayExecutionResult> ExecuteRestrictedTransportAsync(AuthorizedConnectorExecution execution, AuthorizedConnectorRestrictedTransportRequest request, IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> signedTokens, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
+        public Task RecordWorkflowContextAsync(AuthorizedConnectorExecution execution, ConnectorWorkflowContextRecord context, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
+        public Task<AuthorizedConnectorWorkflowContext> ResolveWorkflowContextAsync(AuthorizedConnectorExecution execution, ConnectorWorkflowContextLookup lookup, CancellationToken cancellationToken) =>
             throw new InvalidOperationException();
     }
 

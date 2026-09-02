@@ -197,6 +197,10 @@ public sealed class CapabilityLifetimeRemediationTests
             IReadOnlyDictionary<ConnectorSigningSlotKey, AuthorizedConnectorSignedToken> signedTokens,
             CancellationToken cancellationToken) =>
             signing ? throw new InvalidOperationException() : GateAsync(new QualifiedGatewayExecutionResult(200, "application/json", "{}"u8.ToArray()), cancellationToken);
+        public Task RecordWorkflowContextAsync(AuthorizedConnectorExecution execution, ConnectorWorkflowContextRecord context, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
+        public Task<AuthorizedConnectorWorkflowContext> ResolveWorkflowContextAsync(AuthorizedConnectorExecution execution, ConnectorWorkflowContextLookup lookup, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
 
         private async Task<T> GateAsync<T>(T result, CancellationToken cancellationToken)
         {
@@ -241,6 +245,10 @@ public sealed class CapabilityLifetimeRemediationTests
             Interlocked.Increment(ref transportCalls);
             return Task.FromResult(new QualifiedGatewayExecutionResult(200, "application/json", "{}"u8.ToArray()));
         }
+        public Task RecordWorkflowContextAsync(AuthorizedConnectorExecution execution, ConnectorWorkflowContextRecord context, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
+        public Task<AuthorizedConnectorWorkflowContext> ResolveWorkflowContextAsync(AuthorizedConnectorExecution execution, ConnectorWorkflowContextLookup lookup, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException();
     }
 
     private sealed class SlotSequenceStrategy(string key, IReadOnlyList<string> slots) : IConnectorExecutionStrategy

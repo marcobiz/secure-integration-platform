@@ -124,6 +124,7 @@ else
     builder.Services.AddSingleton<IAdminGatewayRegistry>(services => new PostgresGatewayRegistry(services.GetRequiredService<AdminPostgresDataSource>().Value, services.GetService<IAdminTransactionFaultInjector>()));
     builder.Services.AddSingleton<IAdminDirectoryStore, PostgresAdminDirectoryStore>();
     builder.Services.AddSingleton<IConnectorConfigurationStore, RoutingConnectorConfigurationStore>();
+    builder.Services.AddSingleton<IConnectorWorkflowContextStore, PostgresConnectorWorkflowContextStore>();
     builder.Services.AddSingleton<IAdminSecurityStore, PostgresAdminSecurityStore>();
     builder.Services.AddSingleton<IAdminSessionStore, PostgresAdminSessionStore>();
 }
@@ -204,7 +205,12 @@ builder.Services.AddSingleton<IAuthorizedVerticalCapabilityRuntime>(services => 
     services.GetRequiredService<IRestrictedTransport>(),
     services.GetRequiredService<IGatewayClock>(),
     services.GetService<IPrivateDestinationAllowance>()));
-builder.Services.AddSingleton<AuthorizedConnectorCapabilityDispatcher>();
+builder.Services.AddSingleton(services => new AuthorizedConnectorCapabilityDispatcher(
+    services.GetRequiredService<TypedSessionHandshakeRuntime>(),
+    services.GetRequiredService<ComposedSoapExecutionStrategy>(),
+    services.GetRequiredService<IAuthorizedVerticalCapabilityRuntime>(),
+    services.GetService<IConnectorWorkflowContextStore>(),
+    services.GetRequiredService<IGatewayClock>()));
 builder.Services.AddSingleton<RestrictedEgressService>(services => new RestrictedEgressService(
     services.GetRequiredService<IGatewayRegistry>(),
     services.GetRequiredService<IGatewayOperationCatalog>(),

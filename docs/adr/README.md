@@ -34,3 +34,5 @@ Formato: contesto, decisione, conseguenze e alternative. Tutti gli ADR elencati 
 | [0028](0028-bounded-jwt-signing-certificate-key-usage.md) | Bounded JWT signing-certificate Key Usage |
 | [0029](0029-local-pkcs12-provider-for-offline-labs.md) | Provider PKCS#12 locale per laboratori offline |
 | [0030](0030-fse2-bounded-problem-response-diagnostics.md) | FSE2 bounded problem-response diagnostics |
+| [0031](0031-fse2-officialtest-operational-source-and-provisioner.md) | FSE2 OfficialTest operational source and vertical provisioner |
+| [0032](0032-durable-connector-workflow-context.md) | Durable authorized Connector workflow context |

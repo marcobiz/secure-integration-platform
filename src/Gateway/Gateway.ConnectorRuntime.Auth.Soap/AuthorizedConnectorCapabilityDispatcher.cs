@@ -11,7 +11,9 @@ namespace SecureIntegration.Gateway.ConnectorRuntime.Auth.Soap;
 internal sealed class AuthorizedConnectorCapabilityDispatcher(
     TypedSessionHandshakeRuntime handshakes,
     ComposedSoapExecutionStrategy composedSoap,
-    IAuthorizedVerticalCapabilityRuntime verticalCapabilities) : IAuthorizedConnectorCapabilityDispatcher
+    IAuthorizedVerticalCapabilityRuntime verticalCapabilities,
+    IConnectorWorkflowContextStore? workflowContexts,
+    IGatewayClock clock) : IAuthorizedConnectorCapabilityDispatcher
 {
     private static readonly JsonSerializerOptions ResultJson = CreateResultJson();
 
@@ -86,6 +88,44 @@ internal sealed class AuthorizedConnectorCapabilityDispatcher(
         ArgumentNullException.ThrowIfNull(signedTokens);
         return verticalCapabilities.ExecuteRestrictedTransportAsync(execution, request, signedTokens, cancellationToken);
     }
+
+    public async Task RecordWorkflowContextAsync(
+        AuthorizedConnectorExecution execution,
+        ConnectorWorkflowContextRecord context,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(execution);
+        ArgumentNullException.ThrowIfNull(context);
+        IConnectorWorkflowContextStore store = workflowContexts ??
+            throw new GatewayException("BGW-CONNECTOR-WORKFLOW-CONTEXT-UNAVAILABLE", 503);
+        ConnectorWorkflowContextRecordResult result = await store.RecordAsync(
+            new(WorkflowAuthority(execution), context, clock.UtcNow),
+            cancellationToken).ConfigureAwait(false);
+        if (result == ConnectorWorkflowContextRecordResult.Conflict)
+            throw new GatewayException("BGW-CONNECTOR-WORKFLOW-CONTEXT-CONFLICT", 409);
+    }
+
+    public async Task<AuthorizedConnectorWorkflowContext> ResolveWorkflowContextAsync(
+        AuthorizedConnectorExecution execution,
+        ConnectorWorkflowContextLookup lookup,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(execution);
+        ArgumentNullException.ThrowIfNull(lookup);
+        IConnectorWorkflowContextStore store = workflowContexts ??
+            throw new GatewayException("BGW-CONNECTOR-WORKFLOW-CONTEXT-UNAVAILABLE", 503);
+        return await store.ResolveAsync(WorkflowAuthority(execution), lookup, cancellationToken).ConfigureAwait(false) ??
+            throw new GatewayException("BGW-CONNECTOR-WORKFLOW-CONTEXT-NOT-FOUND", 409);
+    }
+
+    private static ConnectorWorkflowContextAuthorityScope WorkflowAuthority(AuthorizedConnectorExecution execution) => new(
+        execution.TenantId,
+        execution.ApplicationId,
+        execution.InstallationId,
+        execution.EnvironmentId,
+        execution.ConnectorId,
+        execution.ConnectorVersion,
+        execution.PublishedAuthority.WorkflowContextConfigurationSha256());
 
     private static JsonSerializerOptions CreateResultJson()
     {
