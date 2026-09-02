@@ -217,7 +217,7 @@ export function GuidedOnboardingPage() {
     <Card><CardContent>
       <Typography variant="h2">{t('guidedCurrentState')}</Typography>
       <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} sx={{ mt: 1, flexWrap: 'wrap' }}>
-        <Chip label={`${t('status')}: ${t(stateKey)}`} color={isPublished ? 'success' : 'default'} />
+        <Chip label={`${t('status')}: ${t(stateKey)}`} variant={isPublished ? 'outlined' : 'filled'} />
         <Chip label={`${t('guidedMissingPrerequisite')}: ${t(prerequisiteKey)}`} />
         <Chip label={`${t('guidedRequiredRole')}: ${t(roleKey)}`} />
       </Stack>
