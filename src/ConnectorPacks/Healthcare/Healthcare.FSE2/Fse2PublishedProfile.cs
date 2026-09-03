@@ -16,6 +16,7 @@ public sealed class Fse2PublishedOrganizationProfile
     public const string IntegritySigningSlotName = "integrity";
     public const string IntegrityHeaderName = "FSE-JWT-Signature";
     public const string ValidateCdaActivity = "VERIFICA";
+    public const string ValidateCdaPublicationActivity = "VALIDATION";
     public const string OfficialAcceptMediaType = "application/json";
 
     private static readonly HashSet<string> AllowedProperties = new(StringComparer.Ordinal)
@@ -117,7 +118,7 @@ public sealed class Fse2PublishedOrganizationProfile
             if (maximumDocumentBytes is < 1 or > 15 * 1024 * 1024) throw new JsonException();
             string? activity = OptionalString(root, "activity", 32);
             string? acceptMediaType = OptionalString(root, "acceptMediaType", 128);
-            if (activity is not null && !string.Equals(activity, ValidateCdaActivity, StringComparison.Ordinal) ||
+            if (activity is not null && !IsSupportedValidateCdaActivity(activity) ||
                 acceptMediaType is not null && !string.Equals(acceptMediaType, OfficialAcceptMediaType, StringComparison.Ordinal))
                 throw new JsonException();
 
@@ -250,6 +251,10 @@ public sealed class Fse2PublishedOrganizationProfile
         root.TryGetProperty(name, out JsonElement value) ? RequiredString(root, name, maximumLength) : null;
 
     private static string SafeIdentifier(string value) => Fse2Validation.IsSafeIdentifier(value) ? value : throw new JsonException();
+
+    internal static bool IsSupportedValidateCdaActivity(string value) =>
+        string.Equals(value, ValidateCdaActivity, StringComparison.Ordinal) ||
+        string.Equals(value, ValidateCdaPublicationActivity, StringComparison.Ordinal);
 
     private static string SafeApplicationValue(string value) =>
         !value.Any(character => character is '^' or '&') ? value : throw new JsonException();

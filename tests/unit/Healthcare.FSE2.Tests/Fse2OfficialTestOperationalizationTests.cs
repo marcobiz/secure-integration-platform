@@ -253,10 +253,12 @@ public sealed class Fse2OfficialTestOperationalizationTests
     {
         byte[] parity101 = "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}"u8.ToArray();
         byte[] historical100 = "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\",\"mode\":\"ATTACHMENT\"}"u8.ToArray();
+        byte[] publication = "{\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\",\"activity\":\"VALIDATION\"}"u8.ToArray();
         Fse2ClinicalClaims claims = Fse2ClinicalClaims.CreatePerson(
             "RSSMRA80A01H501U", "2.16.840.1.113883.2.9.4.3.2", true, "('11502-2^^2.16.840.1.113883.6.1')");
         AssertSealedWithoutCallerAuthority(parity101);
         AssertSealedWithoutCallerAuthority(historical100);
+        AssertSealedWithoutCallerAuthority(publication);
 
         foreach (string invalid in new[]
         {
@@ -274,6 +276,25 @@ public sealed class Fse2OfficialTestOperationalizationTests
             byte[] sealedRequestBody = Convert.FromBase64String(payload.RootElement.GetProperty("requestBodyBase64").GetString()!);
             Assert.Equal(requestBody, sealedRequestBody);
         }
+    }
+
+    [Fact]
+    public void FSE2_OFFICIALTEST_publication_validation_is_an_explicit_Published_activity()
+    {
+        using JsonDocument definition = JsonDocument.Parse(Compile().CanonicalDefinition);
+        string canonicalProfile = definition.RootElement.GetProperty("operations")[0]
+            .GetProperty("extensionConfiguration").GetRawText();
+        byte[] publicationProfile = Encoding.UTF8.GetBytes(canonicalProfile.Replace(
+            "\"activity\":\"VERIFICA\"",
+            "\"activity\":\"VALIDATION\"",
+            StringComparison.Ordinal));
+
+        Fse2PublishedOrganizationProfile profile = Fse2PublishedOrganizationProfile.ParseJson(
+            publicationProfile,
+            Fse2OfficialTestCanonicalDefinition.OperationId);
+
+        Assert.Equal(Fse2PublishedOrganizationProfile.ValidateCdaPublicationActivity, profile.Activity);
+        Assert.Equal(64, profile.OperationProfileChecksumSha256.Length);
     }
 
     private static Fse2OfficialTestCompiledConfiguration Compile(Fse2OfficialTestOperationalPlan? value = null)

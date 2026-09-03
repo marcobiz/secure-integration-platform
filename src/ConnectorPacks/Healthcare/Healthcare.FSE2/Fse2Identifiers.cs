@@ -200,12 +200,20 @@ public static partial class Fse2Validation
         ReadOnlyMemory<byte> value,
         Fse2Operation operation,
         Fse2ValidateCdaPublishedContract validateCdaContract) =>
-        ValidateJsonObject(value, (Fse2Operation?)operation, validateCdaContract);
+        ValidateJsonObject(value, (Fse2Operation?)operation, validateCdaContract, expectedValidateCdaActivity: null);
+
+    internal static void ValidateJsonObject(
+        ReadOnlyMemory<byte> value,
+        Fse2Operation operation,
+        Fse2ValidateCdaPublishedContract validateCdaContract,
+        string expectedValidateCdaActivity) =>
+        ValidateJsonObject(value, (Fse2Operation?)operation, validateCdaContract, expectedValidateCdaActivity);
 
     private static void ValidateJsonObject(
         ReadOnlyMemory<byte> value,
         Fse2Operation? operation,
-        Fse2ValidateCdaPublishedContract? validateCdaContract = null)
+        Fse2ValidateCdaPublishedContract? validateCdaContract = null,
+        string? expectedValidateCdaActivity = null)
     {
         if (value.IsEmpty || value.Length > 1024 * 1024) throw new ArgumentException("FSE2_REQUEST_BODY_INVALID", nameof(value));
         try
@@ -221,7 +229,7 @@ public static partial class Fse2Validation
                 property.Name.Equals("attachmentHashInput", StringComparison.OrdinalIgnoreCase)))
                 throw new JsonException();
             if (operation == Fse2Operation.ValidateCda)
-                ValidateCdaRequestBody(document.RootElement, validateCdaContract);
+                ValidateCdaRequestBody(document.RootElement, validateCdaContract, expectedValidateCdaActivity);
             if (operation is Fse2Operation.Create or Fse2Operation.Replace)
                 ValidatePublicationWorkflowInstanceId(value.Span);
         }
@@ -233,12 +241,19 @@ public static partial class Fse2Validation
 
     private static void ValidateCdaRequestBody(
         JsonElement root,
-        Fse2ValidateCdaPublishedContract? publishedContract)
+        Fse2ValidateCdaPublishedContract? publishedContract,
+        string? expectedActivity)
     {
         JsonProperty[] properties = root.EnumerateObject().ToArray();
+        string? observedActivity = root.TryGetProperty("activity", out JsonElement activity) && activity.ValueKind == JsonValueKind.String
+            ? activity.GetString()
+            : null;
+        bool activityMatches = expectedActivity is null
+            ? observedActivity is not null && Fse2PublishedOrganizationProfile.IsSupportedValidateCdaActivity(observedActivity)
+            : string.Equals(observedActivity, expectedActivity, StringComparison.Ordinal);
         bool commonFieldsAreInvalid =
             properties.Select(value => value.Name).Distinct(StringComparer.Ordinal).Count() != properties.Length ||
-            !string.Equals(root.GetProperty("activity").GetString(), Fse2PublishedOrganizationProfile.ValidateCdaActivity, StringComparison.Ordinal) ||
+            !activityMatches ||
             !string.Equals(root.GetProperty("healthDataFormat").GetString(), "CDA", StringComparison.Ordinal);
         bool parity101 = properties.Length == 2 &&
             properties.All(value => value.Value.ValueKind == JsonValueKind.String &&

@@ -90,7 +90,7 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
         bool officialTestValidateCda = profile.EnvironmentClass == Fse2EnvironmentClass.OfficialTest &&
             profile.Operation.Operation == Fse2Operation.ValidateCda;
         if (officialTestValidateCda &&
-            (!string.Equals(profile.Activity, Fse2PublishedOrganizationProfile.ValidateCdaActivity, StringComparison.Ordinal) ||
+            (profile.Activity is null || !Fse2PublishedOrganizationProfile.IsSupportedValidateCdaActivity(profile.Activity) ||
              !string.Equals(profile.AcceptMediaType, Fse2PublishedOrganizationProfile.OfficialAcceptMediaType, StringComparison.Ordinal)))
             throw new Fse2ConnectorException(Fse2ErrorCategory.PolicyDenied, "FSE2_OFFICIALTEST_PROFILE_DENIED");
         ConnectorSigningSlotKey authorization = profile.AuthorizationSigningSlot;
@@ -328,7 +328,11 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
         {
             try
             {
-                Fse2Validation.ValidateJsonObject(inbound.RequestBody, operation.Operation, validateCdaContract);
+                Fse2Validation.ValidateJsonObject(
+                    inbound.RequestBody,
+                    operation.Operation,
+                    validateCdaContract,
+                    profile.Activity ?? Fse2PublishedOrganizationProfile.ValidateCdaActivity);
             }
             catch (ArgumentException)
             {

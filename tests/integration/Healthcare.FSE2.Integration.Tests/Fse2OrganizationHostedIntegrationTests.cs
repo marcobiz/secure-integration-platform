@@ -45,6 +45,8 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\",\"mode\":\"ATTACHMENT\"}";
     private const string ParityValidateCdaRequestBody =
         "{\"healthDataFormat\":\"CDA\",\"activity\":\"VERIFICA\"}";
+    private const string PublicationValidateCdaRequestBody =
+        "{\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\",\"activity\":\"VALIDATION\"}";
     internal const int TokenLifetimeSeconds = 300;
     private const string RequirePostgresGateVariable = "REQUIRE_FSE2_POSTGRES_GATE";
     private static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web);
@@ -209,6 +211,23 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             "other-connector");
 
         AssertHistoricalWireContract(result);
+    }
+
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_publication_validation_dispatches_only_when_request_matches_Published_activity()
+    {
+        VersionPolicyResult result = await RunVersionPolicyContractAsync(
+            Fse2OfficialTestCanonicalDefinition.ConnectorId + "-publication",
+            "1.0.0",
+            "chain",
+            PublicationValidateCdaRequestBody,
+            "publication-validation",
+            publishedActivity: Fse2PublishedOrganizationProfile.ValidateCdaPublicationActivity,
+            mismatchedRequestBody: HistoricalValidateCdaRequestBody);
+
+        Assert.True((int)result.StatusCode is >= 200 and <= 299, result.ResponseBody);
+        Assert.Equal(1, result.TransportRequests);
+        Assert.Equal(PublicationValidateCdaRequestBody, Encoding.UTF8.GetString(result.Observation.RequestBody));
     }
 
     [Fact]
@@ -378,7 +397,9 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         string connectorVersion,
         string certificateHeader,
         string requestBody,
-        string identitySuffix)
+        string identitySuffix,
+        string? publishedActivity = null,
+        string? mismatchedRequestBody = null)
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
         TrackingCapabilityProvider provider = new(Provider(material));
@@ -403,7 +424,8 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             environmentId,
             connectorId,
             connectorVersion,
-            certificateHeader);
+            certificateHeader,
+            publishedActivity);
         _ = await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
         Guid tenantId = await fixture.CreateTenantAsync("fse2-officialtest-version-policy-tenant-" + identitySuffix);
         Guid applicationId = await fixture.CreateApplicationAsync("fse2-officialtest-version-policy-application-" + identitySuffix);
@@ -423,6 +445,19 @@ public sealed class Fse2OrganizationHostedIntegrationTests
                 requestBody,
                 DocumentBytes())));
         string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        if (response.IsSuccessStatusCode && mismatchedRequestBody is not null)
+        {
+            using HttpResponseMessage denied = await fixture.SendSignedAsync(
+                identity,
+                HttpMethod.Post,
+                $"/v1/connectors/{connectorId}/operations/{Fse2OfficialTestCanonicalDefinition.OperationId}:invoke",
+                InvokeRequest(PayloadFor(
+                    Fse2OperationCatalog.Get(Fse2Operation.ValidateCda),
+                    mismatchedRequestBody,
+                    DocumentBytes())));
+            Assert.False(denied.IsSuccessStatusCode);
+        }
 
         if (response.IsSuccessStatusCode && string.Equals(
             connectorId,
@@ -460,14 +495,16 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Guid environmentId,
         string connectorId,
         string connectorVersion,
-        string certificateHeader)
+        string certificateHeader,
+        string? publishedActivity = null)
     {
         string definition = CompileVersionPolicyDefinition(
             environmentId,
             material,
             connectorId,
             connectorVersion,
-            certificateHeader);
+            certificateHeader,
+            publishedActivity);
         return await fixture.PrepareCapabilityConnectorVersionAsync(
             connectorId,
             connectorVersion,
@@ -488,7 +525,8 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         SyntheticAuthenticationMaterial material,
         string connectorId,
         string connectorVersion,
-        string certificateHeader)
+        string certificateHeader,
+        string? publishedActivity = null)
     {
         Fse2OfficialTestProviderReference a1 = new("synthetic-capability", "officialtest-a1", "1", 1, 1);
         Fse2OfficialTestProviderReference s1 = new("synthetic-capability", "officialtest-s1", "1", 1, 1);
@@ -515,6 +553,8 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         root["connectorId"] = connectorId;
         root["version"] = connectorVersion;
         JsonObject operation = root["operations"]![0]!.AsObject();
+        if (publishedActivity is not null)
+            operation["extensionConfiguration"]!["activity"] = publishedActivity;
         Assert.Equal("appendToBasePath", operation["pathResolution"]!.GetValue<string>());
         Assert.Equal("deny", operation["redirectPolicy"]!.GetValue<string>());
         Assert.Equal(0, operation["maximumRetries"]!.GetValue<int>());
