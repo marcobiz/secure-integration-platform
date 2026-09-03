@@ -10,6 +10,32 @@ Questa guida mette i passaggi nell’ordine reale e segnala dove il prodotto si 
 autorizza nuove chiamate live, non crea account o materiale A1/S1 e non qualifica
 produzione o accreditamento.
 
+## Validazione CDA e abilitazione alla pubblicazione
+
+In OfficialTest le operazioni hanno finalità distinte:
+
+- `VERIFICA` controlla il CDA, ma non lo abilita alla pubblicazione;
+- `VALIDATION` è la validazione propedeutica alla pubblicazione e deve restituire il
+  `workflowInstanceId` da usare nel passaggio successivo;
+- `validate-and-create` combina validazione e pubblicazione in una sola operazione.
+
+I certificati di test e l’accreditamento usati per la validazione non garantiscono
+automaticamente l’ammissione alle operazioni di pubblicazione. Non è necessario avere già
+l’accreditamento definitivo di produzione per provarle nell’ambiente di test; può tuttavia
+essere necessaria un’abilitazione OfficialTest specifica per `VALIDATION`, `create` e
+`validate-and-create`.
+
+Se `VERIFICA` risponde HTTP 200, ma sia il percorso di pubblicazione separato sia
+`validate-and-create`, costruiti conformemente, ricevono HTTP 404, classificare il caso
+come possibile anomalia di admission/routing e chiedere conferma a Sogei/Ministero. Se
+l’esito di `create` è ambiguo, riconciliare prima tramite workflow, trace o status: non
+ripetere `create` alla cieca.
+
+Riferimenti ufficiali:
+
+- [Processo di accreditamento al FSE 2.0](https://github.com/ministero-salute/it-fse-support/blob/main/doc/accreditamento/README.md)
+- [Integrazione con il Gateway FSE](https://github.com/ministero-salute/it-fse-support/blob/main/doc/integrazione-gateway/README.md)
+
 ## Prima di iniziare: risultato e hard stop
 
 Il pilot disponibile verifica la qualità di un CDA con una singola `validate-cda`. Non
