@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Infrastructure;
@@ -39,15 +40,29 @@ public sealed class ConnectorConfigurationTests
     {
         Fixture fixture = new();
         using JsonDocument original = Sample();
-        using JsonDocument sample = JsonDocument.Parse(original.RootElement.GetRawText().Replace(
-            "\"path\": \"/vendor/orders\"",
-            "\"path\": \"/status/{workflow-instance-id}\", \"pathResolution\": \"appendToBasePath\"",
-            StringComparison.Ordinal));
+        JsonObject root = JsonNode.Parse(original.RootElement.GetRawText())!.AsObject();
+        JsonObject operationNode = root["operations"]![0]!.AsObject();
+        root["bindings"]!["secrets"]!.AsArray().RemoveAt(0);
+        operationNode.Remove("path");
+        operationNode["pathTemplate"] = "/status/{workflow-instance-id}";
+        operationNode["method"] = "GET";
+        operationNode["authentication"] = JsonNode.Parse("""{"kind":"mtls","certificateBinding":"sample-vendor-client-certificate"}""");
+        operationNode["executionStrategy"] = "synthetic-signed-mtls";
+        operationNode["authorizedCapabilities"] = JsonNode.Parse("""
+            {
+              "signing":{"profileId":"synthetic-signing","revision":1,"keyBinding":"sample-vendor-client-certificate","publicKeySpkiSha256":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","issuer":"synthetic-gateway","audience":"synthetic-upstream","subject":"installation","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"clockSkewSeconds":5,"certificateHeader":"chain","temporalClaims":"iat-nbf-exp","minimumRsaKeySize":2048},
+              "restrictedTransport":{"profileId":"synthetic-transport","revision":1,"clientCertificateSpkiSha256":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","authorization":"signedTokenBearer","nearExpirySeconds":30,"bodyMode":"none"}
+            }
+            """);
+        using JsonDocument sample = JsonDocument.Parse(root.ToJsonString());
         ConnectorVersionResource version = await fixture.ImportAsync(sample);
         version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
         _ = await fixture.Admin.PutBindingsAsync(version.ConnectorId,
-            BindingRequest(fixture.EnvironmentId, "https://vendor.example.test/govway/rest/in/FSE/gateway/v1/"),
+            new ConnectorBindingRequest(fixture.EnvironmentId,
+                new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/govway/rest/in/FSE/gateway/v1/" },
+                new Dictionary<string, ProviderResourceReference>(), null, CertificateReferences()),
             "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "approver", Guid.NewGuid(), TestContext.Current.CancellationToken);
         ConnectorVersionRecord stored = await fixture.Store.GetVersionAsync(version.ConnectorId, version.Version, TestContext.Current.CancellationToken)
             ?? throw new InvalidOperationException();
         ConnectorBindingSet binding = Assert.Single((await fixture.Store.ListBindingsPageAsync(
@@ -56,10 +71,39 @@ public sealed class ConnectorConfigurationTests
         ApprovalReviewResult review = ConnectorApprovalArtifacts.Create(stored, [binding]);
 
         ApprovalEndpointReview endpoint = Assert.Single(review.Artifact.Operations).Endpoint;
+        GatewayOperationDefinition runtime = await fixture.Catalog.GetRequiredAsync(
+            version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken);
+        Uri projected = PublishedPathTemplate.Project(runtime.Endpoint, "/status/{workflow-instance-id}",
+            [new("workflow-instance-id", "workflow-123")]);
         Assert.Equal("vendor.example.test", endpoint.Hostname);
-        Assert.Equal("/govway/rest/in/FSE/gateway/v1/status/{workflow-instance-id}", endpoint.Path);
+        Assert.Equal("/status/{workflow-instance-id}", endpoint.Path);
+        Assert.Equal(endpoint.Path.Replace("{workflow-instance-id}", "workflow-123", StringComparison.Ordinal), projected.AbsolutePath);
         Assert.DoesNotContain("%7B", endpoint.Path, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(review.DigestSha256, ConnectorApprovalArtifacts.Create(stored, [binding]).DigestSha256);
+    }
+
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_UT_approval_review_does_not_promote_a_static_path_with_braces_to_a_template()
+    {
+        Fixture fixture = new();
+        using JsonDocument original = Sample();
+        using JsonDocument sample = JsonDocument.Parse(original.RootElement.GetRawText().Replace(
+            "\"path\": \"/vendor/orders\"",
+            "\"path\": \"/status/{workflow-instance-id}\"",
+            StringComparison.Ordinal));
+        ConnectorVersionResource version = await fixture.ImportAsync(sample);
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PutBindingsAsync(version.ConnectorId,
+            BindingRequest(fixture.EnvironmentId, "https://vendor.example.test/"),
+            "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord stored = await fixture.Store.GetVersionAsync(version.ConnectorId, version.Version, TestContext.Current.CancellationToken)
+            ?? throw new InvalidOperationException();
+        ConnectorBindingSet binding = Assert.Single((await fixture.Store.ListBindingsPageAsync(
+            stored.Id, 0, 10, fixture.EnvironmentId, TestContext.Current.CancellationToken)).Items);
+
+        GatewayException denied = Assert.Throws<GatewayException>(() => ConnectorApprovalArtifacts.Create(stored, [binding]));
+
+        Assert.Equal("BGW-CONNECTOR-CONFIGURATION-CORRUPT", denied.Code);
     }
 
     [Theory]

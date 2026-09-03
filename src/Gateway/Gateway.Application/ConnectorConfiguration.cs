@@ -509,25 +509,22 @@ public static class ConnectorApprovalArtifacts
         OperationBindingDependencies dependencies = ConnectorOperationBindings.Required(version.CanonicalJson, operationId);
         string endpointName = operation.GetProperty("endpointBinding").GetString()!;
         if (!binding.Endpoints.TryGetValue(endpointName, out Uri? baseUri)) throw new GatewayException("BGW-CONNECTOR-ENDPOINT-BINDING-MISSING", 503);
-        string path = operation.TryGetProperty("pathTemplate", out JsonElement pathTemplate)
+        bool hasPathTemplate = operation.TryGetProperty("pathTemplate", out JsonElement pathTemplate);
+        string path = hasPathTemplate
             ? pathTemplate.GetString()!
             : operation.GetProperty("path").GetString()!;
         string method = operation.GetProperty("method").GetString()!;
         string redirect = operation.TryGetProperty("redirectPolicy", out JsonElement redirectElement) ? redirectElement.GetString() ?? "deny" : "deny";
-        bool containsPublishedParameters = path.Contains('{', StringComparison.Ordinal) || path.Contains('}', StringComparison.Ordinal);
         ApprovalEndpointReview endpoint;
         string effectiveScheme;
-        if (containsPublishedParameters)
+        if (hasPathTemplate)
         {
-            endpoint = ReviewTemplatedEndpoint(endpointName, binding, baseUri, path,
-                !operation.TryGetProperty("pathTemplate", out _) && PublishedEndpointUri.AppendToBasePath(operation), method, redirect);
+            endpoint = ReviewTemplatedEndpoint(endpointName, binding, baseUri, path, appendToBasePath: false, method, redirect);
             effectiveScheme = baseUri.Scheme;
         }
         else
         {
-            Uri effective = operation.TryGetProperty("pathTemplate", out _)
-                ? new Uri(baseUri, path)
-                : PublishedEndpointUri.Compose(baseUri, path, PublishedEndpointUri.AppendToBasePath(operation));
+            Uri effective = PublishedEndpointUri.Compose(baseUri, path, PublishedEndpointUri.AppendToBasePath(operation));
             endpoint = ReviewEndpoint(endpointName, binding, effective, [method], redirect);
             effectiveScheme = effective.Scheme;
         }
