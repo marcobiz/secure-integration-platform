@@ -605,7 +605,7 @@ public static class Fse2ResponseMapper
                 using JsonDocument document = JsonDocument.Parse(response.Body, new JsonDocumentOptions { MaxDepth = 12 });
                 JsonElement root = document.RootElement;
                 if (root.ValueKind != JsonValueKind.Object) throw new JsonException();
-                foreach (string propertyName in new[] { "type", "code" })
+                foreach (string propertyName in new[] { "type", "code", "instance" })
                 {
                     string? candidate = SafeProblemValue(root, propertyName);
                     if (candidate is null) continue;

@@ -288,6 +288,20 @@ public sealed class Fse2FoundationTests
     }
 
     [Fact]
+    public void FSE2_ERROR_RFC7807_mapper_uses_allowlisted_instance_without_retaining_detail()
+    {
+        const string canary = "clinical-instance-redaction-canary";
+        byte[] problem = Encoding.UTF8.GetBytes($$"""{"type":"about:blank","instance":"/msg/record-not-found","detail":"{{canary}}"}""");
+
+        Fse2ConnectorException error = Fse2ResponseMapper.MapProblem(
+            new(404, "application/problem+json", problem), Fse2RetryClass.NoAutomaticRetry);
+
+        Assert.Equal("record-not-found", error.SafeCode);
+        Assert.Equal("record-not-found", error.SafeUpstreamCode);
+        Assert.DoesNotContain(canary, error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void FSE2_SEC_caller_cannot_override_accept_or_inject_headers()
     {
         string[] requestProperties = typeof(Fse2Request).GetProperties(BindingFlags.Public | BindingFlags.Instance)
