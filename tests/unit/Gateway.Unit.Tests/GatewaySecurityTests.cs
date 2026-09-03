@@ -63,6 +63,7 @@ public sealed class GatewaySecurityTests
         IReadOnlyList<GatewayAuditEvent> audit = broker.Registry.SnapshotAuditEvents();
         Assert.Equal("Broker", audit.Single(value => value.Action == "operation.invoke" && value.ActorId == broker.InstallationId.ToString("D")).Metadata["callerKind"]);
         Assert.Equal("Direct", audit.Single(value => value.Action == "operation.invoke" && value.ActorId == direct.InstallationId.ToString("D")).Metadata["callerKind"]);
+        Assert.All(audit.Where(value => value.Action == "operation.invoke"), value => Assert.Equal("vendor/send", value.TargetId));
         Assert.Equal(InstallationKind.Broker, brokerIdentity.InstallationKind);
         Assert.Equal(InstallationKind.Direct, directIdentity.InstallationKind);
     }

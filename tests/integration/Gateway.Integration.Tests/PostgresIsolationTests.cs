@@ -1,4 +1,5 @@
 using System.Data;
+using System.Net;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
@@ -17,6 +18,91 @@ namespace SecureIntegration.Gateway.Integration.Tests;
 [Collection(PostgreSqlSharedDatabaseGroup.Name)]
 public sealed class PostgresIsolationTests
 {
+    [Fact]
+    public async Task P2_01_IT_PostgreSQL18_pre_authority_denials_persist_only_a_fixed_bounded_target()
+    {
+        string? adminConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        if (string.IsNullOrWhiteSpace(adminConnection)) Assert.Skip("The dedicated PostgreSQL 18 gate must provide the admin connection.");
+        string? migrationConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
+        if (string.IsNullOrWhiteSpace(migrationConnection)) Assert.Skip("The dedicated PostgreSQL 18 gate must provide the migration connection.");
+
+        await ApplyMigrationAsync();
+        await using AdminPostgresDataSource adminPool = new(adminConnection);
+        PostgresGatewayRegistry registry = new(adminPool.Value);
+        TestClock clock = new(DateTimeOffset.UtcNow);
+        string suffix = Guid.NewGuid().ToString("N");
+        Guid tenantId = Guid.NewGuid();
+        Guid applicationId = Guid.NewGuid();
+        Guid environmentId = Guid.NewGuid();
+        Guid installationId = Guid.NewGuid();
+        string rawSentinel = "P2-01-RAW-⚠-/../\"'\r\n";
+        string connectorSelector = "synthetic-" + rawSentinel + new string('λ', 300);
+        string operationSelector = rawSentinel + new string('Ω', 300);
+
+        try
+        {
+            await registry.AddTenantAsync(new(tenantId, "p201-t-" + suffix, "P2-01 tenant", TenantStatus.Active, clock.UtcNow), TestContext.Current.CancellationToken);
+            await registry.AddApplicationAsync(new(applicationId, "p201-a-" + suffix, "P2-01 application", ApplicationStatus.Active, "1.0.0", null, clock.UtcNow), TestContext.Current.CancellationToken);
+            await registry.AddEnvironmentAsync(new(environmentId, "p201-e-" + suffix[..20], "P2-01 environment", false), TestContext.Current.CancellationToken);
+            await registry.AddInstallationAsync(new(installationId, tenantId, applicationId, environmentId, InstallationStatus.Active, "1.0.0", clock.UtcNow), TestContext.Current.CancellationToken);
+
+            RegisteredInstallationIdentity active = new(
+                installationId, tenantId, applicationId, environmentId,
+                TenantStatus.Active, ApplicationStatus.Active, InstallationStatus.Active,
+                Guid.NewGuid(), CredentialStatus.Active, [1, 2, 3],
+                clock.UtcNow.AddMinutes(-1), clock.UtcNow.AddHours(1), "1.0.0", null);
+            NeverRuntimeDependencies dependencies = new();
+            RestrictedEgressService service = new(
+                registry, new GatewayOperationCatalog([]), dependencies, dependencies, dependencies, dependencies, clock);
+            (RegisteredInstallationIdentity Identity, string ExpectedCode)[] cases =
+            [
+                (active with { InstallationStatus = InstallationStatus.Revoked }, "BGW-INSTALLATION-REVOKED"),
+                (active, "BGW-AUTHZ-OPERATION-DENIED")
+            ];
+
+            foreach ((RegisteredInstallationIdentity identity, string expectedCode) in cases)
+            {
+                Guid correlationId = Guid.NewGuid();
+                GatewayException failure = await Assert.ThrowsAsync<GatewayException>(() => service.InvokeAsync(
+                    new(identity, Guid.NewGuid()), connectorSelector, operationSelector,
+                    new("1.0", new("application/json", "utf8", "{}"), correlationId),
+                    TestContext.Current.CancellationToken));
+
+                Assert.Equal(403, failure.StatusCode);
+                Assert.Equal(expectedCode, failure.Code);
+                Assert.Equal(expectedCode, failure.Message);
+                await using NpgsqlConnection owner = new(migrationConnection);
+                await owner.OpenAsync(TestContext.Current.CancellationToken);
+                await using NpgsqlCommand audit = new("""
+                    SELECT target_id, outcome, reason_code, metadata_redacted::text, row_to_json(a)::text
+                      FROM gateway.audit_event AS a
+                     WHERE correlation_id=$1
+                    """, owner);
+                audit.Parameters.AddWithValue(correlationId);
+                await using NpgsqlDataReader reader = await audit.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+                Assert.True(await reader.ReadAsync(TestContext.Current.CancellationToken));
+                string persisted = reader.GetString(4);
+                Assert.Equal("unresolved-operation", reader.GetString(0));
+                Assert.Equal("failure", reader.GetString(1));
+                Assert.Equal(expectedCode, reader.GetString(2));
+                Assert.True(reader.GetString(0).Length <= 256);
+                Assert.DoesNotContain(rawSentinel, persisted, StringComparison.Ordinal);
+                Assert.DoesNotContain(connectorSelector, persisted, StringComparison.Ordinal);
+                Assert.DoesNotContain(operationSelector, persisted, StringComparison.Ordinal);
+                Assert.False(await reader.ReadAsync(TestContext.Current.CancellationToken));
+            }
+            Assert.Equal(0, dependencies.Calls);
+        }
+        finally
+        {
+            await ExecuteNonQueryAsync(migrationConnection, "DELETE FROM gateway.audit_event WHERE tenant_id=$1", CancellationToken.None, tenantId);
+            await ExecuteNonQueryAsync(migrationConnection, "DELETE FROM gateway.installation WHERE id=$1", CancellationToken.None, installationId);
+            await ExecuteNonQueryAsync(migrationConnection, "DELETE FROM gateway.application WHERE id=$1", CancellationToken.None, applicationId);
+            await ExecuteNonQueryAsync(migrationConnection, "DELETE FROM gateway.environment WHERE id=$1", CancellationToken.None, environmentId);
+            await ExecuteNonQueryAsync(migrationConnection, "DELETE FROM gateway.tenant WHERE id=$1", CancellationToken.None, tenantId);
+        }
+    }
+
     [Fact]
     public async Task FSE2_DIAGNOSTICS_unknown_upstream_code_is_rejected_at_domain_and_storage_boundaries()
     {
@@ -1484,6 +1570,29 @@ public sealed class PostgresIsolationTests
     private sealed class NeverReadSecretProvider : ISecretValueProvider
     {
         public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken) => throw new InvalidOperationException("Resolution must not dereference the secret value.");
+    }
+
+    private sealed class NeverRuntimeDependencies :
+        ISecretValueProvider, IClientCertificateProvider, IHostResolver, IRestrictedTransport
+    {
+        public int Calls { get; private set; }
+
+        public Task<string> GetSecretAsync(string logicalReference, CancellationToken cancellationToken) => Unexpected<string>();
+        public Task<X509Certificate2> GetClientCertificateAsync(string logicalReference, CancellationToken cancellationToken) => Unexpected<X509Certificate2>();
+        public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) => Unexpected<IPAddress[]>();
+        public Task<ExternalResponse> SendAsync(
+            HttpRequestMessage request,
+            IReadOnlyList<IPAddress> approvedAddresses,
+            X509Certificate2? clientCertificate,
+            TimeSpan timeout,
+            long maximumResponseBytes,
+            CancellationToken cancellationToken) => Unexpected<ExternalResponse>();
+
+        private Task<T> Unexpected<T>()
+        {
+            Calls++;
+            return Task.FromException<T>(new InvalidOperationException("No post-authority dependency may be called."));
+        }
     }
 
     private static async Task ExecuteAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string sql, params object[] values)

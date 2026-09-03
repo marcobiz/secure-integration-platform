@@ -83,6 +83,7 @@ public sealed class GatewayOperationCatalog : IGatewayOperationCatalog
 /// <summary>Executes a granted operation using only server-owned destination and credentials.</summary>
 public sealed class RestrictedEgressService
 {
+    private const string PreAuthorityAuditTargetId = "unresolved-operation";
     private readonly IGatewayRegistry registry;
     private readonly IGatewayOperationCatalog catalog;
     private readonly IGatewayClock clock;
@@ -142,13 +143,15 @@ public sealed class RestrictedEgressService
         if (identity.TenantStatus != TenantStatus.Active || identity.ApplicationStatus != ApplicationStatus.Active || identity.InstallationStatus != InstallationStatus.Active)
         {
             await AppendInvocationFailureAuditAsync(
-                identity, connectorId, operationId, request.CorrelationId, "BGW-INSTALLATION-REVOKED", null, cancellationToken).ConfigureAwait(false);
+                identity, PreAuthorityAuditTargetId, request.CorrelationId,
+                "BGW-INSTALLATION-REVOKED", null, cancellationToken).ConfigureAwait(false);
             throw new GatewayException("BGW-INSTALLATION-REVOKED", 403);
         }
         if (!await registry.IsGrantedAsync(identity.InstallationId, identity.TenantId, connectorId, operationId, clock.UtcNow, cancellationToken).ConfigureAwait(false))
         {
             await AppendInvocationFailureAuditAsync(
-                identity, connectorId, operationId, request.CorrelationId, "BGW-AUTHZ-OPERATION-DENIED", null, cancellationToken).ConfigureAwait(false);
+                identity, PreAuthorityAuditTargetId, request.CorrelationId,
+                "BGW-AUTHZ-OPERATION-DENIED", null, cancellationToken).ConfigureAwait(false);
             throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403);
         }
         PublishedConnectorAccessContext access = new(identity.InstallationId, identity.TenantId, identity.ApplicationId, operationId);
@@ -239,7 +242,8 @@ public sealed class RestrictedEgressService
             GatewayAuditFailureDiagnostics? diagnostics =
                 (exception.Failure.Diagnostics as SafeUpstreamFailureDiagnostics)?.ToAuditDiagnostics();
             await AppendInvocationFailureAuditAsync(
-                identity, connectorId, operationId, request.CorrelationId, exception.Failure.Code,
+                identity, operation.ConnectorId + "/" + operation.OperationId,
+                request.CorrelationId, exception.Failure.Code,
                 operation.Version, cancellationToken, diagnostics).ConfigureAwait(false);
             throw exception.Failure;
         }
@@ -251,7 +255,8 @@ public sealed class RestrictedEgressService
         catch (Exception)
         {
             await AppendInvocationFailureAuditAsync(
-                identity, connectorId, operationId, request.CorrelationId, "BGW-EGRESS-UPSTREAM-REJECTED",
+                identity, operation.ConnectorId + "/" + operation.OperationId,
+                request.CorrelationId, "BGW-EGRESS-UPSTREAM-REJECTED",
                 operation.Version, cancellationToken).ConfigureAwait(false);
             throw new GatewayException("BGW-EGRESS-UPSTREAM-REJECTED", 502);
         }
@@ -266,8 +271,7 @@ public sealed class RestrictedEgressService
 
     private Task AppendInvocationFailureAuditAsync(
         RegisteredInstallationIdentity identity,
-        string connectorId,
-        string operationId,
+        string targetId,
         Guid correlationId,
         string reasonCode,
         string? connectorVersion,
@@ -282,7 +286,7 @@ public sealed class RestrictedEgressService
             metadata["connectorVersion"] = connectorVersion;
         return registry.AppendAuditAsync(new GatewayAuditEvent(
             Guid.NewGuid(), clock.UtcNow, identity.TenantId, "installation", identity.InstallationId.ToString("D"),
-            "operation.invoke", "operation", connectorId + "/" + operationId, correlationId,
+            "operation.invoke", "operation", targetId, correlationId,
             "failure", reasonCode, metadata, diagnostics), cancellationToken);
     }
 
