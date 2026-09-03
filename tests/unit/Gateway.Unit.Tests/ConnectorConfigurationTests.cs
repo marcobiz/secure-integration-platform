@@ -34,6 +34,34 @@ public sealed class ConnectorConfigurationTests
         Assert.Equal("https://vendor.example.test/govway/rest/in/FSE/gateway/v1/vendor/orders", operation.Endpoint.AbsoluteUri);
     }
 
+    [Fact]
+    public async Task FSE2_OFFICIALTEST_UT_approval_review_preserves_a_published_dynamic_path_without_materializing_the_placeholder()
+    {
+        Fixture fixture = new();
+        using JsonDocument original = Sample();
+        using JsonDocument sample = JsonDocument.Parse(original.RootElement.GetRawText().Replace(
+            "\"path\": \"/vendor/orders\"",
+            "\"path\": \"/status/{workflow-instance-id}\", \"pathResolution\": \"appendToBasePath\"",
+            StringComparison.Ordinal));
+        ConnectorVersionResource version = await fixture.ImportAsync(sample);
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PutBindingsAsync(version.ConnectorId,
+            BindingRequest(fixture.EnvironmentId, "https://vendor.example.test/govway/rest/in/FSE/gateway/v1/"),
+            "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord stored = await fixture.Store.GetVersionAsync(version.ConnectorId, version.Version, TestContext.Current.CancellationToken)
+            ?? throw new InvalidOperationException();
+        ConnectorBindingSet binding = Assert.Single((await fixture.Store.ListBindingsPageAsync(
+            stored.Id, 0, 10, fixture.EnvironmentId, TestContext.Current.CancellationToken)).Items);
+
+        ApprovalReviewResult review = ConnectorApprovalArtifacts.Create(stored, [binding]);
+
+        ApprovalEndpointReview endpoint = Assert.Single(review.Artifact.Operations).Endpoint;
+        Assert.Equal("vendor.example.test", endpoint.Hostname);
+        Assert.Equal("/govway/rest/in/FSE/gateway/v1/status/{workflow-instance-id}", endpoint.Path);
+        Assert.DoesNotContain("%7B", endpoint.Path, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(review.DigestSha256, ConnectorApprovalArtifacts.Create(stored, [binding]).DigestSha256);
+    }
+
     [Theory]
     [InlineData("http://vendor.example.test/govway/rest/in/FSE/gateway/v1/")]
     [InlineData("https://caller@vendor.example.test/govway/rest/in/FSE/gateway/v1/")]

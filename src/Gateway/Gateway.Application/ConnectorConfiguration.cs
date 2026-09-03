@@ -512,12 +512,25 @@ public static class ConnectorApprovalArtifacts
         string path = operation.TryGetProperty("pathTemplate", out JsonElement pathTemplate)
             ? pathTemplate.GetString()!
             : operation.GetProperty("path").GetString()!;
-        Uri effective = operation.TryGetProperty("pathTemplate", out _)
-            ? new Uri(baseUri, path)
-            : PublishedEndpointUri.Compose(baseUri, path, PublishedEndpointUri.AppendToBasePath(operation));
         string method = operation.GetProperty("method").GetString()!;
         string redirect = operation.TryGetProperty("redirectPolicy", out JsonElement redirectElement) ? redirectElement.GetString() ?? "deny" : "deny";
-        ApprovalEndpointReview endpoint = ReviewEndpoint(endpointName, binding, effective, [method], redirect);
+        bool containsPublishedParameters = path.Contains('{', StringComparison.Ordinal) || path.Contains('}', StringComparison.Ordinal);
+        ApprovalEndpointReview endpoint;
+        string effectiveScheme;
+        if (containsPublishedParameters)
+        {
+            endpoint = ReviewTemplatedEndpoint(endpointName, binding, baseUri, path,
+                !operation.TryGetProperty("pathTemplate", out _) && PublishedEndpointUri.AppendToBasePath(operation), method, redirect);
+            effectiveScheme = baseUri.Scheme;
+        }
+        else
+        {
+            Uri effective = operation.TryGetProperty("pathTemplate", out _)
+                ? new Uri(baseUri, path)
+                : PublishedEndpointUri.Compose(baseUri, path, PublishedEndpointUri.AppendToBasePath(operation));
+            endpoint = ReviewEndpoint(endpointName, binding, effective, [method], redirect);
+            effectiveScheme = effective.Scheme;
+        }
         JsonElement authentication = operation.GetProperty("authentication");
         List<ApprovalAuthorityEndpointReview> authorityEndpoints = [];
         foreach ((string property, string role, string authorityMethod) in new[]
@@ -560,7 +573,32 @@ public static class ConnectorApprovalArtifacts
                 Component(logical, resource), binding.ChecksumSha256));
         }
         return new(operationId, binding.EnvironmentId.ToString("D"), ConnectorExecutionStrategyKeys.Resolve(operation).Value,
-            effective.Scheme.ToUpperInvariant(), dependencies, endpoint, authorityEndpoints, secrets, certificates);
+            effectiveScheme.ToUpperInvariant(), dependencies, endpoint, authorityEndpoints, secrets, certificates);
+    }
+
+    private static ApprovalEndpointReview ReviewTemplatedEndpoint(
+        string endpointName,
+        ConnectorBindingSet binding,
+        Uri baseUri,
+        string pathTemplate,
+        bool appendToBasePath,
+        string method,
+        string redirect)
+    {
+        IReadOnlyList<string> parameters;
+        try { parameters = PublishedPathTemplate.Validate(pathTemplate, nameof(pathTemplate)); }
+        catch (ArgumentException) { throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-CORRUPT", 503); }
+        if (parameters.Count == 0) throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-CORRUPT", 503);
+        string probePath = string.Join('/', pathTemplate.Split('/').Select(segment =>
+            segment.Length >= 3 && segment[0] == '{' && segment[^1] == '}' ? "bgw-template-probe" : segment));
+        Uri verified = PublishedEndpointUri.Compose(baseUri, probePath, appendToBasePath);
+        string effectiveTemplatePath = appendToBasePath
+            ? baseUri.AbsolutePath.TrimEnd('/') + "/" + pathTemplate.TrimStart('/')
+            : pathTemplate;
+        return new(endpointName, binding.Revision, verified.Scheme, verified.DnsSafeHost,
+            verified.IsDefaultPort ? DefaultPort(verified.Scheme) : verified.Port, effectiveTemplatePath, string.Empty, [method], redirect,
+            "validate-system-trust-and-hostname", Component(endpointName, verified.GetLeftPart(UriPartial.Authority) + effectiveTemplatePath),
+            binding.ChecksumSha256, Classify(verified));
     }
 
     private static ApprovalEndpointReview ReviewEndpoint(string logicalId, ConnectorBindingSet binding, Uri endpoint, IReadOnlyList<string> methods, string redirectPolicy) =>
