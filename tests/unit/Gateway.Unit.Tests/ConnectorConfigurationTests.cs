@@ -83,6 +83,47 @@ public sealed class ConnectorConfigurationTests
     }
 
     [Fact]
+    public async Task FSE2_OFFICIALTEST_UT_approval_review_accepts_a_canonical_pathTemplate_without_placeholders_and_matches_runtime()
+    {
+        Fixture fixture = new();
+        using JsonDocument original = Sample();
+        JsonObject root = JsonNode.Parse(original.RootElement.GetRawText())!.AsObject();
+        JsonObject operationNode = root["operations"]![0]!.AsObject();
+        root["bindings"]!["secrets"]!.AsArray().RemoveAt(0);
+        operationNode.Remove("path");
+        operationNode["pathTemplate"] = "/vendor/orders";
+        operationNode["authentication"] = JsonNode.Parse("""{"kind":"mtls","certificateBinding":"sample-vendor-client-certificate"}""");
+        operationNode["executionStrategy"] = "synthetic-signed-mtls";
+        operationNode["authorizedCapabilities"] = JsonNode.Parse("""
+            {
+              "signing":{"profileId":"synthetic-signing","revision":1,"keyBinding":"sample-vendor-client-certificate","publicKeySpkiSha256":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","issuer":"synthetic-gateway","audience":"synthetic-upstream","subject":"installation","allowedClaims":["transaction-id"],"tokenLifetimeSeconds":60,"clockSkewSeconds":5,"certificateHeader":"chain","temporalClaims":"iat-nbf-exp","minimumRsaKeySize":2048},
+              "restrictedTransport":{"profileId":"synthetic-transport","revision":1,"clientCertificateSpkiSha256":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","authorization":"signedTokenBearer","nearExpirySeconds":30,"bodyMode":"required"}
+            }
+            """);
+        using JsonDocument sample = JsonDocument.Parse(root.ToJsonString());
+        ConnectorVersionResource version = await fixture.ImportAsync(sample);
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PutBindingsAsync(version.ConnectorId,
+            new ConnectorBindingRequest(fixture.EnvironmentId,
+                new Dictionary<string, string> { ["sample-vendor-endpoint"] = "https://vendor.example.test/govway/rest/in/FSE/gateway/v1/" },
+                new Dictionary<string, ProviderResourceReference>(), null, CertificateReferences()),
+            "editor", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "approver", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        ConnectorVersionRecord stored = await fixture.Store.GetVersionAsync(version.ConnectorId, version.Version, TestContext.Current.CancellationToken)
+            ?? throw new InvalidOperationException();
+        ConnectorBindingSet binding = Assert.Single((await fixture.Store.ListBindingsPageAsync(
+            stored.Id, 0, 10, fixture.EnvironmentId, TestContext.Current.CancellationToken)).Items);
+
+        ApprovalEndpointReview endpoint = Assert.Single(ConnectorApprovalArtifacts.Create(stored, [binding]).Artifact.Operations).Endpoint;
+        GatewayOperationDefinition runtime = await fixture.Catalog.GetRequiredAsync(
+            version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken);
+        Uri projected = PublishedPathTemplate.Project(runtime.Endpoint, "/vendor/orders", []);
+
+        Assert.Equal("/vendor/orders", endpoint.Path);
+        Assert.Equal(endpoint.Path, projected.AbsolutePath);
+    }
+
+    [Fact]
     public async Task FSE2_OFFICIALTEST_UT_approval_review_does_not_promote_a_static_path_with_braces_to_a_template()
     {
         Fixture fixture = new();

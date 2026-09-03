@@ -582,10 +582,8 @@ public static class ConnectorApprovalArtifacts
         string method,
         string redirect)
     {
-        IReadOnlyList<string> parameters;
-        try { parameters = PublishedPathTemplate.Validate(pathTemplate, nameof(pathTemplate)); }
+        try { _ = PublishedPathTemplate.Validate(pathTemplate, nameof(pathTemplate)); }
         catch (ArgumentException) { throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-CORRUPT", 503); }
-        if (parameters.Count == 0) throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-CORRUPT", 503);
         string probePath = string.Join('/', pathTemplate.Split('/').Select(segment =>
             segment.Length >= 3 && segment[0] == '{' && segment[^1] == '}' ? "bgw-template-probe" : segment));
         Uri verified = PublishedEndpointUri.Compose(baseUri, probePath, appendToBasePath);
