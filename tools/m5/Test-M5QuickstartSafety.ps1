@@ -7,7 +7,8 @@ param(
         'M5_Quickstart_rejects_repository_and_home_artifact_roots',
         'M5_Quickstart_Stop_rejects_reparse_artifact_root_without_traversal',
         'M5_Quickstart_Stop_cleans_owned_partial_start_artifacts',
-        'M5_Quickstart_Stop_preserves_unowned_artifacts')]
+        'M5_Quickstart_Stop_preserves_unowned_artifacts',
+        'M5_Quickstart_Admin_probe_avoids_Windows_PowerShell_shell_interpolation')]
     [string] $TestName = 'All'
 )
 
@@ -217,6 +218,14 @@ function Test-UnownedArtifactPreserved {
     finally { Remove-TestCase -Case $case }
 }
 
+function Test-AdminProbeAvoidsShellInterpolation {
+    param([Parameter(Mandatory = $true)][string] $Script)
+    $source = Get-Content -LiteralPath $Script -Raw
+    Assert-True ($source.IndexOf("'curl', '--fail', '--silent'", [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($source.IndexOf("throw 'M5_QUICKSTART_ADMIN_PROBE_FAILED'", [StringComparison]::Ordinal) -ge 0)
+    Assert-True ($source.IndexOf("'sh', '-ec', `$probe", [StringComparison]::Ordinal) -lt 0)
+}
+
 try {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'M5_QUICKSTART_SAFETY_WINDOWS_REQUIRED' }
     $script = Join-Path $PSScriptRoot 'Invoke-M5Quickstart.ps1'
@@ -227,7 +236,8 @@ try {
             'M5_Quickstart_rejects_repository_and_home_artifact_roots',
             'M5_Quickstart_Stop_rejects_reparse_artifact_root_without_traversal',
             'M5_Quickstart_Stop_cleans_owned_partial_start_artifacts',
-            'M5_Quickstart_Stop_preserves_unowned_artifacts')
+            'M5_Quickstart_Stop_preserves_unowned_artifacts',
+            'M5_Quickstart_Admin_probe_avoids_Windows_PowerShell_shell_interpolation')
     } else { @($TestName) }
     foreach ($test in $tests) {
         switch ($test) {
@@ -237,6 +247,7 @@ try {
             'M5_Quickstart_Stop_rejects_reparse_artifact_root_without_traversal' { Test-ReparseArtifactRoot -Script $script }
             'M5_Quickstart_Stop_cleans_owned_partial_start_artifacts' { Test-PartialStartCleanup -Script $script }
             'M5_Quickstart_Stop_preserves_unowned_artifacts' { Test-UnownedArtifactPreserved -Script $script }
+            'M5_Quickstart_Admin_probe_avoids_Windows_PowerShell_shell_interpolation' { Test-AdminProbeAvoidsShellInterpolation -Script $script }
         }
         Write-Host "$test PASS"
     }

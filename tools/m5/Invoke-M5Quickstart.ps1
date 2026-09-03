@@ -150,8 +150,7 @@ function Invoke-Checked {
 function Invoke-ContainerAdminProbe {
     param([Parameter(Mandatory = $true)][string] $CaPath)
     $sdkImage = 'mcr.microsoft.com/dotnet/sdk:10.0.302@sha256:72dd743782f2ae7e5476fd64f6a460045e3998dc862218b80e6944cba79a01b0'
-    $probe = 'content="$(curl --fail --silent --show-error --max-time 15 --max-filesize 262144 --cacert /run/m5-probe/ca.crt https://gateway.m3.test:8443/admin/)" && printf ''%s'' "$content" | grep -F ''<div id="root"></div>'' >/dev/null && ! printf ''%s'' "$content" | grep -F ''__CSP_NONCE__'' >/dev/null'
-    Invoke-Checked 'docker' @(
+    $arguments = @(
         'run', '--rm', '--pull', 'missing',
         '--label', ('com.docker.compose.project=' + $project),
         '--user', '1657:1657',
@@ -164,7 +163,14 @@ function Invoke-ContainerAdminProbe {
         '--add-host', 'gateway.m3.test:172.29.44.4',
         '--mount', ("type=bind,source=$CaPath,target=/run/m5-probe/ca.crt,readonly"),
         $sdkImage,
-        'sh', '-ec', $probe)
+        'curl', '--fail', '--silent', '--show-error', '--max-time', '15', '--max-filesize', '262144',
+        '--cacert', '/run/m5-probe/ca.crt', 'https://gateway.m3.test:8443/admin/')
+    $content = (& docker @arguments | Out-String)
+    if ($LASTEXITCODE -ne 0 -or
+        $content.IndexOf('<div id="root"></div>', [StringComparison]::Ordinal) -lt 0 -or
+        $content.IndexOf('__CSP_NONCE__', [StringComparison]::Ordinal) -ge 0) {
+        throw 'M5_QUICKSTART_ADMIN_PROBE_FAILED'
+    }
 }
 
 function ComposeArguments {
