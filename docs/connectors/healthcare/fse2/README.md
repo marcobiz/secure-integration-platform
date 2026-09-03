@@ -5,6 +5,12 @@
 produzione o copertura completa del Gateway FSE 2.0. La procedura adopter-facing e i
 blocchi correnti sono in [docs/user/fse2-officialtest.md](../../../user/fse2-officialtest.md).
 
+**Candidate 2026-09-03:** il percorso `validate-cda` con `VERIFICA` → trace durevole →
+seconda istanza → `get-status-by-trace` è stato eseguito contro OfficialTest. La
+validazione ha restituito 200; lo status ha restituito il 404 documentato, proiettato dal
+Gateway come `NOT_FOUND` bounded senza conservare il problem body. Questa è una qualifica
+del percorso runtime candidate, non modifica la source/procedura CURRENT validate-only.
+
 ## Capability matrix
 
 | Operation | Stato prodotto | Utilità/limite |
@@ -19,12 +25,13 @@ blocchi correnti sono in [docs/user/fse2-officialtest.md](../../../user/fse2-off
 | `validate-and-create` | `IMPLEMENTED_PARTIAL` | Recovery eccezionale, non flusso normale. |
 | `validate-and-replace` | `IMPLEMENTED_PARTIAL` | Recovery eccezionale e documento esistente. |
 | `get-status-by-workflow` | `PRODUCT_PATH_OFFLINE_QUALIFIED` | Risolve il workflow durevole prima degli effetti e restituisce solo eventi tecnici bounded; nessuna qualifica live. |
-| `get-status-by-trace` | `IMPLEMENTED_PARTIAL` | Diagnostica successiva; stessi limiti di status/correlation. |
+| `get-status-by-trace` | `LIVE_QUALIFIED_CANDIDATE` | Solo trace dal caller; correlazione PostgreSQL e seconda istanza provate in OfficialTest. Un 404 ufficiale diventa `NOT_FOUND` bounded. |
 
 `FULL_FSE2_GATEWAY_COVERAGE = NO`. Il product path offline copre ora
 `validate-cda → create → get-status-by-workflow`; un `202` di create senza lo status
-successivo non dimostra il completamento verso INI/EDS, e nessuna call create/status
-OfficialTest è qualificata da questa copertura sintetica.
+successivo non dimostra il completamento verso INI/EDS. `create/status-by-workflow`
+restano non qualificati live; il solo status-by-trace dopo `VERIFICA` è qualificato dal
+candidate nei limiti sopra.
 
 ## Authority model
 
@@ -83,6 +90,9 @@ sicurezza intenzionale. Accetta al massimo 1.000 eventi ordinati e soltanto i ti
 `VALIDATION`, `PUBLICATION`, `SEND_TO_INI`, `SEND_TO_UAR`, `UAR_FINAL_STATUS`, con esito
 `SUCCESS` o `BLOCKING_ERROR` e timestamp valido. Message, subject, document ID, issuer,
 extra e response raw vengono scartati; valori sconosciuti o malformati falliscono chiusi.
+Il 404 previsto dal contratto status è invece una risposta tecnica valida: viene ridotto
+a `statusCode=404`, `statusClassification=NOT_FOUND` ed eventi vuoti, scartando l'intero
+problem body. Non attiva retry automatici e produce un solo audit success per l'invocation.
 
 ## Esempio minimo create → status
 
@@ -109,6 +119,21 @@ byte[] statusPayload = Fse2Request
 Inviare entrambi i payload al normale endpoint Published del Gateway con
 l'autenticazione runtime già prevista. Non servono nuovo login, binding, grant, SQL,
 accesso store o comando di recovery tra le due invocazioni.
+
+Lo stesso modello vale per la trace restituita da `validate-cda`: la richiesta seguente
+contiene unicamente il valore opaco, mentre action, purpose e scope sono risolti dalla
+correlazione durevole prima di firma, DNS e trasporto:
+
+```csharp
+byte[] traceStatusPayload = Fse2Request
+    .GetStatusByTrace(traceId)
+    .SerializeAuthorizedPayload();
+// JSON prodotto: {"resourceIdentifier":"<traceId>"}
+```
+
+La definition Published deve contenere entrambe le operation nella stessa esatta
+Tenant/Application/Installation/Environment/Connector/versione e configurazione che ha
+registrato la trace; non esiste fallback in-memory o cross-scope.
 
 Local PKCS#12 è un pack/laboratorio opzionale, non HSM/KMS o custody production.
 Accreditamento, produzione, Human Actor, callback inbound, direct FHIR publication

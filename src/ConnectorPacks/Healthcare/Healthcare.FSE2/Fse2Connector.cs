@@ -128,7 +128,7 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
             AuthorizedSigningTokenProjectionExpectation.SignedTokenHeader(Fse2PublishedOrganizationProfile.IntegrityHeaderName),
             profile.Audience,
             profile.SubjectCx,
-            profile.Operation.Operation == Fse2Operation.GetStatusByWorkflow
+            profile.Operation.Operation is Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace
                 ? WorkflowStatusIntegrityClaims
                 : officialTestValidateCda ? ValidateCdaOfficialTestIntegrityClaims : IntegrityClaims,
             Fse2PublishedOrganizationProfile.TokenLifetimeSeconds,
@@ -292,9 +292,7 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
                 stored.OriginatingOperationId,
                 resolvedPurpose,
                 resolvedAction);
-            return new(resolvedAction, resolvedPurpose,
-                profile.Operation.Operation == Fse2Operation.GetStatusByWorkflow ? null : inbound.ClinicalClaims,
-                stored.OriginatingOperationId);
+            return new(resolvedAction, resolvedPurpose, null, stored.OriginatingOperationId);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Fse2ConnectorException) { throw; }
@@ -322,8 +320,8 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
         Fse2ValidateCdaPublishedContract validateCdaContract)
     {
         Fse2OperationDescriptor operation = profile.Operation;
-        bool workflowStatus = operation.Operation == Fse2Operation.GetStatusByWorkflow;
-        if (workflowStatus == (inbound.ClinicalClaims is not null))
+        bool statusRead = operation.Operation is Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace;
+        if (statusRead == (inbound.ClinicalClaims is not null))
             throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_REQUEST_SHAPE_DENIED");
         if (inbound.Document.Length > profile.MaximumDocumentBytes ||
             operation.HasDocument != !inbound.Document.IsEmpty ||
@@ -521,6 +519,10 @@ public static class Fse2ResponseMapper
         if (!operation.SuccessStatusCodes.Contains(response.StatusCode)) throw MapProblem(response, operation.RetryClass);
         try
         {
+            bool statusRead = operation.Operation is Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace;
+            if (statusRead && response.StatusCode == 404)
+                return new(response.StatusCode, correlationId, null, null, null, null,
+                    operation.RetryClass, []) { StatusClassification = Fse2StatusClassification.NotFound };
             using JsonDocument document = JsonDocument.Parse(response.Body, new JsonDocumentOptions { MaxDepth = 16 });
             JsonElement root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object) throw new JsonException();
@@ -528,14 +530,17 @@ public static class Fse2ResponseMapper
             string? traceId = Safe(root, "traceID", Fse2OfficialIdentifierBounds.TraceIdMaximumLength);
             if (operation.Operation == Fse2Operation.Create && (workflowInstanceId is null || traceId is null))
                 throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
-            IReadOnlyList<Fse2WorkflowEvent> workflowEvents = operation.Operation == Fse2Operation.GetStatusByWorkflow
+            IReadOnlyList<Fse2WorkflowEvent> workflowEvents = statusRead
                 ? MapWorkflowEvents(root)
                 : [];
             return new(response.StatusCode, correlationId,
                 workflowInstanceId,
                 traceId,
                 Safe(root, "spanID", Fse2OfficialIdentifierBounds.SpanIdMaximumLength),
-                SafeWarning(root), operation.RetryClass, workflowEvents);
+                SafeWarning(root), operation.RetryClass, workflowEvents)
+            {
+                StatusClassification = statusRead ? Fse2StatusClassification.Found : null
+            };
         }
         catch (Fse2ConnectorException) { throw; }
         catch (Exception) { throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID"); }

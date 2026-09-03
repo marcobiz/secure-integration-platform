@@ -2692,7 +2692,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Dictionary<string, object?> payload = new(StringComparer.Ordinal)
         {
         };
-        if (operation.Operation != Fse2Operation.GetStatusByWorkflow)
+        if (operation.Operation is not (Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace))
         {
             payload["personId"] = PersonId;
             payload["patientConsent"] = true;
@@ -3156,7 +3156,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             ? $"multipart/form-data; boundary={multipartBoundary}"
             : "application/json";
         string bodyMode = operation.HasDocument || operation.HasJsonBody ? "required" : "none";
-        string integrityClaims = operation.Operation == Fse2Operation.GetStatusByWorkflow
+        string integrityClaims = operation.Operation is Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace
             ? "\"subject_role\",\"purpose_of_use\",\"subject_organization\",\"subject_organization_id\",\"locality\",\"action_id\",\"subject_application_id\",\"subject_application_vendor\",\"subject_application_version\""
             : "\"subject_role\",\"purpose_of_use\",\"subject_organization\",\"subject_organization_id\",\"locality\",\"person_id\",\"patient_consent\",\"resource_hl7_type\",\"action_id\",\"attachment_hash\",\"subject_application_id\",\"subject_application_vendor\",\"subject_application_version\"";
         return $$$"""
@@ -3195,6 +3195,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
 
 internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
 {
+    internal const string StatusNotFoundRawCanary = "raw-status-not-found-problem-must-not-escape";
     private readonly WebApplication application;
     private readonly string expectedClientFingerprint;
     private readonly string expectedSigningFingerprint;
@@ -3208,6 +3209,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
     private readonly List<Observation> observations = [];
     private readonly object observationGate = new();
     private int requests;
+    private int statusNotFound;
 
     private SyntheticFse2OperationMatrixServer(
         WebApplication application,
@@ -3237,6 +3239,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
 
     internal Uri Endpoint { get; }
     internal int Requests => Volatile.Read(ref requests);
+    internal void SetStatusNotFound(bool enabled) => Volatile.Write(ref statusNotFound, enabled ? 1 : 0);
     internal IReadOnlyList<Observation> Observations
     {
         get { lock (observationGate) return observations.ToArray(); }
@@ -3362,10 +3365,15 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
                 exactDocumentAndJson));
         }
 
-        context.Response.StatusCode = operation.SuccessStatusCodes.Min();
-        context.Response.ContentType = "application/json";
+        bool returnStatusNotFound = operation.Operation is Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace &&
+            Volatile.Read(ref statusNotFound) == 1;
+        context.Response.StatusCode = returnStatusNotFound ? StatusCodes.Status404NotFound : operation.SuccessStatusCodes.Min();
+        context.Response.ContentType = returnStatusNotFound ? "application/problem+json" : "application/json";
         string response = operation.Operation switch
         {
+            Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace when returnStatusNotFound =>
+                $$"""{"type":"msg/record-not-found","title":"{{StatusNotFoundRawCanary}}","detail":"{{StatusNotFoundRawCanary}}","status":404}""",
+            Fse2Operation.ValidateCda => "{\"traceID\":\"trace-validate-fse2-1\",\"spanID\":\"span-validate-fse2-1\"}",
             Fse2Operation.Create => "{\"workflowInstanceId\":\"workflow-fse2-1\",\"traceID\":\"trace-fse2-1\",\"spanID\":\"span-fse2-1\"}",
             Fse2Operation.Replace when replaceReturnsWorkflowContext => "{\"workflowInstanceId\":\"workflow-fse2-1\",\"traceID\":\"trace-fse2-1\",\"spanID\":\"span-fse2-1\"}",
             Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace =>
@@ -3422,8 +3430,8 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
             "resource_hl7_type", "action_id", "subject_application_id", "subject_application_vendor",
             "subject_application_version"
         ];
-        bool workflowStatus = operation.Operation == Fse2Operation.GetStatusByWorkflow;
-        if (workflowStatus)
+        bool statusRead = operation.Operation is Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace;
+        if (statusRead)
         {
             expected.Remove("person_id");
             expected.Remove("patient_consent");
@@ -3438,7 +3446,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
             string.Equals(payload.GetProperty("action_id").GetString(), Fse2OperationCatalog.ClaimValue(action), StringComparison.Ordinal) &&
             string.Equals(payload.GetProperty("subject_organization").GetString(), "ASL Roma 1", StringComparison.Ordinal) &&
             string.Equals(payload.GetProperty("subject_organization_id").GetString(), "asl-roma-1", StringComparison.Ordinal) &&
-            (workflowStatus ||
+            (statusRead ||
              string.Equals(payload.GetProperty("person_id").GetString(), Fse2OrganizationHostedIntegrationTests.PersonId, StringComparison.Ordinal) &&
              payload.GetProperty("patient_consent").GetBoolean()) &&
             string.Equals(payload.GetProperty("subject_application_id").GetString(), expectedApplicationId, StringComparison.Ordinal) &&

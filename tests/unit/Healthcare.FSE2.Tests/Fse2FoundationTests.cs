@@ -595,8 +595,10 @@ public sealed class Fse2FoundationTests
         Assert.Equal("FSE2_RESPONSE_INVALID", error.SafeCode);
     }
 
-    [Fact]
-    public void FSE2_RESPONSE_status_projects_only_closed_bounded_events()
+    [Theory]
+    [InlineData(Fse2Operation.GetStatusByWorkflow)]
+    [InlineData(Fse2Operation.GetStatusByTrace)]
+    public void FSE2_RESPONSE_status_projects_only_closed_bounded_events(Fse2Operation operation)
     {
         const string rawCanary = "raw-status-data-must-not-escape";
         byte[] body = Encoding.UTF8.GetBytes($$"""
@@ -625,15 +627,36 @@ public sealed class Fse2FoundationTests
         Fse2Response response = Fse2ResponseMapper.Map(
             new(200, "application/json", body),
             Guid.NewGuid(),
-            Fse2OperationCatalog.Get(Fse2Operation.GetStatusByWorkflow));
+            Fse2OperationCatalog.Get(operation));
 
         Assert.Equal(2, response.WorkflowEvents.Count);
         Assert.Equal(Fse2WorkflowEventType.Validation, response.WorkflowEvents[0].EventType);
         Assert.Equal(Fse2WorkflowEventOutcome.Success, response.WorkflowEvents[0].Outcome);
         Assert.Equal(Fse2WorkflowEventType.SendToIni, response.WorkflowEvents[1].EventType);
         Assert.Equal(Fse2WorkflowEventOutcome.BlockingError, response.WorkflowEvents[1].Outcome);
+        Assert.Equal(Fse2StatusClassification.Found, response.StatusClassification);
         Assert.DoesNotContain(rawCanary, JsonSerializer.Serialize(response), StringComparison.Ordinal);
         Assert.DoesNotContain(rawCanary, response.ToString(), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(Fse2Operation.GetStatusByWorkflow)]
+    [InlineData(Fse2Operation.GetStatusByTrace)]
+    public void FSE2_RESPONSE_status_404_is_bounded_not_found_and_discards_raw_problem(Fse2Operation operation)
+    {
+        const string rawCanary = "raw-status-problem-must-not-escape";
+        Fse2Response response = Fse2ResponseMapper.Map(
+            new(404, "application/problem+json", Encoding.UTF8.GetBytes(
+                $$"""{"type":"msg/record-not-found","detail":"{{rawCanary}}"}""")),
+            Guid.NewGuid(),
+            Fse2OperationCatalog.Get(operation));
+
+        Assert.Equal(404, response.StatusCode);
+        Assert.Equal(Fse2StatusClassification.NotFound, response.StatusClassification);
+        Assert.Empty(response.WorkflowEvents);
+        Assert.Null(response.WorkflowInstanceId);
+        Assert.Null(response.TraceId);
+        Assert.DoesNotContain(rawCanary, JsonSerializer.Serialize(response), StringComparison.Ordinal);
     }
 
     [Theory]
@@ -683,8 +706,12 @@ public sealed class Fse2FoundationTests
     {
         string exactMaximum = new('t', 100);
 
-        Assert.Equal(exactMaximum, Fse2Request.GetStatusByTrace(exactMaximum, Claims()).ResourceIdentifier);
-        Assert.Throws<ArgumentException>(() => Fse2Request.GetStatusByTrace(new string('t', 101), Claims()));
+        Fse2Request request = Fse2Request.GetStatusByTrace(exactMaximum);
+        Assert.Equal(exactMaximum, request.ResourceIdentifier);
+        Assert.Null(request.ClinicalClaims);
+        using JsonDocument payload = JsonDocument.Parse(request.SerializeAuthorizedPayload());
+        Assert.Equal(["resourceIdentifier"], payload.RootElement.EnumerateObject().Select(value => value.Name));
+        Assert.Throws<ArgumentException>(() => Fse2Request.GetStatusByTrace(new string('t', 101)));
     }
 
     [Fact]

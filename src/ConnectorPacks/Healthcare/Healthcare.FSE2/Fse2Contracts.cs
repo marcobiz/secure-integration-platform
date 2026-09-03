@@ -231,9 +231,8 @@ public sealed class Fse2Request
         new(Fse2Operation.GetStatusByWorkflow, default, default, null,
             Fse2Validation.ValidateWorkflowId(workflowInstanceId), null);
 
-    public static Fse2Request GetStatusByTrace(string traceId, Fse2ClinicalClaims claims) =>
-        new(Fse2Operation.GetStatusByTrace, default, default, null, Fse2Validation.ValidateTraceId(traceId),
-            claims ?? throw new ArgumentNullException(nameof(claims)));
+    public static Fse2Request GetStatusByTrace(string traceId) =>
+        new(Fse2Operation.GetStatusByTrace, default, default, null, Fse2Validation.ValidateTraceId(traceId), null);
 
     private static Fse2Request DocumentRequest(Fse2Operation operation, ReadOnlyMemory<byte> document, ReadOnlyMemory<byte> requestBody, string contentType, string? id, Fse2ClinicalClaims claims)
     {
@@ -284,6 +283,16 @@ public sealed record Fse2WorkflowEvent(
     DateTimeOffset EventTimestamp,
     Fse2WorkflowEventOutcome Outcome);
 
+/// <summary>Closed status lookup result; upstream problem text is never exposed.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<Fse2StatusClassification>))]
+public enum Fse2StatusClassification
+{
+    [JsonStringEnumMemberName("FOUND")]
+    Found,
+    [JsonStringEnumMemberName("NOT_FOUND")]
+    NotFound
+}
+
 /// <summary>Technical-only normalized response.</summary>
 public sealed record Fse2Response(
     int StatusCode,
@@ -293,4 +302,8 @@ public sealed record Fse2Response(
     string? SpanId,
     string? SafeWarning,
     Fse2RetryClass RetryClass,
-    IReadOnlyList<Fse2WorkflowEvent> WorkflowEvents);
+    IReadOnlyList<Fse2WorkflowEvent> WorkflowEvents)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Fse2StatusClassification? StatusClassification { get; init; }
+}
