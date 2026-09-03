@@ -96,7 +96,9 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
         ConnectorSigningSlotKey authorization = profile.AuthorizationSigningSlot;
         ConnectorSigningSlotKey integrity = profile.IntegritySigningSlot;
         AuthorizedSigningCertificateHeaderMode certificateHeaderMode =
-            validateCdaContract == Fse2ValidateCdaPublishedContract.OfficialTestParity101
+            profile.EnvironmentClass == Fse2EnvironmentClass.OfficialTest &&
+            (!officialTestValidateCda ||
+             validateCdaContract == Fse2ValidateCdaPublishedContract.OfficialTestParity101)
             ? AuthorizedSigningCertificateHeaderMode.Leaf
             : AuthorizedSigningCertificateHeaderMode.Chain;
         AuthorizedSigningSlotExpectation authorizationExpectation = new(

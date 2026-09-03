@@ -1585,6 +1585,88 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     }
 
     [Fact]
+    public async Task FSE2_OFFICIALTEST_create_and_workflow_status_use_leaf_only_x5c()
+    {
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
+        TrackingCapabilityProvider provider = new(Provider(material));
+        await using SyntheticFse2OperationMatrixServer server = await SyntheticFse2OperationMatrixServer.StartAsync(
+            material.ServerCertificate,
+            material.ClientCertificateRevision1,
+            material.SigningKeyRevision1,
+            material.RootCertificate,
+            TestContext.Current.CancellationToken,
+            Fse2OfficialTestCanonicalDefinition.OfficialTestAudience,
+            Fse2OfficialTestCanonicalDefinition.ApplicationId,
+            Fse2OfficialTestCanonicalDefinition.ApplicationVendor,
+            Fse2OfficialTestCanonicalDefinition.ApplicationVersion,
+            expectLeafOnlyX5c: true);
+        await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
+            "unused-fse2-officialtest-create-status-leaf",
+            executionModule: Module(),
+            capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
+
+        Fse2OperationDescriptor create = Fse2OperationCatalog.Get(Fse2Operation.Create);
+        Fse2OperationDescriptor status = Fse2OperationCatalog.Get(Fse2Operation.GetStatusByWorkflow);
+        string connectorId = "fse2-officialtest-create-status-" + Guid.NewGuid().ToString("N");
+        Guid environmentId = await fixture.CreateEnvironmentAsync();
+        Guid tenantId = await fixture.CreateTenantAsync("fse2-officialtest-create-status-tenant");
+        Guid applicationId = await fixture.CreateApplicationAsync("fse2-officialtest-create-status-application");
+        HostedCapabilityAuthority authority = await fixture.PrepareCapabilityConnectorVersionAsync(
+            connectorId,
+            "1.1.0",
+            environmentId,
+            server.Endpoint,
+            DefinitionForOperations(
+                connectorId,
+                "1.1.0",
+                SpkiSha256(material.SigningKeyRevision1),
+                SpkiSha256(material.ClientCertificateRevision1),
+                Fse2OfficialTestCanonicalDefinition.ApplicationVersion,
+                [create, status],
+                environmentClass: "officialTest",
+                certificateHeader: "leaf",
+                audience: Fse2OfficialTestCanonicalDefinition.OfficialTestAudience,
+                applicationId: Fse2OfficialTestCanonicalDefinition.ApplicationId,
+                applicationVendor: Fse2OfficialTestCanonicalDefinition.ApplicationVendor),
+            provider,
+            "sign-r1",
+            "mtls-r1",
+            operationId: "*",
+            expectedOperationCount: 2);
+        await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
+        HostedIdentity identity = await fixture.EnrollIdentityAsync(
+            tenantId, applicationId, environmentId, "fse2-officialtest-create-status-identity");
+        await fixture.AddOperationGrantAsync(identity, connectorId, create.OperationId);
+        await fixture.AddOperationGrantAsync(identity, connectorId, status.OperationId);
+
+        using HttpResponseMessage createResponse = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{create.OperationId}:invoke",
+            InvokeRequest(PayloadFor(create)));
+        string createBody = await createResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.True(createResponse.IsSuccessStatusCode, createBody);
+
+        using HttpResponseMessage statusResponse = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{status.OperationId}:invoke",
+            InvokeRequest(PayloadFor(status)));
+        string statusBody = await statusResponse.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.True(statusResponse.IsSuccessStatusCode, statusBody);
+
+        Assert.Equal(2, server.Requests);
+        Assert.Equal(4, provider.SignDigestCalls);
+        Assert.Equal(2, fixture.GenericTransportRequests);
+        Assert.All(server.Observations, observation =>
+        {
+            Assert.True(observation.DualDistinctTokensObserved);
+            Assert.True(observation.ExactJwtPolicyObserved);
+            Assert.True(observation.ExactClaimsObserved);
+        });
+    }
+
+    [Fact]
     public async Task FSE2_T03_case_476_reads_frozen_git_objects_and_preserves_exact_official_PDF_in_multipart()
     {
         string repositoryPath = Environment.GetEnvironmentVariable("FSE2_T03_DATASET_REPOSITORY_PATH")
@@ -3003,11 +3085,18 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         string clientSpki,
         string applicationVersion,
         IReadOnlyCollection<Fse2OperationDescriptor> operations,
-        string multipartBoundary = Boundary) => $$$"""
+        string multipartBoundary = Boundary,
+        string environmentClass = "synthetic",
+        string certificateHeader = "chain",
+        string audience = Audience,
+        string applicationId = "broker-gateway",
+        string applicationVendor = "Secure Integration") => $$$"""
         {
           "schemaVersion":"1.0","connectorId":"{{{connectorId}}}","version":"{{{version}}}","displayName":"FSE2 Organization",
           "bindings":{"endpoints":[{"name":"service"}],"secrets":[{"name":"signing-certificate","kind":"clientCertificate"},{"name":"mtls-certificate","kind":"clientCertificate"}]},
-          "operations":[{{{string.Join(",", operations.Select(operation => OperationDefinition(operation, signingSpki, clientSpki, applicationVersion, multipartBoundary)))}}}]
+          "operations":[{{{string.Join(",", operations.Select(operation => OperationDefinition(
+              operation, signingSpki, clientSpki, applicationVersion, multipartBoundary,
+              environmentClass, certificateHeader, audience, applicationId, applicationVendor)))}}}]
         }
         """;
 
@@ -3016,7 +3105,12 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         string signingSpki,
         string clientSpki,
         string applicationVersion,
-        string multipartBoundary)
+        string multipartBoundary,
+        string environmentClass,
+        string certificateHeader,
+        string audience,
+        string applicationId,
+        string applicationVendor)
     {
         string contentType = operation.HasDocument
             ? $"multipart/form-data; boundary={multipartBoundary}"
@@ -3031,23 +3125,23 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             "request":{"contentType":"{{{contentType}}}","maximumBytes":2097152},"response":{"maximumBytes":4096},
             "authentication":{"kind":"mtls","certificateBinding":"mtls-certificate"},"executionStrategy":"healthcare-fse2-organization",
             "extensionConfiguration":{
-              "profile":"fse2-organization-v1","environmentClass":"synthetic",
+              "profile":"fse2-organization-v1","environmentClass":"{{{environmentClass}}}",
               "organizationIdentifier":"12345678903","organizationAssigningAuthorityOid":"2.16.840.1.113883.2.9.4.1.2",
               "organizationDescription":"ASL Roma 1","organizationDomainId":"asl-roma-1",
               "localityName":"ASL Roma 1","localityAssigningAuthorityOid":"2.16.840.1.113883.2.9.4.1.2","localityCode":"ASLROMA1",
-              "subjectRole":"DAP","applicationId":"broker-gateway","applicationVendor":"Secure Integration","applicationVersion":"{{{applicationVersion}}}",
+              "subjectRole":"DAP","applicationId":"{{{applicationId}}}","applicationVendor":"{{{applicationVendor}}}","applicationVersion":"{{{applicationVersion}}}",
               "maximumDocumentBytes":1048576
             },
             "authorizedCapabilities":{
               "signingSlots":[
                 {
                   "slot":"authorization","required":true,
-                  "signing":{"profileId":"fse2-authorization","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"{{{AuthorizationIssuer}}}","audience":"{{{Audience}}}","subject":"fixed","fixedSubject":"{{{Subject}}}","allowedClaims":[],"tokenLifetimeSeconds":{{{TokenLifetimeSeconds}}},"clockSkewSeconds":30,"certificateKeyUsage":"contentCommitment","certificateHeader":"chain","temporalClaims":"iat-exp","minimumRsaKeySize":2048},
+                  "signing":{"profileId":"fse2-authorization","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"{{{AuthorizationIssuer}}}","audience":"{{{audience}}}","subject":"fixed","fixedSubject":"{{{Subject}}}","allowedClaims":[],"tokenLifetimeSeconds":{{{TokenLifetimeSeconds}}},"clockSkewSeconds":30,"certificateKeyUsage":"contentCommitment","certificateHeader":"{{{certificateHeader}}}","temporalClaims":"iat-exp","minimumRsaKeySize":2048},
                   "projection":{"kind":"authorizationBearer"}
                 },
                 {
                   "slot":"integrity","required":true,
-                  "signing":{"profileId":"fse2-integrity","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"{{{IntegrityIssuer}}}","audience":"{{{Audience}}}","subject":"fixed","fixedSubject":"{{{Subject}}}","allowedClaims":[{{{integrityClaims}}}],"tokenLifetimeSeconds":{{{TokenLifetimeSeconds}}},"clockSkewSeconds":30,"certificateKeyUsage":"contentCommitment","certificateHeader":"chain","temporalClaims":"iat-exp","minimumRsaKeySize":2048},
+                  "signing":{"profileId":"fse2-integrity","revision":1,"keyBinding":"signing-certificate","publicKeySpkiSha256":"{{{signingSpki}}}","issuer":"{{{IntegrityIssuer}}}","audience":"{{{audience}}}","subject":"fixed","fixedSubject":"{{{Subject}}}","allowedClaims":[{{{integrityClaims}}}],"tokenLifetimeSeconds":{{{TokenLifetimeSeconds}}},"clockSkewSeconds":30,"certificateKeyUsage":"contentCommitment","certificateHeader":"{{{certificateHeader}}}","temporalClaims":"iat-exp","minimumRsaKeySize":2048},
                   "projection":{"kind":"signedTokenHeader","headerName":"FSE-JWT-Signature"}
                 }
               ],
