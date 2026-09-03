@@ -89,6 +89,11 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
             profile.EnvironmentClass);
         bool officialTestValidateCda = profile.EnvironmentClass == Fse2EnvironmentClass.OfficialTest &&
             profile.Operation.Operation == Fse2Operation.ValidateCda;
+        bool officialTestPublicationValidation = officialTestValidateCda &&
+            string.Equals(
+                profile.Activity,
+                Fse2PublishedOrganizationProfile.ValidateCdaPublicationActivity,
+                StringComparison.Ordinal);
         if (officialTestValidateCda &&
             (profile.Activity is null || !Fse2PublishedOrganizationProfile.IsSupportedValidateCdaActivity(profile.Activity) ||
              !string.Equals(profile.AcceptMediaType, Fse2PublishedOrganizationProfile.OfficialAcceptMediaType, StringComparison.Ordinal)))
@@ -97,7 +102,8 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
         ConnectorSigningSlotKey integrity = profile.IntegritySigningSlot;
         AuthorizedSigningCertificateHeaderMode certificateHeaderMode =
             profile.EnvironmentClass == Fse2EnvironmentClass.OfficialTest &&
-            (!officialTestValidateCda ||
+            (officialTestPublicationValidation ||
+             !officialTestValidateCda ||
              validateCdaContract == Fse2ValidateCdaPublishedContract.OfficialTestParity101)
             ? AuthorizedSigningCertificateHeaderMode.Leaf
             : AuthorizedSigningCertificateHeaderMode.Chain;

@@ -214,12 +214,12 @@ public sealed class Fse2OrganizationHostedIntegrationTests
     }
 
     [Fact]
-    public async Task FSE2_OFFICIALTEST_publication_validation_dispatches_only_when_request_matches_Published_activity()
+    public async Task FSE2_OFFICIALTEST_publication_validation_uses_leaf_only_and_dispatches_only_for_Published_activity()
     {
         VersionPolicyResult result = await RunVersionPolicyContractAsync(
             Fse2OfficialTestCanonicalDefinition.ConnectorId + "-publication",
             "1.0.0",
-            "chain",
+            "leaf",
             PublicationValidateCdaRequestBody,
             "publication-validation",
             publishedActivity: Fse2PublishedOrganizationProfile.ValidateCdaPublicationActivity,
