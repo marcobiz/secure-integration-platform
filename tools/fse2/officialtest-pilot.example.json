@@ -1,0 +1,13 @@
+{
+  "organization": {
+    "identifier": "PROVAX00X00X000Y",
+    "assigningAuthorityOid": "2.16.840.1.113883.2.9.4.3.2",
+    "description": "ASL Roma 1",
+    "domainId": "asl-roma-1"
+  },
+  "locality": {
+    "name": "ASL Roma 1",
+    "assigningAuthorityOid": "2.16.840.1.113883.2.9.4.1.2",
+    "code": "ASLROMA1"
+  }
+}

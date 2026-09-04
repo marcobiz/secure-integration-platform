@@ -18,7 +18,7 @@ services:
       Gateway__Provider__Resources__0__ResourceType: ClientCertificate
       Gateway__Provider__Resources__0__DisplayName: FSE2 test mTLS identity
       Gateway__Provider__Resources__0__EnvironmentId: ${FSE2_TEST_ENVIRONMENT_ID:?required}
-      Gateway__Provider__Resources__0__ConnectorScope: fse2-national
+      Gateway__Provider__Resources__0__ConnectorScope: ${FSE2_CONNECTOR_SCOPE:-fse2-national}
       Gateway__Provider__Resources__0__OperationScope: '*'
       Gateway__Provider__Resources__0__ProviderReference: local-pkcs12://fse2-lab/fse2-auth
       Gateway__Provider__Resources__0__Version: ${FSE2_AUTH_CERT_VERSION:?required}
@@ -30,7 +30,7 @@ services:
       Gateway__Provider__Resources__1__ResourceType: ClientCertificate
       Gateway__Provider__Resources__1__DisplayName: FSE2 test JWT signing identity
       Gateway__Provider__Resources__1__EnvironmentId: ${FSE2_TEST_ENVIRONMENT_ID:?required}
-      Gateway__Provider__Resources__1__ConnectorScope: fse2-national
+      Gateway__Provider__Resources__1__ConnectorScope: ${FSE2_CONNECTOR_SCOPE:-fse2-national}
       Gateway__Provider__Resources__1__OperationScope: '*'
       Gateway__Provider__Resources__1__ProviderReference: local-pkcs12://fse2-lab/fse2-sign
       Gateway__Provider__Resources__1__Version: ${FSE2_SIGN_CERT_VERSION:?required}

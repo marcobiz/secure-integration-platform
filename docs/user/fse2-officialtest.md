@@ -1,5 +1,9 @@
 # Pilot FSE2 OfficialTest
 
+Per il nuovo percorso current-spec limitato a VERIFICA e consultazione, vedere
+[FSE2 Organization: validazione e status](fse2-validation-status.md). La presente
+guida conserva il contesto del precedente profilo validate-cda 1.0.1.
+
 **Pubblico:** organizzazione autorizzata a usare l’ambiente OfficialTest.
 **Stato:** CURRENT per il solo `fse2-officialtest-validate-cda@1.0.1` /
 `validate-cda`.

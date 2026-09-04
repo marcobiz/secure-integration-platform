@@ -21,7 +21,7 @@ internal interface IOfficialTestAdminApi : IDisposable
     Task<JsonElement> MutateAsync(HttpMethod method, string relative, object? body, long? ifMatch = null);
 }
 
-internal static class Program
+internal static partial class Program
 {
     private static readonly JsonSerializerOptions Json = CreateJson();
 
@@ -36,6 +36,8 @@ internal static class Program
         string? supportedCommand = null;
         try
         {
+            if (args[0] == "pilot") return await RunPilotAsync(args[1..]).ConfigureAwait(false);
+
             if (args[0] == "plan" && args.Length == 2)
             {
                 Fse2OfficialTestOperationalPlan plan = ReadPlan(args[1]);
@@ -110,7 +112,7 @@ internal static class Program
                 : JsonSerializer.Serialize(exception.RateLimitResult, Json));
             return exception.InputFailure ? 2 : 1;
         }
-        catch (Exception exception) when (exception is IOException or JsonException or HttpRequestException or TaskCanceledException or FormatException or OverflowException)
+        catch (Exception exception) when (exception is IOException or JsonException or HttpRequestException or TaskCanceledException or FormatException or OverflowException or CryptographicException or ArgumentException or InvalidOperationException or KeyNotFoundException)
         {
             Console.Error.WriteLine("FSE2_OFFICIALTEST_PROVISIONING_FAILED");
             return 1;
@@ -185,7 +187,7 @@ internal static class Program
             RequireCompleted(discovered.Snapshot, ConnectorProvisioningPhase.BindingConfiguration);
 
             InstallationGrantAuthority[] existing = await ReadExactGrantsAsync(api, context).ConfigureAwait(false);
-            foreach (string operationId in context.EffectivePlan.OperationIds)
+            foreach (string operationId in context.RequiredGrants)
             {
                 if (existing.Any(grant => grant.OperationId == operationId)) continue;
                 JsonElement created = await api.MutateAsync(HttpMethod.Post, "admin/api/v1/grants", new
@@ -431,7 +433,7 @@ internal static class Program
             if (!IsSha256(bindingChecksum ?? string.Empty)) throw Failure("FSE2_OFFICIALTEST_SERVER_RESPONSE_INVALID");
             completed.Add(ConnectorProvisioningPhase.BindingConfiguration);
 
-            if (grants.Length == context.EffectivePlan.OperationIds.Count) completed.Add(ConnectorProvisioningPhase.Grant);
+            if (grants.Length == context.RequiredGrants.Count) completed.Add(ConnectorProvisioningPhase.Grant);
             JsonElement approvalsPage = await api.GetAsync(VersionPath(context) + "/approvals?offset=0&limit=100").ConfigureAwait(false);
             JsonElement[] activeApprovals = approvalsPage.GetProperty("items").EnumerateArray()
                 .Where(value => value.GetProperty("status").GetString() is "Requested" or "Approved")
@@ -439,7 +441,7 @@ internal static class Program
             if (activeApprovals.Length > 1) throw Failure("BGW-PROVISIONING-SERVER-STATE-INVALID");
             if (activeApprovals.Length == 1)
             {
-                if (grants.Length != context.EffectivePlan.OperationIds.Count) throw Failure("BGW-PROVISIONING-SERVER-STATE-INVALID");
+                if (grants.Length != context.RequiredGrants.Count) throw Failure("BGW-PROVISIONING-SERVER-STATE-INVALID");
                 JsonElement approval = activeApprovals[0];
                 if (!string.Equals(approval.GetProperty("checksumSha256").GetString(), context.Compiled.CanonicalDefinitionSha256, StringComparison.Ordinal))
                     throw new ConnectorProvisioningIdentityDriftException();
@@ -730,7 +732,7 @@ internal static class Program
         .Select(GrantAuthority)
         .Where(value => value.InstallationId == context.Installation.Id &&
             string.Equals(value.ConnectorId, context.EffectivePlan.ConnectorId, StringComparison.Ordinal) &&
-            context.EffectivePlan.OperationIds.Contains(value.OperationId, StringComparer.Ordinal))
+            context.RequiredGrants.Contains(value.OperationId, StringComparer.Ordinal))
         .ToArray();
 
     private static InstallationGrantAuthority GrantAuthority(JsonElement value) => new(
@@ -747,7 +749,7 @@ internal static class Program
     {
         if (grant.InstallationId != context.Installation.Id || grant.TenantId != context.Installation.TenantId || !grant.Enabled ||
             !string.Equals(grant.ConnectorId, context.EffectivePlan.ConnectorId, StringComparison.Ordinal) ||
-            !context.EffectivePlan.OperationIds.Contains(grant.OperationId, StringComparer.Ordinal) ||
+            !context.RequiredGrants.Contains(grant.OperationId, StringComparer.Ordinal) ||
             grant.ValidFrom > DateTimeOffset.UtcNow ||
             grant.ValidUntil is not null && grant.ValidUntil <= DateTimeOffset.UtcNow)
             throw Failure("FSE2_OFFICIALTEST_GRANT_AUTHORITY_DRIFT");
@@ -878,6 +880,7 @@ internal static class Program
         fse2-officialtest publish <operational-plan.json> <expected-publication-revision>
         fse2-officialtest verify <operational-plan.json>
         fse2-officialtest reduce-failure-evidence <admin-audit-page.json> <correlation-id>
+        fse2-officialtest pilot <configure|propose|approve|verify|validate-fhir|validate-cda|status-workflow|status-trace|audit> <settings.json> [identifier]
 
         Operational commands require FSE2_GATEWAY_URL, FSE2_ADMIN_SESSION_COOKIE and optionally
         FSE2_GATEWAY_CA_FILE. Public A1/S1 authority is read only from the authenticated Admin API.
@@ -897,11 +900,15 @@ internal static class Program
         {
             string gatewayText = Environment.GetEnvironmentVariable("FSE2_GATEWAY_URL", EnvironmentVariableTarget.Process) ?? string.Empty;
             string cookieText = Environment.GetEnvironmentVariable("FSE2_ADMIN_SESSION_COOKIE", EnvironmentVariableTarget.Process) ?? string.Empty;
+            string? developmentUser = Environment.GetEnvironmentVariable("FSE2_ADMIN_DEVELOPMENT_USER", EnvironmentVariableTarget.Process);
             if (!Uri.TryCreate(gatewayText, UriKind.Absolute, out Uri? gateway) || gateway.Scheme != Uri.UriSchemeHttps ||
-                string.IsNullOrWhiteSpace(cookieText) || cookieText.Any(character => character is '\r' or '\n'))
+                (string.IsNullOrWhiteSpace(cookieText) && developmentUser is null) || cookieText.Any(character => character is '\r' or '\n'))
                 throw Failure("FSE2_OFFICIALTEST_ADMIN_SESSION_REQUIRED", true);
+            if (developmentUser is not null && (!gateway.IsLoopback || cookieText.Length != 0 ||
+                developmentUser is not ("security-admin" or "editor" or "approver")))
+                throw Failure("FSE2_PILOT_LOCAL_ADMIN_LOGIN_DENIED", true);
             CookieContainer cookies = new();
-            try { cookies.SetCookies(gateway, cookieText); }
+            try { if (cookieText.Length != 0) cookies.SetCookies(gateway, cookieText); }
             catch (CookieException) { throw Failure("FSE2_OFFICIALTEST_ADMIN_SESSION_INVALID", true); }
 
             string? caPath = Environment.GetEnvironmentVariable("FSE2_GATEWAY_CA_FILE", EnvironmentVariableTarget.Process);
@@ -930,6 +937,12 @@ internal static class Program
             AdminApi api = new(client, cookies, Guid.Empty, customRoot);
             try
             {
+                if (developmentUser is not null)
+                {
+                    // The existing server endpoint independently enforces local DevelopmentAuth and roles.
+                    _ = await api.MutateAsync(HttpMethod.Post, "admin/auth/development/login", new { userName = developmentUser }).ConfigureAwait(false);
+                    api.csrf = null; // Authentication changed: obtain the authenticated anti-forgery token.
+                }
                 JsonElement me = await api.GetAsync("admin/auth/me").ConfigureAwait(false);
                 api.PrincipalId = me.GetProperty("id").GetGuid();
                 if (api.PrincipalId == Guid.Empty) throw Failure("FSE2_OFFICIALTEST_ADMIN_SESSION_INVALID");
@@ -1069,7 +1082,11 @@ internal static class Program
         Fse2OfficialTestOperationalPlan EffectivePlan,
         InstallationAuthority Installation,
         Fse2OfficialTestResolvedProviderAuthority PublicAuthority,
-        Fse2OfficialTestCompiledConfiguration Compiled);
+        Fse2OfficialTestCompiledConfiguration Compiled)
+    {
+        internal bool ValidationStatusOnly { get; init; }
+        internal IReadOnlyList<string> RequiredGrants => ValidationStatusOnly ? PilotOperations : EffectivePlan.OperationIds;
+    }
     internal sealed record DiscoveredProvisioningState(
         ConnectorProvisioningSnapshot Snapshot,
         long VersionRowVersion,

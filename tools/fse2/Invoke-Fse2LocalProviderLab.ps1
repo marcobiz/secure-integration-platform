@@ -4,6 +4,8 @@ param(
     [string] $Phase = 'Validate',
     [string] $ProviderManifestPath,
     [string] $MaterialDirectory,
+    [ValidateSet('fse2-national', 'fse2-organization-current-spec')]
+    [string] $ConnectorScope = 'fse2-national',
     [Guid] $EnvironmentId = '907cf0ea-d592-43a7-9b42-2bd5b97fe7b4',
     [string] $DotNetPath,
     [string] $QuickstartArtifactRoot,
@@ -133,6 +135,7 @@ function Set-LabEnvironment {
         M3_PRIMARY_ENVIRONMENT_ID = $EnvironmentId.ToString('D')
         FSE2_AUTH_CERT_VERSION = [string]$auth[0].version
         FSE2_SIGN_CERT_VERSION = [string]$sign[0].version
+        FSE2_CONNECTOR_SCOPE = $ConnectorScope
     }
     foreach ($entry in $values.GetEnumerator()) {
         $script:previousLabEnvironment[$entry.Key] = [Environment]::GetEnvironmentVariable($entry.Key, 'Process')
