@@ -236,11 +236,13 @@ public sealed class ConnectorWorkflowContextPostgresTests
     [Fact]
     public async Task FSE2_DUR_DAT_PostgreSQL18_successor_is_atomic_idempotent_and_preserves_both_trace_scopes()
     {
+        string migrationConnection = RequiredMigrationConnection();
+        string adminConnection = RequiredAdminConnection();
         await PostgresIsolationTests.ApplyMigrationAsync();
         await using AdminApiSecurityTests.PostgresRuntimeRoleLease runtimeRole =
             await AdminApiSecurityTests.PostgresRuntimeRoleLease.CreateAsync(
-                RequiredAdminConnection(), RequiredMigrationConnection(), TestContext.Current.CancellationToken);
-        await using NpgsqlConnection owner = new(RequiredMigrationConnection());
+                adminConnection, migrationConnection, TestContext.Current.CancellationToken);
+        await using NpgsqlConnection owner = new(migrationConnection);
         await owner.OpenAsync(TestContext.Current.CancellationToken);
         WorkflowDatabaseFixture fixture = await CreateFixtureAsync(owner);
         try
@@ -337,8 +339,9 @@ public sealed class ConnectorWorkflowContextPostgresTests
     [Fact]
     public async Task FSE2_DUR_DAT_PostgreSQL18_upgrade_from_0018_preserves_origin_and_second_apply_is_noop()
     {
+        string migrationConnection = RequiredMigrationConnection();
         await PostgresIsolationTests.ApplyMigrationAsync();
-        await using NpgsqlConnection owner = new(RequiredMigrationConnection());
+        await using NpgsqlConnection owner = new(migrationConnection);
         await owner.OpenAsync(TestContext.Current.CancellationToken);
         WorkflowDatabaseFixture fixture = await CreateFixtureAsync(owner);
         try
