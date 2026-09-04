@@ -30,23 +30,27 @@ distinct levels. The integrated baseline does not replace the exact commit of a 
 | Private preview | **Limited** | Core and optional pilot can be evaluated with their respective prerequisites; no public release or guaranteed API stability. |
 | Production/accreditation | **NOT QUALIFIED** | Live cloud use, MSI, C ABI/COM adapters, HA/DR, restore/load/soak, penetration testing, artifact signing and production custody are not qualified. |
 
-## Active work — not yet qualified
+## Local candidate — real-service qualified, not integrated
 
 The first active objective is an independently usable Windows Local Broker: an
 identified, authorized .NET application uses an Installation-local key without
 receiving it or requiring a Gateway. The target includes mutually authenticated IPC,
 application/operation/context policy, state preservation across restart and supported
 service update, DPAPI-bounded lifecycle/backup/restore, and a small executable SDK/sample
-and guide. **This is implementation work, not a completed or newly qualified capability.**
-Existing M0/M1 and M3A evidence does not close this new standalone acceptance path.
+and guide. This remains a local candidate, not an integrated capability.
 
 The local candidate now contains SCM/pipe-owner peer authentication, explicit
 non-replacing data-key initialization, exact protection-context grants, and the
 [sample/lifecycle guide](docs/user/local-broker.md). Focused Windows transport,
 DPAPI/storage and simulated-SCM lifecycle tests pass; this is **not integrated**.
-Real service installation/restart/update and ordinary-user service qualification
-remain **PENDING**: the current host denied SCM creation access (Win32 5), and no
-service was installed. The guide provides the single prepared elevated entrypoint.
+The single elevated gate subsequently passed on exact software candidate
+`3955fd0c3a5eccf816d44b0faba9a704227baa3d`: actual service install/start, standalone
+Protect, repeated Stop, restart, old-ciphertext verify, two unauthorized-client denials,
+same-candidate update/restart/verify and owned cleanup. `FIRST_PROTECT_MS=12532` is an
+observation without a performance threshold. Cleanup removed the exact service
+registration but intentionally preserved installation/state; it was not an uninstall.
+Ordinary-user service use, cross-release update and machine/profile restore remain
+unqualified.
 
 Next comes the existing Broker → Gateway path: Installation identity renewal, revocation,
 reconnection and interruption recovery using the synthetic service. Target-specific

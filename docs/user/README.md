@@ -12,8 +12,8 @@
 - [Windows / Local Broker](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/history/README.md#windows--local-broker-evidence):
   historical service and isolation tests, with their own laboratory prerequisites.
 - [Standalone Local Broker candidate](local-broker.md): local SDK protection without
-  Gateway, explicit key lifecycle and a prepared real-service verification command;
-  service qualification is still pending.
+  Gateway, explicit key lifecycle and a real-service verification command that passed
+  once on the exact software candidate; see the guide for remaining claim limits.
 - [FSE2 validation and status](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md):
   current optional pilot entry point, requiring a host .NET SDK and previously
   authorized OfficialTest access/material; shipped runner for bootstrap, roles and bounded invocation.

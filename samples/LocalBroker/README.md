@@ -4,5 +4,6 @@ See the [standalone guide](../../docs/user/local-broker.md) for publishing, inst
 and running this Windows .NET sample without a Gateway. It uses synthetic data only,
 never prints plaintext/keys, and refuses to overwrite an existing envelope.
 
-Real Windows Service qualification remains pending; in-process SDK/transport tests
-are not a substitute for the guide's elevated service verification entrypoint.
+The elevated real Windows Service gate passed once on exact software candidate
+`3955fd0c3a5eccf816d44b0faba9a704227baa3d`. See the guide for the observed scope
+and remaining ordinary-user, cross-release and recovery limits.

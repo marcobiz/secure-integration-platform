@@ -21,9 +21,10 @@ tag, release, OfficialTest calls, external contact or a production claim.
 3. Qualify distribution and operation for an explicitly selected Windows target,
    with an installable artifact and a tested compatibility matrix.
 
-The first outcome is active implementation work, **not completed or newly qualified**.
-The later outcomes do not silently expand the first one. Existing components and
-historical Windows gates are starting points, not proof that the new adopter path works.
+The first outcome is a converged local candidate with one exact-candidate elevated
+service qualification, pending review and integration. The later outcomes do not
+silently expand it. Historical Windows gates remain separate evidence and do not
+replace the new adopter-path result.
 
 ## NOW — independently usable Windows Local Broker
 
@@ -34,9 +35,11 @@ lifecycle and backup/restore procedure within DPAPI's limits.
 
 Use the existing Windows Service, local protection operations, policy and SDK.
 The [local candidate guide](../user/local-broker.md) records implemented software,
-focused tests and the pending real-service gate separately. SCM creation access
-is unavailable on the current host; this does not convert in-process tests into
-service/restart/update qualification or mark this objective complete.
+focused tests and the single real-service result separately. After an earlier
+non-elevated SCM access denial, the authorized elevated gate passed on exact software
+candidate `3955fd0c3a5eccf816d44b0faba9a704227baa3d`. It proves same-candidate
+install/start/Protect/restart/update/old-ciphertext verification and owned cleanup,
+not ordinary-user use, cross-release compatibility or disaster recovery.
 Freeze one small application example and its result before expanding the surface;
 add a primitive only if the chosen case requires it. This is not a new vault or
 workload-identity platform.

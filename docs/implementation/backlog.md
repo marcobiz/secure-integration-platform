@@ -12,14 +12,15 @@ outcomes and boundaries. Historical slice tables are preserved [below](#historic
 
 | Priority | Outcome | Start condition | Completion criterion |
 |---|---|---|---|
-| NOW — active, not qualified | Independently usable Windows Local Broker | Authorized local candidate on the PR #66 baseline; use the existing service, policy and SDK. | Identified .NET app uses an Installation-local key without receiving it or requiring a Gateway; mutually authenticated IPC and application/operation/context policy; restart and supported update preserve state; tested DPAPI-bounded backup/restore and a small executable sample/guide. |
+| NOW — candidate qualified, pending review/integration | Independently usable Windows Local Broker | Local software candidate and focused tests converged; one exact-candidate elevated service gate passed. | Identified .NET app uses an Installation-local key without receiving it or requiring a Gateway; mutually authenticated IPC and application/operation/context policy; restart and same-candidate update preserve state; tested DPAPI-bounded backup/restore and a small executable sample/guide. |
 | NEXT | Broker → Gateway continuity | Standalone local result converged; freeze the remote-path fault cases. | Existing synthetic service proves identity renewal, revocation, reconnection and supported recovery after interruption, with fewer manual steps and no unsafe replay of uncertain mutations. |
 | NEXT, after continuity | Target-specific distribution and operation | Select the actual Windows/deployment target and authorize its qualification scope. | Installable artifact and lifecycle exercised on a stated compatibility matrix, with explicit recovery limits; no inferred universal Windows support or publication approval. |
 | DEFERRED | Broader surfaces and additional integrations | A concrete requirement or observed defect, explicit scope and an owner; not hypothetical future reuse. | Define a bounded outcome and relevant negatives before promoting work. Use the triggers below; no new framework or laboratory by default. |
 
 A prerequisite is not evidence of completion. The writer updates the NOW row and the
 authoritative status only after the corresponding candidate result is proved.
-Historical Windows PASS-LIVE results do not close the new standalone acceptance path.
+Historical Windows PASS-LIVE results remain separate from the new exact-candidate
+standalone service result.
 
 ## Deferred-work triggers
 
@@ -44,10 +45,11 @@ Historical Windows PASS-LIVE results do not close the new standalone acceptance 
 No `GetSecret`, copied vendor credentials, mandatory new identity platform or
 additional abstraction is justified solely by an item being deferred.
 
-The NOW software candidate has targeted Broker/SDK/storage evidence and a prepared
-[service verification entrypoint](../user/local-broker.md#one-real-service-verification-entrypoint).
-Real service and ordinary-user qualification remain pending on an elevated host;
-the current SCM access-denied result is not a product failure or a completed gate.
+The NOW software candidate has targeted Broker/SDK/storage evidence and one passing
+[service verification entrypoint](../user/local-broker.md#one-real-service-verification-entrypoint)
+on exact software candidate `3955fd0c3a5eccf816d44b0faba9a704227baa3d`.
+The result covers elevated service lifecycle and same-candidate update. Ordinary-user,
+cross-release and disaster-recovery qualification remain pending.
 
 ## Delivery and verification
 

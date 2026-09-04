@@ -22,8 +22,9 @@ absence, mismatch or access denial fails closed without automatic retries.
 Relevant Windows contracts: [QueryServiceStatusEx](https://learn.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-queryservicestatusex),
 [GetNamedPipeServerProcessId](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-getnamedpipeserverprocessid)
 and [GetSecurityInfo](https://learn.microsoft.com/en-us/windows/win32/api/aclapi/nf-aclapi-getsecurityinfo).
-SCM/private-service-profile behavior still requires a real service qualification;
-an in-process IPC test does not establish that operational claim.
+SCM/pipe authority passed once in the elevated real-service gate on exact software
+candidate `3955fd0c3a5eccf816d44b0faba9a704227baa3d`; ordinary-user access remains
+unqualified. In-process IPC tests remain supporting evidence, not that operational claim.
 
 ## Consequences
 

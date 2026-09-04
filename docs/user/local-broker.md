@@ -1,10 +1,12 @@
 # Standalone Windows Local Broker
 
-**Status: local candidate; real Windows Service qualification pending.**
+**Status: local candidate; real Windows Service qualification passed on the exact
+software candidate `3955fd0c3a5eccf816d44b0faba9a704227baa3d`.**
+`REAL_WINDOWS_SERVICE_QUALIFICATION=PASS` for the bounded scope recorded below.
 The SDK, local crypto/storage and transport tests were run on Windows with .NET SDK
-10.0.302. They do not attest a Windows Service installation, a standard-user service
-invocation, upgrade compatibility across releases, or disaster recovery. The current
-host denied SCM create access (Win32 5); no service was installed for this candidate.
+10.0.302. A subsequent authorized elevated run exercised the actual Windows Service,
+but does not attest a standard-user service invocation, upgrade compatibility across
+different releases, a Windows compatibility matrix or disaster recovery.
 
 This path uses local `ProtectData`/`UnprotectData`, not the Direct Gateway pilot.
 It needs no Gateway, PostgreSQL, cloud account, external certificate or enrollment.
@@ -146,7 +148,7 @@ Stop is deliberately not a destructive uninstall or key-retirement command.
 
 ## One real-service verification entrypoint
 
-Prepared for subsequent authorized execution in an elevated Windows PowerShell:
+The following elevated entrypoint was executed once on the exact candidate:
 
 ```powershell
 .\Invoke-LocalBroker.ps1 -Command Verify -Instance qualification-20260904 -BrokerPublishDirectory .\broker -SamplePublishDirectory .\sample
@@ -163,8 +165,15 @@ the ordinary-account walkthrough above must also be exercised before that claim.
 Finally it removes only the exact owned service registration; binaries, DPAPI state,
 profile, Event Log source and synthetic envelope remain intentionally preserved.
 It does not purge event logs or remove foreign resources. A retired qualification
-instance is not an invitation to reinitialize its retained data.
+instance is not an invitation to reinitialize its retained data. This cleanup stops
+the service and removes its task-owned registration, but deliberately preserves the
+fresh installation/state; it is not an uninstall.
 
-This entrypoint has **not run** on the candidate. Focused tests use an in-process
-transport fixture and simulated SCM only for lifecycle control-flow checks. No new
-Windows/live claim follows from those results.
+Observed once: install/start/status with Gateway disabled; Protect in 139 ms;
+`FIRST_PROTECT_MS=12532`; repeated Stop preserving data; restart/status; old-ciphertext
+verify; two unauthorized-client denials; Stop/update/start; second old-ciphertext
+verify; owned cleanup with persistent state preserved. The elapsed values are
+observations, not performance thresholds or guarantees. The update reapplied the same
+candidate, so it does not prove cross-version compatibility. Ordinary-account use and
+machine/profile restore remain unqualified. Focused in-process/simulated-SCM tests
+remain supporting evidence only; they are not the basis for this real-service result.
