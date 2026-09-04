@@ -25,6 +25,18 @@ public sealed class ConnectorWorkflowContextRecord
         string operationProfileChecksumSha256,
         string? workflowInstanceId,
         string? traceId)
+        : this(originatingOperationId, actionCode, purposeOfUseCode, operationProfileChecksumSha256,
+            workflowInstanceId, traceId, null) { }
+
+    /// <summary>Allows one protocol-defined successor to an exact immutable originating profile.</summary>
+    public ConnectorWorkflowContextRecord(
+        string originatingOperationId,
+        string actionCode,
+        string purposeOfUseCode,
+        string operationProfileChecksumSha256,
+        string? workflowInstanceId,
+        string? traceId,
+        ConnectorWorkflowContextPredecessor? permittedPredecessor)
     {
         OriginatingOperationId = ConnectorWorkflowContextValidation.OperationId(originatingOperationId);
         ActionCode = ConnectorWorkflowContextValidation.Code(actionCode, nameof(actionCode));
@@ -36,6 +48,10 @@ public sealed class ConnectorWorkflowContextRecord
         TraceId = ConnectorWorkflowContextValidation.OptionalTraceIdentifier(traceId);
         if (WorkflowInstanceId is null && TraceId is null)
             throw new ArgumentException("At least one workflow correlation identifier is required.");
+        if (permittedPredecessor is not null && (WorkflowInstanceId is null || TraceId is null ||
+            permittedPredecessor.OriginatingOperationId == OriginatingOperationId))
+            throw new ArgumentException("A workflow successor requires distinct operations and both identifiers.");
+        PermittedPredecessor = permittedPredecessor;
     }
 
     /// <summary>Exact operation identifier that originated the workflow.</summary>
@@ -50,6 +66,32 @@ public sealed class ConnectorWorkflowContextRecord
     public string? WorkflowInstanceId { get; }
     /// <summary>Optional exact trace identifier.</summary>
     public string? TraceId { get; }
+    /// <summary>Protocol permission supplied by the trusted runtime, never by invocation input.</summary>
+    public ConnectorWorkflowContextPredecessor? PermittedPredecessor { get; }
+}
+
+/// <summary>Closed originating profile permitted by the current authorized protocol operation.</summary>
+public sealed class ConnectorWorkflowContextPredecessor
+{
+    /// <summary>Creates an exact protocol precondition without scope or caller-selected trace authority.</summary>
+    public ConnectorWorkflowContextPredecessor(string originatingOperationId, string actionCode,
+        string purposeOfUseCode, string operationProfileChecksumSha256)
+    {
+        OriginatingOperationId = ConnectorWorkflowContextValidation.OperationId(originatingOperationId);
+        ActionCode = ConnectorWorkflowContextValidation.Code(actionCode, nameof(actionCode));
+        PurposeOfUseCode = ConnectorWorkflowContextValidation.Code(purposeOfUseCode, nameof(purposeOfUseCode));
+        OperationProfileChecksumSha256 = ConnectorWorkflowContextValidation.Sha256(
+            operationProfileChecksumSha256, nameof(operationProfileChecksumSha256));
+    }
+
+    /// <summary>Exact originating operation allowed by the protocol.</summary>
+    public string OriginatingOperationId { get; }
+    /// <summary>Exact originating action.</summary>
+    public string ActionCode { get; }
+    /// <summary>Exact originating purpose of use.</summary>
+    public string PurposeOfUseCode { get; }
+    /// <summary>Exact originating Published operation-profile checksum.</summary>
+    public string OperationProfileChecksumSha256 { get; }
 }
 
 /// <summary>One bounded exact workflow or trace lookup. Authority is always derived by Core.</summary>

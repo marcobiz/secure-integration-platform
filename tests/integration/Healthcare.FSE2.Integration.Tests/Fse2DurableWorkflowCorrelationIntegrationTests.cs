@@ -12,7 +12,7 @@ using Xunit;
 namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2.Integration.Tests;
 
 [Collection(PostgreSqlSharedDatabaseGroup.Name)]
-public sealed class Fse2DurableWorkflowCorrelationIntegrationTests
+public sealed partial class Fse2DurableWorkflowCorrelationIntegrationTests
 {
     private static readonly JsonSerializerOptions WebJson = new(JsonSerializerDefaults.Web);
 
@@ -125,7 +125,7 @@ public sealed class Fse2DurableWorkflowCorrelationIntegrationTests
                 }
                 await AssertAuditOutcomeAsync(first, tenantId, validationCorrelationId, expectedFailure: 0, expectedSuccess: 1);
 
-                for (int attempt = 0; attempt < 2; attempt++)
+                // Registration idempotency is tested directly against PostgreSQL, never by resending create.
                 {
                     Guid correlationId = Guid.NewGuid();
                     using HttpResponseMessage response = await first.SendSignedAsync(

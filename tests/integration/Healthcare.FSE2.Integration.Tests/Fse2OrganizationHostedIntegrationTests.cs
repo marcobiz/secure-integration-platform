@@ -2722,7 +2722,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         }
         """;
 
-    private static string CurrentSpecPayload(Fse2OperationDescriptor operation) => Encoding.UTF8.GetString(
+    internal static string CurrentSpecPayload(Fse2OperationDescriptor operation) => Encoding.UTF8.GetString(
         Fse2Request.ForCurrentSpec(operation.Operation,
             operation.HasDocument ? DocumentBytes() : default,
             operation.HasJsonBody ? Encoding.UTF8.GetBytes(CurrentSpecBody(operation.Operation)) : default,
@@ -2747,7 +2747,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             Fse2Operation.UpdateMetadata or Fse2Operation.UpdateMetadataLegacy => metadata,
             Fse2Operation.ValidateAndCreate or Fse2Operation.ValidateAndReplace =>
                 metadata.Insert(1, "\"identificativoDoc\":\"2.16.840.1\",\"identificativoRep\":\"2.16.840.2\","),
-            _ => metadata.Insert(1, "\"identificativoDoc\":\"2.16.840.1\",\"identificativoRep\":\"2.16.840.2\",\"workflowInstanceId\":\"workflow-fse2-1\",")
+            _ => metadata.Insert(1, $"\"identificativoDoc\":\"2.16.840.1\",\"identificativoRep\":\"2.16.840.2\",\"workflowInstanceId\":\"{(operation == Fse2Operation.Create ? "workflow-fse2-1" : "workflow-" + Fse2OperationCatalog.Get(operation).OperationId)}\",")
         };
     }
 
@@ -3270,6 +3270,9 @@ public sealed class Fse2OrganizationHostedIntegrationTests
 internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
 {
     internal bool UsesCurrentSpec { get; set; }
+    internal bool ValidationPublicationSequence { get; set; }
+    internal string PublicationSequenceWorkflow { get; set; } = "workflow-sequence-1";
+    internal Fse2Operation? ExpectedStatusOrigin { get; set; }
     internal const string StatusNotFoundRawCanary = "raw-status-not-found-problem-must-not-escape";
     private readonly WebApplication application;
     private readonly string expectedClientFingerprint;
@@ -3448,9 +3451,15 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
             Volatile.Read(ref statusGenericNotFound) == 1;
         bool returnAnyStatusNotFound = returnStatusNotFound || returnGenericStatusNotFound;
         context.Response.StatusCode = returnAnyStatusNotFound ? StatusCodes.Status404NotFound : operation.SuccessStatusCodes.Min();
+        if (ValidationPublicationSequence && operation.Operation == Fse2Operation.ValidateCda)
+            context.Response.StatusCode = StatusCodes.Status201Created;
         context.Response.ContentType = returnAnyStatusNotFound ? "application/problem+json" : "application/json";
         string response = operation.Operation switch
         {
+            Fse2Operation.ValidateCda when ValidationPublicationSequence =>
+                "{\"workflowInstanceId\":\"workflow-sequence-1\",\"traceID\":\"trace-validation-sequence-1\"}",
+            Fse2Operation.Create or Fse2Operation.Replace or Fse2Operation.CreateFhir or Fse2Operation.ReplaceFhir when ValidationPublicationSequence =>
+                $$"""{"workflowInstanceId":"{{PublicationSequenceWorkflow}}","traceID":"trace-publication-sequence-1"}""",
             Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace when returnStatusNotFound =>
                 $$"""{"type":"msg/record-not-found","title":"{{StatusNotFoundRawCanary}}","detail":"{{StatusNotFoundRawCanary}}","status":404}""",
             Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace when returnGenericStatusNotFound =>
@@ -3521,8 +3530,10 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
             expected.Remove("resource_hl7_type");
         }
         if (operation.RequiresAttachmentHash) expected.Add("attachment_hash");
-        Fse2PurposeOfUse purpose = operation.PurposeOfUse ?? Fse2PurposeOfUse.Treatment;
-        Fse2Action action = operation.Action ?? Fse2Action.Create;
+        Fse2OperationDescriptor origin = statusRead && ExpectedStatusOrigin is { } statusOrigin
+            ? Fse2OperationCatalog.Get(statusOrigin) : operation;
+        Fse2PurposeOfUse purpose = origin.PurposeOfUse ?? Fse2PurposeOfUse.Treatment;
+        Fse2Action action = origin.Action ?? Fse2Action.Create;
         return payload.EnumerateObject().Select(value => value.Name).ToHashSet(StringComparer.Ordinal).SetEquals(expected) &&
             string.Equals(payload.GetProperty("subject_role").GetString(), "DAP", StringComparison.Ordinal) &&
             string.Equals(payload.GetProperty("purpose_of_use").GetString(), Fse2OperationCatalog.ClaimValue(purpose), StringComparison.Ordinal) &&

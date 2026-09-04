@@ -171,7 +171,7 @@ public sealed class Fse2FoundationTests
         Assert.Equal("workflow-1", record.WorkflowInstanceId);
         Assert.Equal("trace-1", record.TraceId);
         Assert.Equal(
-            ["ActionCode", "OperationProfileChecksumSha256", "OriginatingOperationId", "PurposeOfUseCode", "TraceId", "WorkflowInstanceId"],
+            ["ActionCode", "OperationProfileChecksumSha256", "OriginatingOperationId", "PermittedPredecessor", "PurposeOfUseCode", "TraceId", "WorkflowInstanceId"],
             typeof(ConnectorWorkflowContextRecord).GetProperties(BindingFlags.Instance | BindingFlags.Public)
                 .Select(value => value.Name).Order(StringComparer.Ordinal).ToArray());
         string[] forbidden = ["Tenant", "Application", "Installation", "Environment", "Connector", "Binding", "Published", "Person", "Patient", "Payload", "Body", "Jwt", "Certificate", "Endpoint", "Header", "Metadata"];
@@ -181,6 +181,15 @@ public sealed class Fse2FoundationTests
             "create", "CREATE", "TREATMENT", new string('b', 64), null, null));
         Assert.Throws<ArgumentException>(() => new ConnectorWorkflowContextRecord(
             "create", "CREATE", "patient=raw", new string('b', 64), "workflow-1", null));
+        Assert.Null(record.PermittedPredecessor);
+        ConnectorWorkflowContextPredecessor predecessor = new("validate-cda", "CREATE", "TREATMENT", new string('a', 64));
+        Assert.Equal(["ActionCode", "OperationProfileChecksumSha256", "OriginatingOperationId", "PurposeOfUseCode"],
+            typeof(ConnectorWorkflowContextPredecessor).GetProperties().Select(value => value.Name).Order(StringComparer.Ordinal).ToArray());
+        Assert.Throws<ArgumentException>(() => new ConnectorWorkflowContextPredecessor("validate-cda", "CREATE", "patient=raw", new string('a', 64)));
+        Assert.Throws<ArgumentException>(() => new ConnectorWorkflowContextPredecessor("validate-cda", "CREATE", "TREATMENT", "not-sha256"));
+        Assert.Same(predecessor, new ConnectorWorkflowContextRecord("create", "CREATE", "TREATMENT", new string('b', 64), "workflow-1", "trace-2", predecessor).PermittedPredecessor);
+        Assert.Throws<ArgumentException>(() => new ConnectorWorkflowContextRecord("create", "CREATE", "TREATMENT", new string('b', 64), "workflow-1", null, predecessor));
+        Assert.Throws<ArgumentException>(() => new ConnectorWorkflowContextRecord("validate-cda", "CREATE", "TREATMENT", new string('a', 64), "workflow-1", "trace-1", predecessor));
     }
 
     [Fact]

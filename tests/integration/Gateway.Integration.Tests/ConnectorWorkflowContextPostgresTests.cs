@@ -19,6 +19,7 @@ public sealed class ConnectorWorkflowContextPostgresTests
         "installation_id",
         "operation_profile_checksum_sha256",
         "originating_operation_id",
+        "predecessor_trace_id",
         "published_context_sha256",
         "purpose_of_use_code",
         "recorded_at",
@@ -65,7 +66,7 @@ public sealed class ConnectorWorkflowContextPostgresTests
         Assert.Equal(first.Policies, second.Policies);
         Assert.Equal(first.RowSecurity, second.RowSecurity);
         Assert.Equal(first.ForcedRowSecurity, second.ForcedRowSecurity);
-        Assert.Equal(ExpectedColumns, first.Columns);
+        Assert.Equal(ExpectedColumns.Where(value => value != "predecessor_trace_id"), first.Columns);
         Assert.Equal(
             ["ux_connector_workflow_context_trace", "ux_connector_workflow_context_workflow"],
             first.UniqueIndexes);
@@ -230,6 +231,154 @@ public sealed class ConnectorWorkflowContextPostgresTests
         {
             await CleanupFixtureAsync(owner, fixture);
         }
+    }
+
+    [Fact]
+    public async Task FSE2_DUR_DAT_PostgreSQL18_successor_is_atomic_idempotent_and_preserves_both_trace_scopes()
+    {
+        await PostgresIsolationTests.ApplyMigrationAsync();
+        await using AdminApiSecurityTests.PostgresRuntimeRoleLease runtimeRole =
+            await AdminApiSecurityTests.PostgresRuntimeRoleLease.CreateAsync(
+                RequiredAdminConnection(), RequiredMigrationConnection(), TestContext.Current.CancellationToken);
+        await using NpgsqlConnection owner = new(RequiredMigrationConnection());
+        await owner.OpenAsync(TestContext.Current.CancellationToken);
+        WorkflowDatabaseFixture fixture = await CreateFixtureAsync(owner);
+        try
+        {
+            ConnectorWorkflowContextAuthorityScope authority = new(fixture.TenantA, fixture.ApplicationA,
+                fixture.InstallationA, fixture.EnvironmentA, fixture.ConnectorId, "1.0.0", fixture.PublishedContextSha256);
+            ConnectorWorkflowContextPredecessor expected = new("validate-cda", "CREATE", "TREATMENT", new string('a', 64));
+            ConnectorWorkflowContextRecord validation = new("validate-cda", "CREATE", "TREATMENT", new string('a', 64), fixture.WorkflowId, fixture.TraceId);
+            ConnectorWorkflowContextRecord publication = new("create", "CREATE", "TREATMENT", new string('b', 64), fixture.WorkflowId, "pub-" + fixture.TraceId, expected);
+            DateTimeOffset recordedAt = new(2026, 9, 4, 0, 0, 0, TimeSpan.Zero);
+            await using NpgsqlDataSource sourceA = NpgsqlDataSource.Create(runtimeRole.ConnectionString);
+            await using NpgsqlDataSource sourceB = NpgsqlDataSource.Create(runtimeRole.ConnectionString);
+            PostgresConnectorWorkflowContextStore first = new(sourceA);
+            PostgresConnectorWorkflowContextStore second = new(sourceB);
+            async Task<ConnectorWorkflowContextRecordResult[]> Race(ConnectorWorkflowContextRecord left, ConnectorWorkflowContextRecord right) =>
+                await Task.WhenAll(first.RecordAsync(new(authority, left, recordedAt), TestContext.Current.CancellationToken),
+                    second.RecordAsync(new(authority, right, recordedAt), TestContext.Current.CancellationToken));
+
+            Assert.Equal([ConnectorWorkflowContextRecordResult.Created, ConnectorWorkflowContextRecordResult.Unchanged],
+                (await Race(validation, validation)).Order().ToArray());
+            ConnectorWorkflowContextPredecessor?[] denied =
+            [
+                null,
+                new("validate-fhir", "CREATE", "TREATMENT", new string('a', 64)),
+                new("validate-cda", "UPDATE", "TREATMENT", new string('a', 64)),
+                new("validate-cda", "CREATE", "UPDATE", new string('a', 64)),
+                new("validate-cda", "CREATE", "TREATMENT", new string('c', 64))
+            ];
+            foreach (ConnectorWorkflowContextPredecessor? predecessor in denied)
+                Assert.Equal(ConnectorWorkflowContextRecordResult.Conflict, await first.RecordAsync(new(authority,
+                    new("create", "CREATE", "TREATMENT", new string('b', 64), fixture.WorkflowId, "pub-" + fixture.TraceId, predecessor), recordedAt),
+                    TestContext.Current.CancellationToken));
+            Assert.Equal(ConnectorWorkflowContextRecordResult.Conflict, await first.RecordAsync(new(authority,
+                new("create", "CREATE", "TREATMENT", new string('b', 64), fixture.WorkflowId, fixture.TraceId, expected), recordedAt),
+                TestContext.Current.CancellationToken));
+            Assert.Equal([ConnectorWorkflowContextRecordResult.Created, ConnectorWorkflowContextRecordResult.Unchanged],
+                (await Race(publication, publication)).Order().ToArray());
+            Assert.Equal(ConnectorWorkflowContextRecordResult.Unchanged,
+                await second.RecordAsync(new(authority, validation, recordedAt.AddDays(1)), TestContext.Current.CancellationToken));
+            Assert.Equal(ConnectorWorkflowContextRecordResult.Conflict, await first.RecordAsync(new(authority,
+                new("replace", "UPDATE", "UPDATE", new string('c', 64), fixture.WorkflowId, "other-" + fixture.TraceId, expected), recordedAt),
+                TestContext.Current.CancellationToken));
+
+            foreach ((ConnectorWorkflowIdentifierKind kind, string id, string operation) in new[]
+            {
+                (ConnectorWorkflowIdentifierKind.WorkflowInstanceId, fixture.WorkflowId, "create"),
+                (ConnectorWorkflowIdentifierKind.TraceId, fixture.TraceId, "validate-cda"),
+                (ConnectorWorkflowIdentifierKind.TraceId, "pub-" + fixture.TraceId, "create")
+            })
+            {
+                AuthorizedConnectorWorkflowContext resolved = Assert.IsType<AuthorizedConnectorWorkflowContext>(
+                    await second.ResolveAsync(authority, new(kind, id), TestContext.Current.CancellationToken));
+                Assert.Equal(operation, resolved.OriginatingOperationId);
+                Assert.Equal(recordedAt, resolved.RecordedAtUtc);
+                foreach (ConnectorWorkflowContextAuthorityScope crossScope in new[]
+                {
+                    authority with { TenantId = fixture.TenantB }, authority with { ApplicationId = fixture.ApplicationB },
+                    authority with { InstallationId = fixture.InstallationB }, authority with { EnvironmentId = fixture.EnvironmentB },
+                    authority with { ConnectorId = fixture.ConnectorId + "-other" }, authority with { ConnectorVersion = "2.0.0" },
+                    authority with { PublishedContextSha256 = new byte[32] }
+                })
+                    Assert.Null(await second.ResolveAsync(crossScope, new(kind, id), TestContext.Current.CancellationToken));
+            }
+            Assert.Equal(fixture.TraceId, await ScalarAsync<string>(owner,
+                "SELECT predecessor_trace_id FROM gateway.connector_workflow_context WHERE trace_id=$1", "pub-" + fixture.TraceId));
+
+            string raceWorkflow = "race-" + fixture.WorkflowId;
+            Assert.Equal(ConnectorWorkflowContextRecordResult.Created, await first.RecordAsync(new(authority,
+                new("validate-cda", "CREATE", "TREATMENT", new string('a', 64), raceWorkflow, "race-" + fixture.TraceId), recordedAt), TestContext.Current.CancellationToken));
+            ConnectorWorkflowContextRecord left = new("create", "CREATE", "TREATMENT", new string('b', 64), raceWorkflow, "race-create-" + fixture.TraceId, expected);
+            ConnectorWorkflowContextRecord right = new("replace", "UPDATE", "UPDATE", new string('c', 64), raceWorkflow, "race-replace-" + fixture.TraceId, expected);
+            ConnectorWorkflowContextRecordResult[] race = await Race(left, right);
+            Assert.Equal([ConnectorWorkflowContextRecordResult.Created, ConnectorWorkflowContextRecordResult.Conflict], race.Order().ToArray());
+            ConnectorWorkflowContextRecord winner = race[0] == ConnectorWorkflowContextRecordResult.Created ? left : right;
+            ConnectorWorkflowContextRecord loser = ReferenceEquals(winner, left) ? right : left;
+            Assert.Equal(winner.OriginatingOperationId, (await second.ResolveAsync(authority,
+                new(ConnectorWorkflowIdentifierKind.WorkflowInstanceId, raceWorkflow), TestContext.Current.CancellationToken))!.OriginatingOperationId);
+            Assert.Null(await second.ResolveAsync(authority, new(ConnectorWorkflowIdentifierKind.TraceId, loser.TraceId!), TestContext.Current.CancellationToken));
+            // Different workflow locks must still enforce global trace uniqueness within this scope.
+            ConnectorWorkflowContextRecord traceLeft = new("create", "CREATE", "TREATMENT", new string('b', 64),
+                "trace-race-a-" + fixture.WorkflowId, "collision-" + fixture.TraceId);
+            ConnectorWorkflowContextRecord traceRight = new("replace", "UPDATE", "UPDATE", new string('c', 64),
+                "trace-race-b-" + fixture.WorkflowId, "collision-" + fixture.TraceId);
+            ConnectorWorkflowContextRecordResult[] traceRace = await Race(traceLeft, traceRight);
+            Assert.Equal([ConnectorWorkflowContextRecordResult.Created, ConnectorWorkflowContextRecordResult.Conflict], traceRace.Order().ToArray());
+            ConnectorWorkflowContextRecord traceLoser = traceRace[0] == ConnectorWorkflowContextRecordResult.Created ? traceRight : traceLeft;
+            Assert.Null(await second.ResolveAsync(authority, new(ConnectorWorkflowIdentifierKind.WorkflowInstanceId, traceLoser.WorkflowInstanceId!), TestContext.Current.CancellationToken));
+            Assert.Equal(5L, await ScalarAsync<long>(owner,
+                "SELECT count(*) FROM gateway.connector_workflow_context WHERE installation_id=$1", fixture.InstallationA));
+        }
+        finally { await CleanupFixtureAsync(owner, fixture); }
+    }
+
+    [Fact]
+    public async Task FSE2_DUR_DAT_PostgreSQL18_upgrade_from_0018_preserves_origin_and_second_apply_is_noop()
+    {
+        await PostgresIsolationTests.ApplyMigrationAsync();
+        await using NpgsqlConnection owner = new(RequiredMigrationConnection());
+        await owner.OpenAsync(TestContext.Current.CancellationToken);
+        WorkflowDatabaseFixture fixture = await CreateFixtureAsync(owner);
+        try
+        {
+            await using NpgsqlTransaction transaction = await owner.BeginTransactionAsync(TestContext.Current.CancellationToken);
+            await ExecuteAsync(owner, transaction, "DROP TABLE gateway.connector_workflow_context");
+            await ExecuteAsync(owner, transaction, await File.ReadAllTextAsync(MigrationPath(), TestContext.Current.CancellationToken));
+            await ExecuteAsync(owner, transaction, """
+                INSERT INTO gateway.connector_workflow_context VALUES
+                ($1,$2,$3,$4,$5,'1.0.0',$6,'validate-cda','CREATE','TREATMENT',$6,$7,$8,now())
+                """, fixture.TenantA, fixture.ApplicationA, fixture.InstallationA, fixture.EnvironmentA,
+                fixture.ConnectorId, fixture.PublishedContextSha256, fixture.WorkflowId, fixture.TraceId);
+            string sql = await File.ReadAllTextAsync(Path.Combine(Path.GetDirectoryName(MigrationPath())!,
+                "0019_connector_workflow_successor.sql"), TestContext.Current.CancellationToken);
+            await ExecuteAsync(owner, transaction, sql);
+            SchemaSnapshot first = await ReadSchemaSnapshotAsync(owner, transaction);
+            uint indexBefore = await IndexOid();
+            await ExecuteAsync(owner, transaction, sql);
+            SchemaSnapshot second = await ReadSchemaSnapshotAsync(owner, transaction);
+            Assert.Equal(indexBefore, await IndexOid());
+            Assert.Equal(ExpectedColumns, first.Columns);
+            Assert.Equal(first.Columns, second.Columns);
+            Assert.Equal(first.UniqueIndexes, second.UniqueIndexes);
+            Assert.Equal(first.Policies, second.Policies);
+            Assert.True(second.RowSecurity && second.ForcedRowSecurity);
+            await using NpgsqlCommand retained = new("SELECT trace_id, predecessor_trace_id FROM gateway.connector_workflow_context", owner, transaction);
+            await using NpgsqlDataReader reader = await retained.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+            Assert.True(await reader.ReadAsync(TestContext.Current.CancellationToken));
+            Assert.Equal(fixture.TraceId, reader.GetString(0));
+            Assert.True(reader.IsDBNull(1));
+            Assert.False(await reader.ReadAsync(TestContext.Current.CancellationToken));
+            await reader.CloseAsync();
+            await transaction.RollbackAsync(TestContext.Current.CancellationToken);
+            async Task<uint> IndexOid()
+            {
+                await using NpgsqlCommand command = new("SELECT 'gateway.ux_connector_workflow_context_workflow'::regclass::oid", owner, transaction);
+                return Assert.IsType<uint>(await command.ExecuteScalarAsync(TestContext.Current.CancellationToken));
+            }
+        }
+        finally { await CleanupFixtureAsync(owner, fixture); }
     }
 
     private static string RequiredMigrationConnection() =>

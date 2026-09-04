@@ -411,6 +411,16 @@ clean-state provisioner gate and Core path projection/approval parity tests cove
 contract. Existing `FSE2_DUR_*` gates retain durable scope/restart/replica coverage.
 The historical requirements below do not imply live qualification of this new profile.
 
+The current candidate also closes the sequential `VALIDATION(W,Tv) -> publication(W,Tp)`
+contract: `FSE2_DUR_E2E_PostgreSQL18_VALIDATION_publication_same_workflow_both_traces_second_instance`
+exercises all four ordinary publication routes, both immutable trace contexts, workflow selection,
+second-instance status and one audit outcome per invocation. Migration `0019` adds only a bounded
+predecessor trace to the existing table; `FSE2_DUR_DAT_PostgreSQL18_successor_is_atomic_idempotent_and_preserves_both_trace_scopes`
+and `FSE2_DUR_DAT_PostgreSQL18_upgrade_from_0018_preserves_origin_and_second_apply_is_noop`
+cover concurrent registration, conflicts, seven-scope isolation, preserved upgrade data and no-op
+reapply. Storage denial after upstream 202 and inconsistent response workflow remain bounded failures;
+registration idempotency does not resend publication. This remains offline qualification only.
+
 | Requirement | Evidence | Status |
 |---|---|---|
 | Official source freeze | `docs/implementation/FSE2-WAVE1-SPEC-FREEZE.md`; guide 2.23 and OpenAPI 1.0.0 at official commit `430e6b5d9dde8a35b04ae635c11303db787a977e` with recorded SHA-256 | PASS documentation |

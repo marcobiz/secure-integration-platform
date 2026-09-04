@@ -214,9 +214,11 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
         QualifiedGatewayExecutionResult upstream = await execution.Capabilities.ExecuteRestrictedTransportAsync(
             restrictedRequest, cancellationToken).ConfigureAwait(false);
         Fse2Response normalized;
+        ConnectorWorkflowContextPredecessor? permittedPredecessor;
         try
         {
             normalized = Fse2ResponseMapper.Map(upstream, execution.CorrelationId, profile.Operation, profile.UsesCurrentSpec, profile.Activity);
+            permittedPredecessor = PublicationPredecessor(profile, inbound, normalized);
         }
         catch (Fse2ConnectorException exception) when (
             exception.Category is Fse2ErrorCategory.UpstreamRejected or Fse2ErrorCategory.TemporarilyUnavailable)
@@ -242,10 +244,33 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
                 Fse2OperationCatalog.ClaimValue(security.PurposeOfUse),
                 profile.OperationProfileChecksumSha256,
                 normalized.WorkflowInstanceId,
-                normalized.TraceId), cancellationToken).ConfigureAwait(false);
+                normalized.TraceId,
+                permittedPredecessor), cancellationToken).ConfigureAwait(false);
         }
 
         return new(upstream.StatusCode, "application/json", JsonSerializer.SerializeToUtf8Bytes(normalized, ResponseJson));
+    }
+
+    private static ConnectorWorkflowContextPredecessor? PublicationPredecessor(
+        Fse2PublishedOrganizationProfile profile, Fse2InboundPayload inbound, Fse2Response response)
+    {
+        if (profile.Operation.Operation is not (Fse2Operation.Create or Fse2Operation.Replace or
+            Fse2Operation.CreateFhir or Fse2Operation.ReplaceFhir) ||
+            !profile.UsesCurrentSpec && profile.Activity != Fse2PublishedOrganizationProfile.ValidateCdaPublicationActivity)
+            return null;
+
+        using JsonDocument body = JsonDocument.Parse(inbound.RequestBody);
+        if (!body.RootElement.TryGetProperty("workflowInstanceId", out JsonElement workflow))
+            return null; // Historical profiles can still record standalone upstream workflows.
+        if (workflow.ValueKind != JsonValueKind.String || workflow.GetString() != response.WorkflowInstanceId)
+            throw Denied(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
+        if (profile.Activity != Fse2PublishedOrganizationProfile.ValidateCdaPublicationActivity)
+            return null;
+
+        Fse2OperationDescriptor validation = Fse2OperationCatalog.Get(Fse2Operation.ValidateCda);
+        return new(validation.OperationId, Fse2OperationCatalog.ClaimValue(validation.Action!.Value),
+            Fse2OperationCatalog.ClaimValue(validation.PurposeOfUse!.Value),
+            profile.CalculateOperationProfileChecksum(validation));
     }
 
     private static async Task<Fse2WorkflowExecutionContext> ResolveSecurityContextAsync(

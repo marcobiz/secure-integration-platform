@@ -39,13 +39,32 @@ without interpreting FSE2 semantics.
 PostgreSQL enforces forced RLS on the exact Tenant and Installation session scope. The runtime role
 has only `SELECT` and `INSERT`; `UPDATE`, `DELETE` and `TRUNCATE` are absent. `gateway_admin`,
 `gateway_readonly` and `PUBLIC` have no table privileges, so there is no Admin read-back path.
-Separate partial unique indexes bind workflow and trace IDs to the complete authoritative scope.
+Trace IDs remain unique in the complete authoritative scope. Migration `0019` corrects the initial
+assumption that a workflow denotes only one operation: the protocol reuses a validation workflow
+for ordinary publication. The same table admits an immutable origin and at most one successor.
+Its only added field is `predecessor_trace_id`; the workflow index distinguishes the two slots.
+No existing migration or row is rewritten, and no UPDATE privilege is added.
 
-Recording uses `INSERT ... ON CONFLICT DO NOTHING` followed in the same transaction by exact
-read-back. An identical record is an idempotent no-op. If either identifier already denotes a
-different closed context, the operation fails closed and no row is mutated. Resolution exact-matches
-the entire authority and one closed identifier kind before the FSE2 strategy can sign, resolve DNS
-or dispatch transport.
+The trusted runtime may supply one closed permitted predecessor (operation/action/purpose/profile
+checksum), derived from the authorized Published protocol, not from caller transition fields.
+Core requires the recorded operation to be the current authorized operation. For FSE2, create,
+replace, create-fhir and replace-fhir may follow the exact `validate-cda` Published `VALIDATION`
+profile only when the successful response echoes the workflow sent in the request. Recovery and
+metadata operations cannot declare this transition. An independently acknowledged workflow can
+still be recorded as an origin when no local context exists; no predecessor is invented for it.
+
+Recording takes a transaction-scoped advisory lock for the exact workflow authority, then checks
+the immutable origin and existing trace before `INSERT ... ON CONFLICT DO NOTHING`. The store,
+not the caller, chooses the predecessor trace from the exact matching origin. Unique indexes
+also arbitrate trace collisions across concurrent workflows. Identical registration of either
+phase is a no-op even after the successor exists; a different profile, reused trace, competing
+successor or third phase fails without mutation. No automatic retry is introduced.
+
+Trace resolution returns its original phase unchanged. Workflow resolution deterministically
+prefers the successor, otherwise the origin, without timestamp ordering. Both exact-match the
+entire authority before the strategy can sign, resolve DNS or dispatch transport. A storage
+failure after upstream acceptance remains a bounded invocation failure, not a success or an
+instruction to resend publication. This is one protocol handoff, not a general workflow/event engine.
 
 ## Consequences
 

@@ -117,6 +117,19 @@ before signing, DNS or transport. It survives restart/second instance. No clinic
 claims/body/JWT are stored and there is no in-memory fallback. A trace from the historical
 validate-only connector or another Published configuration cannot authorize this profile.
 
+For `VALIDATION(W, Tv) -> create(W, Tp)` (also replace/create-fhir/replace-fhir), use
+the same Published configuration with `activity: VALIDATION`. The publication response must
+echo the request's W. Additive migration `0019` preserves the validation row and appends one
+publication row linked to Tv in the existing table. Tv always resolves the validation profile;
+Tp resolves the publication profile; W deterministically resolves publication after registration.
+Both traces survive a second instance. The caller cannot supply predecessor/transition authority.
+An identical store registration is idempotent, including validation after publication; competing
+successors or reused traces fail atomically. This does not support arbitrary additional phases.
+Standalone upstream acknowledgements without a local predecessor retain the historical root
+registration behavior. A storage failure after upstream acceptance remains a bounded failure
+with one failure audit: it does not prove publication was rejected, and must not trigger an
+automatic resend. No document, patient or request/response content is added to persistence.
+
 Caller success is a normal Gateway success envelope with a technical-only FSE2 response.
 An upstream 202 acknowledges processing, not INI/EDS completion. Status emits at most
 1,000 ordered events from the existing closed vocabulary. Only exact allowlisted
@@ -176,7 +189,15 @@ This source version is not a general multi-organization deployment/version edito
   both legacy and current variants reach Published/Active from empty PostgreSQL 18 using
   migrations, existing bootstrap, enrollment and supported provisioner/Admin APIs.
 - Existing rollback/resumability and `FSE2_DUR_*` restart/replica/scope regression gates
-  remain applicable; no persistence schema or authority API changed.
+  remain active alongside additive migration `0019`; historical Published definitions remain unchanged.
+- `FSE2_DUR_E2E_PostgreSQL18_VALIDATION_publication_same_workflow_both_traces_second_instance`:
+  sequential validation/publication/second-instance status for all four ordinary publication
+  routes, original trace contexts, exact audit cardinality and no caller transition authority;
+  inconsistent response workflow and storage INSERT denial after upstream 202 remain failures.
+- `FSE2_DUR_DAT_PostgreSQL18_successor_is_atomic_idempotent_and_preserves_both_trace_scopes`
+  and the `upgrade_from_0018` test cover migration `0019`, unchanged origins, both trace scopes,
+  exact registration replay without any upstream publication, concurrent identical/competing
+  registrations, upgrade and second-apply no-op. Existing least-privilege/RLS tests remain active.
 - Focused Core projection/approval parity tests cover prefix preservation, historical
   authority-root behavior, single encoding, invalid prefix rejection and exact origin.
   The causal fix makes `pathTemplate` honor existing `appendToBasePath` in both

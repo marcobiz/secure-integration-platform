@@ -96,6 +96,8 @@ internal sealed class AuthorizedConnectorCapabilityDispatcher(
     {
         ArgumentNullException.ThrowIfNull(execution);
         ArgumentNullException.ThrowIfNull(context);
+        if (!string.Equals(context.OriginatingOperationId, execution.OperationId, StringComparison.Ordinal))
+            throw new GatewayException("BGW-CONNECTOR-WORKFLOW-CONTEXT-CONFLICT", 409);
         IConnectorWorkflowContextStore store = workflowContexts ??
             throw new GatewayException("BGW-CONNECTOR-WORKFLOW-CONTEXT-UNAVAILABLE", 503);
         ConnectorWorkflowContextRecordResult result = await store.RecordAsync(
