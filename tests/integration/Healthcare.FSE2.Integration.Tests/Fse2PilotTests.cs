@@ -11,6 +11,17 @@ namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2.Integration.Tests;
 
 public sealed class Fse2PilotTests
 {
+    [Theory]
+    [InlineData("asl-roma-1", false)]
+    [InlineData("190", true)]
+    public void FSE2_PILOT_organization_domain_is_not_local_facility_id(string domain, bool accepted)
+    {
+        Pilot.PilotSettings settings = new(new("PROVAX00X00X000Y", "2.16.840.1.113883.2.9.4.3.2", "Regione Sicilia", domain),
+            new("LABORATORIO DI PROVA", "2.16.840.1.113883.2.9.4.1.3", "190111123456"));
+        if (accepted) Pilot.ValidatePilotSettings(settings);
+        else Assert.Throws<Pilot.ProvisioningException>(() => Pilot.ValidatePilotSettings(settings));
+    }
+
     [Fact]
     public async Task FSE2_PILOT_runtime_message_has_traceparent_and_exact_BGW1_body_signature()
     {

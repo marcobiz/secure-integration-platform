@@ -20,6 +20,10 @@ del profilo rimangono qualificate offline; ciò non equivale alla disponibilità
   dal repository. Il modello
   [officialtest-pilot.example.json](../../tools/fse2/officialtest-pilot.example.json)
   contiene soltanto valori sintetici: usare quelli ammessi dal proprio accesso test.
+  Il dominio è il codice organizzativo ufficiale a tre cifre e la descrizione
+  corrispondente (§16.3.7), **non** l'identificativo della ASL/struttura. Il modello
+  usa il profilo di prova già qualificato (`190` / `Regione Sicilia`,
+  `LABORATORIO DI PROVA`), non assegna quel dominio a un'altra organizzazione.
 
 Non servono SQL, accesso diretto allo store, cookie copiati, UUID/checksum ricostruiti
 o certificati operativi forniti al caller. Il bootstrap esistente crea le identità
@@ -104,6 +108,8 @@ riscrivere il PDF. Questa è una prova CDA separata, non un PASS FHIR.
 - Errori locali: controllare prerequisiti, stato/ruolo e codice stabile riportato.
   Se l'attivazione è scaduta prima dell'enrollment, fermare e riavviare il proprio
   stack; nessuna richiesta OfficialTest è necessaria per ripristinare il bootstrap.
+  Anche una configurazione test già Published con valori organizzativi errati va
+  ricreata in un nuovo stack temporaneo: non si sovrascrive la definizione immutabile.
 
 Gli identificativi e l'ultimo risultato ridotto sono in
 `.artifacts/m5/fse2-validation-status/fse2-last-call.json`; `fse2-build.json` lega

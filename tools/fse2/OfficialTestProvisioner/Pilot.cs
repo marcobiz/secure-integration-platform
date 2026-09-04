@@ -35,7 +35,7 @@ internal static partial class Program
             ?? throw Failure("FSE2_PILOT_START_REQUIRED", true);
         PilotSettings settings = JsonSerializer.Deserialize<PilotSettings>(ReadBounded(args[1], 16384, "FSE2_PILOT_SETTINGS_INVALID"), Json)
             ?? throw Failure("FSE2_PILOT_SETTINGS_INVALID", true);
-        if (settings.Organization is null || settings.Locality is null) throw Failure("FSE2_PILOT_SETTINGS_INVALID", true);
+        ValidatePilotSettings(settings);
         using JsonDocument bootstrap = JsonDocument.Parse(ReadBounded(Path.Combine(root, "raw", "provisioning.json"), 65536, "FSE2_PILOT_START_REQUIRED"));
         JsonElement data = bootstrap.RootElement;
         Guid tenant = RequiredGuid(data, "tenantId");
@@ -148,6 +148,14 @@ internal static partial class Program
                 break;
         }
         return 0;
+    }
+
+    internal static void ValidatePilotSettings(PilotSettings settings)
+    {
+        if (settings.Organization is null || settings.Locality is null) throw Failure("FSE2_PILOT_SETTINGS_INVALID", true);
+        string? domain = settings.Organization.DomainId;
+        if (domain is not { Length: 3 } || !domain.All(char.IsAsciiDigit))
+            throw Failure("FSE2_PILOT_USE_ASSIGNED_ORGANIZATION_DOMAIN_CODE", true);
     }
 
     private static HttpClient PilotClient(X509Certificate2 certificate, X509Certificate2 ca)
