@@ -642,7 +642,7 @@ public sealed class Fse2FoundationTests
     [Theory]
     [InlineData(Fse2Operation.GetStatusByWorkflow)]
     [InlineData(Fse2Operation.GetStatusByTrace)]
-    public void FSE2_RESPONSE_status_404_is_bounded_not_found_and_discards_raw_problem(Fse2Operation operation)
+    public void FSE2_RESPONSE_status_404_exact_record_not_found_is_bounded_and_discards_raw_problem(Fse2Operation operation)
     {
         const string rawCanary = "raw-status-problem-must-not-escape";
         Fse2Response response = Fse2ResponseMapper.Map(
@@ -657,6 +657,32 @@ public sealed class Fse2FoundationTests
         Assert.Null(response.WorkflowInstanceId);
         Assert.Null(response.TraceId);
         Assert.DoesNotContain(rawCanary, JsonSerializer.Serialize(response), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("application/problem+json", "", null)]
+    [InlineData("text/plain", "record-not-found", null)]
+    [InlineData("application/problem+json", "{", null)]
+    [InlineData("application/problem+json", "{\"type\":\"msg/routing-not-found\"}", null)]
+    [InlineData("application/problem+json", "{\"type\":\"msg/RECORD-NOT-FOUND\"}", null)]
+    [InlineData("application/problem+json", "{\"type\":\"msg/record-not-found-extra\",\"title\":\"record-not-found\",\"message\":\"record-not-found\",\"detail\":\"record-not-found\"}", null)]
+    [InlineData("application/problem+json", "{\"type\":\"msg/syntax\"}", "syntax")]
+    public void FSE2_RESPONSE_status_generic_404_uses_bounded_upstream_failure(
+        string contentType,
+        string body,
+        string? expectedSafeUpstreamCode)
+    {
+        Fse2ConnectorException error = Assert.Throws<Fse2ConnectorException>(() => Fse2ResponseMapper.Map(
+            new(404, contentType, Encoding.UTF8.GetBytes(body)),
+            Guid.NewGuid(),
+            Fse2OperationCatalog.Get(Fse2Operation.GetStatusByTrace)));
+
+        Assert.Equal(Fse2ErrorCategory.UpstreamRejected, error.Category);
+        Assert.False(error.Retryable);
+        Assert.Equal(expectedSafeUpstreamCode ?? "FSE2_UPSTREAM_REJECTED", error.SafeCode);
+        Assert.Equal(expectedSafeUpstreamCode, error.SafeUpstreamCode);
+        if (body.Length > 0)
+            Assert.DoesNotContain(body, error.ToString(), StringComparison.Ordinal);
     }
 
     [Theory]

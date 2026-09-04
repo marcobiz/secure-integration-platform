@@ -3210,6 +3210,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
     private readonly object observationGate = new();
     private int requests;
     private int statusNotFound;
+    private int statusGenericNotFound;
 
     private SyntheticFse2OperationMatrixServer(
         WebApplication application,
@@ -3240,6 +3241,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
     internal Uri Endpoint { get; }
     internal int Requests => Volatile.Read(ref requests);
     internal void SetStatusNotFound(bool enabled) => Volatile.Write(ref statusNotFound, enabled ? 1 : 0);
+    internal void SetStatusGenericNotFound(bool enabled) => Volatile.Write(ref statusGenericNotFound, enabled ? 1 : 0);
     internal IReadOnlyList<Observation> Observations
     {
         get { lock (observationGate) return observations.ToArray(); }
@@ -3367,12 +3369,17 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
 
         bool returnStatusNotFound = operation.Operation is Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace &&
             Volatile.Read(ref statusNotFound) == 1;
-        context.Response.StatusCode = returnStatusNotFound ? StatusCodes.Status404NotFound : operation.SuccessStatusCodes.Min();
-        context.Response.ContentType = returnStatusNotFound ? "application/problem+json" : "application/json";
+        bool returnGenericStatusNotFound = operation.Operation is Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace &&
+            Volatile.Read(ref statusGenericNotFound) == 1;
+        bool returnAnyStatusNotFound = returnStatusNotFound || returnGenericStatusNotFound;
+        context.Response.StatusCode = returnAnyStatusNotFound ? StatusCodes.Status404NotFound : operation.SuccessStatusCodes.Min();
+        context.Response.ContentType = returnAnyStatusNotFound ? "application/problem+json" : "application/json";
         string response = operation.Operation switch
         {
             Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace when returnStatusNotFound =>
                 $$"""{"type":"msg/record-not-found","title":"{{StatusNotFoundRawCanary}}","detail":"{{StatusNotFoundRawCanary}}","status":404}""",
+            Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace when returnGenericStatusNotFound =>
+                $$"""{"type":"msg/routing-not-found","title":"{{StatusNotFoundRawCanary}}","detail":"{{StatusNotFoundRawCanary}}","status":404}""",
             Fse2Operation.ValidateCda => "{\"traceID\":\"trace-validate-fse2-1\",\"spanID\":\"span-validate-fse2-1\"}",
             Fse2Operation.Create => "{\"workflowInstanceId\":\"workflow-fse2-1\",\"traceID\":\"trace-fse2-1\",\"spanID\":\"span-fse2-1\"}",
             Fse2Operation.Replace when replaceReturnsWorkflowContext => "{\"workflowInstanceId\":\"workflow-fse2-1\",\"traceID\":\"trace-fse2-1\",\"spanID\":\"span-fse2-1\"}",

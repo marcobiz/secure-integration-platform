@@ -7,8 +7,8 @@ blocchi correnti sono in [docs/user/fse2-officialtest.md](../../../user/fse2-off
 
 **Candidate 2026-09-03:** il percorso `validate-cda` con `VERIFICA` → trace durevole →
 seconda istanza → `get-status-by-trace` è stato eseguito contro OfficialTest. La
-validazione ha restituito 200; lo status ha restituito il 404 documentato, proiettato dal
-Gateway come `NOT_FOUND` bounded senza conservare il problem body. Questa è una qualifica
+validazione ha restituito 200; lo status ha restituito un 404, proiettato dal Gateway come
+`NOT_FOUND` bounded senza conservare il problem body. Questa è una qualifica
 del percorso runtime candidate, non modifica la source/procedura CURRENT validate-only.
 
 ## Capability matrix
@@ -25,7 +25,7 @@ del percorso runtime candidate, non modifica la source/procedura CURRENT validat
 | `validate-and-create` | `IMPLEMENTED_PARTIAL` | Recovery eccezionale, non flusso normale. |
 | `validate-and-replace` | `IMPLEMENTED_PARTIAL` | Recovery eccezionale e documento esistente. |
 | `get-status-by-workflow` | `PRODUCT_PATH_OFFLINE_QUALIFIED` | Risolve il workflow durevole prima degli effetti e restituisce solo eventi tecnici bounded; nessuna qualifica live. |
-| `get-status-by-trace` | `LIVE_QUALIFIED_CANDIDATE` | Solo trace dal caller; correlazione PostgreSQL e seconda istanza provate in OfficialTest. Un 404 ufficiale diventa `NOT_FOUND` bounded. |
+| `get-status-by-trace` | `LIVE_QUALIFIED_CANDIDATE` | Solo trace dal caller; correlazione PostgreSQL e seconda istanza provate in OfficialTest. Soltanto un 404 RFC7807 ridotto all'exact code allowlisted `record-not-found` diventa `NOT_FOUND`. |
 
 `FULL_FSE2_GATEWAY_COVERAGE = NO`. Il product path offline copre ora
 `validate-cda → create → get-status-by-workflow`; un `202` di create senza lo status
@@ -90,9 +90,12 @@ sicurezza intenzionale. Accetta al massimo 1.000 eventi ordinati e soltanto i ti
 `VALIDATION`, `PUBLICATION`, `SEND_TO_INI`, `SEND_TO_UAR`, `UAR_FINAL_STATUS`, con esito
 `SUCCESS` o `BLOCKING_ERROR` e timestamp valido. Message, subject, document ID, issuer,
 extra e response raw vengono scartati; valori sconosciuti o malformati falliscono chiusi.
-Il 404 previsto dal contratto status è invece una risposta tecnica valida: viene ridotto
-a `statusCode=404`, `statusClassification=NOT_FOUND` ed eventi vuoti, scartando l'intero
-problem body. Non attiva retry automatici e produce un solo audit success per l'invocation.
+Il 404 previsto dal contratto status è una risposta tecnica valida soltanto quando il reducer
+bounded riconosce l'exact code RFC7807 allowlisted `record-not-found`: viene ridotto a
+`statusCode=404`, `statusClassification=NOT_FOUND` ed eventi vuoti, scartando l'intero
+problem body. Body assente, non JSON, malformato, code sconosciuto e ogni altro 404 seguono
+il normale upstream failure bounded. Nessun 404 attiva retry automatici; il primo caso produce
+un solo audit success, il secondo un solo audit failure.
 
 ## Esempio minimo create → status
 

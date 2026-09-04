@@ -285,6 +285,17 @@ public sealed class Fse2DurableWorkflowCorrelationIntegrationTests
             {
                 server.SetStatusNotFound(false);
             }
+            server.SetStatusGenericNotFound(true);
+            try
+            {
+                await AssertGenericStatusNotFoundFailureAsync(
+                    replica, restartedIdentity, tenantId, connectorId, traceStatus,
+                    exactValidationTraceId, provider, server);
+            }
+            finally
+            {
+                server.SetStatusGenericNotFound(false);
+            }
 
             HostedCapabilityAuthority changedAuthority = await replica.PrepareCapabilityConnectorVersionAsync(
                 connectorId,
@@ -461,7 +472,48 @@ public sealed class Fse2DurableWorkflowCorrelationIntegrationTests
         Assert.Equal(dnsBefore + 1, fixture.HostResolutionCount);
         Assert.Equal(serverBefore + 1, server.Requests);
         Assert.Equal(transportBefore + 1, fixture.GenericTransportRequests);
+        Assert.DoesNotContain(
+            SyntheticFse2OperationMatrixServer.StatusNotFoundRawCanary,
+            await fixture.SerializeAuditAsync(tenantId),
+            StringComparison.Ordinal);
         await AssertAuditOutcomeAsync(fixture, tenantId, correlationId, expectedFailure: 0, expectedSuccess: 1);
+    }
+
+    private static async Task AssertGenericStatusNotFoundFailureAsync(
+        HostedTypedSessionFixture fixture,
+        HostedIdentity identity,
+        Guid tenantId,
+        string connectorId,
+        Fse2OperationDescriptor status,
+        string resourceIdentifier,
+        TrackingCapabilityProvider provider,
+        SyntheticFse2OperationMatrixServer server)
+    {
+        int signingBefore = provider.SignDigestCalls;
+        int dnsBefore = fixture.HostResolutionCount;
+        int serverBefore = server.Requests;
+        int transportBefore = fixture.GenericTransportRequests;
+        Guid correlationId = Guid.NewGuid();
+        using HttpResponseMessage response = await fixture.SendSignedAsync(
+            identity,
+            HttpMethod.Post,
+            $"/v1/connectors/{connectorId}/operations/{status.OperationId}:invoke",
+            Fse2OrganizationHostedIntegrationTests.InvokeRequest(
+                StatusPayload(resourceIdentifier), correlationId));
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Contains("BGW-EGRESS-UPSTREAM-REJECTED", body, StringComparison.Ordinal);
+        Assert.DoesNotContain(SyntheticFse2OperationMatrixServer.StatusNotFoundRawCanary, body, StringComparison.Ordinal);
+        Assert.DoesNotContain("routing-not-found", body, StringComparison.Ordinal);
+        Assert.Equal(signingBefore + 2, provider.SignDigestCalls);
+        Assert.Equal(dnsBefore + 1, fixture.HostResolutionCount);
+        Assert.Equal(serverBefore + 1, server.Requests);
+        Assert.Equal(transportBefore + 1, fixture.GenericTransportRequests);
+        string audit = await fixture.SerializeAuditAsync(tenantId);
+        Assert.DoesNotContain(SyntheticFse2OperationMatrixServer.StatusNotFoundRawCanary, audit, StringComparison.Ordinal);
+        Assert.DoesNotContain("routing-not-found", audit, StringComparison.Ordinal);
+        await AssertAuditOutcomeAsync(fixture, tenantId, correlationId, expectedFailure: 1, expectedSuccess: 0);
     }
 
     private static string StatusPayload(string workflowInstanceId) => JsonSerializer.Serialize(
@@ -498,16 +550,15 @@ public sealed class Fse2DurableWorkflowCorrelationIntegrationTests
         int expectedFailure,
         int expectedSuccess)
     {
-        GatewayAuditEvent[] audit = JsonSerializer.Deserialize<GatewayAuditEvent[]>(
-            await fixture.SerializeAuditAsync(tenantId)) ?? [];
-        GatewayAuditEvent[] matching = audit
-            .Where(item => item.CorrelationId == correlationId &&
-                string.Equals(item.Action, "operation.invoke", StringComparison.Ordinal))
+        using JsonDocument audit = JsonDocument.Parse(await fixture.SerializeAuditAsync(tenantId));
+        JsonElement[] matching = audit.RootElement.EnumerateArray()
+            .Where(item => item.GetProperty("CorrelationId").GetGuid() == correlationId &&
+                string.Equals(item.GetProperty("Action").GetString(), "operation.invoke", StringComparison.Ordinal))
             .ToArray();
         Assert.Equal(expectedFailure, matching.Count(item =>
-            string.Equals(item.Outcome, "failure", StringComparison.OrdinalIgnoreCase)));
+            string.Equals(item.GetProperty("Outcome").GetString(), "failure", StringComparison.OrdinalIgnoreCase)));
         Assert.Equal(expectedSuccess, matching.Count(item =>
-            string.Equals(item.Outcome, "success", StringComparison.OrdinalIgnoreCase)));
+            string.Equals(item.GetProperty("Outcome").GetString(), "success", StringComparison.OrdinalIgnoreCase)));
         Assert.Equal(expectedFailure + expectedSuccess, matching.Length);
     }
 

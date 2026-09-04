@@ -212,16 +212,16 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
                 : new AuthorizedConnectorRestrictedTransportRequest(pathParameters);
         QualifiedGatewayExecutionResult upstream = await execution.Capabilities.ExecuteRestrictedTransportAsync(
             restrictedRequest, cancellationToken).ConfigureAwait(false);
-        if (!profile.Operation.SuccessStatusCodes.Contains(upstream.StatusCode))
-        {
-            Fse2ConnectorException problem = Fse2ResponseMapper.MapProblem(upstream, profile.Operation.RetryClass);
-            execution.Capabilities.RejectRestrictedTransportResponse(upstream, problem.SafeUpstreamCode);
-            throw problem;
-        }
         Fse2Response normalized;
         try
         {
             normalized = Fse2ResponseMapper.Map(upstream, execution.CorrelationId, profile.Operation);
+        }
+        catch (Fse2ConnectorException exception) when (
+            exception.Category is Fse2ErrorCategory.UpstreamRejected or Fse2ErrorCategory.TemporarilyUnavailable)
+        {
+            execution.Capabilities.RejectRestrictedTransportResponse(upstream, exception.SafeUpstreamCode);
+            throw;
         }
         catch (Fse2ConnectorException exception) when (
             exception.Category == Fse2ErrorCategory.ResponseInvalid &&
@@ -503,13 +503,14 @@ public static class Fse2ResponseMapper
     private const int MaximumProblemBytes = 16 * 1024;
     private const int MaximumProblemContentTypeCharacters = 512;
     private const int MaximumWorkflowEvents = 1000;
+    private const string RecordNotFoundProblemCode = "record-not-found";
     private static readonly FrozenSet<string> OfficialProblemCodes = new[]
     {
         "cda-element", "cda-extraction", "cda-match", "cda-validation", "document-hash",
         "document-type", "eds-document-missing", "eds-error", "empty-file", "fhir-element",
         "fhir-extraction", "fhir-mapping-type", "generic-error", "generic-timeout", "ini-error",
         "invalid-format", "jwt-validation", "mandatory-element", "mandatory-element-token",
-        "max-day-limit-exceed", "missing-token", "record-not-found", "semantic", "service-error",
+        "max-day-limit-exceed", "missing-token", RecordNotFoundProblemCode, "semantic", "service-error",
         "syntax", "vocabulary", "workflow-id-error-extraction"
     }.ToFrozenSet(StringComparer.Ordinal);
 
@@ -521,8 +522,13 @@ public static class Fse2ResponseMapper
         {
             bool statusRead = operation.Operation is Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace;
             if (statusRead && response.StatusCode == 404)
+            {
+                Fse2ConnectorException problem = MapProblem(response, operation.RetryClass);
+                if (!string.Equals(problem.SafeUpstreamCode, RecordNotFoundProblemCode, StringComparison.Ordinal))
+                    throw problem;
                 return new(response.StatusCode, correlationId, null, null, null, null,
                     operation.RetryClass, []) { StatusClassification = Fse2StatusClassification.NotFound };
+            }
             using JsonDocument document = JsonDocument.Parse(response.Body, new JsonDocumentOptions { MaxDepth = 16 });
             JsonElement root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object) throw new JsonException();
