@@ -14,3 +14,9 @@ fc367a9c0011b334effacc7d5221a0a4af559a5b:tests/integration/Gateway.Integration.T
 # Exact historical false positive: the value is a synthetic mutation case name,
 # not a credential. The test data label was renamed in the following commit.
 2fb355967d87cb825e6aaeddcbf2a9236b83289c:packs/deployment/local-pkcs12/tests/Providers.LocalPkcs12.Tests/LocalPkcs12ProviderTests.cs:generic-api-key:136
+
+# Exact historical false positive: `key, X509Certificate2` in the synthetic Direct
+# enrollment method signature is typed C# source, not credential material. The
+# parameter is now named `signer`. Owner: FSE2 maintainers; remove this exception
+# when the originating commit is no longer in the scanned history.
+3ee5c0e5dd1dffe61767e607d131809bdc52990b:tools/fse2/OfficialTestProvisioner/Pilot.cs:generic-api-key:154

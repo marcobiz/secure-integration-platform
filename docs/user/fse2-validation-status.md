@@ -132,7 +132,8 @@ ignorata del provisioner può restare come cache locale non sensibile.
 
 Codice eseguito live: `ac115fef76344dc4857204830b6badbc154a03d4`, su deployment
 temporaneo pulito, configurazione Published e identità Direct normalmente enrolled.
-Le successive modifiche di documentazione non richiedono altre richieste live.
+Le successive modifiche di documentazione e la rinomina di un parametro C# per un
+falso positivo Gitleaks non cambiano il comportamento e non richiedono altre richieste live.
 
 | Percorso con configurazione corretta | HTTP upstream / Gateway | Risultato | Audit per invocation |
 | --- | --- | --- | --- |

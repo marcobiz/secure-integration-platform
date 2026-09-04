@@ -177,11 +177,11 @@ internal static partial class Program
         return new(handler) { BaseAddress = gateway, Timeout = TimeSpan.FromSeconds(45), MaxResponseContentBufferSize = 1024 * 1024 };
     }
 
-    private static async Task PilotEnrollAsync(HttpClient client, ECDsa key, X509Certificate2 certificate, JsonElement bootstrap)
+    private static async Task PilotEnrollAsync(HttpClient client, ECDsa signer, X509Certificate2 certificate, JsonElement bootstrap)
     {
         Guid activation = RequiredGuid(bootstrap, "directActivationCodeId");
         using HttpResponseMessage challengeResponse = await client.PostAsJsonAsync("v1/enrollments/challenges", new
-            { activationCodeId = activation, publicKeySpki = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo()) }).ConfigureAwait(false);
+            { activationCodeId = activation, publicKeySpki = Convert.ToBase64String(signer.ExportSubjectPublicKeyInfo()) }).ConfigureAwait(false);
         if (!challengeResponse.IsSuccessStatusCode) throw Failure("FSE2_PILOT_ENROLLMENT_CHALLENGE_FAILED_RESTART_IF_EXPIRED");
         using JsonDocument challengeDocument = JsonDocument.Parse(await challengeResponse.Content.ReadAsByteArrayAsync().ConfigureAwait(false));
         JsonElement challenge = challengeDocument.RootElement;
@@ -191,7 +191,7 @@ internal static partial class Program
         {
             challengeId, activationCode = bootstrap.GetProperty("directActivationCode").GetString(),
             clientCertificate = Convert.ToBase64String(certificate.RawData),
-            proofSignature = PilotEncode(key.SignData(proof, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation)),
+            proofSignature = PilotEncode(signer.SignData(proof, HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation)),
             clientVersion = "1.0.0"
         }).ConfigureAwait(false);
         if (!activated.IsSuccessStatusCode) throw Failure("FSE2_PILOT_ENROLLMENT_FAILED_CHECK_INSTALLATION");
