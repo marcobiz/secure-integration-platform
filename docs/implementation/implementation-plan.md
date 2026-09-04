@@ -1,5 +1,158 @@
 # Implementation plan
 
+Updated: 2026-09-04
+Planning baseline: `8de271bfb3fa0f6953a0a8b6062245223713acf5` (PR #66 integrated).
+
+This is the current order of work. [IMPLEMENTATION_STATUS.md](../../IMPLEMENTATION_STATUS.md)
+owns integrated capability and qualification claims; the [backlog](backlog.md#current-work-order)
+owns the small NOW/NEXT/DEFERRED queue. The older Core alpha/FSE2 plan is retained
+[below](#historical-planning-snapshot) as history, not a competing active roadmap.
+
+The present authorization covers implementation, documentation and local Signed-off-by
+commits for one converged candidate. It does not authorize public push, a PR, merge,
+tag, release, OfficialTest calls, external contact or a production claim.
+
+## Current order of work
+
+1. Make the existing Windows Local Broker independently usable for one local
+   application-protection path, without a Gateway.
+2. Complete the existing Broker → Gateway identity and interruption-recovery path,
+   reusing the synthetic service.
+3. Qualify distribution and operation for an explicitly selected Windows target,
+   with an installable artifact and a tested compatibility matrix.
+
+The first outcome is active implementation work, **not completed or newly qualified**.
+The later outcomes do not silently expand the first one. Existing components and
+historical Windows gates are starting points, not proof that the new adopter path works.
+
+## NOW — independently usable Windows Local Broker
+
+An identified, authorized .NET application must be able to use an Installation-local
+key through the Broker without receiving that key. The path must work without a
+Gateway, survive service restart and a supported service update, and expose an honest
+lifecycle and backup/restore procedure within DPAPI's limits.
+
+Use the existing Windows Service, local protection operations, policy and SDK.
+Freeze one small application example and its result before expanding the surface;
+add a primitive only if the chosen case requires it. This is not a new vault or
+workload-identity platform.
+
+Completion requires the following observable properties on the chosen Windows target:
+
+- The documented path provisions the required local state and completes the selected
+  operation without Gateway enrollment, availability or an external credential.
+- IPC authenticates both peers. The Broker verifies the application and authorizes
+  the operation and context; the SDK verifies the Broker. Unauthorized applications,
+  a false peer or a wrong operation/context are denied before key use or payload disclosure.
+- The key remains under the Broker's service identity and is never returned through
+  the SDK/IPC or exposed in logs. Document key creation, use, rotation/retirement and
+  deletion, including their effects on already-protected data.
+- Restart and the supported service update preserve required identity, keys, policy
+  and protected state. Missing or inconsistent state is an explicit failure, not
+  silent reinitialization or a newly generated replacement key.
+- Backup/restore identifies what must be retained and proves the supported restore
+  case. DPAPI-protected blobs alone are not a portable recovery package. Loss of the
+  machine, service profile or necessary recovery material may make data unrecoverable;
+  no cross-machine recovery or central recovery service is implied.
+- A small SDK/sample and executable guide provide prerequisites, authorized setup,
+  invocation, expected result, update/recovery and owned cleanup without requiring
+  test-fixture knowledge or manual store edits. Reuse existing sample/tooling where useful.
+
+The Broker holds Installation-local keys; vendor credentials remain exclusively on
+the Gateway side. It is neither EDR nor HSM. Administrator/SYSTEM and code injected
+into an authorized process remain residual threats. Plaintext legitimately returned
+to a compromised application cannot be protected by keeping the key in the Broker.
+
+The relevant existing decisions are [Named Pipe IPC](../adr/0003-named-pipe-ipc.md),
+[local protection](../adr/0004-local-protection.md),
+[application identification](../adr/0016-application-process-identification.md) and
+[recovery](../adr/0014-recovery.md). The
+[installer lifecycle contract](../adr/0017-msi-installation-provisioning.md) informs
+state preservation; completing all M9 installer work is not a prerequisite for this
+bounded service-update proof.
+
+## NEXT — Broker to Gateway continuity
+
+After the standalone result converges, complete the existing remote path rather than
+introducing a second client identity or runtime. Cover Installation identity renewal,
+revocation, reconnection and recovery after interruptions, with fewer routine manual
+steps. Reuse the existing synthetic Connector/service and the shared authentication,
+grant and Published-operation model.
+
+The completion gate must show the application recovering through supported interfaces,
+expired/revoked identities failing closed, and interruption handling respecting operation
+idempotency. An uncertain remote mutation is not permission to resend it blindly.
+Freeze the exact fault cases for this slice before implementation; do not build a
+general reconnect framework in anticipation of other consumers.
+See [Installation identity](../adr/0008-installation-identity.md) and the
+[shared Broker/Direct principal](../adr/0020-direct-gateway-client-principal.md).
+
+## NEXT — target-specific distribution and operation
+
+After the application paths work, select the actual Windows versions, architectures
+and deployment context to qualify. Deliver an installable artifact, tested lifecycle
+and a compatibility matrix describing what was actually exercised, with explicit
+recovery and support limits. Publishing that artifact still requires separate authority.
+
+A universal MSI, COM/native adapters, every Windows version, the whole M9 plan and
+enterprise HA/DR are not prerequisites for the first local result. A target-specific
+need can bring one of these forward only through an explicit scope decision, not an
+assumed “production-ready” requirement.
+
+## Scope and evidence boundaries
+
+Maintain three distinct verification paths:
+
+- The provider-neutral synthetic Core remains easy to evaluate through its
+  [existing local pilot](../user/local-pilot.md).
+- Windows/Broker demonstrates the installed-software boundary. Historical M0/M1 and
+  M3A evidence remains attached to its own baseline; the new standalone path needs
+  its own bounded acceptance result.
+- FSE2 remains an optional pack and separate external-integration evidence. Its
+  [current guide](../user/fse2-validation-status.md) and the authoritative status
+  retain the offline/live distinctions. This work neither reopens that track nor
+  requires another live call.
+
+The differentiation hypothesis is a small set of authorized operations for distributed
+Windows applications, with less credential distribution and manageable adoption cost.
+Windows support alone is not a differentiation claim. SIP is not being expanded into
+a general-purpose replacement for SPIRE, Aembit or Secretless. CGM is a possible adopter,
+not a product dependency or an authorized pilot.
+
+Do not add speculative Connectors, a universal SQL/HTTP proxy, `GetSecret`, mandatory
+cloud, SPIFFE/WIMSE federation, continuous attestation, a mandatory driver/TEE or a
+new identity/vault platform. A new primitive needs a demonstrated requirement from
+the selected case; a new Connector needs concrete demand and separate authorization.
+
+## Ownership, measurement and verification
+
+One implementation owner carries the Broker outcome end-to-end. The disjoint plan
+update is integrated once into that owner's candidate; do not split the result into
+a chain of micro-PRs or writer/reviewer handoffs.
+
+Use the small sample to record adopter steps and, where useful, startup time, memory
+and operation latency, with workload and machine context. These are measurements,
+not invented thresholds or evidence of performance on untested Windows targets.
+Do not build a new laboratory or production instrumentation solely for this evidence.
+
+Use focused named tests while changing the affected surface, including positive and
+negative IPC/policy, state-preservation and supported recovery cases. Review one
+converged candidate and run the applicable gates in proportion to its risk. Keep
+documentation-only checks to content/links, delta secret scanning and diff-check;
+do not duplicate unrelated local runtime suites or SBOMs.
+
+Iterate on distinct causal findings until the agreed outcome is met. Stop for a real
+authority boundary, risk of data loss or a material architectural decision—not an
+arbitrary commit or attempt count. Do not weaken authentication, policy, ACLs, DPAPI
+isolation or cleanup to obtain a passing test. Update status only for results actually
+proved, distinguishing candidate evidence from integration and release qualification.
+
+## Historical planning snapshot
+
+The following plan retains its original baseline, gate states and sequence. Its
+“active”, “CURRENT”, “TARGET” and milestone labels describe that recorded period only.
+They do not override the current order above or convert old TODO entries into PASS.
+
 Updated: 2026-08-24
 Recorded planning baseline: `97daa565f582d575da5d61665126c50ea52be3ed`
 
@@ -14,7 +167,7 @@ Current summary status is in
 [`0.1.0-alpha-scope.md`](0.1.0-alpha-scope.md) and ordered slices in the
 [`backlog`](backlog.md). Detailed history remains in the existing tags and reports.
 
-## Planning principles
+### Planning principles
 
 - a capability is CURRENT only when integrated into `main`; a release or external
   qualification also requires its own exact-head gate;
@@ -27,7 +180,7 @@ Current summary status is in
 - attested baselines are not rewritten;
 - there are only two active tracks: Core alpha and FSE2 Organization OfficialTest.
 
-## Recorded baseline
+### Recorded baseline
 
 | Area | Status | Current limitation |
 |---|---|---|
@@ -45,9 +198,9 @@ PostgreSQL FSE2 1/1 zero skips, provider 30/30, architecture 42/42, provider-act
 synthetic lab and security micro-review are PASS/GO within the attested scope. These gates
 do not include real material, operational import or FSE2 calls.
 
-## Track A — Core `0.1.0-alpha`
+### Track A — Core `0.1.0-alpha`
 
-### Outcome
+#### Outcome
 
 A non-production, provider-neutral developer alpha with one golden path:
 
@@ -60,7 +213,7 @@ Direct .NET
 → sanitized response and metadata-only audit
 ```
 
-### Dependencies and parallel work
+#### Dependencies and parallel work
 
 DOC-01 is the only initial common prerequisite. After DOC-01, these proceed in parallel:
 
@@ -83,7 +236,7 @@ release candidate. ALPHA-DOC-04 is a documentation-truth dependency only: it doe
 require live `validate-cda` or FSE2-T01..T06. FSE2 OfficialTest qualification does not block
 the Core alpha release.
 
-### Constraints
+#### Constraints
 
 - FSE2 and vendor-specific packs do not enter the Core golden path;
 - MSI, COM/C ABI, Azure live, HA/DR and stable API compatibility remain excluded;
@@ -91,15 +244,15 @@ the Core alpha release.
   inventory digest because `generatedAtUtc` makes the raw manifest run-specific;
 - no publication precedes independent review, integration and the ALPHA-LIC and ALPHA-SEC publication gate.
 
-## Track B — FSE2 Organization OfficialTest
+### Track B — FSE2 Organization OfficialTest
 
-### Outcome
+#### Outcome
 
 The first outcome is `validate-cda` in the official test environment, with an authorized
 synthetic dataset, exact configuration and redacted evidence. Attachment hash, create/replace and
 status follow; they are not `validate-cda` prerequisites without new official evidence.
 
-### Integrated CURRENT
+#### Integrated CURRENT
 
 - optional Local PKCS12 pack, without generic secret retrieval and with
   `SecretValues=false`/deny-only slot;
@@ -109,7 +262,7 @@ status follow; they are not `validate-cda` prerequisites without new official ev
 - Compose overlay and provider-active synthetic lab;
 - S1 `contentCommitment`, distinct A1 mTLS, CI and review within the synthetic scope.
 
-### TARGET still open
+#### TARGET still open
 
 - operational access/import and verification of real custody;
 - verified distinction between test access and software accreditation;
@@ -119,7 +272,7 @@ status follow; they are not `validate-cda` prerequisites without new official ev
 - exact OfficialTest image/configuration and redacted operational driver;
 - any live FSE2, `validate-cda`, create/replace or status call.
 
-### Candidate operationalization slice
+#### Candidate operationalization slice
 
 The `FSE2-OFFICIALTEST-OPERATIONALIZATION` slice, still subject to exact-head gate and review, fixes
 the canonical source for `validate-cda` only, the closed external plan, A1 mTLS/S1 authorization+integrity,
@@ -130,7 +283,7 @@ URI composition that preserves the OfficialTest prefix without accepting caller 
 Integration closes only the software tooling in step 6; steps 1-5 and 7-8 remain separate
 operational gates.
 
-### Sequence
+#### Sequence
 
 1. external intake: distinguish test access and software accreditation;
 2. import/custody preflight outside Git;
@@ -145,14 +298,14 @@ operational gates.
 11. bounded/redacted status;
 12. subsequent workflows only if included in the plan.
 
-### Gates and claims
+#### Gates and claims
 
 FSE2-T01..T04 and T06 enable only the `validate-cda` official-test claim on the exact
 attested configuration. FSE2-T05 enables only subsequent workflows actually
 executed. Synthetic tests of the 11 operations do not become an 11/11 live claim. No
 gate in this track implies production.
 
-## Relationship between tracks
+### Relationship between tracks
 
 ```text
 DOC-01
@@ -175,7 +328,7 @@ unless it demonstrates a general security defect. A new Core abstraction require
 a concrete blocker and test. DOC-04 does not convert FSE2 gates into Core gates: it only
 keeps the optional pack documentation truthful.
 
-## HISTORICAL and deferred work
+### HISTORICAL and deferred work
 
 The original roadmap used M0-M9. The M6/M7 names are ambiguous because the authentication
 foundation was brought forward ahead of legacy adapters. Historical tags and reports remain

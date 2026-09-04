@@ -1,8 +1,10 @@
 # Implementation dashboard
 
 Updated: 2026-09-04
-Baseline integrated through PR #65:
-`18df69d6eaa34ed636b101bce1d188cd65226e1a`.
+Baseline integrated through PR #66:
+`8de271bfb3fa0f6953a0a8b6062245223713acf5`.
+PR #66 changed documentation; the previously attested product/live qualifications
+remain attached to their original baselines.
 
 This page is the authoritative summary of integrated capabilities and claim limits.
 CURRENT guides own procedures; technical references detail contracts; earlier plans,
@@ -27,6 +29,30 @@ distinct levels. The integrated baseline does not replace the exact commit of a 
 | Overall FSE 2.0 Gateway coverage/qualification | **NO** | Offline limited to the 14 frozen routes; live limited to the cases above. Human Actor, inbound callbacks and confirmed native FHIR publication remain excluded. |
 | Private preview | **Limited** | Core and optional pilot can be evaluated with their respective prerequisites; no public release or guaranteed API stability. |
 | Production/accreditation | **NOT QUALIFIED** | Live cloud use, MSI, C ABI/COM adapters, HA/DR, restore/load/soak, penetration testing, artifact signing and production custody are not qualified. |
+
+## Active work — not yet qualified
+
+The first active objective is an independently usable Windows Local Broker: an
+identified, authorized .NET application uses an Installation-local key without
+receiving it or requiring a Gateway. The target includes mutually authenticated IPC,
+application/operation/context policy, state preservation across restart and supported
+service update, DPAPI-bounded lifecycle/backup/restore, and a small executable SDK/sample
+and guide. **This is implementation work, not a completed or newly qualified capability.**
+Existing M0/M1 and M3A evidence does not close this new standalone acceptance path.
+
+Next comes the existing Broker → Gateway path: Installation identity renewal, revocation,
+reconnection and interruption recovery using the synthetic service. Target-specific
+distribution and operational qualification follow, without making universal MSI,
+COM/native, all Windows versions, full M9 or enterprise HA/DR prerequisites for the
+first local result. The full repository's implementation plan and backlog own this
+sequence; they do not authorize a new Connector, customer pilot or FSE2 live call.
+
+Local keys belong to the Installation; vendor credentials remain on the Gateway side.
+The Broker is not EDR/HSM and cannot protect plaintext returned to a compromised
+application. Administrator/SYSTEM remain residual threats. DPAPI blob backup is not
+portable key recovery: machine/profile loss without the necessary recovery material
+may make protected data unrecoverable. Status changes require actual evidence; local
+candidate work is not integration, publication or production qualification.
 
 ## CURRENT paths and provenance
 
@@ -59,6 +85,8 @@ presence and outcomes.
 
 - Update this summary only when integrated status changes or an exact-head external
   gate is attested; README and guides summarize it with links.
+- Keep authorized active objectives separate from integrated capabilities. Promote
+  candidate evidence only within its proved scope; do not infer integration or release.
 - Do not turn synthetic tests, a `202` response, `FOUND` or an aggregate count
   into a broader claim.
 - Preserve and identify historical paths and profiles without rewriting attested

@@ -1,4 +1,65 @@
-# Backlog ordered by dependencies — planning snapshot
+# Backlog ordered by outcome
+
+Updated: 2026-09-04
+Planning baseline: `8de271bfb3fa0f6953a0a8b6062245223713acf5` (PR #66 integrated).
+
+This is the work queue, not another capability dashboard.
+[IMPLEMENTATION_STATUS.md](../../IMPLEMENTATION_STATUS.md) owns integrated status;
+the [implementation plan](implementation-plan.md#current-order-of-work) explains the
+outcomes and boundaries. Historical slice tables are preserved [below](#historical-backlog-snapshot).
+
+## Current work order
+
+| Priority | Outcome | Start condition | Completion criterion |
+|---|---|---|---|
+| NOW — active, not qualified | Independently usable Windows Local Broker | Authorized local candidate on the PR #66 baseline; use the existing service, policy and SDK. | Identified .NET app uses an Installation-local key without receiving it or requiring a Gateway; mutually authenticated IPC and application/operation/context policy; restart and supported update preserve state; tested DPAPI-bounded backup/restore and a small executable sample/guide. |
+| NEXT | Broker → Gateway continuity | Standalone local result converged; freeze the remote-path fault cases. | Existing synthetic service proves identity renewal, revocation, reconnection and supported recovery after interruption, with fewer manual steps and no unsafe replay of uncertain mutations. |
+| NEXT, after continuity | Target-specific distribution and operation | Select the actual Windows/deployment target and authorize its qualification scope. | Installable artifact and lifecycle exercised on a stated compatibility matrix, with explicit recovery limits; no inferred universal Windows support or publication approval. |
+| DEFERRED | Broader surfaces and additional integrations | A concrete requirement or observed defect, explicit scope and an owner; not hypothetical future reuse. | Define a bounded outcome and relevant negatives before promoting work. Use the triggers below; no new framework or laboratory by default. |
+
+A prerequisite is not evidence of completion. The writer updates the NOW row and the
+authoritative status only after the corresponding candidate result is proved.
+Historical Windows PASS-LIVE results do not close the new standalone acceptance path.
+
+## Deferred-work triggers
+
+- **MSI/COM/native adapters or additional Windows targets:** a selected adopter/deployment
+  needs that exact surface after the small .NET path works. Qualify only the requested
+  artifact/compatibility slice; do not pull the whole M9 plan into NOW.
+- **Cloud deployments, federation, attestation, drivers/TEE or additional providers:** a
+  demonstrated requirement cannot be met safely with existing boundaries. A mandatory
+  cloud, generic identity/vault platform or universal SQL/HTTP proxy is not planned.
+- **New Connectors or customer pilots:** concrete demand and explicit authorization.
+  CGM is a possible adopter, not a dependency or a pilot authorized by this backlog.
+- **FSE2:** reopen only for a concrete requirement or observed defect with its own
+  authorization. Existing offline and partial live qualifications remain unchanged;
+  FHIR's undetermined 500 and unqualified publication are not prompts for speculative
+  fixes or live retries.
+- **Enterprise recovery/HA/DR and broad performance qualification:** a real operating
+  target, workload and recovery objective. DPAPI context loss is not solved by
+  promising recovery without recovery material.
+- **Public push, PR, merge, tag or release:** separate publication authority and the
+  applicable converged review/gates. Current authorization is local preparation only.
+
+No `GetSecret`, copied vendor credentials, mandatory new identity platform or
+additional abstraction is justified solely by an item being deferred.
+
+## Delivery and verification
+
+One owner completes the implementation and imports the disjoint plan update once into
+one local candidate. Use focused verification during causal iterations and one final
+proportionate review; no artificial commit budget or series of micro-PRs.
+
+Measure adopter steps and useful startup/memory/latency observations through the small
+sample, not a new laboratory or invented pass thresholds. Keep historical evidence
+unchanged, avoid unrelated local suites/SBOM duplication and do not mark a candidate
+result integrated or released before it is.
+
+## Historical backlog snapshot
+
+The following tables retain their original slice states and dependencies, including
+TODO, BLOCKED and candidate PASS entries. They are not today's execution queue or a
+retroactive gate decision. Their “active” and “P0” labels describe the recorded period.
 
 Updated: 2026-08-24
 Recorded planning baseline: `97daa565f582d575da5d61665126c50ea52be3ed`
@@ -13,7 +74,7 @@ This backlog records the two planned tracks. `Todo` does not authorize out-of-sc
 work; `BLOCKED_EXTERNAL` does not authorize unsafe workarounds. Gates and claims are defined
 in [`0.1.0-alpha-scope.md`](0.1.0-alpha-scope.md).
 
-## P0 — Core `0.1.0-alpha`
+### P0 — Core `0.1.0-alpha`
 
 | ID | Outcome | Status | Dependency | Gate | Does not prove |
 |---|---|---|---|---|---|
@@ -45,7 +106,7 @@ describe the optional pack truthfully: it does not require live `validate-cda` o
 FSE2-T01..T06. FSE2 gates are not ALPHA-REL dependencies, and a Track B blocker does not
 block Core alpha unless it reveals a general Core security defect.
 
-## Parallel P0 — FSE2 Organization OfficialTest
+### Parallel P0 — FSE2 Organization OfficialTest
 
 FSE2-PROV and FSE2-PACK are no longer candidates outside main: PR #33 integrated the
 Local PKCS12 provider, importer, overlay and vertical image and qualified them synthetically. The
@@ -70,7 +131,7 @@ slices below cover only the remaining path to OfficialTest. The pack remains
 `FSE2-HASH` and `FSE2-STATUS` are not prerequisites for `validate-cda`. They become necessary
 only for authorized create/status claims.
 
-## Phase stop list
+### Phase stop list
 
 Until the alpha and first `validate-cda` are closed, do not start or authorize:
 
@@ -89,7 +150,7 @@ Until the alpha and first `validate-cda` are closed, do not start or authorize:
 Explicitly unauthorized claims are listed in the
 [`scope`](0.1.0-alpha-scope.md#unauthorized-claims).
 
-## Deferred outside the active tracks
+### Deferred outside the active tracks
 
 Legacy distribution, other providers/verticals, production supply chain, enterprise
 operability and pilots remain deferred. They do not become P0 as a result of this truth pass.
