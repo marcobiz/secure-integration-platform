@@ -1,83 +1,65 @@
 # Implementation dashboard
 
-Aggiornato: 2026-09-02
-Baseline CURRENT: `main` / `origin/main` =
-`0437ab13ac4092f1fe7a8c3ec768d44edf689dbf`
+Aggiornato: 2026-09-04
+Baseline integrata fino alla PR #65:
+`18df69d6eaa34ed636b101bce1d188cd65226e1a`.
 
-Questa pagina è l’autorità sintetica sullo stato integrato. Le guide CURRENT spiegano
-come usare ciò che esiste; piani, review e report precedenti sono HISTORICAL e non
-prevalgono su questa dashboard. `Synthetic`, `live lab`, `OfficialTest qualified` e
-`production qualified` sono livelli distinti.
+Questa pagina è l’autorità sintetica sulle capability integrate e sui limiti delle
+claim. Le guide CURRENT possiedono le procedure; i riferimenti tecnici dettagliano i
+contratti; piani, review e report precedenti sono HISTORICAL per lo stato qui riassunto.
+`Synthetic`, `live lab`, `OfficialTest qualified` e `production qualified` sono livelli
+distinti. La baseline integrata non sostituisce l'exact commit di una prova live.
 
 ## Stato prodotto
-
-Candidate non integrato: FSE2 Organization current-spec offline (pack Healthcare;
-`docs/connectors/healthcare/fse2/current-spec.md`)
-su baseline `96943621a2d99c3e52d7f1189dbab77a3268ecab`: 14 route opt-in con
-provisioning e contratti chiusi. La tabella CURRENT sottostante conserva le qualifiche
-storiche; nessuna nuova qualifica live o produzione è dichiarata.
 
 | Superficie | Stato CURRENT | Limite della claim |
 |---|---|---|
 | Core M0–M5.5 | Integrato | Local Broker, Gateway, PostgreSQL, Connector lifecycle/runtime, Admin e Direct Gateway; non equivale a installer o produzione enterprise. |
-| Pilot locale | **Disponibile — Docker-first synthetic live lab** | Un percorso canonico Direct .NET → Gateway → Connector REST Published → mock HTTPS/mTLS; l'host richiede soltanto Git, PowerShell e Docker Linux/Compose, non SDK applicativi o database. Nessun servizio esterno o cloud. |
-| Admin UI/API | **Integrata — onboarding Connector guidato** | Cinque azioni su tre ruoli coprono Installation/enrollment, file validate/import, binding server-owned e grant autorizzati dall’esatta versione canonica; retry sequenziali o concorrenti convergono su una riga/un audit. `FULLSTACK-02` prova reload/resume e prima invocation su PostgreSQL 18. Il quickstart locale usa identità sintetiche, non una configurazione production. |
-| Authentication foundation | **Integrata** | Le primitive SOAP/session, JWT/X.509, signing e mTLS non qualificano automaticamente un servizio esterno. |
-| FSE2 `validate-cda` | **LIVE_QUALIFIED — OfficialTest** | Una chiamata applicativa bounded sulla baseline exact ha restituito Gateway 200 con A1 mTLS, dual JWT S1 e contratto CDA/`VERIFICA`; non è accreditamento né qualifica production. |
-| FSE2 `delete` | **PRODUCT_PATH_OFFLINE_QUALIFIED** | Metodo/path/no-body/claim e risposta bounded attraversano il product path verso mock; nessuna qualifica live o operationalization distribuita. |
-| FSE2 `create + get-status-by-workflow` | **PRODUCT_PATH_OFFLINE_QUALIFIED** | Un E2E Gateway/PostgreSQL 18 prova exact create, correlazione durevole, restart/replica e status tecnico bounded; nessuna call live o qualifica OfficialTest/production. |
-| Altre sette operazioni FSE2 | **IMPLEMENTED_PARTIAL** | Runtime foundation sintetica; mancano a seconda dell’operazione definition/provisioning canonici, DTO/response completi o qualifica live. |
-| Copertura completa Gateway FSE 2.0 | **NO** | Solo 1/11 live-qualified; Human Actor, callback inbound, accreditamento e produzione non sono coperti. |
-| Private preview | **Limitata** | Il Core e il pilot qualità CDA sono valutabili nei limiti dichiarati; non esiste una release pubblica o un impegno di stabilità API. |
-| Produzione/accreditamento | **NON QUALIFICATI** | Cloud live, MSI, HA/DR, restore/load/soak, pentest, firma artefatti, custody production e accreditamento restano fuori dal CURRENT. |
+| A. Pilot Core locale | **Disponibile — Docker-first synthetic live lab** | Percorso principale Direct .NET → Gateway → Connector REST Published → mock HTTPS/mTLS. Host con Git, PowerShell e Docker Linux/Compose; niente .NET SDK, Node, npm, curl o PostgreSQL host. Nessun servizio esterno, cloud o pack healthcare. |
+| B. Windows / Local Broker | **Integrato — evidenze live lab storiche M0/M1 e M3A** | Windows Service, identità/processi e isolamento locale; M3A include Gateway e upstream sintetico. Non è il pilot Direct, un installer o una nuova qualifica exact-head: vedi i [riferimenti storici](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/history/README.md#prove-windows--local-broker). |
+| Admin UI/API | **Integrata — onboarding Connector guidato** | Cinque azioni su tre ruoli per Installation/enrollment, definition, binding/grant, four-eyes e prima invocation. `FULLSTACK-02` prova reload/resume e prima invocation su PostgreSQL 18. Il pilot usa identità sintetiche, non autenticazione production. |
+| Authentication foundation | **Integrata** | Primitive SOAP/session, JWT/X.509, signing e mTLS provider-neutral; non qualificano automaticamente un servizio esterno. |
+| C. FSE2 Organization current-spec | **PRODUCT_PATH_OFFLINE_COMPLETE — 14 route** | Profilo opt-in `fse2-organization-current-spec@1.0.0`: contratti, provisioning e risposte bounded completi nei limiti della [specifica congelata](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/connectors/healthcare/fse2/current-spec.md). Non significa 14 route qualificate live. |
+| FSE2 CDA `VERIFICA` | **LIVE_QUALIFIED — OfficialTest** | Sul profilo current-spec: upstream/Gateway 200, `VALIDATED`, workflow e trace, A1 mTLS e dual JWT S1; non abilita o prova pubblicazione documentale. |
+| FSE2 `get-status-by-workflow` | **LIVE_QUALIFIED — OfficialTest, caso CDA osservato** | Dopo riavvio reale Gateway: upstream/Gateway 200, `FOUND`, un evento bounded sul workflow restituito da CDA. Prova consultazione e correlazione PostgreSQL durevole, non completamento clinico o pubblicazione. |
+| FSE2 FHIR `VERIFICA` | **NON QUALIFICATO LIVE** | Due richieste intenzionali con configurazione corretta: upstream 500 / Gateway 502, `generic-error`. Causa non determinata; non attribuibile da questo codice a formato, accreditamento o autorizzazione. |
+| FSE2 pubblicazione documentale live | **NON QUALIFICATA** | Il runner corrente consente soltanto VERIFICA e consultazione. Pubblicare la configurazione Connector non pubblica documenti; un `202` non prova completamento verso INI/EDS. |
+| Copertura/qualifica complessiva Gateway FSE 2.0 | **NO** | Offline limitato alle 14 route congelate; live limitato ai casi sopra. Human Actor, callback inbound e pubblicazione nativa FHIR confermata restano esclusi. |
+| Private preview | **Limitata** | Core e pilot opzionale valutabili nei rispettivi prerequisiti; nessuna release pubblica o stabilità API garantita. |
+| Produzione/accreditamento | **NON QUALIFICATI** | Cloud live, MSI, adapter C ABI/COM, HA/DR, restore/load/soak, pentest, firma artefatti e custody production non sono qualificati. |
 
-## Percorsi CURRENT
+## Percorsi CURRENT e provenienza
 
-- prodotto locale: [docs/user/local-pilot.md](docs/user/local-pilot.md);
-- FSE2 OfficialTest: [docs/user/fse2-officialtest.md](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-officialtest.md);
-- amministrazione: [docs/user/administration.md](docs/user/administration.md);
-- sviluppo Connector: [docs/connector-development/README.md](docs/connector-development/README.md);
-- regole interne: [docs/internal/README.md](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/internal/README.md).
+- Core: [quickstart](docs/user/quickstart.md) → [pilot locale](docs/user/local-pilot.md).
+- FSE2: [validazione e consultazione OfficialTest](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md).
+  È l'ingresso operativo corrente: runner distribuito, bootstrap locale, enrollment
+  Direct, sessioni di ruolo in memoria e provisioner Admin resumable, senza SQL/store
+  diretti o cookie copiati. Richiede SDK .NET host e materiale A1/S1 già predisposto e
+  autorizzato, accesso OfficialTest e configurazione organizzativa esterna. Non crea
+  account esterni o certificati e non fornisce custody production.
+- La [qualifica osservata il 4 settembre](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md#qualifica-osservata-il-4-settembre-2026)
+  identifica codice eseguito, esiti e limiti delle prove live. I gate offline sono nel
+  riferimento current-spec; le qualifiche dei vecchi profili non si trasferiscono al nuovo.
+- Il [precedente percorso validate-only](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-officialtest.md)
+  è HISTORICAL per la prima adozione. Conserva la provenienza di
+  `fse2-officialtest-validate-cda@1.0.1` e il riferimento al provisioner condiviso;
+  `1.0.0` rimane compatibilità Published immutabile.
+- [Amministrazione](docs/user/administration.md),
+  [sviluppo Connector](docs/connector-development/README.md) e
+  [regole interne](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/internal/README.md).
 
-La configurazione FSE2 dispone di un provisioner Admin resumable, ma bootstrap/provider
-operativo, acquisizione delle sessioni di ruolo e runner live adopter-facing non sono un
-flusso self-service documentabile dalla repository. Per questo
-`FSE2_PILOT_REPRODUCIBLE_FROM_DOCS = NO`, pur restando vera la qualifica live di
-`validate-cda` sulla baseline.
-
-## Capacità FSE2 e prossimo gate
-
-Il pilot di qualità CDA è già disponibile con `validate-cda`. Un pilot minimo di
-pubblicazione richiede la slice coerente:
-
-```text
-validate-cda → create → get-status-by-workflow
-```
-
-`create` e `get-status-by-workflow` sono qualificati offline sul product path, inclusi
-restart e replica; non sono qualificati live. Un `202` di `create` senza riconciliazione
-non dimostra il completamento verso INI/EDS. `replace`, `delete`,
-`update-metadata` e `get-status-by-trace` sono successivi ad alto valore; le altre
-operazioni non entrano automaticamente in roadmap.
-
-Il gate prodotto **time to first successful call** resta black-box e da stato pulito.
-Deve misurare separatamente:
-
-- pilot locale: prerequisiti → singolo workflow → prima risposta sanificata → cleanup;
-- FSE2: prerequisiti esterni già presenti → bootstrap supportato → plan/apply/four-eyes
-  → verify → una `validate-cda` → audit/evidence redatti → resume terminale.
-
-Il gate fallisce se l’operatore deve conoscere la struttura della repository, usare SQL
-o store diretti, copiare cookie come procedura ordinaria, inventare una sequenza o
-richiedere intervento specialistico per onboarding, recovery o test normali.
+Il percorso FSE2 è ora documentato ed eseguibile con i suoi prerequisiti esterni:
+il vecchio blocco «runner/sessioni/bootstrap locale non distribuiti» non è più CURRENT.
+Questo non rende FHIR live riuscito né il pilot riproducibile senza accesso e materiale
+autorizzati. Il Core resta indipendente dall'esito e dalla presenza del pack FSE2.
 
 ## Regole di aggiornamento
 
-- Aggiornare questa dashboard solo quando cambia lo stato integrato o viene attestato un
-  gate esterno exact-head.
-- Non trasformare test sintetici, una risposta `202`, una dichiarazione del maintainer o
-  un conteggio aggregato in una claim più ampia.
-- Conservare dettagli di run, SHA storici e remediation nei report HISTORICAL; non
-  ricopiarli nelle guide utente.
+- Aggiornare questa sintesi solo quando cambia lo stato integrato o viene attestato un
+  gate esterno exact-head; README e guide la riassumono con collegamenti.
+- Non trasformare test sintetici, una risposta `202`, `FOUND` o un conteggio aggregato
+  in una claim più ampia.
+- Conservare percorsi e profili storici, identificandoli senza riscrivere le evidenze
+  attestate; non ricopiare matrici di capability nelle guide.
 - Non versionare endpoint operativi riservati, certificati, chiavi, P12, password, token,
   cookie, payload sanitari o risposte raw.

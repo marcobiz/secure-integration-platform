@@ -1,5 +1,12 @@
 # FSE2 Organization: validazione e consultazione OfficialTest
 
+**Pubblico:** organizzazione autorizzata a usare OfficialTest.
+**Stato:** CURRENT, ingresso al pilot FSE2 opzionale della baseline PR #65.
+**Risultato:** validazione VERIFICA e consultazione bounded, non pubblicazione documentale.
+La [sintesi delle capability](../../IMPLEMENTATION_STATUS.md#stato-prodotto) distingue
+copertura offline, risultati live e limiti; il
+[contratto current-spec](../connectors/healthcare/fse2/current-spec.md) dettaglia le route.
+
 Questo percorso locale utilizza il normale Gateway, PostgreSQL e il profilo
 `fse2-organization-current-spec@1.0.0` Published. Non abilita la pubblicazione di
 documenti: il runner permette soltanto `VERIFICA` e consultazioni. Le 14 operazioni

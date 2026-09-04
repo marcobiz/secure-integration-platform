@@ -1,14 +1,16 @@
-# Pilot FSE2 OfficialTest
+# Pilot FSE2 OfficialTest — profilo validate-only storico
 
 Per il nuovo percorso current-spec limitato a VERIFICA e consultazione, vedere
 [FSE2 Organization: validazione e status](fse2-validation-status.md). La presente
 guida conserva il contesto del precedente profilo validate-cda 1.0.1.
 
 **Pubblico:** organizzazione autorizzata a usare l’ambiente OfficialTest.
-**Stato:** CURRENT per il solo `fse2-officialtest-validate-cda@1.0.1` /
-`validate-cda`.
-**Claim:** `validate-cda` è LIVE_QUALIFIED sulla baseline exact; il percorso completo
-non è ancora self-service né riproducibile dalla documentazione sola.
+**Stato:** HISTORICAL per la prima adozione; riferimento del solo
+`fse2-officialtest-validate-cda@1.0.1` / `validate-cda` e del provisioner condiviso.
+**Claim storica:** `validate-cda` LIVE_QUALIFIED sulla propria baseline exact. I gap
+di bootstrap/sessioni/runner descritti sotto riguardano questo precedente percorso,
+non il [pilot corrente](fse2-validation-status.md). Lo
+[stato delle capability](../../IMPLEMENTATION_STATUS.md#stato-prodotto) distingue i profili.
 
 Questa guida mette i passaggi nell’ordine reale e segnala dove il prodotto si ferma. Non
 autorizza nuove chiamate live, non crea account o materiale A1/S1 e non qualifica

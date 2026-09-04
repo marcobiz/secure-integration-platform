@@ -1,42 +1,26 @@
 # FSE2 National Connector — Organization profile
 
-**Current-spec candidate:** the opt-in `fse2-organization-current-spec@1.0.0`
-closes the [14-route offline product path](current-spec.md), including validated request
-contracts, canonical provisioning and bounded responses. The matrix below describes
-the historical profiles; their live qualification is not transferred to the new profile.
+**Current entry point:** [validation and workflow status pilot](../../../user/fse2-validation-status.md).
+The opt-in `fse2-organization-current-spec@1.0.0` is integrated through PR #65.
+The [capability summary](../../../../IMPLEMENTATION_STATUS.md#stato-prodotto) owns current
+status; the [14-route current-spec contract](current-spec.md) owns the frozen offline
+scope, request/response matrix and acceptance limits.
 
-**Stato CURRENT:** `validate-cda` LIVE_QUALIFIED in OfficialTest sulla baseline
-`613b28558fc9aeef13b60381b4fc49b59e2ad5c2`. La claim non implica accreditamento,
-produzione o copertura completa del Gateway FSE 2.0. La procedura adopter-facing e i
-blocchi correnti sono in [docs/user/fse2-officialtest.md](../../../user/fse2-officialtest.md).
+Offline completeness does not mean full live qualification. The current pilot records
+CDA VERIFICA and workflow FOUND after a Gateway restart in OfficialTest. FHIR is not
+live-qualified (upstream 500, undetermined cause); live document publication, production
+and overall accreditation are not qualified. Healthcare remains an optional pack, never
+a Core dependency.
 
-**Candidate 2026-09-03:** il percorso `validate-cda` con `VERIFICA` → trace durevole →
-seconda istanza → `get-status-by-trace` è stato eseguito contro OfficialTest. La
-validazione ha restituito 200; lo status ha restituito un 404, proiettato dal Gateway come
-`NOT_FOUND` bounded senza conservare il problem body. Questa è una qualifica
-del percorso runtime candidate, non modifica la source/procedura CURRENT validate-only.
+## Historical profiles
 
-## Historical-profile capability matrix
-
-| Operation | Stato prodotto | Utilità/limite |
-|---|---|---|
-| `validate-cda` | `LIVE_QUALIFIED` | Pilot qualità CDA disponibile; una chiamata applicativa bounded OfficialTest ha restituito Gateway 200. |
-| `delete` | `PRODUCT_PATH_OFFLINE_QUALIFIED` | Wire/no-body/claim/ack qualificati contro mock; non productizzata né live. |
-| `validate-fhir` | `IMPLEMENTED_PARTIAL` | Foundation runtime; DTO/response e provisioning OfficialTest non qualificati. |
-| `create` | `PRODUCT_PATH_OFFLINE_QUALIFIED` | Published path, exact PDF/CDA, A1/S1, risposta bounded e correlazione durevole qualificati contro upstream sintetico; nessuna qualifica live. |
-| `replace` | `IMPLEMENTED_PARTIAL` | Foundation con document ID e hash; non necessaria alla prima pubblicazione. |
-| `update-metadata` | `IMPLEMENTED_PARTIAL` | JSON pass-through non qualificato contro DTO ufficiale completo. |
-| `update-metadata-chain-concealment` | `IMPLEMENTED_PARTIAL` | Test-only e contratto insufficiente per una claim operativa. |
-| `validate-and-create` | `IMPLEMENTED_PARTIAL` | Recovery eccezionale, non flusso normale. |
-| `validate-and-replace` | `IMPLEMENTED_PARTIAL` | Recovery eccezionale e documento esistente. |
-| `get-status-by-workflow` | `PRODUCT_PATH_OFFLINE_QUALIFIED` | Risolve il workflow durevole prima degli effetti e restituisce solo eventi tecnici bounded; nessuna qualifica live. |
-| `get-status-by-trace` | `LIVE_QUALIFIED_CANDIDATE` | Solo trace dal caller; correlazione PostgreSQL e seconda istanza provate in OfficialTest. Soltanto un 404 RFC7807 ridotto all'exact code allowlisted `record-not-found` diventa `NOT_FOUND`. |
-
-`FULL_FSE2_GATEWAY_COVERAGE = NO`. Il product path offline copre ora
-`validate-cda → create → get-status-by-workflow`; un `202` di create senza lo status
-successivo non dimostra il completamento verso INI/EDS. `create/status-by-workflow`
-restano non qualificati live; il solo status-by-trace dopo `VERIFICA` è qualificato dal
-candidate nei limiti sopra.
+The [validate-only guide](../../../user/fse2-officialtest.md) retains the earlier
+`fse2-officialtest-validate-cda@1.0.1` path and shared provisioner reference. Its
+bootstrap/session/runner gaps do not describe the current distributed pilot.
+The [history index](../../../history/README.md#percorsi-fse2-precedenti) preserves the
+11-operation profile matrix and the earlier trace/NOT_FOUND observation. Historical
+Published definitions and their evidence remain immutable; qualifications do not
+transfer to the current profile.
 
 ## Authority model
 
@@ -51,7 +35,7 @@ path, content type, endpoint, audience, claim policy, signing slot, certificati 
 revisioni sono server-owned. `person_id` resta dato business validato e non diventa
 identità autenticata.
 
-## OfficialTest `validate-cda`
+## OfficialTest `validate-cda` — riferimento storico
 
 La source pubblica canonica è
 `Definitions/fse2-officialtest-validate-cda.connector.json` e contiene una sola
@@ -61,10 +45,10 @@ locator, P12, password o token. Il provisioner verticale
 `plan → configure/grant → propose → approve/publish → verify` e risolve A1/S1 dal
 catalogo pubblico server-side.
 
-Il provisioner non esegue la call live. La qualifica di `validate-cda` è stata ottenuta
-da un runner esterno controllato e redatto; un runner adopter-facing riproducibile non è
-ancora distribuito. Non sostituirlo con test integration, fixture o una request costruita
-a mano.
+Il provisioner non esegue la call live. La qualifica di questo profilo validate-only è
+stata ottenuta da un runner esterno controllato e redatto. Per la prima adozione usare
+ora il [runner current-spec distribuito](../../../user/fse2-validation-status.md), con
+i suoi prerequisiti e limiti, non test integration, fixture o request ricostruite a mano.
 
 La parity è esclusiva di `fse2-officialtest-validate-cda@1.0.1`: entrambi i JWT usano la
 sola leaf S1 in `x5c` e il body `VERIFICA` contiene soltanto `healthDataFormat=CDA` e
@@ -102,7 +86,12 @@ problem body. Body assente, non JSON, malformato, code sconosciuto e ogni altro 
 il normale upstream failure bounded. Nessun 404 attiva retry automatici; il primo caso produce
 un solo audit success, il secondo un solo audit failure.
 
-## Esempio minimo create → status
+## Esempio minimo create → status — profilo storico
+
+Questo esempio conserva la factory storica. Per il profilo corrente usare il
+[consumer contract current-spec](current-spec.md#consumer-contract), che richiede
+il workflow della precedente VALIDATION per la pubblicazione ordinaria. Il runner
+di valutazione VERIFICA/status non abilita queste operazioni di pubblicazione.
 
 Con Installation, grant e configurazione Published già attivi, il payload applicativo
 `create` resta quello canonico già usato dal client Gateway:
@@ -145,4 +134,5 @@ registrato la trace; non esiste fallback in-memory o cross-scope.
 
 Local PKCS#12 è un pack/laboratorio opzionale, non HSM/KMS o custody production.
 Accreditamento, produzione, Human Actor, callback inbound, direct FHIR publication
-confermata e full operation coverage restano fuori scope.
+confermata e qualifica live complessiva restano fuori scope. La copertura offline
+corrente è limitata alle 14 route e alle risoluzioni esplicite di current-spec.

@@ -1,9 +1,12 @@
 # Matrice di tracciabilità requisiti-test
 
-Questa matrice distingue requisito, test nominativo, tipo di evidence e stato. Il riepilogo
-CURRENT è riconciliato con la baseline
-`613b28558fc9aeef13b60381b4fc49b59e2ad5c2`; le sezioni milestone successive conservano
-evidence storica, che non prevale sul riepilogo exact-main.
+Questa matrice distingue requisito, test nominativo, tipo di evidence e stato. Lo stato
+CURRENT delle capability è in [IMPLEMENTATION_STATUS.md](../../IMPLEMENTATION_STATUS.md).
+La mappa DOC-02 sotto è una fotografia della baseline
+`613b28558fc9aeef13b60381b4fc49b59e2ad5c2`, non un riepilogo aggiornato alla PR #65.
+Per FSE2 corrente, [current-spec](../connectors/healthcare/fse2/current-spec.md#qualification-summary-redacted-offline-only)
+mappa i gate offline nominativi e la [guida validation/status](../user/fse2-validation-status.md#qualifica-osservata-il-4-settembre-2026)
+identifica le osservazioni live. Le tabelle di milestone restano evidence delle rispettive baseline.
 
 Stati usati:
 
@@ -60,8 +63,8 @@ livelli distinti.
 
 Le tabelle dettagliate sotto restano utili per i test nominativi. Qualsiasi stato
 “exact-head pending” o “nessuna call live” associato a un vecchio candidate è storico e
-non prevale sul riepilogo exact-main sopra. La qualifica OfficialTest non rende il pilot
-riproducibile per un nuovo adottante e non amplia la claim oltre `validate-cda@1.0.1`.
+non prevale sulla sintesi CURRENT collegata in apertura. Per FSE2, la mappa DOC-02 sopra
+qualifica soltanto il precedente `validate-cda@1.0.1`, non il successivo profilo current-spec.
 Le guide CURRENT sono indicizzate in `docs/README.md`.
 
 ## Requisiti funzionali

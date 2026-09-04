@@ -1,13 +1,13 @@
 # FSE2 Organization — current-spec product path (offline)
 
 Scope: the 14 outbound routes below, excluding health, inbound callbacks, Human Actor,
-production and live publication qualification. Baseline:
+production and live publication qualification. Implementation starting baseline:
 `96943621a2d99c3e52d7f1189dbab77a3268ecab`.
 
 `PRODUCT_PATH_OFFLINE_COMPLETE` applies to the opt-in
 `fse2-organization-current-spec@1.0.0` definition and
 `fse2-organization-current-spec-v1` Published profile, within the explicit limits below.
-`LIVE_QUALIFIED = NO` for this profile. `LIVE_NOT_QUALIFIED_EXTERNAL_LIMITATION`:
+The offline gate does not establish live qualification:
 official access/certification and live publication conformance are outside this offline
 qualification. No OfficialTest request or operational FSE2 material was used for that gate.
 The earlier validate-only live observation does not qualify this new definition.
@@ -15,7 +15,10 @@ The earlier validate-only live observation does not qualify this new definition.
 A later, separately authorized [validation/status path](../../../user/fse2-validation-status.md)
 qualified CDA VERIFICA and workflow status with one event after an actual Gateway restart
 on 4 September 2026. FHIR VERIFICA returned upstream 500 `generic-error` and is not live
-qualified. This partial observation does not qualify all 14 routes or document publication.
+qualified; the cause of that 500 is undetermined. This partial observation does not qualify
+all 14 routes or document publication. The integrated
+[capability summary](../../../../IMPLEMENTATION_STATUS.md#stato-prodotto) owns current status;
+this document owns the frozen route contract and its offline acceptance limits.
 
 ## Frozen authority and resolved differences
 

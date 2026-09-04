@@ -34,10 +34,15 @@ SQL, store diretti o pubblicazione di dati sensibili.
 
 ## Invocation FSE2
 
-Un HTTP/Gateway 200 sulla baseline ha qualificato `validate-cda`, ma non esiste ancora un
-runner adopter-facing nella repository. Se non si dispone dell’owner autorizzato del
-runner esterno e di un nuovo budget live, fermarsi dopo `verify`. Non costruire un
-payload o una chiamata da test integration, fixture, raw evidence o endpoint copiati.
+Usare il [runner corrente di validazione e status](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md),
+solo con prerequisiti e chiamate OfficialTest autorizzati. I suoi comandi `Audit`,
+`Restart` e status hanno esiti e limiti documentati; non costruire payload o chiamate
+da test integration, fixture, raw evidence o endpoint copiati.
+
+Il 500 FHIR `generic-error` osservato non ha una causa determinata: non dimostra un
+problema di formato, accreditamento o autorizzazione e non autorizza retry automatici
+o variazioni speculative. Se manca il workflow, non inventarlo. Un `FOUND` dopo CDA
+non prova pubblicazione: vedi la [sintesi capability](../../IMPLEMENTATION_STATUS.md#stato-prodotto).
 
 Se una chiamata autorizzata fallisce, conservare soltanto correlation ID e i campi
 diagnostici bounded visibili al Security Administrator (fase, categoria/status bounded,

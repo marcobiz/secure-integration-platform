@@ -1,16 +1,20 @@
 # Healthcare connector characterization
 
-This directory contains public-safe characterization, synthetic guidance and the Wave 1 Regional
-ePrescription foundation. No production regional connector is implemented.
+This optional pack directory contains public-safe characterization, the Wave 1 Regional
+ePrescription foundation and the FSE2 Organization integration. The Core does not depend
+on Healthcare. No production qualification or overall certification is claimed.
 
 ## Package contents
 
+- [FSE2 Organization](fse2/README.md): [current validation/status pilot](../../user/fse2-validation-status.md),
+  [frozen offline route contract](fse2/current-spec.md) and historical profile references.
+  The [capability summary](../../../IMPLEMENTATION_STATUS.md#stato-prodotto) owns current status.
 - [Complete integration inventory](integration-inventory.md)
 - [Protocol matrix](protocol-matrix.md)
 - [Execution-location matrix](execution-location-matrix.md)
 - [Minimal authentication primitives](auth-primitives-required.md)
 - [Clean-implementation provenance](provenance.md)
-- [Implementation waves and GO/NO-GO](M6-IMPLEMENTATION-PLAN.md)
+- [Historical implementation waves and GO/NO-GO](M6-IMPLEMENTATION-PLAN.md)
 - [Regional ePrescription Wave 1 foundation](regional-eprescription/README.md)
 - Connector specifications:
   - [SOGEI Basic + session](sogei-basic-session/spec.md)

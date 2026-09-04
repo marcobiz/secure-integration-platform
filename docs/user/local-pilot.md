@@ -5,8 +5,10 @@
 **Risultato:** prima chiamata locale riuscita, risposta sanificata, audit metadata-only e
 cleanup ownership-checked.
 
-Questo è l'unico pilot locale canonico. Non richiede cloud, materiale FSE2, SQL, `.env`,
-.NET, Node, npm, PostgreSQL sull'host o modifica del trust store.
+Questo è il pilot locale canonico del Core. Non richiede cloud, materiale FSE2, SQL,
+`.env`, .NET SDK, Node, npm, curl, PostgreSQL sull'host o modifica del trust store.
+Questi prerequisiti non si estendono al
+[pilot FSE2 opzionale](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md#prerequisiti).
 
 ## Prerequisiti
 
@@ -71,6 +73,7 @@ alternativo.
 ## Confine della prova
 
 Il pilot usa DevelopmentAuth, CA e materiale esclusivamente sintetici e una chiave
-Direct process-local. Non prova installer, cloud, FSE2, custodia production, stabilità
+Direct process-local e non attraversa il Local Broker Windows. Non prova installer,
+cloud, FSE2, custodia production, stabilità
 API, HA/DR o produzione. Il prossimo gate di adozione deve misurare black-box il tempo
 da prerequisiti disponibili a `ALPHA_GOLDEN_PATH_PASS`, includendo il cleanup.

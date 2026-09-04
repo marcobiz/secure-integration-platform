@@ -1,71 +1,106 @@
 # Secure Integration Platform
 
-Piattaforma provider-neutral per integrare software on-premise e legacy senza distribuire
-credenziali, chiavi private o destinazioni operative ai client. Il Core comprende Local
-Broker, Gateway, runtime dei Connector, PostgreSQL, Admin UI/API, provider sintetico e
-client .NET Direct. I pack healthcare sono opzionali e non diventano dipendenze del Core.
+Un gestionale installato sui PC dei clienti deve chiamare servizi esterni, ma distribuire
+con il programma le credenziali del fornitore e le relative chiavi private di firma
+significa distribuirne anche il controllo. Secure Integration Platform (SIP) separa
+l'applicazione che chiede un'operazione dal server che custodisce e usa quelle credenziali.
 
-> Stato: private preview tecnica, non produzione. Il pilot locale sintetico è disponibile.
-> Per FSE2 OfficialTest è live-qualified soltanto `validate-cda`; non sono qualificati
-> accreditamento, produzione o copertura completa del Gateway FSE 2.0.
+È pensata per sviluppatori e software house che integrano software Windows, on-premise
+o legacy, e per CTO che vogliono governare accessi e integrazioni senza consegnare
+segreti esterni a ogni installazione. Il client invoca un'operazione autorizzata;
+destinazione, credenziali e firme sono risolte sul server. Non esiste un'API `GetSecret`
+per applicazioni, Local Broker o Admin UI.
 
-![Sanitized Admin UI dashboard](docs/images/admin-dashboard.png)
+Per esempio, un gestionale può chiedere «invia questo ordine» a un Connector, cioè una
+definizione versionata dell'integrazione. Il server verifica identità e permessi, chiama
+il servizio configurato e restituisce una risposta sanificata. Il gestionale non sceglie
+un URL arbitrario e non riceve la credenziale del fornitore o la chiave di firma.
+L'esempio eseguibile sotto usa un ordine e un servizio interamente sintetici.
 
-## Scegli il tuo percorso
+> Private preview tecnica, non produzione né certificazione complessiva. Non è un
+> proxy universale o un'integrazione automatica per qualsiasi legacy: servono Connector
+> e client compatibili. Le identità dei client restano da proteggere; Administrator e
+> SYSTEM sull'host sono minacce privilegiate residue. Vedi i [limiti](docs/user/known-limitations.md).
 
-| Obiettivo | Inizia qui | Risultato supportato |
-|---|---|---|
-| Provare il prodotto in locale | [Quick start](docs/user/quickstart.md) → [pilot locale](docs/user/local-pilot.md) | Una chiamata Direct .NET → Gateway → Connector Published → mock HTTPS/mTLS, con risposta sanificata e audit metadata-only. |
-| Provare FSE2 OfficialTest | [Pilot FSE2 OfficialTest](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-officialtest.md) | Configurazione e pubblicazione di `validate-cda`; la chiamata live è qualificata sulla baseline, ma non è ancora self-service per un nuovo adottante. |
-| Amministrare la piattaforma | [Onboarding guidato Connector](docs/user/guided-connector-onboarding.md) → [guida di amministrazione](docs/user/administration.md) | Cinque azioni su tre ruoli per Installation, definition, binding/grant, four-eyes, publish e prima invocation tramite superfici supportate. |
-| Sviluppare un Connector | [Guida per sviluppatori](docs/connector-development/README.md) | Definizione minima provider-neutral e golden path `plan → apply → verify → first call`. |
-| Capire stato e regole interne | [Indice interno](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/internal/README.md) | Autorità documentali, governance della complessità e regole per agenti/contributor. |
+## Provalo subito: Core locale, senza cloud
 
-Limitazioni e rimedi operativi sono raccolti in
-[problemi noti](docs/user/known-limitations.md) e
-[troubleshooting](docs/user/troubleshooting.md). L’indice completo, separato per
-pubblico, è in [docs/README.md](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/README.md);
-i documenti di milestone, review e gate precedenti sono classificati
-nell’[indice storico](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/history/README.md).
-
-## Pilot locale, senza cloud
-
-Prerequisiti: Git, Docker con Linux containers e Compose, e PowerShell 5.1 o 7. Il
-percorso adottante non richiede .NET, Node, npm o PostgreSQL sull'host: build e sample
-usano immagini Docker pinned.
+Da un checkout del repository, servono Git, Docker con Linux containers e Compose, e
+PowerShell 5.1 o 7. Questo percorso Core non richiede .NET SDK, Node, npm, curl o
+PostgreSQL sull'host: build, tool e sample usano container. Il pilot FSE2 ha
+[prerequisiti propri](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md#prerequisiti).
 
 ```powershell
 ./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Validate
 ./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Run
 ```
 
-Il runner usa solo materiale sintetico per-run, verifica una singola chiamata e rimuove
-container, rete, volume e materiale temporaneo. In caso di interruzione:
+Il runner verifica una chiamata Direct .NET → Gateway → Connector Published → mock
+HTTPS/mTLS, con risposta sanificata e audit metadata-only. Usa materiale sintetico
+per-run e rimuove le proprie risorse; il marker finale è `ALPHA_GOLDEN_PATH_PASS`.
+In caso di interruzione:
 
 ```powershell
 ./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Stop
 ```
 
-Il percorso canonico e i marker attesi sono in
-[docs/user/local-pilot.md](docs/user/local-pilot.md). Non usare i vecchi quickstart di
-milestone come percorsi alternativi.
+[Quick start](docs/user/quickstart.md) · [Procedura completa e marker](docs/user/local-pilot.md) ·
+[Troubleshooting](docs/user/troubleshooting.md)
 
-## Stato FSE2 in una riga
+## Tre prove, tre confini
 
-- `validate-cda`: **LIVE_QUALIFIED** su OfficialTest, per il solo pilot di qualità CDA;
-- `delete`: **PRODUCT_PATH_OFFLINE_QUALIFIED**, non live né productizzato;
-- altre nove operazioni: **IMPLEMENTED_PARTIAL**;
-- copertura completa del Gateway FSE 2.0: **NO**;
-- pilot di pubblicazione: richiede almeno `create` e `get-status-by-workflow`, ancora
-  parziali;
-- produzione e accreditamento: **NON QUALIFICATI**.
+### A. Core sintetico — percorso principale di valutazione
 
-## Build, sicurezza e confini
+Il [pilot Docker-first](docs/user/local-pilot.md) prova la chiamata autorizzata e la
+separazione delle credenziali sul percorso Direct. Non richiede cloud o pack verticali,
+non attraversa il Local Broker Windows e non qualifica un servizio esterno.
 
-I controlli repository sono descritti in
-[AGENTS.md](https://github.com/marcobiz/secure-integration-platform/blob/main/AGENTS.md).
-L’architettura e i
-confini dell’export Core sono in [ARCHITECTURE.md](ARCHITECTURE.md) e
-[OPEN_SOURCE_BOUNDARIES.md](OPEN_SOURCE_BOUNDARIES.md). Segnalare vulnerabilità tramite
-[SECURITY.md](SECURITY.md), senza pubblicare dettagli sfruttabili, token, certificati,
-payload o risposte raw.
+### B. Windows / Local Broker — il confine per il software installato
+
+Il software Windows comunica via Named Pipe con un Local Broker eseguito come Windows
+Service sotto un'identità distinta. Le prove già disponibili verificano autorizzazione
+del processo, isolamento tra utenti, ACL e persistenza dopo riavvio; il percorso M3A
+collega inoltre il simulatore legacy al Gateway e a un fornitore sintetico.
+
+Sono [evidenze e runbook storici](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/history/README.md#prove-windows--local-broker):
+dimostrano quel confine sulle baseline attestate, non una nuova demo pronta all'uso sul
+CURRENT. Richiedono un laboratorio Windows dedicato e prerequisiti propri; MSI e
+adapter C ABI/COM non sono disponibili come percorso di adozione qualificato.
+
+### C. FSE2 opzionale — evidenza di un'integrazione reale
+
+Il pack per il Fascicolo Sanitario Elettronico 2.0 usa i contratti del Core, senza
+introdurre una dipendenza sanitaria nel Core. Il
+[pilot corrente di validazione e status](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
+documenta CDA `VERIFICA` e workflow `FOUND` dopo riavvio qualificati live in OfficialTest.
+Le 14 route sono complete offline **nei limiti della specifica congelata**; FHIR non è
+qualificato live (HTTP 500, causa non determinata) e la pubblicazione documentale live
+non è qualificata. Non è una certificazione complessiva né una qualifica di produzione.
+
+La [sintesi autorevole delle capability](IMPLEMENTATION_STATUS.md) distingue stato
+integrato, copertura offline ed evidenze live, senza trasferire qualifiche tra profili.
+
+## Come è composto
+
+- **Local Broker e client .NET:** accesso delle applicazioni installate; il client Direct
+  può raggiungere il Gateway senza Broker.
+- **Gateway e Connector Runtime:** autorizzazione, esecuzione dell'integrazione e uso
+  server-side delle capability di autenticazione, firma e trasporto.
+- **PostgreSQL e Admin UI/API:** configurazioni, permessi, approvazione a quattro occhi
+  e audit metadata-only. La UI usa soltanto API Admin autenticate same-origin.
+- **Synthetic Provider e pack opzionali:** il Core si valuta da solo; provider di
+  deployment e integrazioni verticali dipendono dal Core, mai il contrario.
+
+![Sanitized Admin UI dashboard](docs/images/admin-dashboard.png)
+
+## Approfondisci
+
+- [Onboarding guidato Connector](docs/user/guided-connector-onboarding.md) e
+  [amministrazione](docs/user/administration.md).
+- [Sviluppare un Connector](docs/connector-development/README.md).
+- [Architettura](ARCHITECTURE.md) e [confini dell'export Core](OPEN_SOURCE_BOUNDARIES.md).
+- [Indice documentale](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/README.md),
+  [riferimenti storici](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/history/README.md) e
+  [regole per contributor](https://github.com/marcobiz/secure-integration-platform/blob/main/AGENTS.md).
+
+Segnalare vulnerabilità tramite [SECURITY.md](SECURITY.md), senza pubblicare token,
+certificati, payload o risposte raw.
