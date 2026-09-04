@@ -53,6 +53,9 @@ metodo di autenticazione per produzione o per un Gateway remoto.
 I comandi amministrativi riusano il provisioner e la sua ripresa fail-closed:
 configurazione già corretta non viene ricreata; drift e autorizzazioni insufficienti
 richiedono una correzione esplicita, non vengono aggirati.
+`Verify` controlla anche mTLS/BGW1 sulla lettura Broker già esistente: per un Direct
+autenticato il diniego di ruolo è atteso e distinto da un errore di autenticazione.
+Questo controllo non invia richieste OfficialTest.
 
 ## Validazione e seconda istanza
 

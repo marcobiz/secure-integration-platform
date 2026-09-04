@@ -1,5 +1,8 @@
 using System.Text;
 using System.Text.Json;
+using System.Diagnostics;
+using System.Security.Cryptography;
+using SecureIntegration.Gateway.Application;
 using SecureIntegration.Tools.Fse2.OfficialTestProvisioner;
 using Xunit;
 using Pilot = SecureIntegration.Tools.Fse2.OfficialTestProvisioner.Program;
@@ -8,6 +11,23 @@ namespace SecureIntegration.ConnectorPacks.Healthcare.FSE2.Integration.Tests;
 
 public sealed class Fse2PilotTests
 {
+    [Fact]
+    public async Task FSE2_PILOT_runtime_message_has_traceparent_and_exact_BGW1_body_signature()
+    {
+        using ECDsa key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        const string target = "/v1/connectors/fse2-organization-current-spec/operations/validate-fhir:invoke";
+        byte[] body = "{\"synthetic\":true}"u8.ToArray();
+        using HttpRequestMessage message = Pilot.CreatePilotMessage(key, HttpMethod.Post, target, body);
+        string Header(string name) => Assert.Single(message.Headers.GetValues(name));
+        Assert.True(ActivityContext.TryParse(Header("traceparent"), null, out _));
+        byte[] delivered = await message.Content!.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(body, delivered);
+        string signing = RuntimeIdentityService.BuildSigningInput("POST", target, Header("X-BG-Timestamp"), Header("X-BG-Nonce"), Header("X-BG-Content-SHA256"));
+        byte[] Decode(string value) => Convert.FromBase64String(value.Replace('-', '+').Replace('_', '/').PadRight((value.Length + 3) / 4 * 4, '='));
+        Assert.Equal(SHA256.HashData(delivered), Decode(Header("X-BG-Content-SHA256")));
+        Assert.True(key.VerifyData(Encoding.UTF8.GetBytes(signing), Decode(Header("X-BG-Signature")), HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
+    }
+
     [Fact]
     public void FSE2_PILOT_fhir_preserves_exact_bundle_and_official_VERIFICA_RESOURCE_body()
     {
@@ -73,5 +93,16 @@ public sealed class Fse2PilotTests
         Assert.DoesNotContain("create", Pilot.PilotOperations);
         Assert.DoesNotContain("replace", Pilot.PilotOperations);
         Assert.DoesNotContain("delete", Pilot.PilotOperations);
+    }
+
+    [Theory]
+    [InlineData("{\"code\":\"BGW-AUTHN-CERTIFICATE-REQUIRED\",\"detail\":\"raw-token-endpoint-canary\"}", "BGW-AUTHN-CERTIFICATE-REQUIRED")]
+    [InlineData("{\"code\":\"raw-token-endpoint-canary\"}", "FSE2_PILOT_GATEWAY_REJECTED")]
+    [InlineData("not json raw-canary", "FSE2_PILOT_GATEWAY_REJECTED")]
+    public void FSE2_PILOT_failure_retains_only_existing_published_wire_code(string body, string expected)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(body);
+        Assert.Equal(expected, Pilot.ReducePilotFailure(bytes));
+        Assert.All(bytes, value => Assert.Equal(0, value));
     }
 }

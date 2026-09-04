@@ -9,6 +9,7 @@ using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
 using SecureIntegration.ConnectorPacks.Healthcare.FSE2;
+using SecureIntegration.Gateway.Application;
 
 namespace SecureIntegration.Tools.Fse2.OfficialTestProvisioner;
 
@@ -19,7 +20,10 @@ internal static partial class Program
         { "validate-fhir", "validate-cda", "get-status-by-workflow", "get-status-by-trace" });
     internal sealed record PilotSettings(Fse2OfficialTestOrganization Organization, Fse2OfficialTestLocality Locality);
     internal sealed record PilotState(Guid CorrelationId, string Operation, int? GatewayHttpStatus,
-        int? UpstreamHttpStatus, string? Workflow, string? Trace, string Classification, int EventCount);
+        int? UpstreamHttpStatus, string? Workflow, string? Trace, string Classification, int EventCount)
+    {
+        public string? SafeGatewayCode { get; init; }
+    }
 
     private static async Task<int> RunPilotAsync(string[] args)
     {
@@ -31,6 +35,7 @@ internal static partial class Program
             ?? throw Failure("FSE2_PILOT_START_REQUIRED", true);
         PilotSettings settings = JsonSerializer.Deserialize<PilotSettings>(ReadBounded(args[1], 16384, "FSE2_PILOT_SETTINGS_INVALID"), Json)
             ?? throw Failure("FSE2_PILOT_SETTINGS_INVALID", true);
+        if (settings.Organization is null || settings.Locality is null) throw Failure("FSE2_PILOT_SETTINGS_INVALID", true);
         using JsonDocument bootstrap = JsonDocument.Parse(ReadBounded(Path.Combine(root, "raw", "provisioning.json"), 65536, "FSE2_PILOT_START_REQUIRED"));
         JsonElement data = bootstrap.RootElement;
         Guid tenant = RequiredGuid(data, "tenantId");
@@ -62,8 +67,10 @@ internal static partial class Program
             string operation = phase.StartsWith("status-", StringComparison.Ordinal) ? "get-" + phase.Replace("status-", "status-by-", StringComparison.Ordinal) : phase;
             Guid correlation = Guid.NewGuid();
             // Write intent before dispatch. A timeout is ambiguous: resuming never repeats this call.
-            bool status = phase.StartsWith("status-", StringComparison.Ordinal);
-            PilotState pending = new(correlation, operation, null, null, status ? previous?.Workflow : null, status ? previous?.Trace : null, "DISPATCH_PENDING", 0);
+            PilotState pending = new(correlation, operation, null, null,
+                phase == "status-workflow" ? request.ResourceIdentifier : null,
+                phase == "status-trace" ? request.ResourceIdentifier : phase == "status-workflow" && previous?.Workflow == request.ResourceIdentifier ? previous?.Trace : null,
+                "DISPATCH_PENDING", 0);
             File.WriteAllBytes(statePath, JsonSerializer.SerializeToUtf8Bytes(pending, Json));
             PilotState result = await PilotInvokeAsync(client, key, request, pending).ConfigureAwait(false);
             File.WriteAllBytes(statePath, JsonSerializer.SerializeToUtf8Bytes(result, Json));
@@ -127,7 +134,18 @@ internal static partial class Program
                 long revision = connectors.Single(item => item.GetProperty("connectorId").GetString() == plan.ConnectorId).GetProperty("publicationRevision").GetInt64();
                 await PublishAsync(api, context, revision).ConfigureAwait(false);
                 break;
-            case "verify": await VerifyAndPrintAsync(api, context, "Published", "Active").ConfigureAwait(false); break;
+            case "verify":
+                await VerifyAndPrintAsync(api, context, "Published", "Active").ConfigureAwait(false);
+                // The existing Broker-only read authenticates Direct before denying its role.
+                // This proves mTLS/BGW1 without an upstream document dispatch or a new API.
+                using (HttpResponseMessage response = await PilotSendAsync(client, key, HttpMethod.Get, "/v1/broker-policy", []).ConfigureAwait(false))
+                {
+                    string code = ReducePilotFailure(await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false));
+                    if (response.StatusCode != HttpStatusCode.Forbidden || code != "BGW-AUTHZ-OPERATION-DENIED")
+                        throw Failure(code);
+                    Print(new { status = "runtime-authenticated", documentDispatch = 0 });
+                }
+                break;
         }
         return 0;
     }
@@ -180,25 +198,50 @@ internal static partial class Program
             payload = new { contentType = "application/vnd.bgw.fse2+json", encoding = "base64", data = Convert.ToBase64String(payload) } }, Json);
         try
         {
-            string timestamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture);
-            string nonce = PilotEncode(RandomNumberGenerator.GetBytes(16));
-            string hash = PilotEncode(SHA256.HashData(body));
-            string signature = PilotEncode(key.SignData(Encoding.UTF8.GetBytes(string.Join('\n', "BGW1", "POST", target, timestamp, nonce, hash)),
-                HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
-            using HttpRequestMessage message = new(HttpMethod.Post, target) { Content = new ByteArrayContent(body) };
-            message.Content.Headers.ContentType = new("application/json");
-            message.Headers.Add("X-BG-Timestamp", timestamp);
-            message.Headers.Add("X-BG-Nonce", nonce);
-            message.Headers.Add("X-BG-Content-SHA256", hash);
-            message.Headers.Add("X-BG-Signature", signature);
-            using HttpResponseMessage response = await client.SendAsync(message).ConfigureAwait(false);
+            using HttpResponseMessage response = await PilotSendAsync(client, key, HttpMethod.Post, target, body).ConfigureAwait(false);
             if (response.StatusCode != HttpStatusCode.OK)
-                return pending with { GatewayHttpStatus = (int)response.StatusCode, Classification = "FAILURE_CHECK_AUDIT" };
+                return pending with { GatewayHttpStatus = (int)response.StatusCode, Classification = "FAILURE_CHECK_AUDIT",
+                    SafeGatewayCode = ReducePilotFailure(await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false)) };
             byte[] responseBytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
             try { return ReducePilotSuccess(responseBytes, pending); }
             finally { CryptographicOperations.ZeroMemory(responseBytes); }
         }
         finally { CryptographicOperations.ZeroMemory(payload); CryptographicOperations.ZeroMemory(body); }
+    }
+
+    private static async Task<HttpResponseMessage> PilotSendAsync(HttpClient client, ECDsa key, HttpMethod method, string target, byte[] body)
+    {
+        using HttpRequestMessage message = CreatePilotMessage(key, method, target, body);
+        return await client.SendAsync(message).ConfigureAwait(false);
+    }
+
+    internal static HttpRequestMessage CreatePilotMessage(ECDsa key, HttpMethod method, string target, byte[] body)
+    {
+        string timestamp = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'", CultureInfo.InvariantCulture);
+        string nonce = PilotEncode(RandomNumberGenerator.GetBytes(16));
+        string hash = PilotEncode(SHA256.HashData(body));
+        string signature = PilotEncode(key.SignData(Encoding.UTF8.GetBytes(RuntimeIdentityService.BuildSigningInput(method.Method, target, timestamp, nonce, hash)),
+            HashAlgorithmName.SHA256, DSASignatureFormat.IeeeP1363FixedFieldConcatenation));
+        HttpRequestMessage message = new(method, target);
+        if (method == HttpMethod.Post) { message.Content = new ByteArrayContent(body); message.Content.Headers.ContentType = new("application/json"); }
+        message.Headers.Add("X-BG-Timestamp", timestamp);
+        message.Headers.Add("X-BG-Nonce", nonce);
+        message.Headers.Add("X-BG-Content-SHA256", hash);
+        message.Headers.Add("X-BG-Signature", signature);
+        message.Headers.Add("traceparent", $"00-{Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant()}-{Convert.ToHexString(RandomNumberGenerator.GetBytes(8)).ToLowerInvariant()}-01");
+        return message;
+    }
+
+    internal static string ReducePilotFailure(byte[] bytes)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(bytes);
+            string? code = document.RootElement.TryGetProperty("code", out JsonElement value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+            return code is not null && BackendRuntimeWireCodes.IsPublished(RuntimeWireCodeKind.Reason, code) ? code : "FSE2_PILOT_GATEWAY_REJECTED";
+        }
+        catch (JsonException) { return "FSE2_PILOT_GATEWAY_REJECTED"; }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
     }
 
     internal static PilotState ReducePilotSuccess(byte[] bytes, PilotState pending)
@@ -214,8 +257,9 @@ internal static partial class Program
             if (normalized.CorrelationId != pending.CorrelationId) throw Failure("FSE2_PILOT_RESPONSE_INVALID");
             if (normalized.WorkflowInstanceId is not null) _ = Fse2Request.GetStatusByWorkflow(normalized.WorkflowInstanceId);
             if (normalized.TraceId is not null) _ = Fse2Request.GetStatusByTrace(normalized.TraceId);
-            string? workflow = normalized.WorkflowInstanceId ?? pending.Workflow;
-            string? trace = normalized.TraceId ?? pending.Trace;
+            bool status = pending.Operation.StartsWith("get-status-", StringComparison.Ordinal);
+            string? workflow = status ? pending.Workflow : normalized.WorkflowInstanceId;
+            string? trace = status ? pending.Trace : normalized.TraceId;
             return pending with { GatewayHttpStatus = 200, UpstreamHttpStatus = normalized.StatusCode, Workflow = workflow, Trace = trace,
                 Classification = normalized.StatusClassification switch { Fse2StatusClassification.Found => "FOUND", Fse2StatusClassification.NotFound => "NOT_FOUND", _ => "VALIDATED" },
                 EventCount = normalized.WorkflowEvents.Count };
