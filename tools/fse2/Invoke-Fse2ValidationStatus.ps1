@@ -25,18 +25,25 @@ function Invoke-Checked {
     if ($LASTEXITCODE -ne 0) { throw 'FSE2_PILOT_COMMAND_FAILED_SEE_BOUNDED_RESULT' }
 }
 
-function Get-OwnedGateway {
-    $containers = @(& docker ps -aq --filter ('label=com.docker.compose.project=' + $project) --filter 'label=com.docker.compose.service=gateway')
-    if ($LASTEXITCODE -ne 0 -or $containers.Count -ne 1) { throw 'FSE2_PILOT_START_REQUIRED' }
-    $id = [string]$containers[0]
-    $files = & docker inspect $id --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}'
+function Assert-PilotContainerOwnership {
+    param([string] $Id, [switch] $AllowBootstrap)
+    $files = & docker inspect $Id --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}'
     if ($LASTEXITCODE -ne 0) { throw 'FSE2_PILOT_OWNERSHIP_UNVERIFIED' }
     $expected = @('deploy\m3\docker-compose.m3a.yml', 'deploy\m5\docker-compose.m5.yml', 'deploy\fse2\docker-compose.fse2-local.yml') |
         ForEach-Object { [IO.Path]::GetFullPath((Join-Path $root $_)).Replace('\', '/') }
     $actual = @(([string]$files -split ',') | ForEach-Object { $_.Replace('\', '/') })
+    # Start first creates the base M5 stack, then adds the FSE2 overlay to Gateway.
+    if ($AllowBootstrap -and $actual.Count -eq 2) { $expected = $expected[0..1] }
     if (@(Compare-Object $expected $actual).Count -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $artifacts '.m5-quickstart-owner'))) {
         throw 'FSE2_PILOT_FOREIGN_STACK_DENIED'
     }
+}
+
+function Get-OwnedGateway {
+    $containers = @(& docker ps -aq --filter ('label=com.docker.compose.project=' + $project) --filter 'label=com.docker.compose.service=gateway')
+    if ($LASTEXITCODE -ne 0 -or $containers.Count -ne 1) { throw 'FSE2_PILOT_START_REQUIRED' }
+    $id = [string]$containers[0]
+    Assert-PilotContainerOwnership -Id $id
     return $id.Trim()
 }
 
@@ -65,11 +72,24 @@ try {
         return
     }
 
-    $gateway = Get-OwnedGateway
     if ($Phase -eq 'Stop') {
+        # A partial Start need not have a Gateway. Keep the checkout boundary before
+        # delegating marker/path checks and all deletion to the existing M5 cleanup.
+        $containers = @(& docker ps -aq --filter ('label=com.docker.compose.project=' + $project))
+        if ($LASTEXITCODE -ne 0) { throw 'FSE2_PILOT_OWNERSHIP_UNVERIFIED' }
+        $networks = @(& docker network ls -q --filter ('label=com.docker.compose.project=' + $project))
+        if ($LASTEXITCODE -ne 0) { throw 'FSE2_PILOT_OWNERSHIP_UNVERIFIED' }
+        $volumes = @(& docker volume ls -q --filter ('label=com.docker.compose.project=' + $project))
+        if ($LASTEXITCODE -ne 0) { throw 'FSE2_PILOT_OWNERSHIP_UNVERIFIED' }
+        if ($containers.Count + $networks.Count + $volumes.Count -gt 0 -and
+            -not (Test-Path -LiteralPath (Join-Path $artifacts '.m5-quickstart-owner') -PathType Leaf)) {
+            throw 'FSE2_PILOT_OWNERSHIP_UNVERIFIED'
+        }
+        foreach ($id in $containers) { Assert-PilotContainerOwnership -Id $id -AllowBootstrap }
         Invoke-Checked $powershell @('-NoProfile', '-File', $localProvider, '-Phase', 'Stop', '-QuickstartArtifactRoot', $artifacts)
         return
     }
+    $gateway = Get-OwnedGateway
     if ($Phase -eq 'Restart') {
         Invoke-Checked 'docker' @('restart', $gateway)
         $deadline = [DateTimeOffset]::UtcNow.AddSeconds(60)

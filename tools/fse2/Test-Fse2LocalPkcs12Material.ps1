@@ -4,12 +4,16 @@ param(
     [string] $DotNetPath,
     [string] $RuntimePrincipal,
     [switch] $ValidateCompose,
-    [switch] $StartLab
+    [switch] $StartLab,
+    [switch] $PilotCleanupOnly
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
+& (Join-Path $PSScriptRoot 'Test-Fse2ValidationStatusCleanup.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'FSE2_LOCAL_PILOT_CLEANUP_TEST_FAILED' }
+if ($PilotCleanupOnly) { return }
 Import-Module (Join-Path $PSScriptRoot 'Fse2PathPolicy.psm1') -Force
 $importer = Join-Path $PSScriptRoot 'New-Fse2LocalPkcs12Material.ps1'
 $providerProbe = Join-Path $PSScriptRoot 'ProviderProbe\ProviderProbe.csproj'
