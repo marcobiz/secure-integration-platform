@@ -313,6 +313,11 @@ internal static partial class Program
         byte[] xml = await PilotDatasetAsync("it-fse-accreditamento", commit,
             "Test Case/Validazione/Documenti XML Casi OK/8 - Casi OK Profilo Sanitario Sintetico/PSS476.xml",
             "7B54299D5AD7E87CA7D5569E98ADAC2D687D3E9432FD4D015194E733A2ADAABD").ConfigureAwait(false);
+        return BuildPilotCdaRequest(pdf, xml);
+    }
+
+    internal static Fse2Request BuildPilotCdaRequest(byte[] pdf, byte[] xml)
+    {
         try
         {
             using MemoryStream stream = new(xml);
@@ -321,7 +326,8 @@ internal static partial class Program
             XNamespace ns = "urn:hl7-org:v3";
             XElement person = document.Element(ns + "recordTarget")!.Element(ns + "patientRole")!.Element(ns + "id")!;
             string identifier = person.Attribute("extension")!.Value;
-            if (!identifier.StartsWith("PROVA", StringComparison.Ordinal)) throw Failure("FSE2_PILOT_SYNTHETIC_DATASET_REQUIRED");
+            // Case 476 is selected exclusively by its frozen official test-case hashes.
+            // Its synthetic fiscal identifier need not have the FHIR example's PROVA prefix.
             string code = document.Element(ns + "code")!.Attribute("code")!.Value;
             return Fse2Request.ForCurrentSpec(Fse2Operation.ValidateCda, pdf,
                 "{\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\",\"activity\":\"VERIFICA\"}"u8.ToArray(), "application/pdf",

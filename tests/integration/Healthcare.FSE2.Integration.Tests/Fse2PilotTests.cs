@@ -58,6 +58,23 @@ public sealed class Fse2PilotTests
         Assert.Equal(2, await Pilot.Main(["pilot", command, "nonexistent-settings.json"]));
     }
 
+    [Fact]
+    public void FSE2_PILOT_frozen_CDA_test_case_does_not_require_FHIR_PROVA_prefix()
+    {
+        byte[] xml = Encoding.UTF8.GetBytes("""
+            <ClinicalDocument xmlns="urn:hl7-org:v3"><code code="60591-5"/>
+              <recordTarget><patientRole><id root="2.16.840.1.113883.2.9.4.3.2" extension="RSSMRA80A01H501U"/></patientRole></recordTarget>
+            </ClinicalDocument>
+            """);
+        byte[] pdf = "%PDF-synthetic-test-only"u8.ToArray();
+        Fse2Request request = Pilot.BuildPilotCdaRequest(pdf, xml);
+        using JsonDocument payload = JsonDocument.Parse(request.SerializeAuthorizedPayload());
+        Assert.Equal(pdf, payload.RootElement.GetProperty("documentBase64").GetBytesFromBase64());
+        Assert.Equal("{\"healthDataFormat\":\"CDA\",\"mode\":\"ATTACHMENT\",\"activity\":\"VERIFICA\"}",
+            Encoding.UTF8.GetString(payload.RootElement.GetProperty("requestBodyBase64").GetBytesFromBase64()));
+        Assert.All(xml, value => Assert.Equal(0, value));
+    }
+
     [Theory]
     [InlineData(200, null, "VALIDATED")]
     [InlineData(200, "FOUND", "FOUND")]
