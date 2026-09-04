@@ -1,5 +1,9 @@
 # FSE2 National Connector Wave 1 - official specification freeze and capability gap
 
+Historical freeze retained for existing Published profiles. The opt-in current-spec
+profile uses the [14-route freeze and explicit contract resolutions](../connectors/healthcare/fse2/current-spec.md)
+at official commit `4d2691dcdc051fa5a842e2cac074226bb50373d2`.
+
 Date of freeze and access: **2026-08-08**
 
 Repository baseline: `m6-auth-foundation-baseline-20260808` / `6e1a7c626e0e24d0a385c611fc03faef51598889`

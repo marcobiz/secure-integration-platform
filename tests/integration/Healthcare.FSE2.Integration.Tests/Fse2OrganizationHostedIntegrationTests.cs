@@ -1520,8 +1520,10 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         Assert.False(SyntheticFse2OrganizationServer.TemporalPolicyIsExact(emptyJti.RootElement));
     }
 
-    [Fact]
-    public async Task FSE2_IT_all_11_operations_use_Published_paths_body_modes_and_exact_input_file_hash_contract()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FSE2_IT_current_and_historical_Published_route_matrix_exact_bytes_claims_and_bounded_responses(bool current)
     {
         using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.CreateContentCommitmentSigning(DateTimeOffset.UtcNow);
         TrackingCapabilityProvider provider = new(Provider(material));
@@ -1530,19 +1532,36 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             material.ClientCertificateRevision1,
             material.SigningKeyRevision1,
             material.RootCertificate,
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken,
+            expectedApplicationId: current ? Fse2OfficialTestCanonicalDefinition.ApplicationId : "broker-gateway",
+            expectedApplicationVendor: current ? Fse2OfficialTestCanonicalDefinition.ApplicationVendor : "Secure Integration",
+            expectedApplicationVersion: current ? Fse2OfficialTestCanonicalDefinition.ApplicationVersion : "1.0.0");
+        server.UsesCurrentSpec = current;
         await using HostedTypedSessionFixture fixture = await HostedTypedSessionFixture.CreateAsync(
             "unused-fse2-matrix",
             executionModule: Module(),
             capabilityProvider: new(provider, provider, provider, provider, material.RootCertificate));
 
-        string connectorId = "fse2-matrix-" + Guid.NewGuid().ToString("N");
+        string connectorId = current ? Fse2CurrentSpec.ConnectorId : "fse2-matrix-" + Guid.NewGuid().ToString("N");
+        Fse2OperationDescriptor[] descriptors = Fse2OperationCatalog.All.Where(value => current || value.Operation <= Fse2Operation.GetStatusByTrace).ToArray();
         Guid environmentId = await fixture.CreateEnvironmentAsync();
         Guid tenantId = await fixture.CreateTenantAsync("fse2-matrix-tenant");
         Guid applicationId = await fixture.CreateApplicationAsync("fse2-matrix-application");
         string allOperationsDefinition = DefinitionForOperations(
             connectorId, "1.0.0", SpkiSha256(material.SigningKeyRevision1),
-            SpkiSha256(material.ClientCertificateRevision1), "1.0.0", Fse2OperationCatalog.All);
+            SpkiSha256(material.ClientCertificateRevision1), "1.0.0", descriptors);
+        if (current)
+        {
+            Fse2OfficialTestOperationalPlan plan = new(
+                tenantId, Guid.NewGuid(), environmentId, new(server.Endpoint, "gateway/v1/"),
+                new("12345678903", "2.16.840.1.113883.2.9.4.1.2", "ASL Roma 1", "asl-roma-1"),
+                new("ASL Roma 1", "2.16.840.1.113883.2.9.4.1.2", "ASLROMA1"),
+                new("synthetic-capability", "a1", "1", 1, 1), new("synthetic-capability", "s1", "1", 1, 1), null)
+                { UsesCurrentSpec = true, EnvironmentClass = Fse2EnvironmentClass.Synthetic };
+            allOperationsDefinition = Fse2OfficialTestOperationalization.Compile(plan,
+                new(plan.A1, SpkiSha256(material.ClientCertificateRevision1), "Synthetic A1", new string('C', 64)),
+                new(plan.S1, SpkiSha256(material.SigningKeyRevision1), material.SigningKeyRevision1.GetNameInfo(X509NameType.SimpleName, false), new string('D', 64))).CanonicalDefinition;
+        }
         using (JsonDocument definitionDocument = JsonDocument.Parse(allOperationsDefinition))
         {
             ConnectorValidationResult validation = new ConnectorDefinitionValidator().Validate(definitionDocument.RootElement);
@@ -1552,25 +1571,44 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             connectorId,
             "1.0.0",
             environmentId,
-            server.Endpoint,
+            current ? new(server.Endpoint, "gateway/v1/") : server.Endpoint,
             allOperationsDefinition,
             provider,
             "sign-r1",
             "mtls-r1",
             operationId: "*",
-            expectedOperationCount: Fse2OperationCatalog.All.Length);
+            expectedOperationCount: descriptors.Length,
+            endpointBinding: current ? Fse2OfficialTestCanonicalDefinition.EndpointBinding : "service",
+            signingCertificateBinding: current ? Fse2OfficialTestCanonicalDefinition.SigningBinding : "signing-certificate",
+            clientCertificateBinding: current ? Fse2OfficialTestCanonicalDefinition.MutualTlsBinding : "mtls-certificate");
         await fixture.PublishAsync(authority, expectedPublicationRevision: 0);
         HostedIdentity identity = await fixture.EnrollIdentityAsync(
             tenantId, applicationId, environmentId, "fse2-matrix-identity");
-        foreach (Fse2OperationDescriptor operation in Fse2OperationCatalog.All)
+        foreach (Fse2OperationDescriptor operation in descriptors)
             await fixture.AddOperationGrantAsync(identity, connectorId, operation.OperationId);
+
+        if (current)
+        {
+            foreach (Fse2OperationDescriptor operation in descriptors.Where(value => value.HasJsonBody))
+            {
+                using HttpResponseMessage rejected = await fixture.SendSignedAsync(identity, HttpMethod.Post,
+                    $"/v1/connectors/{connectorId}/operations/{operation.OperationId}:invoke",
+                    InvokeRequest(PayloadFor(operation, "{}")));
+                Assert.False(rejected.IsSuccessStatusCode);
+            }
+            Assert.Equal(0, provider.SignDigestCalls);
+            Assert.Equal(0, server.Requests);
+            Assert.Equal(0, fixture.GenericTransportRequests);
+            Assert.Equal((descriptors.Count(value => value.HasJsonBody), 0),
+                CountInvokeAuditOutcomes(await fixture.SerializeAuditAsync(tenantId)));
+        }
 
         Fse2Operation[] ordered =
         [
             Fse2Operation.Create,
             Fse2Operation.GetStatusByWorkflow,
             Fse2Operation.GetStatusByTrace,
-            .. Fse2OperationCatalog.All.Select(value => value.Operation).Where(value => value is not
+            .. descriptors.Select(value => value.Operation).Where(value => value is not
                 (Fse2Operation.Create or Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace))
         ];
         foreach (Fse2Operation operationValue in ordered)
@@ -1580,21 +1618,25 @@ public sealed class Fse2OrganizationHostedIntegrationTests
                 identity,
                 HttpMethod.Post,
                 $"/v1/connectors/{connectorId}/operations/{operation.OperationId}:invoke",
-                InvokeRequest(PayloadFor(operation)));
+                InvokeRequest(current ? CurrentSpecPayload(operation) : PayloadFor(operation)));
             string responseBody = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
             Assert.True(response.StatusCode == HttpStatusCode.OK, $"{operation.OperationId}:{responseBody}");
+            Assert.DoesNotContain("discarded-clinical-canary", responseBody, StringComparison.Ordinal);
         }
 
-        Assert.Equal(11, server.Requests);
-        Assert.Equal(11, server.Observations.Count);
-        Assert.Equal(22, provider.SignDigestCalls);
-        Assert.Equal(11, fixture.GenericTransportRequests);
-        foreach (Fse2OperationDescriptor operation in Fse2OperationCatalog.All)
+        Assert.Equal(descriptors.Length, server.Requests);
+        Assert.Equal(descriptors.Length, server.Observations.Count);
+        Assert.Equal(descriptors.Length * 2, provider.SignDigestCalls);
+        Assert.Equal(descriptors.Length, fixture.GenericTransportRequests);
+        string audit = await fixture.SerializeAuditAsync(tenantId);
+        Assert.Equal((current ? descriptors.Count(value => value.HasJsonBody) : 0, descriptors.Length), CountInvokeAuditOutcomes(audit));
+        Assert.DoesNotContain("discarded-clinical-canary", audit, StringComparison.Ordinal);
+        foreach (Fse2OperationDescriptor operation in descriptors)
         {
             SyntheticFse2OperationMatrixServer.Observation observed = Assert.Single(
                 server.Observations, value => value.Operation == operation.Operation);
             Assert.Equal(operation.Method.Method, observed.Method);
-            Assert.Equal(ExpectedPath(operation), observed.RawTarget);
+            Assert.Equal((current ? "/gateway/v1" : "") + ExpectedPath(operation), observed.RawTarget);
             Assert.True(observed.ExactApplicationJsonAcceptObserved);
             Assert.True(observed.ClientCertificateObserved);
             Assert.True(observed.DualDistinctTokensObserved);
@@ -1605,14 +1647,17 @@ public sealed class Fse2OrganizationHostedIntegrationTests
             Assert.Equal(operation.RequiresAttachmentHash, observed.AttachmentHashPresent);
             if (operation.HasDocument)
             {
-                Assert.Equal($"multipart/form-data; boundary={Boundary}", observed.ContentType);
-                Assert.True(observed.ExactDocumentAndJsonObserved);
+                Assert.Equal($"multipart/form-data; boundary={(current ? OfficialTestBoundary : Boundary)}", observed.ContentType);
+                MultipartCapture capture = await ReadMultipartCaptureAsync(
+                    observed.ContentType!, observed.Body, current ? OfficialTestBoundary : Boundary, TestContext.Current.CancellationToken);
+                Assert.Equal(DocumentBytes(), capture.FileBytes);
+                Assert.Equal(current ? CurrentSpecBody(operation.Operation) : operation.Operation == Fse2Operation.ValidateCda ? HistoricalValidateCdaRequestBody : "{\"metadata\":\"published-exact\"}", Encoding.UTF8.GetString(capture.RequestBodyBytes));
                 Assert.True(observed.HasHttpContent);
             }
             else if (operation.HasJsonBody)
             {
                 Assert.Equal("application/json", observed.ContentType);
-                Assert.Equal("{\"metadata\":\"published-exact\"}", Encoding.UTF8.GetString(observed.Body));
+                Assert.Equal(current ? CurrentSpecBody(operation.Operation) : "{\"metadata\":\"published-exact\"}", Encoding.UTF8.GetString(observed.Body));
                 Assert.True(observed.HasHttpContent);
             }
             else
@@ -2677,6 +2722,35 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         }
         """;
 
+    private static string CurrentSpecPayload(Fse2OperationDescriptor operation) => Encoding.UTF8.GetString(
+        Fse2Request.ForCurrentSpec(operation.Operation,
+            operation.HasDocument ? DocumentBytes() : default,
+            operation.HasJsonBody ? Encoding.UTF8.GetBytes(CurrentSpecBody(operation.Operation)) : default,
+            operation.HasDocument ? operation.Operation == Fse2Operation.ValidateFhir ? "application/json" : "application/pdf" : null,
+            operation.Operation switch
+            {
+                Fse2Operation.GetStatusByWorkflow => "workflow-fse2-1",
+                Fse2Operation.GetStatusByTrace => "trace-fse2-1",
+                _ => operation.RequiresResourceIdentifier ? "2.16.840.1.113883.2.9.99.1" : null
+            },
+            operation.Action is not null ? Fse2ClinicalClaims.CreateCanonicalPerson(PersonId, true, "('11502-2^^2.16.840.1.113883.6.1')") : null)
+        .SerializeAuthorizedPayload());
+
+    internal static string CurrentSpecBody(Fse2Operation operation)
+    {
+        const string metadata = """{"assettoOrganizzativo":"AD_PSC001","identificativoSottomissione":"2.16.840.1","tipoAttivitaClinica":"CON","tipoDocumentoLivAlto":"REF","tipologiaStruttura":"Ospedale"}""";
+        return operation switch
+        {
+            Fse2Operation.ValidateCda => """{"activity":"VERIFICA","healthDataFormat":"CDA","mode":"RESOURCE"}""",
+            Fse2Operation.ValidateFhir => """{"activity":"VERIFICA","mode":"ATTACHMENT"}""",
+            Fse2Operation.UpdateMetadataChainConcealment => """{"attiCliniciRegoleAccesso":["P99"]}""",
+            Fse2Operation.UpdateMetadata or Fse2Operation.UpdateMetadataLegacy => metadata,
+            Fse2Operation.ValidateAndCreate or Fse2Operation.ValidateAndReplace =>
+                metadata.Insert(1, "\"identificativoDoc\":\"2.16.840.1\",\"identificativoRep\":\"2.16.840.2\","),
+            _ => metadata.Insert(1, "\"identificativoDoc\":\"2.16.840.1\",\"identificativoRep\":\"2.16.840.2\",\"workflowInstanceId\":\"workflow-fse2-1\",")
+        };
+    }
+
     internal static string PayloadFor(
         Fse2OperationDescriptor operation,
         string? requestBodyJson = null,
@@ -3195,6 +3269,7 @@ public sealed class Fse2OrganizationHostedIntegrationTests
 
 internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
 {
+    internal bool UsesCurrentSpec { get; set; }
     internal const string StatusNotFoundRawCanary = "raw-status-not-found-problem-must-not-escape";
     private readonly WebApplication application;
     private readonly string expectedClientFingerprint;
@@ -3297,7 +3372,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
         string rawTarget = context.Request.Path + context.Request.QueryString;
         Fse2OperationDescriptor operation = Fse2OperationCatalog.All.Single(value =>
             string.Equals(value.Method.Method, context.Request.Method, StringComparison.Ordinal) &&
-            PathMatches(value, context.Request.Path));
+            PathMatches(value, UsesCurrentSpec ? new PathString(context.Request.Path.Value!["/gateway/v1".Length..]) : context.Request.Path));
         X509Certificate2? clientCertificate = await context.Connection.GetClientCertificateAsync(context.RequestAborted);
         bool clientObserved = clientCertificate is not null && string.Equals(
             Convert.ToHexString(SHA256.HashData(clientCertificate.RawData)),
@@ -3385,6 +3460,7 @@ internal sealed class SyntheticFse2OperationMatrixServer : IAsyncDisposable
             Fse2Operation.Replace when replaceReturnsWorkflowContext => "{\"workflowInstanceId\":\"workflow-fse2-1\",\"traceID\":\"trace-fse2-1\",\"spanID\":\"span-fse2-1\"}",
             Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace =>
                 "{\"traceID\":\"trace-status-1\",\"spanID\":\"span-status-1\",\"transactionData\":[{\"eventType\":\"VALIDATION\",\"eventDate\":\"2024-10-23T12:26:06.971+02:00\",\"eventStatus\":\"SUCCESS\",\"message\":\"raw-status-message-not-exposed\"},{\"eventType\":\"SEND_TO_INI\",\"eventDate\":\"2024-10-23T12:27:06.971+02:00\",\"eventStatus\":\"SUCCESS\"}]}",
+            _ when UsesCurrentSpec => $$"""{"workflowInstanceId":"workflow-{{operation.OperationId}}","traceID":"trace-{{operation.OperationId}}","warning":"discarded-clinical-canary"}""",
             _ => "{}"
         };
         await context.Response.WriteAsync(response, context.RequestAborted);

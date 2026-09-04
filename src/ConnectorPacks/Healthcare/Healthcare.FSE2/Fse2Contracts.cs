@@ -16,7 +16,10 @@ public enum Fse2Operation
     ValidateAndCreate,
     ValidateAndReplace,
     GetStatusByWorkflow,
-    GetStatusByTrace
+    GetStatusByTrace,
+    UpdateMetadataLegacy,
+    CreateFhir,
+    ReplaceFhir
 }
 
 /// <summary>Official deployment availability; test-only operations are never promoted to production.</summary>
@@ -198,6 +201,37 @@ public sealed class Fse2Request
             writer.WriteEndObject();
         }
         return output.ToArray();
+    }
+
+    /// <summary>Validated input for the opt-in current-spec Published profile. No authority selectors.</summary>
+    public static Fse2Request ForCurrentSpec(
+        Fse2Operation operation,
+        ReadOnlyMemory<byte> document = default,
+        ReadOnlyMemory<byte> requestBody = default,
+        string? documentContentType = null,
+        string? resourceIdentifier = null,
+        Fse2ClinicalClaims? clinicalClaims = null)
+    {
+        Fse2OperationDescriptor descriptor = Fse2OperationCatalog.Get(operation);
+        if (descriptor.HasDocument != !document.IsEmpty || descriptor.HasJsonBody != !requestBody.IsEmpty ||
+            descriptor.RequiresResourceIdentifier != (resourceIdentifier is not null) ||
+            (descriptor.Action is not null) != (clinicalClaims is not null) ||
+            descriptor.HasDocument != (documentContentType is not null))
+            throw new ArgumentException("FSE2_REQUEST_SHAPE_DENIED");
+        if (descriptor.HasDocument && (documentContentType != "application/pdf" &&
+            !(operation == Fse2Operation.ValidateFhir && documentContentType == "application/json")))
+            throw new ArgumentException("FSE2_DOCUMENT_CONTENT_TYPE_DENIED");
+        if (descriptor.HasJsonBody) Fse2CurrentSpec.ValidateRequestBody(operation, requestBody);
+        if (descriptor.Action is not null && operation != Fse2Operation.Delete && clinicalClaims?.ResourceHl7Type is null)
+            throw new ArgumentException("FSE2_RESOURCE_HL7_TYPE_REQUIRED");
+        if (resourceIdentifier is not null)
+            _ = operation switch
+            {
+                Fse2Operation.GetStatusByWorkflow => Fse2Validation.ValidateWorkflowId(resourceIdentifier),
+                Fse2Operation.GetStatusByTrace => Fse2Validation.ValidateTraceId(resourceIdentifier),
+                _ => Fse2Validation.ValidateDocumentId(resourceIdentifier)
+            };
+        return new(operation, document, requestBody, documentContentType, resourceIdentifier, clinicalClaims);
     }
 
     public static Fse2Request ValidateCda(ReadOnlyMemory<byte> document, ReadOnlyMemory<byte> requestBody, Fse2ClinicalClaims claims) =>

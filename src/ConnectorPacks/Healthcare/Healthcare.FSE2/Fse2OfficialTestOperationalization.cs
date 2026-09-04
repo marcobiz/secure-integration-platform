@@ -81,7 +81,17 @@ public sealed record Fse2OfficialTestOperationalPlan(
     Fse2OfficialTestLocality Locality,
     Fse2OfficialTestProviderReference A1,
     Fse2OfficialTestProviderReference S1,
-    long? ExpectedBindingRevision);
+    long? ExpectedBindingRevision)
+{
+    public bool UsesCurrentSpec { get; init; }
+    public Fse2EnvironmentClass EnvironmentClass { get; init; } = Fse2EnvironmentClass.OfficialTest;
+    public string Activity { get; init; } = "VERIFICA";
+    public string ConnectorId => UsesCurrentSpec ? Fse2CurrentSpec.ConnectorId : Fse2OfficialTestCanonicalDefinition.ConnectorId;
+    public string ConnectorVersion => UsesCurrentSpec ? Fse2CurrentSpec.ConnectorVersion : Fse2OfficialTestCanonicalDefinition.ConnectorVersion;
+    public IReadOnlyList<string> OperationIds => UsesCurrentSpec
+        ? Fse2OperationCatalog.All.Select(value => value.OperationId).ToArray()
+        : [Fse2OfficialTestCanonicalDefinition.OperationId];
+}
 
 /// <summary>Public material resolved server-side from one exact provider-catalog revision.</summary>
 public sealed record Fse2OfficialTestResolvedCertificate(
@@ -142,7 +152,10 @@ public sealed record Fse2OfficialTestPlanResult(
     string EndpointDigestSha256,
     string A1ReferenceDigestSha256,
     string S1ReferenceDigestSha256,
-    Fse2OfficialTestSideEffectCounters Counters);
+    Fse2OfficialTestSideEffectCounters Counters)
+{
+    public IReadOnlyList<string> OperationIds { get; init; } = [Fse2OfficialTestCanonicalDefinition.OperationId];
+}
 
 /// <summary>Exact checksum-specific artefacts submitted through the existing Admin API.</summary>
 public sealed record Fse2OfficialTestCompiledConfiguration(
@@ -159,7 +172,7 @@ public sealed class Fse2OfficialTestOperationalizationException(string code) : E
 }
 
 /// <summary>
-/// Vertical-only compiler for OfficialTest validate-cda. It has no store, signing, DNS, HTTP,
+/// Vertical-only compiler for legacy validate-cda and opt-in current-spec Organization. It has no store, signing, DNS, HTTP,
 /// transport, secret-value or private-key dependency. Administrative callers cannot pass runtime
 /// authority through a Gateway invocation.
 /// </summary>
@@ -182,9 +195,11 @@ public static class Fse2OfficialTestOperationalization
                 MaxDepth = 6
             });
             JsonElement root = Object(document.RootElement, "FSE2_OFFICIALTEST_PLAN_INVALID");
-            ExactProperties(root,
-                ["schemaVersion", "tenantId", "installationId", "environmentId", "officialTestEndpoint", "organization", "locality", "a1", "s1", "expectedBindingRevision"]);
-            if (!string.Equals(String(root, "schemaVersion", 8), SchemaVersion, StringComparison.Ordinal))
+            string schema = String(root, "schemaVersion", 8);
+            bool current = schema == "2.0";
+            string[] properties = ["schemaVersion", "tenantId", "installationId", "environmentId", "officialTestEndpoint", "organization", "locality", "a1", "s1", "expectedBindingRevision"];
+            ExactProperties(root, current ? [.. properties, "environmentClass", "activity"] : properties);
+            if (schema != SchemaVersion && !current)
                 throw Denied("FSE2_OFFICIALTEST_PLAN_SCHEMA_UNSUPPORTED");
             if (!Guid.TryParseExact(String(root, "tenantId", 36), "D", out Guid tenantId) || tenantId == Guid.Empty)
                 throw Denied("FSE2_OFFICIALTEST_TENANT_SELECTOR_INVALID");
@@ -209,7 +224,17 @@ public static class Fse2OfficialTestOperationalization
                 new(String(locality, "name", 128), String(locality, "assigningAuthorityOid", 128), String(locality, "code", 32)),
                 Provider(root, "a1"),
                 Provider(root, "s1"),
-                NullableRevision(root, "expectedBindingRevision")));
+                NullableRevision(root, "expectedBindingRevision"))
+            {
+                UsesCurrentSpec = current,
+                EnvironmentClass = current ? String(root, "environmentClass", 16) switch
+                {
+                    "synthetic" => Fse2EnvironmentClass.Synthetic,
+                    "officialTest" => Fse2EnvironmentClass.OfficialTest,
+                    _ => throw Denied("FSE2_CURRENT_SPEC_ENVIRONMENT_DENIED")
+                } : Fse2EnvironmentClass.OfficialTest,
+                Activity = current ? String(root, "activity", 16) : "VERIFICA"
+            });
         }
         catch (Fse2OfficialTestOperationalizationException) { throw; }
         catch (Exception exception) when (exception is ArgumentException or FormatException or InvalidOperationException or JsonException or KeyNotFoundException or OverflowException)
@@ -229,17 +254,17 @@ public static class Fse2OfficialTestOperationalization
         Fse2PublishedOrganizationProfile profile = Fse2PublishedOrganizationProfile.ParseJson(
             Encoding.UTF8.GetBytes(extension.ToJsonString()), Fse2OfficialTestCanonicalDefinition.OperationId);
         return new(
-            Fse2OfficialTestCanonicalDefinition.ConnectorId,
-            Fse2OfficialTestCanonicalDefinition.ConnectorVersion,
+            value.ConnectorId,
+            value.ConnectorVersion,
             Fse2OfficialTestCanonicalDefinition.OperationId,
             value.EnvironmentId,
-            Fse2OfficialTestCanonicalDefinition.SourceSha256,
+            Convert.ToHexString(SHA256.HashData(SourceBytes(value))),
             Digest(PlanAuthority(value)),
             profile.OperationProfileChecksumSha256,
             Digest(value.Endpoint.AbsoluteUri),
             Digest(ReferenceAuthority(value.A1)),
             Digest(ReferenceAuthority(value.S1)),
-            Fse2OfficialTestSideEffectCounters.Zero);
+            Fse2OfficialTestSideEffectCounters.Zero) { OperationIds = value.OperationIds };
     }
 
     /// <summary>
@@ -257,35 +282,37 @@ public static class Fse2OfficialTestOperationalization
         if (FixedEquals(a1.SubjectPublicKeyInfoSha256, s1.SubjectPublicKeyInfoSha256))
             throw Denied("FSE2_OFFICIALTEST_A1_S1_NOT_DISTINCT");
 
-        JsonNode parsed = JsonNode.Parse(Fse2OfficialTestCanonicalDefinition.GetSourceBytes(), documentOptions: new() { MaxDepth = 32 })
+        JsonNode parsed = JsonNode.Parse(SourceBytes(value), documentOptions: new() { MaxDepth = 32 })
             ?? throw Denied("FSE2_OFFICIALTEST_CANONICAL_DEFINITION_INVALID");
         JsonObject root = parsed.AsObject();
-        JsonObject operation = root["operations"]![0]!.AsObject();
         JsonObject extension = Extension(value);
-        operation["extensionConfiguration"] = extension;
         Fse2PublishedOrganizationProfile profile = Fse2PublishedOrganizationProfile.ParseJson(
             Encoding.UTF8.GetBytes(extension.ToJsonString()), Fse2OfficialTestCanonicalDefinition.OperationId);
-
-        JsonArray slots = operation["authorizedCapabilities"]!["signingSlots"]!.AsArray();
-        int signingRevision = CheckedRevision(value.S1.PublicMetadataRevision);
-        foreach (JsonNode? slotNode in slots)
+        foreach (JsonNode? operationNode in root["operations"]!.AsArray())
         {
-            JsonObject slot = slotNode!.AsObject();
-            JsonObject signing = slot["signing"]!.AsObject();
-            string slotName = slot["slot"]!.GetValue<string>();
-            signing["revision"] = signingRevision;
-            signing["publicKeySpkiSha256"] = s1.SubjectPublicKeyInfoSha256;
-            signing["issuer"] = (slotName == Fse2PublishedOrganizationProfile.AuthorizationSigningSlotName ? "auth:" : "integrity:") + s1.SubjectCommonName;
-            signing["audience"] = profile.Audience;
-            signing["fixedSubject"] = profile.SubjectCx;
+            JsonObject operation = operationNode!.AsObject();
+            operation["extensionConfiguration"] = extension.DeepClone();
+            JsonArray slots = operation["authorizedCapabilities"]!["signingSlots"]!.AsArray();
+            int signingRevision = CheckedRevision(value.S1.PublicMetadataRevision);
+            foreach (JsonNode? slotNode in slots)
+            {
+                JsonObject slot = slotNode!.AsObject();
+                JsonObject signing = slot["signing"]!.AsObject();
+                string slotName = slot["slot"]!.GetValue<string>();
+                signing["revision"] = signingRevision;
+                signing["publicKeySpkiSha256"] = s1.SubjectPublicKeyInfoSha256;
+                signing["issuer"] = (slotName == Fse2PublishedOrganizationProfile.AuthorizationSigningSlotName ? "auth:" : "integrity:") + s1.SubjectCommonName;
+                signing["audience"] = profile.Audience;
+                signing["fixedSubject"] = profile.SubjectCx;
+            }
+            JsonObject transport = operation["authorizedCapabilities"]!["restrictedTransport"]!.AsObject();
+            transport["revision"] = CheckedRevision(value.A1.PublicMetadataRevision);
+            transport["clientCertificateSpkiSha256"] = a1.SubjectPublicKeyInfoSha256;
         }
-        JsonObject transport = operation["authorizedCapabilities"]!["restrictedTransport"]!.AsObject();
-        transport["revision"] = CheckedRevision(value.A1.PublicMetadataRevision);
-        transport["clientCertificateSpkiSha256"] = a1.SubjectPublicKeyInfoSha256;
 
         using JsonDocument compiledDocument = JsonDocument.Parse(root.ToJsonString(), new JsonDocumentOptions { MaxDepth = 32 });
         string canonical = ConnectorCanonicalJson.Canonicalize(compiledDocument.RootElement);
-        ValidateCompiledDefinition(canonical, profile);
+        if (!value.UsesCurrentSpec) ValidateCompiledDefinition(canonical, profile);
 
         Dictionary<string, ProviderResourceReference> certificates = new(StringComparer.Ordinal)
         {
@@ -301,7 +328,7 @@ public static class Fse2OfficialTestOperationalization
             new Dictionary<string, ProviderResourceReference>(StringComparer.Ordinal),
             value.ExpectedBindingRevision,
             certificates,
-            Fse2OfficialTestCanonicalDefinition.ConnectorVersion);
+            value.ConnectorVersion);
         string bindingDigest = Digest(new
         {
             plan = PlanAuthority(value),
@@ -364,7 +391,7 @@ public static class Fse2OfficialTestOperationalization
             if (!string.Equals(canonical, expected.CanonicalDefinition, StringComparison.Ordinal) ||
                 !string.Equals(ConnectorCanonicalJson.Checksum(canonical), expected.CanonicalDefinitionSha256, StringComparison.Ordinal))
                 throw Denied("FSE2_OFFICIALTEST_DEFINITION_READBACK_DRIFT");
-            JsonElement operation = definition.RootElement.GetProperty("operations").EnumerateArray().Single();
+            JsonElement operation = definition.RootElement.GetProperty("operations").EnumerateArray().Single(value => value.GetProperty("operationId").GetString() == Fse2OfficialTestCanonicalDefinition.OperationId);
             Fse2PublishedOrganizationProfile profile = Fse2PublishedOrganizationProfile.ParseJson(
                 Encoding.UTF8.GetBytes(operation.GetProperty("extensionConfiguration").GetRawText()),
                 Fse2OfficialTestCanonicalDefinition.OperationId);
@@ -384,7 +411,13 @@ public static class Fse2OfficialTestOperationalization
         if (value.TenantId == Guid.Empty) throw Denied("FSE2_OFFICIALTEST_TENANT_SELECTOR_INVALID");
         if (value.InstallationId == Guid.Empty) throw Denied("FSE2_OFFICIALTEST_INSTALLATION_SELECTOR_INVALID");
         if (value.EnvironmentId == Guid.Empty) throw Denied("FSE2_OFFICIALTEST_ENVIRONMENT_INVALID");
-        if (!string.Equals(value.Endpoint.AbsoluteUri, Fse2OfficialTestCanonicalDefinition.OfficialTestEndpoint, StringComparison.Ordinal))
+        if (!Fse2PublishedOrganizationProfile.IsSupportedValidateCdaActivity(value.Activity) ||
+            !value.UsesCurrentSpec && (value.Activity != "VERIFICA" || value.EnvironmentClass != Fse2EnvironmentClass.OfficialTest))
+            throw Denied("FSE2_OFFICIALTEST_PLAN_INVALID");
+        bool synthetic = value.UsesCurrentSpec && value.EnvironmentClass == Fse2EnvironmentClass.Synthetic &&
+            value.Endpoint.Host == "localhost" && value.Endpoint.AbsolutePath == "/gateway/v1/";
+        if (!synthetic && (value.EnvironmentClass != Fse2EnvironmentClass.OfficialTest ||
+            !string.Equals(value.Endpoint.AbsoluteUri, Fse2OfficialTestCanonicalDefinition.OfficialTestEndpoint, StringComparison.Ordinal)))
             throw Denied("FSE2_OFFICIALTEST_ENDPOINT_DENIED");
         Fse2OperationCatalog.ValidateBaseEndpoint(value.Endpoint);
         ValidateProvider(value.A1);
@@ -396,11 +429,50 @@ public static class Fse2OfficialTestOperationalization
         return value;
     }
 
+    // One source-owned recipe shares equivalent route families; the legacy embedded artefact stays byte-identical.
+    private static byte[] SourceBytes(Fse2OfficialTestOperationalPlan value)
+    {
+        byte[] legacy = Fse2OfficialTestCanonicalDefinition.GetSourceBytes();
+        if (!value.UsesCurrentSpec) return legacy;
+        JsonObject root = JsonNode.Parse(legacy)!.AsObject();
+        JsonObject template = root["operations"]![0]!.AsObject();
+        JsonArray operations = [];
+        foreach (Fse2OperationDescriptor descriptor in Fse2OperationCatalog.All)
+        {
+            JsonObject operation = template.DeepClone().AsObject();
+            operation["operationId"] = descriptor.OperationId;
+            operation["method"] = descriptor.Method.Method;
+            operation.Remove("path");
+            operation["pathTemplate"] = descriptor.PathTemplate;
+            operation["request"]!["contentType"] = descriptor.HasDocument
+                ? "multipart/form-data; boundary=broker-gateway-fse2-officialtest-v1"
+                : "application/json";
+            operation["response"]!["maximumBytes"] = 262144;
+            JsonObject capabilities = operation["authorizedCapabilities"]!.AsObject();
+            capabilities["restrictedTransport"]!["bodyMode"] = descriptor.HasDocument || descriptor.HasJsonBody ? "required" : "none";
+            JsonArray claims = capabilities["signingSlots"]![1]!["signing"]!["allowedClaims"]!.AsArray();
+            if (descriptor.RequiresAttachmentHash) claims.Add("attachment_hash");
+            if (descriptor.Action is null)
+                for (int i = claims.Count - 1; i >= 0; i--)
+                    if (claims[i]!.GetValue<string>() is "person_id" or "patient_consent" or "resource_hl7_type")
+                        claims.RemoveAt(i);
+            if (value.EnvironmentClass == Fse2EnvironmentClass.Synthetic)
+                foreach (JsonNode? slot in capabilities["signingSlots"]!.AsArray()) slot!["signing"]!["certificateHeader"] = "chain";
+            operation["extensionConfiguration"] = Extension(value);
+            operations.Add(operation);
+        }
+        root["connectorId"] = value.ConnectorId;
+        root["version"] = value.ConnectorVersion;
+        root["displayName"] = "FSE2 Organization current specification";
+        root["operations"] = operations;
+        return Encoding.UTF8.GetBytes(root.ToJsonString());
+    }
+
     private static JsonObject Extension(Fse2OfficialTestOperationalPlan value) => new()
     {
-        ["profile"] = "fse2-organization-v1",
-        ["environmentClass"] = "officialTest",
-        ["activity"] = "VERIFICA",
+        ["profile"] = value.UsesCurrentSpec ? Fse2CurrentSpec.ProfileId : "fse2-organization-v1",
+        ["environmentClass"] = value.EnvironmentClass == Fse2EnvironmentClass.Synthetic ? "synthetic" : "officialTest",
+        ["activity"] = value.Activity,
         ["acceptMediaType"] = "application/json",
         ["organizationIdentifier"] = value.Organization.Identifier,
         ["organizationAssigningAuthorityOid"] = value.Organization.AssigningAuthorityOid,
@@ -437,8 +509,8 @@ public static class Fse2OfficialTestOperationalization
 
         Fse2OfficialTestProviderCatalogResource selected = exact[0];
         if (!string.Equals(selected.ResourceType, "ClientCertificate", StringComparison.Ordinal) ||
-            !string.Equals(selected.ConnectorScope, Fse2OfficialTestCanonicalDefinition.ConnectorId, StringComparison.Ordinal) ||
-            !string.Equals(selected.OperationScope, Fse2OfficialTestCanonicalDefinition.OperationId, StringComparison.Ordinal))
+            !string.Equals(selected.ConnectorScope, plan.ConnectorId, StringComparison.Ordinal) ||
+            !string.Equals(selected.OperationScope, plan.UsesCurrentSpec ? "*" : Fse2OfficialTestCanonicalDefinition.OperationId, StringComparison.Ordinal))
             throw Denied($"FSE2_OFFICIALTEST_{role}_PROVIDER_AUTHORITY_MISMATCH");
         if (!string.Equals(selected.Status, "Active", StringComparison.Ordinal))
             throw Denied($"FSE2_OFFICIALTEST_{role}_PROVIDER_AUTHORITY_INACTIVE");
@@ -508,7 +580,9 @@ public static class Fse2OfficialTestOperationalization
             throw Denied($"FSE2_OFFICIALTEST_{role}_PUBLIC_METADATA_INVALID");
     }
 
-    private static object PlanAuthority(Fse2OfficialTestOperationalPlan value) => new
+    private static object PlanAuthority(Fse2OfficialTestOperationalPlan value) => value.UsesCurrentSpec
+        ? new { schemaVersion = "2.0", value.EnvironmentClass, value.Activity, legacy = PlanAuthority(value with { UsesCurrentSpec = false }) }
+        : new
     {
         schemaVersion = SchemaVersion,
         tenantId = value.TenantId.ToString("D"),

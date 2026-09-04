@@ -32,6 +32,8 @@ public sealed class Fse2PublishedOrganizationProfile
 
     private Fse2PublishedOrganizationProfile() { }
 
+    public string ProfileId { get; init; } = "fse2-organization-v1";
+    public bool UsesCurrentSpec => ProfileId == Fse2CurrentSpec.ProfileId;
     public required Fse2EnvironmentClass EnvironmentClass { get; init; }
     public required string OrganizationIdentifier { get; init; }
     public required string OrganizationAssigningAuthorityOid { get; init; }
@@ -91,7 +93,8 @@ public sealed class Fse2PublishedOrganizationProfile
             if (root.ValueKind != JsonValueKind.Object) throw new JsonException();
             ValidateProperties(root);
 
-            if (!string.Equals(RequiredString(root, "profile", 64), "fse2-organization-v1", StringComparison.Ordinal))
+            string profileId = RequiredString(root, "profile", 64);
+            if (profileId is not ("fse2-organization-v1" or Fse2CurrentSpec.ProfileId))
                 throw new JsonException();
             Fse2EnvironmentClass environment = RequiredString(root, "environmentClass", 32) switch
             {
@@ -102,6 +105,9 @@ public sealed class Fse2PublishedOrganizationProfile
             };
             if (environment == Fse2EnvironmentClass.Production &&
                 operation.Availability != Fse2OperationAvailability.ProductionAvailable)
+                throw new JsonException();
+
+            if (profileId == Fse2CurrentSpec.ProfileId && environment == Fse2EnvironmentClass.Production)
                 throw new JsonException();
 
             string organizationIdentifier = Fse2Validation.ValidateItalianSubjectIdentifier(RequiredString(root, "organizationIdentifier", 16));
@@ -118,12 +124,15 @@ public sealed class Fse2PublishedOrganizationProfile
             if (maximumDocumentBytes is < 1 or > 15 * 1024 * 1024) throw new JsonException();
             string? activity = OptionalString(root, "activity", 32);
             string? acceptMediaType = OptionalString(root, "acceptMediaType", 128);
+            if (profileId == Fse2CurrentSpec.ProfileId && (activity is null || acceptMediaType is null))
+                throw new JsonException();
             if (activity is not null && !IsSupportedValidateCdaActivity(activity) ||
                 acceptMediaType is not null && !string.Equals(acceptMediaType, OfficialAcceptMediaType, StringComparison.Ordinal))
                 throw new JsonException();
 
             Fse2PublishedOrganizationProfile profile = new()
             {
+                ProfileId = profileId,
                 EnvironmentClass = environment,
                 OrganizationIdentifier = organizationIdentifier,
                 OrganizationAssigningAuthorityOid = organizationAuthority,
@@ -148,6 +157,7 @@ public sealed class Fse2PublishedOrganizationProfile
             string sharedChecksum = Hash(profile.WriteSharedProfile);
             return new()
             {
+                ProfileId = profile.ProfileId,
                 EnvironmentClass = profile.EnvironmentClass,
                 OrganizationIdentifier = profile.OrganizationIdentifier,
                 OrganizationAssigningAuthorityOid = profile.OrganizationAssigningAuthorityOid,
@@ -186,7 +196,7 @@ public sealed class Fse2PublishedOrganizationProfile
     private void WriteSharedProfile(Utf8JsonWriter writer)
     {
         writer.WriteStartObject();
-        writer.WriteString("profile", "fse2-organization-v1");
+        writer.WriteString("profile", ProfileId);
         writer.WriteString("environmentClass", EnvironmentClass.ToString());
         writer.WriteString("organizationIdentifier", OrganizationIdentifier);
         writer.WriteString("organizationAssigningAuthorityOid", OrganizationAssigningAuthorityOid);

@@ -12,9 +12,9 @@ public sealed class Fse2FoundationTests
     [Fact]
     public void FSE2_OPS_frozen_matrix_and_retry_policy_are_exact()
     {
-        Assert.Equal(11, Fse2OperationCatalog.All.Length);
-        Assert.Equal(9, Fse2OperationCatalog.All.Count(value => value.Availability == Fse2OperationAvailability.ProductionAvailable));
-        Assert.Equal(2, Fse2OperationCatalog.All.Count(value => value.Availability == Fse2OperationAvailability.TestOnlyOfficial));
+        Assert.Equal(14, Fse2OperationCatalog.All.Length);
+        Assert.Equal(10, Fse2OperationCatalog.All.Count(value => value.Availability == Fse2OperationAvailability.ProductionAvailable));
+        Assert.Equal(4, Fse2OperationCatalog.All.Count(value => value.Availability == Fse2OperationAvailability.TestOnlyOfficial));
         Assert.All(Fse2OperationCatalog.All.Where(value => value.Operation is Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace),
             value => Assert.Equal(Fse2RetryClass.SafeRetry, value.RetryClass));
     }

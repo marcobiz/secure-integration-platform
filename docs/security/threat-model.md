@@ -341,6 +341,14 @@ cross-scope e unknown pre-outbound, restart reale del Gateway e lettura da una s
 
 ## Confine dell'evidenza
 
+The current-spec FSE2 profile adds no authority source or persistence surface. Its closed
+operation-aware JSON validation is covered by `Fse2CurrentSpecTests` and the existing
+Published HTTPS matrix's pre-signing negative cases. The causal templated-path prefix fix
+is covered by `CT_Published_path_template_honors_explicit_base_path_policy` and the
+approval-review parity test: the exact origin, single encoding and server-owned base
+prefix are preserved. Legacy authority-root and Published validation contracts remain
+regression-tested. See the [offline contract limits](../connectors/healthcare/fse2/current-spec.md).
+
 Le prove sintetiche, incluso il laboratorio local PKCS#12, qualificano soltanto la
 pipeline e il materiale per-run controllato. Non attestano import operativo, custody
 production o una chiamata FSE2 live. Un laboratorio live sintetico non è OfficialTest;

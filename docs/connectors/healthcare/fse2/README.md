@@ -1,5 +1,10 @@
 # FSE2 National Connector — Organization profile
 
+**Current-spec candidate:** the opt-in `fse2-organization-current-spec@1.0.0`
+closes the [14-route offline product path](current-spec.md), including validated request
+contracts, canonical provisioning and bounded responses. The matrix below describes
+the historical profiles; their live qualification is not transferred to the new profile.
+
 **Stato CURRENT:** `validate-cda` LIVE_QUALIFIED in OfficialTest sulla baseline
 `613b28558fc9aeef13b60381b4fc49b59e2ad5c2`. La claim non implica accreditamento,
 produzione o copertura completa del Gateway FSE 2.0. La procedura adopter-facing e i
@@ -11,7 +16,7 @@ validazione ha restituito 200; lo status ha restituito un 404, proiettato dal Ga
 `NOT_FOUND` bounded senza conservare il problem body. Questa è una qualifica
 del percorso runtime candidate, non modifica la source/procedura CURRENT validate-only.
 
-## Capability matrix
+## Historical-profile capability matrix
 
 | Operation | Stato prodotto | Utilità/limite |
 |---|---|---|

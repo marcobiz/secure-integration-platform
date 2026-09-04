@@ -6,6 +6,23 @@ namespace SecureIntegration.Gateway.Unit.Tests;
 
 public sealed class AuthorizedPublishedOperationContractTests
 {
+    [Theory]
+    [InlineData(false, "/documents/caff%C3%A8%2B2026")]
+    [InlineData(true, "/gateway/v1/documents/caff%C3%A8%2B2026")]
+    public void CT_Published_path_template_honors_explicit_base_path_policy(bool append, string expected)
+    {
+        Uri endpoint = new("https://api.example.test:8443/gateway/v1/");
+        Uri projected = PublishedPathTemplate.Project(endpoint, "/documents/{document}",
+            [new("document", "caffè+2026")], append);
+        Assert.Equal(expected, projected.AbsolutePath);
+        Assert.Equal(endpoint.GetLeftPart(UriPartial.Authority), projected.GetLeftPart(UriPartial.Authority));
+        Assert.Empty(projected.Query);
+        Assert.Empty(projected.Fragment);
+        if (append)
+            Assert.Throws<GatewayException>(() => PublishedPathTemplate.Project(
+                new("https://api.example.test/gateway%2Fv1/"), "/documents/{document}", [new("document", "doc")], true));
+    }
+
     [Fact]
     public void Wave1_CT_Published_path_projection_is_exact_single_encoded_and_origin_preserving()
     {

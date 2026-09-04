@@ -67,7 +67,7 @@ internal static class PublishedPathTemplate
         return value;
     }
 
-    internal static Uri Project(Uri baseEndpoint, string template, IReadOnlyList<AuthorizedConnectorPathParameter> values)
+    internal static Uri Project(Uri baseEndpoint, string template, IReadOnlyList<AuthorizedConnectorPathParameter> values, bool appendToBasePath = false)
     {
         ArgumentNullException.ThrowIfNull(baseEndpoint);
         ArgumentNullException.ThrowIfNull(values);
@@ -91,6 +91,11 @@ internal static class PublishedPathTemplate
             supplied.TryGetValue(segment[1..^1], out string? value)
                 ? Uri.EscapeDataString(value)
                 : segment));
+        if (appendToBasePath)
+        {
+            _ = PublishedEndpointUri.Compose(baseEndpoint, "/bgw-template-probe", appendToBasePath: true);
+            path = baseEndpoint.AbsolutePath.TrimEnd('/') + path;
+        }
         Uri projected;
         try { projected = new Uri(baseEndpoint.GetLeftPart(UriPartial.Authority) + path, UriKind.Absolute); }
         catch (UriFormatException) { throw new GatewayException("BGW-EGRESS-AUTHENTICATION", 409); }

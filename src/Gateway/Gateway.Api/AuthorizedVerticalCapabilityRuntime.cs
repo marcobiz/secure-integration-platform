@@ -653,7 +653,8 @@ internal sealed class AuthorizedVerticalCapabilityRuntime : IAuthorizedVerticalC
                 return PublishedPathTemplate.Project(
                     current.BaseEndpoint,
                     template.GetString()!,
-                    transportRequest.PathParameters);
+                    transportRequest.PathParameters,
+                    PublishedEndpointUri.AppendToBasePath(current.Operation));
             }
             catch (GatewayException)
             {

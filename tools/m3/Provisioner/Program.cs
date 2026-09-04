@@ -135,20 +135,21 @@ foreach (string operation in securityGrantedOperations)
     await registry.AddGrantAsync(new InstallationGrantRecord(Guid.NewGuid(), securityInstallationId, securityTenantId, "m3-vendor", operation, true, clock.UtcNow), CancellationToken.None).ConfigureAwait(false);
 
 object? fse2OfficialTest = null;
-if (string.Equals(Optional("M3_FSE2_OFFICIALTEST_SYNTHETIC_BOOTSTRAP"), "1", StringComparison.Ordinal))
+if (Optional("M3_FSE2_OFFICIALTEST_SYNTHETIC_BOOTSTRAP") is "1" or "current-spec")
 {
+    bool currentSpec = Optional("M3_FSE2_OFFICIALTEST_SYNTHETIC_BOOTSTRAP") == "current-spec";
     ProviderResourceCatalogRecord a1 = await RegisterFse2OfficialTestResourceAsync(
         securityEnvironmentId,
         "fse2-officialtest-a1",
         "FSE2 OfficialTest synthetic A1",
         "synthetic-vault://vault.m3.test/fse2-officialtest-a1",
-        vendorCertificate).ConfigureAwait(false);
+        vendorCertificate, currentSpec).ConfigureAwait(false);
     ProviderResourceCatalogRecord s1 = await RegisterFse2OfficialTestResourceAsync(
         securityEnvironmentId,
         "fse2-officialtest-s1",
         "FSE2 OfficialTest synthetic S1",
         "synthetic-vault://vault.m3.test/fse2-officialtest-s1",
-        wrongVendorCertificate).ConfigureAwait(false);
+        wrongVendorCertificate, currentSpec).ConfigureAwait(false);
     fse2OfficialTest = new
     {
         tenantId = securityTenantId,
@@ -316,7 +317,8 @@ async Task<ProviderResourceCatalogRecord> RegisterFse2OfficialTestResourceAsync(
     string resourceId,
     string displayName,
     string providerReference,
-    X509Certificate2 certificate) =>
+    X509Certificate2 certificate,
+    bool currentSpec = false) =>
     await connectorStore.RegisterProviderResourceAsync(new(
         Guid.NewGuid(),
         "synthetic-vault",
@@ -326,8 +328,8 @@ async Task<ProviderResourceCatalogRecord> RegisterFse2OfficialTestResourceAsync(
         ProviderResourceType.ClientCertificate,
         displayName,
         environment,
-        "fse2-officialtest-validate-cda",
-        "validate-cda",
+        currentSpec ? "fse2-organization-current-spec" : "fse2-officialtest-validate-cda",
+        currentSpec ? "*" : "validate-cda",
         providerReference,
         ProviderResourceStatus.Active,
         "1",

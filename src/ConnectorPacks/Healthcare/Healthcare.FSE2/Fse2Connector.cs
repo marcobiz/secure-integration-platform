@@ -102,7 +102,7 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
         ConnectorSigningSlotKey integrity = profile.IntegritySigningSlot;
         AuthorizedSigningCertificateHeaderMode certificateHeaderMode =
             profile.EnvironmentClass == Fse2EnvironmentClass.OfficialTest &&
-            (officialTestPublicationValidation ||
+            (profile.UsesCurrentSpec || officialTestPublicationValidation ||
              !officialTestValidateCda ||
              validateCdaContract == Fse2ValidateCdaPublishedContract.OfficialTestParity101)
             ? AuthorizedSigningCertificateHeaderMode.Leaf
@@ -130,7 +130,8 @@ public sealed class Fse2OrganizationPublishedOperationExpectationProvider : IAut
             profile.SubjectCx,
             profile.Operation.Operation is Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace
                 ? WorkflowStatusIntegrityClaims
-                : officialTestValidateCda ? ValidateCdaOfficialTestIntegrityClaims : IntegrityClaims,
+                : officialTestValidateCda || profile.UsesCurrentSpec && !profile.Operation.RequiresAttachmentHash
+                    ? ValidateCdaOfficialTestIntegrityClaims : IntegrityClaims,
             Fse2PublishedOrganizationProfile.TokenLifetimeSeconds,
             AuthorizedSigningTemporalMode.IssuedAtExpiration,
             jtiRequired: true,
@@ -215,7 +216,7 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
         Fse2Response normalized;
         try
         {
-            normalized = Fse2ResponseMapper.Map(upstream, execution.CorrelationId, profile.Operation);
+            normalized = Fse2ResponseMapper.Map(upstream, execution.CorrelationId, profile.Operation, profile.UsesCurrentSpec, profile.Activity);
         }
         catch (Fse2ConnectorException exception) when (
             exception.Category is Fse2ErrorCategory.UpstreamRejected or Fse2ErrorCategory.TemporarilyUnavailable)
@@ -321,6 +322,8 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
     {
         Fse2OperationDescriptor operation = profile.Operation;
         bool statusRead = operation.Operation is Fse2Operation.GetStatusByWorkflow or Fse2Operation.GetStatusByTrace;
+        if (profile.UsesCurrentSpec && operation.HasDocument != (inbound.DocumentContentType is not null))
+            throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_REQUEST_SHAPE_DENIED");
         if (statusRead == (inbound.ClinicalClaims is not null))
             throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_REQUEST_SHAPE_DENIED");
         if (inbound.Document.Length > profile.MaximumDocumentBytes ||
@@ -328,7 +331,15 @@ public sealed class Fse2OrganizationExecutionStrategy : IConnectorExecutionStrat
             operation.HasJsonBody != !inbound.RequestBody.IsEmpty ||
             operation.RequiresResourceIdentifier != (inbound.ResourceIdentifier is not null))
             throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_REQUEST_SHAPE_DENIED");
-        if (operation.Operation == Fse2Operation.ValidateCda)
+        if (profile.UsesCurrentSpec && operation.HasJsonBody)
+        {
+            try { Fse2CurrentSpec.ValidateRequestBody(operation.Operation, inbound.RequestBody, profile.Activity); }
+            catch (ArgumentException)
+            {
+                throw Denied(Fse2ErrorCategory.InputDenied, "FSE2_CURRENT_SPEC_REQUEST_DENIED");
+            }
+        }
+        else if (operation.Operation == Fse2Operation.ValidateCda)
         {
             try
             {
@@ -514,7 +525,7 @@ public static class Fse2ResponseMapper
         "syntax", "vocabulary", "workflow-id-error-extraction"
     }.ToFrozenSet(StringComparer.Ordinal);
 
-    public static Fse2Response Map(QualifiedGatewayExecutionResult response, Guid correlationId, Fse2OperationDescriptor operation)
+    public static Fse2Response Map(QualifiedGatewayExecutionResult response, Guid correlationId, Fse2OperationDescriptor operation, bool currentSpec = false, string? activity = null)
     {
         ArgumentNullException.ThrowIfNull(response);
         if (!operation.SuccessStatusCodes.Contains(response.StatusCode)) throw MapProblem(response, operation.RetryClass);
@@ -529,13 +540,33 @@ public static class Fse2ResponseMapper
                 return new(response.StatusCode, correlationId, null, null, null, null,
                     operation.RetryClass, []) { StatusClassification = Fse2StatusClassification.NotFound };
             }
+            if (currentSpec && response.Body.Length > 256 * 1024) throw new JsonException();
             using JsonDocument document = JsonDocument.Parse(response.Body, new JsonDocumentOptions { MaxDepth = 16 });
             JsonElement root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object) throw new JsonException();
+            if (currentSpec)
+            {
+                HashSet<string> names = new(StringComparer.Ordinal);
+                foreach (JsonProperty property in root.EnumerateObject())
+                    if (!names.Add(property.Name)) throw new JsonException();
+                if (operation.Operation == Fse2Operation.ValidateCda &&
+                    response.StatusCode != (activity == "VALIDATION" ? 201 : 200) ||
+                    operation.Operation == Fse2Operation.ValidateFhir && response.StatusCode != 200)
+                    throw new JsonException();
+            }
             string? workflowInstanceId = Safe(root, "workflowInstanceId", Fse2OfficialIdentifierBounds.WorkflowInstanceIdMaximumLength, workflow: true);
             string? traceId = Safe(root, "traceID", Fse2OfficialIdentifierBounds.TraceIdMaximumLength);
             if (operation.Operation == Fse2Operation.Create && (workflowInstanceId is null || traceId is null))
                 throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
+            if (currentSpec && !statusRead)
+            {
+                if (traceId is null) throw new JsonException();
+                if (operation.Operation != Fse2Operation.ValidateFhir &&
+                    !(operation.Operation == Fse2Operation.ValidateCda && activity != "VALIDATION") &&
+                    workflowInstanceId is null) throw new JsonException();
+                if (workflowInstanceId is not null) Fse2Validation.ValidateWorkflowId(workflowInstanceId);
+                Fse2Validation.ValidateTraceId(traceId);
+            }
             IReadOnlyList<Fse2WorkflowEvent> workflowEvents = statusRead
                 ? MapWorkflowEvents(root)
                 : [];
@@ -543,7 +574,7 @@ public static class Fse2ResponseMapper
                 workflowInstanceId,
                 traceId,
                 Safe(root, "spanID", Fse2OfficialIdentifierBounds.SpanIdMaximumLength),
-                SafeWarning(root), operation.RetryClass, workflowEvents)
+                SafeWarning(root, currentSpec), operation.RetryClass, workflowEvents)
             {
                 StatusClassification = statusRead ? Fse2StatusClassification.Found : null
             };
@@ -743,13 +774,14 @@ public static class Fse2ResponseMapper
         return text;
     }
 
-    private static string? SafeWarning(JsonElement root)
+    private static string? SafeWarning(JsonElement root, bool currentSpec)
     {
         if (!root.TryGetProperty("warning", out JsonElement value) || value.ValueKind == JsonValueKind.Null) return null;
         if (value.ValueKind != JsonValueKind.String)
             throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
         string text = value.GetString()!;
-        if (string.IsNullOrWhiteSpace(text) || text.Length > 512 || text.Any(char.IsControl))
+        if (currentSpec && text.Length == 0) return null;
+        if (text.Length > (currentSpec ? 200000 : 512) || !currentSpec && (string.IsNullOrWhiteSpace(text) || text.Any(char.IsControl)))
             throw new Fse2ConnectorException(Fse2ErrorCategory.ResponseInvalid, "FSE2_RESPONSE_INVALID");
         return "FSE2_UPSTREAM_WARNING";
     }

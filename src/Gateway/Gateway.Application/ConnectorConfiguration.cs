@@ -519,7 +519,7 @@ public static class ConnectorApprovalArtifacts
         string effectiveScheme;
         if (hasPathTemplate)
         {
-            endpoint = ReviewTemplatedEndpoint(endpointName, binding, baseUri, path, appendToBasePath: false, method, redirect);
+            endpoint = ReviewTemplatedEndpoint(endpointName, binding, baseUri, path, PublishedEndpointUri.AppendToBasePath(operation), method, redirect);
             effectiveScheme = baseUri.Scheme;
         }
         else

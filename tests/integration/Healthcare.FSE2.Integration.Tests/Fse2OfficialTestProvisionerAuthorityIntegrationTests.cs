@@ -16,6 +16,7 @@ using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
 using SecureIntegration.Gateway.Integration.Tests;
 using SecureIntegration.Tools.Fse2.OfficialTestProvisioner;
+using SecureIntegration.Tools.ConnectorProvisioning;
 using Xunit;
 using ProvisionerProgram = SecureIntegration.Tools.Fse2.OfficialTestProvisioner.Program;
 
@@ -98,8 +99,10 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         AssertNoEffects(api);
     }
 
-    [Fact]
-    public async Task PROVISIONER_clean_state_golden_path_stays_below_25_percent_of_each_quota()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PROVISIONER_clean_state_golden_path_stays_below_25_percent_of_each_quota(bool currentSpec)
     {
         if (!string.Equals(Environment.GetEnvironmentVariable("REQUIRE_FSE2_POSTGRES_GATE"), "1", StringComparison.Ordinal))
             Assert.Skip("The clean-state supported-path gate runs only in the dedicated PostgreSQL 18 job.");
@@ -145,7 +148,7 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
             ["M3_VENDOR_CLIENT_PFX_BASE64"] = RequiredFixture(fixture, "M3_VENDOR_CLIENT_PFX_BASE64"),
             ["M3_WRONG_VENDOR_CLIENT_PFX_BASE64"] = RequiredFixture(fixture, "M3_WRONG_VENDOR_CLIENT_PFX_BASE64"),
             ["M5_POSTGRES_ADMIN_API_PASSWORD"] = adminApiPassword,
-            ["M3_FSE2_OFFICIALTEST_SYNTHETIC_BOOTSTRAP"] = "1"
+            ["M3_FSE2_OFFICIALTEST_SYNTHETIC_BOOTSTRAP"] = currentSpec ? "current-spec" : "1"
         };
         await RunDotNetComponentAsync(
             repository,
@@ -163,7 +166,8 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         Guid environmentId = fse2.GetProperty("environmentId").GetGuid();
         Fse2OfficialTestProviderReference a1 = ProviderReference(fse2.GetProperty("a1"));
         Fse2OfficialTestProviderReference s1 = ProviderReference(fse2.GetProperty("s1"));
-        Fse2OfficialTestOperationalPlan plan = Plan(tenantId, installationId, environmentId, a1, s1);
+        Fse2OfficialTestOperationalPlan plan = Plan(tenantId, installationId, environmentId, a1, s1) with { UsesCurrentSpec = currentSpec };
+        string versionPath = $"admin/api/v1/connectors/{plan.ConnectorId}/versions/{plan.ConnectorVersion}";
 
         string runtimeConnection = database.ConnectionString("m3_gateway_runtime", RequiredFixture(fixture, "M3_POSTGRES_RUNTIME_PASSWORD"));
         string adminConnection = database.ConnectionString("m5_gateway_admin", adminApiPassword);
@@ -188,8 +192,8 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         using HttpAdminApi editor = await HttpAdminApi.LoginAsync(factory, "editor", cancellationToken);
         ProvisionerProgram.ProvisioningContext editorContext = await ProvisionerProgram.PreflightAsync(editor, plan);
         await ProvisionerProgram.ProposeAsync(editor, editorContext);
-        JsonElement review = await editor.GetAsync(VersionPath() + "/approval-review");
-        JsonElement approvals = await editor.GetAsync(VersionPath() + "/approvals?offset=0&limit=100");
+        JsonElement review = await editor.GetAsync(versionPath + "/approval-review");
+        JsonElement approvals = await editor.GetAsync(versionPath + "/approvals?offset=0&limit=100");
         JsonElement request = Assert.Single(approvals.GetProperty("items").EnumerateArray().ToArray());
 
         using HttpAdminApi approver = await HttpAdminApi.LoginAsync(factory, "approver", cancellationToken);
@@ -216,8 +220,13 @@ public sealed class Fse2OfficialTestProvisionerAuthorityIntegrationTests
         Assert.Equal("Active", resumed.BindingState);
         Assert.Equal(1, approver.LoginCount);
         Assert.Equal(environmentId, approverContext.Compiled.BindingRequest.EnvironmentId);
-        JsonElement finalVersions = await approver.GetAsync($"admin/api/v1/connectors/{Fse2OfficialTestCanonicalDefinition.ConnectorId}/versions?offset=0&limit=10");
+        JsonElement finalVersions = await approver.GetAsync($"admin/api/v1/connectors/{plan.ConnectorId}/versions?offset=0&limit=10");
         Assert.Equal(1, finalVersions.GetProperty("total").GetInt32());
+        using JsonDocument finalDefinition = JsonDocument.Parse(await approver.GetBytesAsync(versionPath + "/definition"));
+        Assert.Equal(currentSpec ? 14 : 1, finalDefinition.RootElement.GetProperty("operations").GetArrayLength());
+        ProvisionerProgram.DiscoveredProvisioningState finalState = await ProvisionerProgram.DiscoverProvisioningStateAsync(approver, resumedContext);
+        Assert.Equal(ConnectorProvisioningCurrentState.PublishedActive, finalState.Snapshot.CurrentState);
+        await ProvisionerProgram.GrantAsync(securityAdministrator, grantContext);
         Assert.Equal(0, editor.OfficialTestNetworkCount + securityAdministrator.OfficialTestNetworkCount + approver.OfficialTestNetworkCount);
         Dictionary<string, int> authRequestCounts = new(StringComparer.Ordinal)
         {

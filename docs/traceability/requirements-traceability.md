@@ -405,6 +405,12 @@ accreditation and live conformance remain blocked until current official specifi
 available. Generic M6 auth tests are regression evidence only, not regional support evidence.
 ## Healthcare Wave 1 - FSE2 National Connector
 
+Current-spec opt-in candidate: [frozen 14-route matrix and qualification](../connectors/healthcare/fse2/current-spec.md).
+`Fse2CurrentSpecTests`, the current/historical Published HTTPS matrix, the dual-profile
+clean-state provisioner gate and Core path projection/approval parity tests cover the new
+contract. Existing `FSE2_DUR_*` gates retain durable scope/restart/replica coverage.
+The historical requirements below do not imply live qualification of this new profile.
+
 | Requirement | Evidence | Status |
 |---|---|---|
 | Official source freeze | `docs/implementation/FSE2-WAVE1-SPEC-FREEZE.md`; guide 2.23 and OpenAPI 1.0.0 at official commit `430e6b5d9dde8a35b04ae635c11303db787a977e` with recorded SHA-256 | PASS documentation |

@@ -35,8 +35,10 @@ public sealed class ConnectorConfigurationTests
         Assert.Equal("https://vendor.example.test/govway/rest/in/FSE/gateway/v1/vendor/orders", operation.Endpoint.AbsoluteUri);
     }
 
-    [Fact]
-    public async Task FSE2_OFFICIALTEST_UT_approval_review_preserves_a_published_dynamic_path_without_materializing_the_placeholder()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FSE2_OFFICIALTEST_UT_approval_review_preserves_a_published_dynamic_path_without_materializing_the_placeholder(bool append)
     {
         Fixture fixture = new();
         using JsonDocument original = Sample();
@@ -45,6 +47,7 @@ public sealed class ConnectorConfigurationTests
         root["bindings"]!["secrets"]!.AsArray().RemoveAt(0);
         operationNode.Remove("path");
         operationNode["pathTemplate"] = "/status/{workflow-instance-id}";
+        operationNode["pathResolution"] = append ? "appendToBasePath" : "authorityRoot";
         operationNode["method"] = "GET";
         operationNode["authentication"] = JsonNode.Parse("""{"kind":"mtls","certificateBinding":"sample-vendor-client-certificate"}""");
         operationNode["executionStrategy"] = "synthetic-signed-mtls";
@@ -74,9 +77,9 @@ public sealed class ConnectorConfigurationTests
         GatewayOperationDefinition runtime = await fixture.Catalog.GetRequiredAsync(
             version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken);
         Uri projected = PublishedPathTemplate.Project(runtime.Endpoint, "/status/{workflow-instance-id}",
-            [new("workflow-instance-id", "workflow-123")]);
+            [new("workflow-instance-id", "workflow-123")], append);
         Assert.Equal("vendor.example.test", endpoint.Hostname);
-        Assert.Equal("/status/{workflow-instance-id}", endpoint.Path);
+        Assert.Equal((append ? "/govway/rest/in/FSE/gateway/v1" : "") + "/status/{workflow-instance-id}", endpoint.Path);
         Assert.Equal(endpoint.Path.Replace("{workflow-instance-id}", "workflow-123", StringComparison.Ordinal), projected.AbsolutePath);
         Assert.DoesNotContain("%7B", endpoint.Path, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(review.DigestSha256, ConnectorApprovalArtifacts.Create(stored, [binding]).DigestSha256);
