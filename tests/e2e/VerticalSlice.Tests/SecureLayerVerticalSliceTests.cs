@@ -236,8 +236,12 @@ public sealed class SecureLayerVerticalSliceTests
             Task brokerTask = broker.RunAsync(stopped.Token);
             // The positive test path includes two in-process HTTPS handshakes and has a bounded
             // fixture-only deadline for shared-runner load. Deadline behavior is covered below.
-            BrokerClient client = new(new BrokerClientOptions { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId, OperationTimeout = PositiveClientOperationTimeout });
-            BrokerClient shortClient = new(new BrokerClientOptions { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId, OperationTimeout = TimeSpan.FromMilliseconds(150) });
+            SecurityIdentifier pipeOwner = WindowsIdentity.GetCurrent().Owner!;
+            byte[] pipeOwnerBytes = new byte[pipeOwner.BinaryLength];
+            pipeOwner.GetBinaryForm(pipeOwnerBytes, 0);
+            Func<NamedPipeServerIdentity> openFixtureServer = () => new((uint)Environment.ProcessId, pipeOwnerBytes);
+            BrokerClient client = new(new BrokerClientOptions { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId, OperationTimeout = PositiveClientOperationTimeout }, openFixtureServer);
+            BrokerClient shortClient = new(new BrokerClientOptions { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId, OperationTimeout = TimeSpan.FromMilliseconds(150) }, openFixtureServer);
             harness = new VerticalSliceHarness(temporary, external, gateway, broker, stopped, brokerTask, secrets, keys, gatewayAddress, pipeName, client, shortClient, brokerClientCertificate, gatewayClientCertificate, gatewayServerCertificate, externalServerCertificate);
             harness.PlatformAudit.AddRange(audit.Events);
             return harness;
