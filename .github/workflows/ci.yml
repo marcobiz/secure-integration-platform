@@ -317,7 +317,7 @@ jobs:
             --logger "trx;LogFileName=fse2-officialtest-clean-state.trx" \
             --results-directory "$results_directory"
           counters="$(grep -o '<Counters [^>]*/>' "$results_directory/fse2-officialtest-clean-state.trx" | tail -n 1)"
-          test "$(sed -n 's/.* passed="\([0-9][0-9]*\)".*/\1/p' <<<"$counters")" -eq 1
+          test "$(sed -n 's/.* passed="\([0-9][0-9]*\)".*/\1/p' <<<"$counters")" -eq 2
           test "$(sed -n 's/.* failed="\([0-9][0-9]*\)".*/\1/p' <<<"$counters")" -eq 0
           test "$(sed -n 's/.* notExecuted="\([0-9][0-9]*\)".*/\1/p' <<<"$counters")" -eq 0
       - name: Run independent same-NAT dual-onboarding gate

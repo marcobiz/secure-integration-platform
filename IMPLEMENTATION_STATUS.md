@@ -11,7 +11,8 @@ prevalgono su questa dashboard. `Synthetic`, `live lab`, `OfficialTest qualified
 
 ## Stato prodotto
 
-Candidate non integrato: [FSE2 Organization current-spec offline](docs/connectors/healthcare/fse2/current-spec.md)
+Candidate non integrato: FSE2 Organization current-spec offline (pack Healthcare;
+`docs/connectors/healthcare/fse2/current-spec.md`)
 su baseline `96943621a2d99c3e52d7f1189dbab77a3268ecab`: 14 route opt-in con
 provisioning e contratti chiusi. La tabella CURRENT sottostante conserva le qualifiche
 storiche; nessuna nuova qualifica live o produzione è dichiarata.
