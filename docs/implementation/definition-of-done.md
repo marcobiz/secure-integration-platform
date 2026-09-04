@@ -1,138 +1,138 @@
 # Definition of Done
 
-Aggiornato: 2026-08-13
+Updated: 2026-08-13
 
-La DoD è proporzionata allo scope e alla classe di evidenza. Una developer alpha o un
-gate sintetico non può essere presentato come official-test o production.
+The DoD is proportional to scope and evidence class. A developer alpha or
+synthetic gate cannot be presented as official-test or production.
 
 ## Change/Story DoD
 
-Una story è Done solo quando:
+A story is Done only when:
 
-- comportamento richiesto e negative case pertinenti sono implementati;
-- build e test nominativi della superficie modificata passano;
-- authorization, provider e Core/pack boundary restano fail-closed;
-- quando una modifica introduce o cambia una decisione architetturale durevole, l'ADR
-  pertinente viene aggiunto o aggiornato; non è richiesto un ADR per ogni modifica;
-- quando cambia la superficie di minaccia, un trust boundary, una capability sensibile o
-  una mitigazione security, il threat model viene aggiornato e i cambiamenti
-  security-sensitive conservano test positivi e negativi proporzionati;
-- migration, OpenAPI, generated client, schema ed esempi sono sincronizzati quando
-  applicabili;
-- log, Problem Details, audit ed evidence sono verificati per assenza di secret, token,
-  cookie, authorization header, payload sensibili e stack trace;
-- documentazione e traceability distinguono CURRENT, TARGET e HISTORICAL e non
-  sovrastimano test live o conformance;
-- requisiti interessati, test nominativi ed evidence sono collegati nella requirements
-  traceability, distinguendo automated PASS, evidence esterna, verifica manuale,
-  deferred, blocked e non verificato;
-- l'assenza di test o evidence non viene convertita in PASS tramite documentazione o
-  conteggi aggregati;
-- secret/dependency/artifact check proporzionati passano;
-- fixture ed evidence raw restano sintetiche e fuori Git;
-- rischio residuo, lavoro deferred e compatibility impact sono espliciti;
-- review tecnica/security proporzionata è registrata quando il rischio o il gate la
-  richiede.
+- the requested behavior and relevant negative cases are implemented;
+- builds and named tests for the changed surface pass;
+- authorization, provider and Core/pack boundaries remain fail-closed;
+- when a change introduces or alters a durable architectural decision, the relevant
+  ADR is added or updated; an ADR is not required for every change;
+- when the threat surface, a trust boundary, a sensitive capability or a security
+  mitigation changes, the threat model is updated and security-sensitive changes
+  retain proportionate positive and negative tests;
+- migrations, OpenAPI, generated clients, schemas and examples are synchronized where
+  applicable;
+- logs, Problem Details, audit and evidence are checked for the absence of secrets, tokens,
+  cookies, authorization headers, sensitive payloads and stack traces;
+- documentation and traceability distinguish CURRENT, TARGET and HISTORICAL and do not
+  overstate live testing or conformance;
+- affected requirements, named tests and evidence are linked in requirements
+  traceability, distinguishing automated PASS, external evidence, manual verification,
+  deferred, blocked and unverified;
+- missing tests or evidence are not converted into PASS through documentation or
+  aggregate counts;
+- proportionate secret/dependency/artifact checks pass;
+- fixtures and raw evidence remain synthetic and outside Git;
+- residual risk, deferred work and compatibility impact are explicit;
+- proportionate technical/security review is recorded when the risk or gate
+  requires it.
 
-Una story integrata non è automaticamente un prodotto pubblicabile.
-ADR, threat model e traceability sono aggiornati quando applicabile; la decisione di non
-aggiornarli deve essere coerente con la superficie realmente modificata. Una modifica
-documentation-only che non cambia decisioni, minacce o capability non richiede per
-questo solo fatto una security review completa.
+An integrated story is not automatically a publishable product.
+ADRs, threat model and traceability are updated where applicable; a decision not to
+update them must be consistent with the actual changed surface. A documentation-only
+change that does not alter decisions, threats or capabilities does not, by that fact
+alone, require a full security review.
 
 ## Documentation DoD
 
-- ogni claim è classificabile come **CURRENT**, **TARGET** o **HISTORICAL**;
-- ogni qualifica è esplicitamente **synthetic**, **live lab**, **official-test** o
+- every claim can be classified as **CURRENT**, **TARGET** or **HISTORICAL**;
+- every qualification is explicitly **synthetic**, **live lab**, **official-test** or
   **production**;
-- dashboard e roadmap non duplicano cronologie complete di branch o PR;
-- link relativi e riferimenti a gate sono validi;
-- conteggi aggregati non sono l'unica evidence;
-- input del maintainer non viene trasformato in evidence repository;
-- documenti API machine-readable, guide e parity test evolvono nello stesso change set
-  quando la superficie API cambia;
-- `validate-docs`, secret scan e `git diff --check` passano;
-- CI General e M5/Admin passano sul final exact HEAD prima dell'handoff della PR.
+- dashboards and roadmaps do not duplicate complete branch or PR histories;
+- relative links and gate references are valid;
+- aggregate counts are not the only evidence;
+- maintainer input is not transformed into repository evidence;
+- machine-readable API documents, guides and parity tests evolve in the same change set
+  when the API surface changes;
+- `validate-docs`, secret scan and `git diff --check` pass;
+- General and M5/Admin CI pass on the final exact HEAD before PR handoff.
 
 ## DOC-01 DoD
 
-La slice ALPHA-DOC-01 è Done soltanto se:
+The ALPHA-DOC-01 slice is Done only if it:
 
-- parte dall'exact main `eec2fa5556eccc7e8e3b47fc7d7b127bcac1ed9e`;
-- preserva senza modifiche il dirty truth source locale e riconcilia semanticamente
-  baseline pre-PR #33, truth pass dirty e risultato integrato;
-- modifica solo dashboard, scope, piano, backlog e DoD autorizzati;
-- registra PR #33 come integrata e synthetic-qualified senza dichiarare custody o call
-  live;
-- definisce soltanto Track A Core alpha e Track B FSE2 Organization OfficialTest;
-- registra `P3-CORE-EXPORT-DIGEST` come outcome futuro di ALPHA-ART, separando raw
-  manifest run-specific e normalized inventory digest;
-- mantiene `SecretValues=false` e generic secret retrieval deny-only per Local PKCS12;
-- lascia architecture/security/deployment, API/generated types e documentazione FSE2 di
-  dettaglio alle slice DOC-02/03/04;
-- passa i gate documentation-only e la CI exact-head senza modificare source code o Core
+- starts from exact main `eec2fa5556eccc7e8e3b47fc7d7b127bcac1ed9e`;
+- preserves the local dirty truth source unchanged and semantically reconciles
+  the pre-PR #33 baseline, dirty truth pass and integrated result;
+- changes only the authorized dashboard, scope, plan, backlog and DoD;
+- records PR #33 as integrated and synthetic-qualified without claiming custody or live
+  calls;
+- defines only Track A Core alpha and Track B FSE2 Organization OfficialTest;
+- records `P3-CORE-EXPORT-DIGEST` as a future ALPHA-ART outcome, separating the raw
+  run-specific manifest and normalized inventory digest;
+- retains `SecretValues=false` and deny-only generic secret retrieval for Local PKCS12;
+- leaves architecture/security/deployment, API/generated types and detailed FSE2
+  documentation to DOC-02/03/04;
+- passes documentation-only gates and exact-head CI without changing source code or Core
   export.
 
 ## `0.1.0-alpha` DoD
 
-Si applicano ALPHA-01..08 in
-[`0.1.0-alpha-scope.md`](0.1.0-alpha-scope.md). In sintesi:
+ALPHA-01..08 in
+[`0.1.0-alpha-scope.md`](0.1.0-alpha-scope.md) apply. In summary:
 
-- versione comune `0.1.0-alpha.1`, futuro tag exact commit e artifact/checksum/SPDX coerenti;
-- licenza OSS approvata e canale security/governance minimi operativi;
-- clean clone e quickstart ripetibili;
-- unico golden path supportato: Direct .NET → Gateway → REST Connector Published →
-  Synthetic Provider → mock HTTPS/mTLS → risposta sanificata e audit metadata-only;
-- configuration/enrollment/publish/grant/invoke documentati e provati da un secondo
-  utilizzatore;
-- limiti non-production e key storage del sample espliciti;
-- gate Core, Admin, PostgreSQL 18, container/export, scan e cleanup verdi sull'exact
+- common version `0.1.0-alpha.1`, future exact-commit tag and consistent artifacts/checksums/SPDX;
+- approved OSS license and operational minimum security/governance channels;
+- reproducible clean clone and quickstart;
+- one supported golden path: Direct .NET → Gateway → REST Connector Published →
+  Synthetic Provider → mock HTTPS/mTLS → sanitized response and metadata-only audit;
+- configuration/enrollment/publish/grant/invoke documented and tested by a second
+  user;
+- explicit non-production and sample key-storage limitations;
+- Core, Admin, PostgreSQL 18, container/export, scan and cleanup gates green on the exact
   release commit;
-- Core export con raw manifest run-specific e digest normalizzato dell'inventario
-  riproducibile come artefatti distinti.
+- Core export with the raw run-specific manifest and reproducible normalized
+  inventory digest as separate artifacts.
 
-MSI, C ABI/COM, fuzzing, performance, Azure live, FSE2, HA/DR e API stability non
-bloccano l'alpha perché sono fuori scope; non possono essere dichiarati inclusi.
+MSI, C ABI/COM, fuzzing, performance, Azure live, FSE2, HA/DR and API stability do not
+block the alpha because they are out of scope; they cannot be claimed as included.
 
 ## FSE2 OfficialTest DoD
 
-Esistono due livelli di claim, entrambi configuration-specific.
+There are two claim levels, both configuration-specific.
 
-### Primo outcome: `validate-cda`
+### First outcome: `validate-cda`
 
-Richiede FSE2-T01..T04 e T06:
+Requires FSE2-T01..T04 and T06:
 
-- accesso test, software accreditation applicabile e piano autorizzato sono distinti e
-  verificati fuori Git;
-- custody/import e composition server-owned provano S1 `contentCommitment`, public chain,
-  A1 mTLS distinta ed eventuale activation HMAC separata;
-- l'exact vertical image/configuration completa E2E sintetico e negativi zero-network;
-- warning mapping è bounded e non conserva testo raw;
-- `validate-cda` OfficialTest completa su dataset sintetico autorizzato;
-- exact commit/image/Connector/binding/provider revision ed evidence redatta sono
-  attestati.
+- test access, applicable software accreditation and the authorized plan are separate and
+  verified outside Git;
+- custody/import and server-owned composition prove S1 `contentCommitment`, public chain,
+  distinct A1 mTLS and any separate activation HMAC;
+- the exact vertical image/configuration completes synthetic E2E and zero-network negatives;
+- warning mapping is bounded and retains no raw text;
+- `validate-cda` OfficialTest completes on an authorized synthetic dataset;
+- exact commit/image/Connector/binding/provider revision and redacted evidence are
+  attested.
 
-La claim ammessa è: **qualified for `validate-cda` in the official FSE2 test environment
-on the attested configuration**. Non implica create/status, 11/11 live, production o
+The permitted claim is: **qualified for `validate-cda` in the official FSE2 test environment
+on the attested configuration**. It does not imply create/status, 11/11 live, production or
 Human Actor.
 
-### Outcome successivo: create/status
+### Subsequent outcome: create/status
 
-Richiede anche FSE2-T05:
+Also requires FSE2-T05:
 
-- `attachment_hash` è SHA-256 degli exact input-file bytes, non del multipart HTTP;
-- create/replace sono autorizzati dal piano;
-- status espone soltanto outcome tecnici bounded/redatti;
-- limiti process-local/cross-restart sono espliciti;
-- cleanup ed evidence restano conformi a FSE2-T06.
+- `attachment_hash` is SHA-256 of the exact input-file bytes, not the HTTP multipart;
+- create/replace are authorized by the plan;
+- status exposes only bounded/redacted technical outcomes;
+- process-local/cross-restart limitations are explicit;
+- cleanup and evidence remain compliant with FSE2-T06.
 
-Solo gli specifici workflow attestati possono essere dichiarati official-test qualified.
-I test sintetici delle 11 operation non autorizzano una claim 11/11 live.
+Only the specific attested workflows may be claimed as official-test qualified.
+Synthetic tests of the 11 operations do not authorize an 11/11 live claim.
 
-## Legacy e production DoD
+## Legacy and production DoD
 
-Queste track sono deferred e non sono attive. Se autorizzate in futuro, aggiungono test
-installer/native su host reali, provider/cloud reali, artifact signing/provenance,
+These tracks are deferred and not active. If authorized in future, they add
+installer/native tests on real hosts, real providers/cloud, artifact signing/provenance,
 backup/restore, HA/DR, rotation/recovery, load/soak, fuzzing, pentest, observability,
-support ownership, pilot e acceptance/risk sign-off. Nessuna di queste proprietà si
-deduce dall'alpha o da OfficialTest.
+support ownership, pilot and acceptance/risk sign-off. None of these properties
+can be inferred from the alpha or OfficialTest.

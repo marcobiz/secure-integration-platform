@@ -1,16 +1,15 @@
-# ADR-0005: PostgreSQL e multi-tenancy
+# ADR-0005: PostgreSQL and multi-tenancy
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Decisione
+## Decision
 
-PostgreSQL 18, schema condiviso, UUID, `tenant_id`, composite foreign key e Row Level Security. EF Core/Npgsql per accesso; migrazioni esplicite e reviewate. JSONB contiene la configurazione Connector canonica.
+PostgreSQL 18, shared schema, UUIDs, `tenant_id`, composite foreign keys and Row Level Security. EF Core/Npgsql for access; explicit, reviewed migrations. JSONB holds canonical Connector configuration.
 
-## Conseguenze
+## Consequences
 
-Portabilità e self-hosting restano possibili. RLS richiede il contesto Tenant transaction-local e test obbligatori. Il database non contiene secret value.
+Portability and self-hosting remain possible. RLS requires transaction-local Tenant context and mandatory tests. The database contains no secret values.
 
-## Alternative escluse
+## Rejected alternatives
 
-Database per Tenant moltiplica operations; SQL Server riduce portabilità; NoSQL non offre vantaggi per lifecycle transazionale e grants.
-
+A database per Tenant multiplies operational work; SQL Server reduces portability; NoSQL offers no advantage for transactional lifecycle and grants.

@@ -1,17 +1,17 @@
-# M5 — Admin UI e confini dei provider
+# M5 — Admin UI and provider boundaries
 
-## Scopo
+## Purpose
 
-M5 aggiunge una console amministrativa production-grade senza modificare il data plane del Broker. La console e l'Admin API non possono leggere valori segreti, contattare provider direttamente o scegliere endpoint runtime arbitrari.
+M5 adds a production-grade administrative console without changing the Broker data plane. The console and Admin API cannot read secret values, contact providers directly or choose arbitrary runtime endpoints.
 
-## Vista dei componenti
+## Component view
 
 ```mermaid
 flowchart LR
   B[Browser] -->|same-origin HTTPS + cookie| H[Gateway/Admin host]
   H -->|OIDC code + PKCE| I[OIDC provider]
   H --> A[Admin API v1]
-  A --> P[Policy RBAC + four-eyes]
+  A --> P[RBAC policy + four-eyes]
   P --> C[Connector administration]
   P --> R[Registry administration]
   C --> DB[(PostgreSQL 18 + RLS)]
@@ -23,11 +23,11 @@ flowchart LR
   RT --> EXT[Restricted HTTPS egress]
 ```
 
-Dipendenze consentite:
+Allowed dependencies:
 
 ```mermaid
 flowchart BT
-  D[Domain] --> X[nessuna dipendenza provider]
+  D[Domain] --> X[no provider dependency]
   APP[Application] --> D
   ABS[Providers.Abstractions] --> X
   INF[Gateway.Infrastructure] --> APP
@@ -36,87 +36,87 @@ flowchart BT
   HOST[Gateway.Api] --> INF
   HOST --> SYN
   AZ[Azure deployment pack] --> ABS
-  AZ -. mai dipendenza Core .-> HOST
+  AZ -. never a Core dependency .-> HOST
 ```
 
-Il Core è l'insieme di Domain, Application, Infrastructure provider-neutral, API, Broker, SDK, contratti e provider sintetico. Il pack Azure è un consumer opzionale delle sole astrazioni.
+Core comprises Domain, Application, provider-neutral Infrastructure, API, Broker, SDK, contracts and synthetic provider. The Azure pack is an optional consumer of the abstractions alone.
 
-Questa direzione resta invariata dopo M5: il pack local PKCS#12 è un secondo consumer
-opzionale e il Gateway image predefinito non include né quel pack né moduli healthcare.
-Il pack locale dichiara `SecretValues=false`; il relativo generic secret provider è
-deny-only, mentre certificate, public material e signing restano capability distinte.
+This direction remains unchanged after M5: the local PKCS#12 pack is a second optional
+consumer, and the default Gateway image includes neither that pack nor healthcare modules.
+The local pack declares `SecretValues=false`; its generic secret provider is
+deny-only, while certificate, public material and signing remain separate capabilities.
 
-## Flusso di autenticazione Admin
+## Admin authentication flow
 
 ```mermaid
 sequenceDiagram
-  actor U as Operatore
+  actor U as Operator
   participant B as Browser
   participant H as Admin host
   participant O as OIDC provider
   participant A as Admin API
   participant D as PostgreSQL
-  U->>B: Apri /admin
+  U->>B: Open /admin
   B->>H: GET /admin/auth/login
   H->>H: state, nonce, PKCE, correlation cookie
   H->>O: authorization request
   O-->>H: authorization code
   H->>O: code + verifier
-  O-->>H: ID token validato
-  H->>D: resolve issuer + subject e ruoli
-  H-->>B: cookie HttpOnly Secure SameSite + redirect
+  O-->>H: validated ID token
+  H->>D: resolve issuer + subject and roles
+  H-->>B: HttpOnly Secure SameSite cookie + redirect
   B->>H: GET /admin/auth/csrf
-  H-->>B: token CSRF associato alla sessione
+  H-->>B: session-bound CSRF token
   B->>A: mutation + cookie + X-CSRF-TOKEN
-  A->>A: session, CSRF, ruolo, tenant scope, ETag
-  A->>D: transazione e audit metadata-only
-  A-->>B: DTO o ProblemDetails + correlationId
+  A->>A: session, CSRF, role, tenant scope, ETag
+  A->>D: transaction and metadata-only audit
+  A-->>B: DTO or ProblemDetails + correlationId
 ```
 
-L'identità persistita è `(issuer, subject)`. Email e display name sono attributi visuali, mai chiavi di autorizzazione.
+The persisted identity is `(issuer, subject)`. Email and display name are visual attributes, never authorization keys.
 
-## Lifecycle four-eyes
+## Four-eyes lifecycle
 
 ```mermaid
 stateDiagram-v2
   [*] --> Draft
-  Draft --> Validated: validazione
-  Validated --> ApprovalRequested: richiesta approvazione
-  ApprovalRequested --> Approved: approvatore distinto + checksum corrente
-  ApprovalRequested --> Draft: modifica invalida richiesta
-  Approved --> Draft: modifica invalida approvazione
-  Approved --> Published: publish con ETag e approvazione valida
-  Published --> Superseded: nuova versione pubblicata
+  Draft --> Validated: validation
+  Validated --> ApprovalRequested: request approval
+  ApprovalRequested --> Approved: distinct approver + current checksum
+  ApprovalRequested --> Draft: change invalidates request
+  Approved --> Draft: change invalidates approval
+  Approved --> Published: publish with ETag and valid approval
+  Published --> Superseded: new version published
   Published --> Retired: retire
-  Superseded --> Published: rollback autorizzato
+  Superseded --> Published: authorized rollback
 ```
 
-Una approvazione è una registrazione separata e immutabile, legata a version id, checksum e approvatore. Creator, requester e ultimo editor non possono approvare. Ogni modifica del contenuto o dei binding soggetti ad approvazione invalida le approvazioni precedenti.
+An approval is a separate immutable record bound to version ID, checksum and approver. Creator, requester and last editor cannot approve. Any change to content or approval-controlled bindings invalidates prior approvals.
 
-## Data flow e divieti
+## Data flow and prohibitions
 
-- Il browser parla soltanto con l'Admin API same-origin.
-- Admin UI/API persistono riferimenti logici e metadata; non restituiscono secret value o materiale di chiave.
-- Il runtime risolve endpoint e credenziali esclusivamente server-side dopo grant e tenant binding.
-- Il Broker e il Legacy non ricevono vendor secret.
-- Nessun accesso browser a PostgreSQL, filesystem, synthetic vault o pack provider.
-- Non esiste `GetSecret`, diretto o indiretto, nell'API amministrativa.
+- The browser talks only to the same-origin Admin API.
+- Admin UI/API persist logical references and metadata; they do not return secret values or key material.
+- The runtime resolves endpoints and credentials exclusively server-side after grants and tenant binding.
+- Broker and legacy applications receive no vendor secrets.
+- No browser access to PostgreSQL, filesystem, synthetic vault or provider packs.
+- The administrative API has no direct or indirect `GetSecret`.
 
-## Deployment locale
+## Local deployment
 
-Il frontend usa React 19, TypeScript strict, Vite, React Router, TanStack Query, React Hook Form, AJV 2020-12, CodeMirror 6, MUI Community, Lucide, i18next, Vitest, Testing Library, Playwright e axe. La navigazione client-side mantiene il dirty state dei form complessi e richiede una scelta esplicita prima di scartare modifiche; nessun contenuto del form viene persistito in localStorage. Nessun CDN, font remoto, analytics, PWA o source map di produzione.
+The frontend uses React 19, strict TypeScript, Vite, React Router, TanStack Query, React Hook Form, AJV 2020-12, CodeMirror 6, MUI Community, Lucide, i18next, Vitest, Testing Library, Playwright and axe. Client-side navigation preserves dirty state in complex forms and requires an explicit choice before discarding changes; no form content is persisted in localStorage. No CDNs, remote fonts, analytics, PWA or production source maps.
 
 ```mermaid
 flowchart TB
   subgraph Browser
     WEB[Admin UI]
   end
-  subgraph GatewayContainer[Gateway container non-root]
+  subgraph GatewayContainer[Non-root Gateway container]
     ASP[ASP.NET Core]
-    STATIC[asset React hashati]
+    STATIC[Hashed React assets]
     DEV[Development OIDC fixture]
   end
-  subgraph PrivateNetwork[rete Compose privata]
+  subgraph PrivateNetwork[Private Compose network]
     PG[(PostgreSQL 18)]
     VAULT[Synthetic provider]
     MOCK[HTTPS/mTLS mock]
@@ -129,12 +129,14 @@ flowchart TB
   ASP --> DEV
 ```
 
-Solo la porta HTTPS del Gateway è pubblicata. PostgreSQL, provider sintetico e mock restano su rete privata Compose.
+Only the Gateway HTTPS port is published. PostgreSQL, synthetic provider and mock remain on the private Compose network.
 
-## Confini open source
+## Open-source boundaries
 
-L'export OSS usa una allowlist versionata, crea una directory temporanea, ricalcola un manifest SHA-256, esegue scansioni license/secret e compila/testa la soluzione Core esportata. Sono esclusi pack Azure, futuri pack sanitari, adapter commerciali, raw evidence e report interni. L'export non pubblica repository remoti.
+The OSS export uses a versioned allowlist, creates a temporary directory, recomputes a SHA-256 manifest, performs license/secret scans and builds/tests the exported Core solution. Azure packs, healthcare packs, commercial adapters, raw evidence and internal reports are excluded. The export does not publish remote repositories.
 
-Il digest del manifest dipende anche dal contenuto/run dell'export e non è trattato come
-un valore deterministico cross-run. La normalizzazione futura resta lavoro di
-`ALPHA-ART` (`P3-CORE-EXPORT-DIGEST`), non una regressione del provider boundary.
+The raw manifest digest depends on export content and run metadata and is not a
+cross-run deterministic value. The exporter also writes a normalized inventory digest
+over source commit and sorted paths, sizes and file hashes, without a run timestamp.
+This is source-inventory identity, not binary reproducibility or release signing;
+see [CoreExportInventory.psm1](../../eng/CoreExportInventory.psm1).

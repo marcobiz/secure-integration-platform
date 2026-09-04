@@ -1,136 +1,135 @@
-# Strategia di migrazione dei legacy
+# Legacy migration strategy
 
-## Principio
+## Principle
 
-Non riscrivere un'integrazione funzionante senza beneficio concreto. Individuare il punto in cui il legacy legge o usa un segreto, sostituirlo con una capability del Local Broker/Gateway e conservare il resto del flusso.
+Do not rewrite a working integration without a concrete benefit. Find where the legacy application reads or uses a secret, replace it with a Local Broker/Gateway capability and preserve the rest of the flow.
 
-## Fasi per prodotto
+## Per-product phases
 
-1. Inventario segreti, certificati, token e chiavi dati.
-2. Classificazione Vendor/Tenant/Operator/Session/Local Data Key.
-3. Mappa dei punti di lettura, uso, log e persistenza.
-4. Test di caratterizzazione con fixture sintetiche.
-5. Decisione local/Gateway/hybrid.
-6. Decisione Secure Layer/Managed Connector.
-7. Definizione Application manifest e operation grants.
-8. Implementazione del seam minimo.
-9. Migrazione configurazioni e dati locali.
-10. Test regressione e security negative path.
-11. Rotazione/revoca dei segreti compromessi.
-12. Rimozione del vecchio materiale e codice raggiungibile.
-13. Blocco egress/bypass diretto.
-14. Pilot, rollback plan ed evidence di completamento.
+1. Inventory secrets, certificates, tokens and data keys.
+2. Classify Vendor/Tenant/Operator/Session/Local Data Key.
+3. Map read, use, logging and persistence points.
+4. Characterization tests with synthetic fixtures.
+5. Decide local/Gateway/hybrid.
+6. Decide Secure Layer/Managed Connector.
+7. Define Application manifest and operation grants.
+8. Implement the minimal seam.
+9. Migrate configuration and local data.
+10. Regression and security-negative-path tests.
+11. Rotate/revoke compromised secrets.
+12. Remove old material and reachable code.
+13. Block direct egress/bypass.
+14. Pilot, rollback plan and completion evidence.
 
 ## Integration Seam Map
 
-Template obbligatorio:
+Required template:
 
-| Campo | Descrizione |
+| Field | Description |
 |---|---|
-| Product/version | Prodotto e build analizzata. |
-| Module/method | Punto di aggancio, senza copiare codice proprietario. |
-| Source finding | Documento, finding ID e livello di certezza. |
+| Product/version | Product and build analyzed. |
+| Module/method | Integration point, without copying proprietary code. |
+| Source finding | Document, finding ID and certainty level. |
 | Secret class | Vendor/Tenant/Operator/Session/Local Data Key. |
-| Current source | Config, binary, DB, user input, certificate store o log. |
+| Current source | Config, binary, DB, user input, certificate store or log. |
 | Target location | Broker/Vault/memory. |
 | Execution | broker/gateway/hybrid. |
 | Mode | Secure Layer/Managed Connector. |
-| Replacement call | Operazione IPC/Connector. |
-| Behavior test | Fixture e expected interaction. |
-| Legacy removal | File/config/code/egress da eliminare. |
-| Rotation/revocation | Azione esterna richiesta. |
-| Residual risk | Rischio non eliminato. |
-| Rollback | Percorso sicuro senza ripristinare secret compromesso. |
+| Replacement call | IPC/Connector operation. |
+| Behavior test | Fixture and expected interaction. |
+| Legacy removal | Files/config/code/egress to remove. |
+| Rotation/revocation | Required external action. |
+| Residual risk | Risk not eliminated. |
+| Rollback | Safe path without restoring a compromised secret. |
 
-## Regole per scegliere la modalità
+## Mode-selection rules
 
-Secure Layer quando:
+Use Secure Layer when:
 
-- il legacy costruisce correttamente SOAP/XML/JSON;
-- la modifica può limitarsi a credential injection, mTLS, HMAC o token exchange;
-- la logica dipende fortemente dalla UI/prodotto;
-- è il primo utilizzo del protocollo.
+- the legacy application correctly constructs SOAP/XML/JSON;
+- the change can be limited to credential injection, mTLS, HMAC or token exchange;
+- logic is strongly tied to the UI/product;
+- this is the first use of the protocol.
 
-Managed Connector quando:
+Use Managed Connector when:
 
-- la stessa integrazione serve più prodotti/vendor;
-- il protocollo cambia frequentemente;
-- la normalizzazione centralizzata riduce duplicazioni;
-- la logica tecnica è separabile dalla UI e dall'hardware locale.
+- the same integration serves multiple products/vendors;
+- the protocol changes frequently;
+- centralized normalization reduces duplication;
+- technical logic can be separated from UI and local hardware.
 
-Hybrid quando browser/MFA/firma sono locali e token exchange/chiamata sono centrali. Nuovi handoff non tipizzati richiedono ADR.
+Use Hybrid when browser/MFA/signing are local and token exchange/calls are central. New untyped handoffs require an ADR.
 
-## Migrazione dei segreti
+## Secret migration
 
 ### Vendor Secret
 
-1. Predisporre nuova versione nel Vault.
-2. Creare SecretBinding.
-3. Testare con Connector sintetico/test Environment.
-4. Migrare il prodotto al Gateway.
-5. Disabilitare egress diretto.
-6. Revocare il vecchio valore distribuito.
-7. Scansionare package, backup di release e log.
+1. Prepare a new version in the Vault.
+2. Create SecretBinding.
+3. Test with a synthetic Connector/test Environment.
+4. Migrate the product to the Gateway.
+5. Disable direct egress.
+6. Revoke the old distributed value.
+7. Scan packages, release backups and logs.
 
-### Tenant Secret locale
+### Local Tenant Secret
 
-1. Acquisizione tramite UI/utility autorizzata senza command line.
-2. `PutLocalSecret` e ritorno opaque ref.
-3. Aggiornare configurazione legacy con il ref, non il valore.
-4. Rimuovere valore originario e backup temporanei.
-5. Verificare ACL, offline use e deletion.
+1. Acquire through an authorized UI/utility without a command line.
+2. `PutLocalSecret` and return an opaque reference.
+3. Update legacy configuration with the reference, not the value.
+4. Remove the original value and temporary backups.
+5. Verify ACLs, offline use and deletion.
 
-### Chiavi dati locali
+### Local data keys
 
-- Nuovo formato versionato AES-GCM.
-- Reader supporta vecchio e nuovo durante la finestra di migrazione.
-- Scritture solo nel nuovo formato.
-- Batch/lazy re-encryption con checkpoint e backup.
-- Auth failure blocca uso del dato e produce diagnostica redatta.
+- New versioned AES-GCM format.
+- Reader supports old and new formats during the migration window.
+- Writes only in the new format.
+- Batch/lazy re-encryption with checkpoints and backups.
+- Authentication failure blocks data use and produces redacted diagnostics.
 
-## Characterization test
+## Characterization tests
 
-La specifica ricostruita dai report/decompilazione viene trasformata in test black-box:
+The specification reconstructed from reports/decompilation becomes black-box tests:
 
-- ordine chiamate;
-- method/path/header names sanificati;
-- formato payload con valori sintetici;
-- token/session lifetime e handoff;
+- call order;
+- sanitized method/path/header names;
+- payload format with synthetic values;
+- token/session lifetime and handoff;
 - error mapping;
-- retry/idempotency osservati.
+- observed retry/idempotency.
 
-Ogni test conserva provenance e livello di certezza, non codice decompilato.
+Each test retains provenance and certainty level, not decompiled code.
 
 ## Rollback
 
-Rollback non significa ripristinare credenziali già compromesse. Opzioni ammesse:
+Rollback does not mean restoring already compromised credentials. Allowed options:
 
-- rollback ConnectorVersion mantenendo il Gateway;
-- rollback applicativo a una build che usa comunque il Broker;
-- sospensione dell'operation;
-- fallback manuale autorizzato del servizio esterno.
+- ConnectorVersion rollback while retaining the Gateway;
+- application rollback to a build that still uses the Broker;
+- operation suspension;
+- authorized manual fallback for the external service.
 
-Riattivare secret hardcoded, trust-all o egress diretto è vietato.
+Reactivating hardcoded secrets, trust-all or direct egress is prohibited.
 
-## Criterio di finding risolto
+## Finding-resolution criterion
 
-Un finding non è chiuso se:
+A finding is not closed if:
 
-- il secret resta nel package/config/log;
-- il vecchio codice è raggiungibile;
-- l'Application può bypassare Broker/Gateway;
-- l'egress diretto è ancora consentito;
-- certificato/secret precedente non è revocato;
-- i test non coprono negative path e regressione.
+- the secret remains in the package/config/log;
+- old code remains reachable;
+- the Application can bypass Broker/Gateway;
+- direct egress is still allowed;
+- the previous certificate/secret is not revoked;
+- tests do not cover negative paths and regression.
 
 ## Pilot acceptance pack
 
-- Integration Seam Map firmata/reviewata.
-- Test behavior/regression/security.
-- Evidence di secret removal e scanning.
-- Evidence di rotation/revocation.
+- Signed/reviewed Integration Seam Map.
+- Behavior/regression/security tests.
+- Secret-removal and scanning evidence.
+- Rotation/revocation evidence.
 - Network/egress evidence.
 - Rollback test.
-- Residual risk acceptance.
-- Runbook support e incident response.
-
+- Residual-risk acceptance.
+- Support and incident-response runbook.

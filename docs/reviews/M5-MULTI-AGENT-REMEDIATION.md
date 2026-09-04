@@ -28,7 +28,7 @@ The local gate records 145 ordinary .NET PASS plus seven explicit PG SKIP, eight
 
 The four residual technical findings are closed on candidate `7ac956fe9d3fa641d420004c2f944c7a2f5a8210`: backend canonical semantic approval, transaction-local Tenant FORCE RLS, ETag/If-Match concurrency for Tenant/Application, and complete independent IT/EN resources. The updated gate records 149 ordinary .NET PASS, nine PostgreSQL 18 PASS, 25 Vitest PASS, 35 browser-mock PASS and FULLSTACK-01 PASS. Exact-candidate CI is green: general `31088473433` (6/6), M5 PR `31088472335` (15/15), M5 push `31088472535` (15/15). See `M5-TECHNICAL-FINAL-REMEDIATION.md` for the requirement-to-evidence delta. M5 remains not Done and PR #5 remains open/unmerged.
 
-| Finding | Stato | Causa | Remediation applicata | Test regressivo / evidenza | Commit | Esito |
+| Finding | Status | Cause | Applied remediation | Regression test / evidence | Commit | Result |
 |---|---|---|---|---|---|---|
 | A1 — FE-01 / PROD-01 | RESOLVED | The browser used a reduced hand-written schema and a non-canonical initial document. | The UI now consumes the repository-owned Draft 2020-12 schema and sample; AJV is preliminary and server validation remains authoritative. | `connectorSchema.test.ts`; Admin import API tests; `FULLSTACK-01` persists the canonical Draft in PostgreSQL. | `7f1126e` | PASS |
 | A2 — SEC-01 | RESOLVED | Mutable endpoint and provider-reference dictionaries could be recombined after approval. | Immutable scoped binding bundle revisions are checksum-bound to four-eyes approval/publication; runtime resolves only the exact active approved revision. | Binding canary/scope/staleness/cache tests; PostgreSQL migration apply/no-op; `FULLSTACK-01`. | `b90271b` | PASS |

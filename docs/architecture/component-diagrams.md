@@ -1,7 +1,7 @@
-# Diagrammi di container e componenti
+# Container and component diagrams
 
-Le viste **CURRENT** rappresentano componenti presenti. Le viste **TARGET** descrivono
-packaging o qualifiche ancora aperte.
+**CURRENT** views represent existing components. **TARGET** views describe
+packaging or qualifications that remain open.
 
 ## CURRENT — Local Broker
 
@@ -29,10 +29,10 @@ flowchart TB
   Core --> Audit
 ```
 
-Le operation IPC correnti includono storage/delete di secret locali ammessi,
-protect/unprotect, HMAC, invoke Gateway e status. Non esiste un'interfaccia Broker per
-leggere un secret. Lo SDK corrente è .NET; native/COM e smart-card signing appartengono
-al target legacy.
+Current IPC operations include storage/deletion of permitted local secrets,
+protect/unprotect, HMAC, Gateway invocation and status. There is no Broker interface for
+reading a secret. The current SDK is .NET; native/COM and smart-card signing belong to
+the legacy target.
 
 ## CURRENT — Gateway modular monolith
 
@@ -66,13 +66,13 @@ flowchart TB
   Audit --> Persistence
 ```
 
-Domain e Application restano provider-neutral. `Gateway.Api` compone Infrastructure,
-Synthetic Provider, auth runtime e moduli esplicitamente configurati. Azure, local
-PKCS#12 e i pack verticali sono consumer opzionali e non entrano nel grafo Core. Il pack
-local PKCS#12 dichiara `SecretValues=false`; il generic secret provider fornito al factory
-è deny-only.
+Domain and Application remain provider-neutral. `Gateway.Api` composes Infrastructure,
+Synthetic Provider, authentication runtime and explicitly configured modules. Azure, local
+PKCS#12 and vertical packs are optional consumers and do not enter the Core graph. The
+local PKCS#12 pack declares `SecretValues=false`; the generic secret provider supplied to the factory
+is deny-only.
 
-## CURRENT — Connector runtime e cache Published
+## CURRENT — Connector runtime and Published cache
 
 ```mermaid
 flowchart LR
@@ -90,13 +90,13 @@ flowchart LR
   HTTP --> Normalize[Bound, Sanitize and Audit Result]
 ```
 
-Lo stamp copre la Published authority e le revisioni binding/resource pertinenti. Viene
-verificato a ogni invocazione; una cache TTL non diventa fallback stale quando lo store è
-indisponibile o cambia. Il modulo non riceve un proxy generico, un endpoint
-client-controlled, un locator o un provider facade. Un modulo .NET in-process resta
-comunque full-trust.
+The stamp covers Published authority and relevant binding/resource revisions. It is
+checked on every invocation; a TTL cache does not become a stale fallback when the store is
+unavailable or changes. The module receives no generic proxy, client-controlled
+endpoint, locator or provider facade. An in-process .NET module nevertheless remains
+full-trust.
 
-## CURRENT — Admin plane e pubblicazione
+## CURRENT — Admin plane and publication
 
 ```mermaid
 flowchart LR
@@ -115,17 +115,17 @@ flowchart LR
   Stamp --> RuntimeCache[Reuse or Reload]
 ```
 
-L'approvazione è separata dallo stato della versione e lega checksum canonico e digest
-dei binding. La pubblicazione rende la nuova versione `Published`, la precedente
-`Superseded` e aggiorna il puntatore attivo. Il rollback riattiva una versione
-`Superseded` già pubblicata senza copiarne o modificarne i byte.
+Approval is separate from version state and binds the canonical checksum and binding
+digest. Publication makes the new version `Published`, the previous one
+`Superseded` and updates the active pointer. Rollback reactivates a previously
+published `Superseded` version without copying or modifying its bytes.
 
-Il runtime e l'Admin plane producono record metadata-only. La migration 0017 revoca ai
-ruoli applicativi la modifica di record evento esistenti: runtime conserva solo INSERT su
-audit/invocation e Admin solo SELECT/INSERT su audit. Owner/migration e amministratori
-host/DB restano nella TCB; non sono introdotte firma o notarizzazione.
+The runtime and Admin plane produce metadata-only records. Migration 0017 revokes
+application-role modification of existing event records: runtime retains only INSERT on
+audit/invocation and Admin only SELECT/INSERT on audit. Owner/migration and
+host/DB administrators remain in the TCB; no signing or notarization is introduced.
 
-## CURRENT — laboratorio locale no-cloud
+## CURRENT — local no-cloud laboratory
 
 ```mermaid
 flowchart LR
@@ -137,18 +137,18 @@ flowchart LR
   Migrations[Separate Migration Container] --> PG
 ```
 
-I profili Compose M2-M5 combinano questi componenti per test e quickstart. Sono ambienti
-sintetici, non una topologia production qualificata. PostgreSQL usa ruoli distinti, ma
-il Compose locale non è prova di TLS database o HA production.
+M2–M5 Compose profiles combine these components for tests and quickstart. They are synthetic
+environments, not a qualified production topology. PostgreSQL uses separate roles, but
+local Compose is not evidence of database TLS or production HA.
 
-## CURRENT, opt-in — laboratorio local PKCS#12
+## CURRENT, opt-in — local PKCS#12 laboratory
 
-L'overlay FSE2 sostituisce solo l'immagine Gateway con una composizione che include il
-provider local PKCS#12 e il modulo verticale. Manifest e materiale sintetico per-run sono
-montati read-only; il container resta non-root/read-only. Il gate prova provider
-certificate/signing, readiness e tamper response senza eseguire chiamate FSE2 live.
+The FSE2 overlay replaces only the Gateway image with a composition including the
+local PKCS#12 provider and vertical module. The manifest and per-run synthetic material are
+mounted read-only; the container remains non-root/read-only. The gate tests provider
+certificate/signing, readiness and tamper response without executing live FSE2 calls.
 
-## TARGET — qualifica Azure opzionale
+## TARGET — optional Azure qualification
 
 ```mermaid
 flowchart TB
@@ -162,17 +162,20 @@ flowchart TB
   Pipeline --> Bicep[m3-dev Bicep Smoke]
 ```
 
-Il pack e lo skeleton Bicep esistono, ma M3B non ha un gate live attestato. Networking
-privato, HA/DR, backup/restore, release signing, monitoring operativo e provider
-production-qualified sono target, non claim della baseline.
+The pack and Bicep skeleton exist, but M3B has no attested live gate. Private
+networking, HA/DR, backup/restore, release signing, operational monitoring and
+production-qualified providers are targets, not baseline claims.
 
-## TARGET — distribuzione
+## TARGET — distribution
 
-- Core alpha: packaging, licenza, security channel e clean-clone del golden path REST;
-- legacy: MSI, adapter aggiuntivi e compatibility matrix;
-- FSE2 OfficialTest: composizione verticale, custody/import e driver redatto, con
-  `validate-cda` come primo outcome futuro;
-- enterprise: provider/cloud qualificati, provenance, backup/restore, HA/DR, load/soak
-  e pentest.
+- Core alpha: publication and adoption gates; existing licensing and security-reporting
+  policies are in [LICENSING.md](../../LICENSING.md) and [SECURITY.md](../../SECURITY.md);
+- legacy: MSI, additional adapters and compatibility matrix;
+- FSE2 OfficialTest: the [current optional pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
+  covers validation and lookup; remaining qualification targets are in the
+  [capability summary](../../IMPLEMENTATION_STATUS.md);
+- enterprise: qualified providers/cloud, provenance, backup/restore, HA/DR, load/soak
+  and pentest.
 
-Early-adopter completion non è dichiarata finché `ALPHA-ADOPT` resta aperto.
+Historical adopter-simulation evidence applies to its recorded baseline; it does not
+by itself establish release readiness or production adoption.

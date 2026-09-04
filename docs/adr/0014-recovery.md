@@ -1,14 +1,13 @@
-# ADR-0014: Recovery locale
+# ADR-0014: Local recovery
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Decisione
+## Decision
 
-MVP: backup metadata/blob e recovery solo con profilo/system-state capace di usare DPAPI. Perdita completa macchina richiede re-enrollment e può rendere i dati cifrati irrecuperabili.
+MVP: metadata/blob backup and recovery only with a profile/system state capable of using DPAPI. Complete machine loss requires re-enrollment and may make encrypted data unrecoverable.
 
-Enterprise: recovery copy per-Installation, wrapped da recovery key centrale, dual-control, revoca e audit. Nessuna master key universale.
+Enterprise: per-Installation recovery copy, wrapped by a central recovery key, dual control, revocation and audit. No universal master key.
 
-## Conseguenze
+## Consequences
 
-L'MVP non indebolisce l'isolamento per offrire recovery universale. Il rischio operativo deve essere comunicato e testato.
-
+The MVP does not weaken isolation to offer universal recovery. The operational risk must be communicated and tested.

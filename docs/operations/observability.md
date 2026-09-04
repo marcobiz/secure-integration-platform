@@ -1,57 +1,57 @@
-# Osservabilità e operazioni
+# Observability and operations
 
-## Principi
+## Principles
 
-- OpenTelemetry per log, metrics e tracing.
-- W3C `traceparent` e correlation ID dall'adapter al servizio esterno.
-- Redaction prima dell'export.
-- Nessun health check espone configurazione o secret metadata dettagliati.
-- Audit e telemetry hanno scopi e retention distinti.
+- OpenTelemetry for logs, metrics and tracing.
+- W3C `traceparent` and correlation ID from the adapter to the external service.
+- Redaction before export.
+- No health check exposes configuration or detailed secret metadata.
+- Audit and telemetry have distinct purposes and retention policies.
 
 ## Health
 
 ### Local Broker
 
-- servizio/pipe disponibili;
-- storage e DPAPI round-trip sintetico;
-- identity key accessibile;
-- enrollment/credential state e scadenza;
+- service/pipe availability;
+- storage and synthetic DPAPI round-trip;
+- identity key accessibility;
+- enrollment/credential state and expiry;
 - Gateway last contact;
 - broker/version compatibility;
 - queue/concurrency saturation.
 
-La diagnostica offline restituisce reason code, non blob/path/secret.
+Offline diagnostics return reason codes, not blobs/paths/secrets.
 
 ### Gateway
 
 - liveness: event loop/process.
-- readiness: DB query minimale, active deployment cache e Vault metadata call rate-limited.
-- dependency detail disponibile solo agli admin.
-- Connector health eseguito on-demand o schedulato con payload sintetico; non in readiness globale.
+- readiness: minimal DB query, active deployment cache and rate-limited Vault metadata call.
+- dependency details available only to admins.
+- Connector health runs on demand or on schedule with a synthetic payload, not in global readiness.
 
-## Metriche minime
+## Minimum metrics
 
-- `broker_ipc_requests_total` per operation/result.
+- `broker_ipc_requests_total` by operation/result.
 - `broker_ipc_duration_ms` histogram.
 - `broker_authorization_denied_total`.
-- `gateway_invocations_total` per Connector/operation/outcome.
-- `gateway_duration_ms` e `external_duration_ms` histogram.
+- `gateway_invocations_total` by Connector/operation/outcome.
+- `gateway_duration_ms` and `external_duration_ms` histograms.
 - `gateway_authentication_failures_total`.
 - `gateway_cross_tenant_denials_total`.
-- `vault_requests_total`, latency e throttling.
+- `vault_requests_total`, latency and throttling.
 - `connector_config_errors_total`.
 - `connector_cache_age_seconds`.
 - `certificate_expiry_days`.
 - `token_refresh_failures_total`.
 - `revoked_installation_attempts_total`.
-- `broker_version_distribution` e broker non aggiornati.
-- `egress_policy_denials_total` per reason code.
+- `broker_version_distribution` and outdated brokers.
+- `egress_policy_denials_total` by reason code.
 
-Tenant e Installation non diventano label metriche ad alta cardinalità; restano negli audit/eventi ricercabili.
+Tenant and Installation do not become high-cardinality metric labels; they remain in searchable audits/events.
 
 ## Tracing
 
-Span principali:
+Main spans:
 
 ```text
 sdk.invoke
@@ -65,53 +65,52 @@ sdk.invoke
       external.http
 ```
 
-Payload, authorization header e query sensibili non sono span attribute. URL esterno viene normalizzato a endpoint/operation ID, non registrato integralmente quando contiene parametri.
+Payloads, authorization headers and sensitive queries are not span attributes. External URLs are normalized to endpoint/operation IDs, not recorded in full when they contain parameters.
 
 ## Logging
 
-Strutturato JSON. Campi comuni: timestamp, level, event code, correlation, trace/span, component, connector, operation, installation, tenant, outcome, duration e reason code.
+Structured JSON. Common fields: timestamp, level, event code, correlation, trace/span, component, connector, operation, installation, tenant, outcome, duration and reason code.
 
-Test di redaction obbligatori su:
+Mandatory redaction tests cover:
 
 - Authorization/Cookie/API key;
-- access/refresh/session token;
-- password/PIN/OTP;
-- private key/certificate bundle;
-- XML/JSON payload;
-- exception di provider esterni.
+- access/refresh/session tokens;
+- passwords/PINs/OTPs;
+- private keys/certificate bundles;
+- XML/JSON payloads;
+- external provider exceptions.
 
-## Alert iniziali
+## Initial alerts
 
-- Authentication failure rate sopra baseline.
-- Tentativi da Installation revocate.
-- Cross-Tenant denial diverso da zero.
-- Vault errors/throttling sostenuti.
-- External failure rate o latency per Connector.
-- Connector config/cache stale.
-- Certificato in scadenza a 30/14/7 giorni.
-- Broker sotto minimum supported version.
-- Secret rotation overdue.
-- Readiness failure o DB failover.
-- Improvviso aumento egress policy denial.
+- Authentication failure rate above baseline.
+- Attempts by revoked Installations.
+- Nonzero cross-Tenant denials.
+- Sustained Vault errors/throttling.
+- External failure rate or latency by Connector.
+- Stale Connector configuration/cache.
+- Certificates expiring in 30/14/7 days.
+- Brokers below the minimum supported version.
+- Overdue secret rotation.
+- Readiness failure or DB failover.
+- Sudden increase in egress policy denials.
 
-Le soglie numeriche vengono calibrate in test/preprod e documentate per Environment.
+Numeric thresholds are calibrated in test/preproduction and documented per Environment.
 
-## Retry e circuit breaker
+## Retry and circuit breaker
 
-- Connect timeout 5 secondi; operation timeout 30 secondi default.
-- Retry massimo 2 con exponential backoff e jitter.
-- Solo errori transient e operation idempotenti.
-- Nessun retry automatico su 4xx auth/validation o response non idempotente.
-- Circuit breaker isolato per endpoint/Connector, non globale.
+- Connect timeout: 5 seconds; default operation timeout: 30 seconds.
+- At most 2 retries with exponential backoff and jitter.
+- Only transient errors and idempotent operations.
+- No automatic retry on 4xx auth/validation or non-idempotent responses.
+- Circuit breaker isolated per endpoint/Connector, not global.
 
-## Runbook minimi
+## Minimum runbooks
 
-- Revocare/re-enrollare una Installation.
-- Ruotare Vendor/Tenant Secret senza downtime.
-- Diagnosticare Vault/DB/external outage.
-- Pubblicare e rollbackare ConnectorVersion.
-- Gestire certificato in scadenza.
-- Ripristinare PostgreSQL e verificare RLS/audit.
-- Aggiornare Broker e riparare ACL/service identity.
-- Incident response per possibile secret exposure.
-
+- Revoke/re-enroll an Installation.
+- Rotate Vendor/Tenant Secrets without downtime.
+- Diagnose Vault/DB/external outages.
+- Publish and roll back ConnectorVersions.
+- Handle expiring certificates.
+- Restore PostgreSQL and verify RLS/audit.
+- Upgrade Broker and repair ACLs/service identity.
+- Incident response for possible secret exposure.

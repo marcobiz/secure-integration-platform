@@ -1,16 +1,15 @@
-# ADR-0016: Identificazione Application locale
+# ADR-0016: Local Application identification
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Decisione
+## Decision
 
-Combinare Windows identity, pipe ACL, Application registration ID, processo/PID, canonical path, publisher Authenticode e hash opzionale. Mantenere un process handle e creation time per ridurre PID reuse/TOCTOU.
+Combine Windows identity, pipe ACL, Application registration ID, process/PID, canonical path, Authenticode publisher and optional hash. Retain a process handle and creation time to reduce PID reuse/TOCTOU.
 
-## Conseguenze
+## Consequences
 
-Lo stesso utente non autorizza automaticamente ogni processo. Publisher/path consentono upgrade controllati; hash pinning resta opzionale perché fragile. Code injection nel processo autorizzato è rischio residuo.
+The same user does not automatically authorize every process. Publisher/path allow controlled upgrades; hash pinning remains optional because it is fragile. Code injection into the authorized process is a residual risk.
 
-## Alternative escluse
+## Rejected alternatives
 
-Nome processo o token statico in file non sono identità sufficienti.
-
+A process name or a static token in a file is not sufficient identity.

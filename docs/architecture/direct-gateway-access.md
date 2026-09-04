@@ -1,11 +1,11 @@
 # Direct Gateway Access
 
-## Scopo
+## Purpose
 
-M5.5 estende il confine inbound del Gateway a due identita machine-to-machine senza
-duplicare il runtime. Il Local Broker resta obbligatorio per applicazioni legacy che
-necessitano del confine Windows locale; un'applicazione moderna autorizzata puo invece
-possedere direttamente una `DirectInstallation`.
+M5.5 extends the Gateway inbound boundary to two machine-to-machine identities without
+duplicating the runtime. The Local Broker remains mandatory for legacy applications that
+need the local Windows boundary; an authorized modern application can instead
+own a `DirectInstallation` directly.
 
 ```mermaid
 flowchart LR
@@ -19,69 +19,69 @@ flowchart LR
   Bindings --> Egress[Restricted outbound egress]
 ```
 
-Il punto di convergenza e `GatewayClientPrincipal`. Da quel punto in avanti non esiste
-un ramo Broker/Direct.
+The convergence point is `GatewayClientPrincipal`. Beyond that point there is no
+Broker/Direct branch.
 
-## Confine inbound
+## Inbound boundary
 
-1. il certificato ClientAuth presentato via mTLS viene cercato per SHA-256 nel registry;
-2. il registry deriva Installation, Application, Tenant, Environment e
+1. the ClientAuth certificate presented through mTLS is looked up by SHA-256 in the registry;
+2. the registry derives Installation, Application, Tenant, Environment and
    `InstallationKind`;
-3. stato, validita credential e revoca sono verificati fail-closed;
-4. la firma BGW1 copre metodo, target, timestamp, nonce e digest del body;
-5. il nonce viene consumato atomicamente;
-6. nasce un `GatewayClientPrincipal` con credential ID, metodo
-   `MutualTlsPopBgw1`, correlation context e scope di protocollo;
-7. il grant Connector/operation viene verificato separatamente e server-side.
+3. state, credential validity and revocation are checked fail-closed;
+4. the BGW1 signature covers method, target, timestamp, nonce and body digest;
+5. the nonce is consumed atomically;
+6. a `GatewayClientPrincipal` is created with credential ID, the
+   `MutualTlsPopBgw1` method, correlation context and protocol scope;
+7. the Connector/operation grant is checked separately, server-side.
 
-Il principal non contiene logica Connector e non accetta claim autorevoli dal payload.
-`GatewayInvokeRequest` non espone TenantId, ApplicationId, InstallationId, URL,
-provider, locator o binding di credenziali.
+The principal contains no Connector logic and accepts no authoritative claims from the payload.
+`GatewayInvokeRequest` exposes no TenantId, ApplicationId, InstallationId, URL,
+provider, locator or credential bindings.
 
-## Tipi e lifecycle
+## Types and lifecycle
 
-| Tipo | Uso | Versione di enrollment | Dipendenze locali |
+| Type | Use | Enrollment version | Local dependencies |
 |---|---|---|---|
-| `Broker` | Legacy tramite Local Broker | `BrokerVersion`, verificata contro la policy Application | Windows Service, Named Pipe, DPAPI/CNG |
-| `Direct` | Applicazione moderna M2M | `ClientVersion` | key store scelto dal client; nessun Broker |
+| `Broker` | Legacy through Local Broker | `BrokerVersion`, checked against Application policy | Windows Service, Named Pipe, DPAPI/CNG |
+| `Direct` | Modern M2M application | `ClientVersion` | Client-chosen key store; no Broker |
 
-Entrambi riusano `Pending -> Active -> Revoked`, activation code monouso, challenge PoP,
-renewal, overlap e revoca immediata. La chiave privata viene generata e custodita dal
-client; il Gateway persiste certificato pubblico, fingerprint, SPKI, seriale, validita e
-stato. L'Admin API non restituisce DER, chiavi private o activation code dopo la risposta
-one-time di creazione.
+Both reuse `Pending -> Active -> Revoked`, single-use activation codes, PoP challenges,
+renewal, overlap and immediate revocation. The private key is generated and held by the
+client; the Gateway persists the public certificate, fingerprint, SPKI, serial, validity and
+state. The Admin API does not return DER, private keys or activation codes after the
+one-time creation response.
 
-## Runtime unificato
+## Unified runtime
 
-I seguenti componenti sono identici per entrambi i tipi:
+The following components are identical for both types:
 
-- `OperationBindingDependencies` e publication artifact immutabile;
-- grant deny-by-default;
-- risoluzione endpoint, secret e certificato server-owned;
-- provider capability contracts e cache fail-closed;
-- SSRF/DNS-rebinding protection, TLS, redirect e header policy;
-- trasporto, sanitizzazione risposta e audit metadata-only.
+- `OperationBindingDependencies` and immutable publication artifact;
+- deny-by-default grants;
+- server-owned endpoint, secret and certificate resolution;
+- provider capability contracts and fail-closed cache;
+- SSRF/DNS-rebinding protection, TLS, redirect and header policy;
+- transport, response sanitization and metadata-only audit.
 
-L'audit aggiunge soltanto `callerKind=Broker|Direct` e il metodo di autenticazione; il
-resto del modello rimane comune.
+Audit adds only `callerKind=Broker|Direct` and the authentication method; the
+rest of the model remains shared.
 
-## Persistenza e compatibilita
+## Persistence and compatibility
 
-La migration `0011_direct_installation_m55.sql` aggiunge `installation_kind`,
-`client_version` e `updated_at`, effettua il backfill a `broker` e mantiene FORCE RLS e
-ruoli esistenti. La funzione M2 `resolve_installation_identity` non cambia firma: una
-nuova funzione stretta restituisce la sola classificazione M5.5. Questo preserva upgrade
-M5, applicazione da database vuoto e Broker client esistenti.
+Migration `0011_direct_installation_m55.sql` adds `installation_kind`,
+`client_version` and `updated_at`, backfills to `broker` and preserves FORCE RLS and
+existing roles. The M2 `resolve_installation_identity` function keeps its signature: a
+new narrow function returns only the M5.5 classification. This preserves M5 upgrades,
+application to an empty database and existing Broker clients.
 
-## Threat boundary e rischio residuo
+## Threat boundary and residual risk
 
-- il furto della chiave Direct consente di agire come quella Installation fino a revoca;
-- la chiave deve essere non esportabile o protetta in produzione, scelta lasciata al
-  deployment/client e non al Gateway;
-- host client, Gateway host e DBA privilegiati restano nella TCB;
-- revoca, rotazione, scope minimo e audit riducono il blast radius ma non eliminano la
-  compromissione endpoint;
-- nessun vendor secret, locator o chiave privata outbound attraversa il confine inbound.
+- theft of a Direct key allows acting as that Installation until revocation;
+- the key must be non-exportable or protected in production, a choice left to the
+  deployment/client rather than the Gateway;
+- client hosts, Gateway hosts and privileged DBAs remain in the TCB;
+- revocation, rotation, minimal scope and audit reduce blast radius but do not eliminate
+  endpoint compromise;
+- no vendor secret, locator or outbound private key crosses the inbound boundary.
 
-Il sample `samples/DirectGatewayClient` usa una chiave solo in memoria per dimostrazione,
-non costituisce una strategia di key storage production.
+The `samples/DirectGatewayClient` sample uses an in-memory-only key for demonstration;
+it is not a production key-storage strategy.

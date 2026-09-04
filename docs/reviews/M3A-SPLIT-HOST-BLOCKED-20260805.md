@@ -1,66 +1,66 @@
-# M3A split-host — run bloccata 2026-08-05
+# M3A split-host — Blocked run 2026-08-05
 
 RunId: `m3a-live-20260805-091023`
 
-Commit candidato ed effettivamente eseguito nella VM:
+Candidate commit actually executed in the VM:
 `febd8b33201c9827e5e28fcfdd70db1c04d6fce6`.
 
-Esito: **BLOCKED — HOST SECURITY DRIVER SCHANNEL INCOMPATIBILITY**.
-La run non costituisce un PASS M3A e nessun suo activation code, certificato,
-handoff o RunId può essere riutilizzato.
+Result: **BLOCKED — HOST SECURITY DRIVER SCHANNEL INCOMPATIBILITY**.
+The run is not an M3A PASS, and none of its activation codes, certificates,
+handoff or RunId may be reused.
 
-## Evidenza positiva ottenuta prima del blocco
+## Positive evidence obtained before the blocker
 
-Il percorso VM ha prodotto evidenze originali redatte coerenti e non ricostruite:
+The VM path produced consistent original redacted evidence, not a reconstruction:
 
-- Broker installato come vero Windows Service, stato `Running`;
-- `StartName` `NT SERVICE\SecureIntegrationBroker` e service SID effettivo;
-- Legacy Simulator eseguito come utente standard con token `Limited`;
+- Broker installed as a real Windows Service, `Running` state;
+- `StartName` `NT SERVICE\SecureIntegrationBroker` and effective service SID;
+- Legacy Simulator executed as a standard user with a `Limited` token;
 - P02 Legacy → SDK → Named Pipe → Broker Service → Gateway → PostgreSQL 18 →
-  synthetic Vault → vendor mock HTTPS/mTLS completato con risposta sanitizzata;
-- applicazione locale non autorizzata negata;
-- operation grant non concesso negato con `gateway_operation_not_granted`;
-- nessun endpoint backend o vendor secret distribuito alla VM;
-- Event Log e canary scan VM PASS;
-- cleanup VM PASS con zero servizi, task e utenti sintetici residui.
+  synthetic Vault → HTTPS/mTLS vendor mock completed with a sanitized response;
+- unauthorized local application denied;
+- ungranted operation denied with `gateway_operation_not_granted`;
+- no backend endpoint or vendor secret distributed to the VM;
+- VM Event Log and canary scan PASS;
+- VM cleanup PASS with zero residual synthetic services, tasks and users.
 
-Le quattro evidenze VM originali sono state trasferite fuori dal repository nel bundle
-privato `m3a-live-20260805-091023-vm-redacted-recovered.zip`, SHA-256
+The four original VM evidence files were transferred outside the repository into the
+private bundle `m3a-live-20260805-091023-vm-redacted-recovered.zip`, SHA-256
 `69432D0BA1FFF34FE551DE64FFA4A8DBFC47270C6E198F499F3B3E19DFC4FC22`.
-Gli hash per-file sono stati verificati sull'HOST. Il bundle non sostituisce il bundle
-finale HOST e non trasforma la run in PASS.
+Per-file hashes were verified on the HOST. The bundle does not replace the final
+HOST bundle and does not turn the run into PASS.
 
-## Blocco HOST
+## HOST blocker
 
-Durante `Finalize`, `SecureIntegration.M3.SecurityDriver.exe` è terminato prima della
-matrice negativa HOST. Il record `.NET Runtime` 1026 attesta:
+During `Finalize`, `SecureIntegration.M3.SecurityDriver.exe` exited before the
+HOST negative matrix. The `.NET Runtime` 1026 record attests:
 
 `AuthenticationException: Authentication failed because the platform does not support ephemeral keys`.
 
-La causa è il caricamento del certificato client sintetico tramite
-`X509KeyStorageFlags.EphemeralKeySet`. Windows Schannel non può presentare quella chiave
-come credenziale TLS client. Non sono quindi stati completati N01–N14, la correlazione
-HOST, il canary scan complessivo e il bundle finale. Il wrapper di controllo ha registrato
-`M3A_FINALIZE_FAILED` senza dichiarare PASS.
+The cause is loading the synthetic client certificate through
+`X509KeyStorageFlags.EphemeralKeySet`. Windows Schannel cannot present that key
+as a TLS client credential. N01–N14, HOST correlation, the aggregate
+canary scan and the final bundle therefore did not complete. The control wrapper recorded
+`M3A_FINALIZE_FAILED` without claiming PASS.
 
-Il `Finalize` ha invocato il cleanup ufficiale nel proprio percorso di errore. La verifica
-successiva ha rilevato zero container, volumi e network Docker della run, assenza
-dell'adattatore `M3A-Isolated` e ripristino dei tre profili Firewall allo stato originario
-disabilitato. Le evidenze esistenti non sono state cancellate.
+`Finalize` invoked official cleanup in its error path. Subsequent verification
+found zero run Docker containers, volumes and networks, absence
+of the `M3A-Isolated` adapter and restoration of the three Firewall profiles to their original
+disabled state. Existing evidence was not deleted.
 
-## Correzioni
+## Corrections
 
-I commit `678aa07ca20802d342d00772c019b233869e7639` e
-`2dd70e8` correggono e verificano esclusivamente il laboratorio:
+Commits `678aa07ca20802d342d00772c019b233869e7639` and
+`2dd70e8` correct and verify only the laboratory:
 
-1. il SecurityDriver usa `UserKeySet` su Windows, senza `PersistKeySet`, e conserva
-   `EphemeralKeySet` sugli altri sistemi;
-2. il packaging VM accetta esplicitamente il suffisso vuoto richiesto dall'archive di
-   successo in Windows PowerShell 5.1;
-3. regressioni statiche fail-closed impediscono il ritorno dei due difetti;
-4. un integration test Windows esegue un handshake mTLS Schannel reale con certificato
-   client importato tramite `UserKeySet`.
+1. SecurityDriver uses `UserKeySet` on Windows, without `PersistKeySet`, and retains
+   `EphemeralKeySet` on other systems;
+2. VM packaging explicitly accepts the empty suffix required by the success
+   archive in Windows PowerShell 5.1;
+3. fail-closed static regressions prevent the two defects from returning;
+4. a Windows integration test performs a real Schannel mTLS handshake with a
+   client certificate imported through `UserKeySet`.
 
-Nessun file di produzione Broker o Gateway è modificato. Prima di una nuova run sono
-obbligatori CI verde sul commit correttivo, RunId/materiale sintetico nuovi e una nuova
-finestra operativa. M3B e M4 restano non iniziati.
+No production Broker or Gateway file is changed. Before a new run,
+green CI on the corrective commit, a new RunId/synthetic material and a new
+operational window are mandatory. M3B and M4 remain unstarted.

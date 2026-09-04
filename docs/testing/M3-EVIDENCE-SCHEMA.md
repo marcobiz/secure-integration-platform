@@ -1,24 +1,24 @@
-# M3 — schema delle evidenze redatte
+# M3 — Redacted evidence schema
 
-Il bundle M3 è una prova riproducibile, non un archivio dei dati grezzi. Il manifest JSON
-usa proprietà ordinate e contiene:
+The M3 bundle is reproducible evidence, not a raw-data archive. The JSON manifest
+uses ordered properties and contains:
 
-- `schemaVersion`, `runId`, `environment` (`M3A`, `M3A-CI` o `M3B`) e `scope`;
+- `schemaVersion`, `runId`, `environment` (`M3A`, `M3A-CI` or `M3B`) and `scope`;
 - `commitSha`, `m2BaselineTag`, `startedAtUtc`, `completedAtUtc`;
-- digest SHA-256 di immagini e migration; il digest del bundle è nel sidecar esterno per
-  evitare un riferimento circolare;
-- identità pubbliche (SID service/account o resource ID Managed Identity), mai token;
-- lista scenario con ID, stato e codice osservato; durata ed evidence file sono richiesti
-  per i gate live M3A/M3B e facoltativi nel sotto-gate `M3A-CI`;
-- contatori Vault/mock/DB prima e dopo i negative path;
-- esito canary scan e cleanup verificato prima della finalizzazione;
+- SHA-256 digests of images and migrations; the bundle digest is in an external sidecar
+  to avoid a circular reference;
+- public identities (service/account SID or Managed Identity resource ID), never tokens;
+- scenario list with ID, status and observed code; duration and evidence files are required
+  for the M3A/M3B live gates and optional in the `M3A-CI` sub-gate;
+- Vault/mock/DB counters before and after negative paths;
+- canary scan result and verified cleanup before finalization;
 - tool/runtime versions.
 
-File ammessi: manifest, report Markdown, JUnit/TRX senza payload, ACL/config pubblica,
-query di audit metadata-only, SBOM, digest e sidecar. File vietati: chiavi private, PFX,
-activation code, API key, body raw, DPAPI blob, token, environment dump, EVTX non redatto,
-core dump e log non redatti.
+Allowed files: manifest, Markdown report, JUnit/TRX without payloads, public ACL/configuration,
+metadata-only audit queries, SBOM, digests and sidecars. Prohibited files: private keys, PFX,
+activation codes, API keys, raw bodies, DPAPI blobs, tokens, environment dumps, unredacted EVTX,
+core dumps and unredacted logs.
 
-La redazione sostituisce valori con identificatori stabili (`[REDACTED:<kind>]`) e poi
-esegue una ricerca byte-for-byte delle undici canary originali. Il bundle è creato solo
-dopo tale ricerca e il suo hash viene calcolato su byte finali immutabili.
+Redaction replaces values with stable identifiers (`[REDACTED:<kind>]`) and then
+performs a byte-for-byte search for the eleven original canaries. The bundle is created only
+after that search, and its hash is computed over the final immutable bytes.

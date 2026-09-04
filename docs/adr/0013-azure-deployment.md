@@ -1,16 +1,15 @@
-# ADR-0013: Deployment Azure
+# ADR-0013: Azure deployment
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Decisione
+## Decision
 
-Linux Azure App Service for Containers, ACR, Key Vault, PostgreSQL Flexible Server, Managed Identity, Application Insights/Log Analytics e Bicep. Ambienti isolati dev/test/preprod/prod.
+Linux Azure App Service for Containers, ACR, Key Vault, PostgreSQL Flexible Server, Managed Identity, Application Insights/Log Analytics and Bicep. Isolated dev/test/preprod/prod environments.
 
-## Conseguenze
+## Consequences
 
-Operations inferiori ad AKS e supporto mTLS con certificate forwarding. Il Gateway valida sempre il certificato inoltrato. VNet e firewall sono baseline; Private Endpoint/WAF sono profili attivabili.
+Less operational work than AKS and mTLS support through certificate forwarding. The Gateway always validates the forwarded certificate. VNet and firewall are baseline controls; Private Endpoint/WAF are optional profiles.
 
-## Alternative escluse
+## Rejected alternatives
 
-AKS, Container Apps e App Service Windows non offrono vantaggio sufficiente per l'MVP; Terraform non viene mantenuto in parallelo a Bicep.
-
+AKS, Container Apps and Windows App Service offer insufficient benefit for the MVP; Terraform is not maintained alongside Bicep.

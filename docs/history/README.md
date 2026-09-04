@@ -1,71 +1,75 @@
-# Indice storico
+# Historical index
 
-**Pubblico:** maintainer, auditor e reviewer.
-**Stato:** HISTORICAL index.
+**Audience:** maintainers, auditors and reviewers.
+**Status:** HISTORICAL index.
 
-Questo indice conserva la classificazione iniziale di 53 documenti di piani completati,
-gate, review, report e runbook di milestone, e identifica i percorsi successivamente
-superati. I file restano ai path originali per non rompere link o riscrivere evidence;
-non sono autorità sullo stato attuale e non devono fornire passaggi mancanti a un adottante.
+This index preserves the initial classification of 53 completed plans, gates, reviews,
+reports and milestone runbooks, and identifies subsequently superseded paths.
+Files retain their original paths to preserve links and evidence provenance.
+They are not authorities on current status and must not supply missing adopter steps.
 
-## Classificazione iniziale dei 53 documenti
+The English translation changes presentation, not historical outcomes, dates or
+attested baselines. Protocol values, identifiers, paths and recorded outputs retain
+their original spelling; attested commits and tags remain unchanged.
 
-| Gruppo | Conteggio | Path classificati HISTORICAL |
+## Initial classification of 53 documents
+
+| Group | Count | Paths classified HISTORICAL |
 |---|---:|---|
-| Architettura milestone | 1 | `docs/architecture/m2-gateway-architecture.md` |
-| Piano connector precedente | 1 | `docs/connectors/healthcare/M6-IMPLEMENTATION-PLAN.md` |
-| Piani di implementazione completati | 19 | Tutti i file in `docs/implementation/` eccetto `0.1.0-alpha-scope.md`, `implementation-plan.md`, `backlog.md`, `definition-of-done.md`. |
-| Runbook/laboratori milestone | 5 | `M0-M1-LIVE-MATRIX-RUNBOOK.md`, `M2-GATEWAY-RUNBOOK.md`, `M3-E2E-RUNBOOK.md`, `M3A-SPLIT-HOST-CODEX-VM.md`, `M3A-SPLIT-HOST-RUNBOOK.md` sotto `docs/operations/`. |
-| Review | 16 | Tutti i file versionati in `docs/reviews/` sulla baseline. |
-| Report di test/evidence | 9 | Tutti i file in `docs/testing/` eccetto `test-strategy.md`; include il report FSE2 pre-qualifica, ora superato dalla dashboard CURRENT. |
-| Tracciabilità di fase | 1 | `docs/traceability/auth-phase2-wave1-oauth.md` |
-| Harness M0/M1 | 1 | `tools/live-matrix/README.md` |
-| **Totale** | **53** | Nessun file spostato in questa tranche. |
+| Milestone architecture | 1 | `docs/architecture/m2-gateway-architecture.md` |
+| Earlier Connector plan | 1 | `docs/connectors/healthcare/M6-IMPLEMENTATION-PLAN.md` |
+| Completed implementation plans | 19 | All files in `docs/implementation/` except `0.1.0-alpha-scope.md`, `implementation-plan.md`, `backlog.md`, `definition-of-done.md`. |
+| Milestone runbooks/laboratories | 5 | `M0-M1-LIVE-MATRIX-RUNBOOK.md`, `M2-GATEWAY-RUNBOOK.md`, `M3-E2E-RUNBOOK.md`, `M3A-SPLIT-HOST-CODEX-VM.md`, `M3A-SPLIT-HOST-RUNBOOK.md` under `docs/operations/`. |
+| Reviews | 16 | All versioned files under `docs/reviews/` at the baseline. |
+| Test/evidence reports | 9 | All files under `docs/testing/` except `test-strategy.md`; includes the pre-qualification FSE2 report, now superseded by the CURRENT dashboard. |
+| Phase traceability | 1 | `docs/traceability/auth-phase2-wave1-oauth.md` |
+| M0/M1 harness | 1 | `tools/live-matrix/README.md` |
+| **Total** | **53** | No files moved in this tranche. |
 
-`docs/operations/M4-QUICKSTART.md` è un percorso duplicato e non canonico: conservarlo
-come reference di milestone, ma per l’adozione usare soltanto
-[docs/user/local-pilot.md](../user/local-pilot.md). I documenti stale/target non compresi
-nel conteggio storico non diventano CURRENT per esclusione: l’elenco CURRENT è
-esplicitamente definito in [docs/README.md](../README.md).
+`docs/operations/M4-QUICKSTART.md` is a duplicated, non-canonical path: retain it as
+a milestone reference, but use only [docs/user/local-pilot.md](../user/local-pilot.md)
+for adoption. Stale/target-state documents not included in the historical count
+do not become CURRENT by exclusion: the CURRENT list is explicitly defined in
+[docs/README.md](../README.md).
 
-## Prove Windows / Local Broker
+## Windows / Local Broker evidence
 
-- [Matrice M0/M1 requisito-test-evidenza](../reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md)
-  e [runbook Windows](../operations/M0-M1-LIVE-MATRIX-RUNBOOK.md): servizio SCM reale
-  con identità distinta, processi autorizzati/non autorizzati, ACL pipe/storage, DPAPI,
-  restart e reboot. L'[harness esistente](../../tools/live-matrix/README.md) richiede
-  VM Windows dedicata, elevazione e SDK; non è il pilot Core Docker-first.
-- [Gate M3A split-host](../operations/M3A-SPLIT-HOST-RUNBOOK.md): simulatore legacy
-  Windows → Named Pipe → Local Broker → Gateway → fornitore sintetico HTTPS/mTLS.
-  Il [gate prodotto M3A](../reviews/M3A-PRODUCT-GATE-20260805.md) e la
-  [tracciabilità FR-008](../traceability/requirements-traceability.md#requisiti-funzionali)
-  identificano la run PASS-LIVE storica e il relativo perimetro; il runbook conserva
-  baseline, prerequisiti Hyper-V e handoff di quella milestone.
+- [M0/M1 requirement-test-evidence matrix](../reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md)
+  and [Windows runbook](../operations/M0-M1-LIVE-MATRIX-RUNBOOK.md): real SCM service
+  with a distinct identity, authorized/unauthorized processes, pipe/storage ACLs,
+  DPAPI, restart and reboot. The [existing harness](../../tools/live-matrix/README.md)
+  requires a dedicated Windows VM, elevation and an SDK; it is not the Docker-first Core pilot.
+- [M3A split-host gate](../operations/M3A-SPLIT-HOST-RUNBOOK.md): Windows legacy simulator
+  → Named Pipe → Local Broker → Gateway → synthetic HTTPS/mTLS upstream.
+  The [M3A product gate](../reviews/M3A-PRODUCT-GATE-20260805.md) and
+  [FR-008 traceability](../traceability/requirements-traceability.md#functional-requirements)
+  identify the historical PASS-LIVE run and its scope; the runbook preserves that
+  milestone's baseline, Hyper-V prerequisites and handoff.
 
-Queste prove supportano il confine per software installato sulle baseline attestate,
-non una nuova demo o qualifica del CURRENT. Non eseguire i comandi di laboratorio come
-installazione ordinaria. MSI, adapter C ABI/COM e produzione non sono qualificati;
-Administrator e SYSTEM restano minacce privilegiate residue.
+These tests support the installed-software boundary on attested baselines, not a new
+demo or CURRENT qualification. Do not run laboratory commands as an ordinary installation.
+MSI, C ABI/COM adapters and production are not qualified; Administrator and SYSTEM
+remain privileged residual threats.
 
-## Percorsi FSE2 precedenti
+## Earlier FSE2 paths
 
-L'ingresso corrente è [validazione e consultazione OfficialTest](../user/fse2-validation-status.md),
-con [capability sintetizzate qui](../../IMPLEMENTATION_STATUS.md#stato-prodotto).
+The current entry point is [OfficialTest validation and lookup](../user/fse2-validation-status.md),
+with [capabilities summarized here](../../IMPLEMENTATION_STATUS.md#product-status).
 
-- [Pilot validate-only](../user/fse2-officialtest.md): storico per la prima adozione,
-  specifico di `fse2-officialtest-validate-cda@1.0.1`. I limiti del vecchio runner non
-  descrivono il runner current-spec; il riferimento al provisioner condiviso resta utile.
-- [Spec freeze Wave 1](../implementation/FSE2-WAVE1-SPEC-FREEZE.md): inventory storico
-  a 11 operazioni. Non sostituisce le [14 route current-spec](../connectors/healthcare/fse2/current-spec.md).
-- [Matrice dei profili storici alla baseline PR #65](https://github.com/marcobiz/secure-integration-platform/blob/18df69d6eaa34ed636b101bce1d188cd65226e1a/docs/connectors/healthcare/fse2/README.md#historical-profile-capability-matrix):
-  conserva anche la prova trace/`NOT_FOUND` del 3 settembre, distinta dal workflow
-  `FOUND` del 4 settembre. Nessuna qualifica si trasferisce automaticamente tra profili.
+- [Validate-only pilot](../user/fse2-officialtest.md): historical for first adoption,
+  specific to `fse2-officialtest-validate-cda@1.0.1`. The old runner's limits do not
+  describe the current-spec runner; the shared provisioner reference remains useful.
+- [Wave 1 spec freeze](../implementation/FSE2-WAVE1-SPEC-FREEZE.md): historical
+  11-operation inventory. It does not replace the [14 current-spec routes](../connectors/healthcare/fse2/current-spec.md).
+- [Historical profile matrix at the PR #65 baseline](https://github.com/marcobiz/secure-integration-platform/blob/18df69d6eaa34ed636b101bce1d188cd65226e1a/docs/connectors/healthcare/fse2/README.md#historical-profile-capability-matrix):
+  also preserves the September 3 trace/`NOT_FOUND` test, distinct from September 4
+  workflow `FOUND`. Qualification never transfers automatically between profiles.
 
-## Uso corretto della storia
+## Correct use of history
 
-- Usare questi file per provenance, decisioni su baseline passate o audit.
-- Non ricostruire da essi il percorso di installazione, onboarding o invocation.
-- Non aggiornare un report immutabile per correggere lo stato corrente; aggiornare
-  dashboard, guide CURRENT e traceability.
-- Non copiare SHA, conteggi di gate o dettagli di laboratorio nelle guide utente salvo
-  che supportino una decisione attuale e bounded.
+- Use these files for provenance, decisions on past baselines or audit.
+- Do not reconstruct installation, onboarding or invocation procedures from them.
+- Do not update an immutable report to correct current status; update the dashboard,
+  CURRENT guides and traceability.
+- Do not copy SHAs, gate counts or laboratory details into user guides unless they
+  support a current, bounded decision.

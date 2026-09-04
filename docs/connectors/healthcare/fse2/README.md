@@ -2,7 +2,7 @@
 
 **Current entry point:** [validation and workflow status pilot](../../../user/fse2-validation-status.md).
 The opt-in `fse2-organization-current-spec@1.0.0` is integrated through PR #65.
-The [capability summary](../../../../IMPLEMENTATION_STATUS.md#stato-prodotto) owns current
+The [capability summary](../../../../IMPLEMENTATION_STATUS.md#product-status) owns current
 status; the [14-route current-spec contract](current-spec.md) owns the frozen offline
 scope, request/response matrix and acceptance limits.
 
@@ -17,84 +17,86 @@ a Core dependency.
 The [validate-only guide](../../../user/fse2-officialtest.md) retains the earlier
 `fse2-officialtest-validate-cda@1.0.1` path and shared provisioner reference. Its
 bootstrap/session/runner gaps do not describe the current distributed pilot.
-The [history index](../../../history/README.md#percorsi-fse2-precedenti) preserves the
+The [history index](../../../history/README.md#earlier-fse2-paths) preserves the
 11-operation profile matrix and the earlier trace/NOT_FOUND observation. Historical
 Published definitions and their evidence remain immutable; qualifications do not
 transfer to the current profile.
 
 ## Authority model
 
-Il solo actor profile implementato è `ORGANIZATION`; Human Actor è differito. Core
-autentica il caller, deriva Tenant/Application/Installation/Environment, verifica grant
-e Published operation e poi consegna al modulo `healthcare-fse2` una authority bounded.
-Il pack dipende da contratti provider-neutral e non riceve store/provider access,
-`GetSecret`, signing oracle, endpoint selector o HTTP generico.
+The only implemented actor profile is `ORGANIZATION`; Human Actor is deferred.
+The Core authenticates the caller, derives Tenant/Application/Installation/Environment,
+checks the grant and Published operation, then gives the `healthcare-fse2` module
+bounded authority. The pack depends on provider-neutral contracts and receives no
+store/provider access, `GetSecret`, signing oracle, endpoint selector or generic HTTP.
 
-La configurazione Published contiene identità Organization e binding logici. Metodo,
-path, content type, endpoint, audience, claim policy, signing slot, certificati e
-revisioni sono server-owned. `person_id` resta dato business validato e non diventa
-identità autenticata.
+Published configuration contains Organization identity and logical bindings.
+Method, path, content type, endpoint, audience, claim policy, signing slots, certificates
+and revisions are server-owned. `person_id` remains validated business data and
+does not become authenticated identity.
 
-## OfficialTest `validate-cda` — riferimento storico
+## OfficialTest `validate-cda` — historical reference
 
-La source pubblica canonica è
-`Definitions/fse2-officialtest-validate-cda.connector.json` e contiene una sola
-operation. Non contiene endpoint concreto, identità organizzative operative, provider
-locator, P12, password o token. Il provisioner verticale
-`tools/fse2/OfficialTestProvisioner` usa le Admin API autenticate per
-`plan → configure/grant → propose → approve/publish → verify` e risolve A1/S1 dal
-catalogo pubblico server-side.
+The canonical public source is
+`Definitions/fse2-officialtest-validate-cda.connector.json`, containing one operation.
+It contains no concrete endpoint, operational organization identities, provider locators,
+P12 files, passwords or tokens. The vertical
+`tools/fse2/OfficialTestProvisioner` uses authenticated Admin APIs for
+`plan → configure/grant → propose → approve/publish → verify` and resolves A1/S1
+from the server-side public catalog.
 
-Il provisioner non esegue la call live. La qualifica di questo profilo validate-only è
-stata ottenuta da un runner esterno controllato e redatto. Per la prima adozione usare
-ora il [runner current-spec distribuito](../../../user/fse2-validation-status.md), con
-i suoi prerequisiti e limiti, non test integration, fixture o request ricostruite a mano.
+The provisioner does not make the live call. Qualification of this validate-only
+profile came from a controlled, redacted external runner. For first adoption, now use
+the [shipped current-spec runner](../../../user/fse2-validation-status.md), with
+its prerequisites and limits, not integration tests, fixtures or hand-reconstructed requests.
 
-La parity è esclusiva di `fse2-officialtest-validate-cda@1.0.1`: entrambi i JWT usano la
-sola leaf S1 in `x5c` e il body `VERIFICA` contiene soltanto `healthDataFormat=CDA` e
-`activity=VERIFICA`, senza `mode` o `attachment_hash`. La versione `1.0.0` è
-compatibilità storica immutabile, non contract-parity qualified.
+Parity applies only to `fse2-officialtest-validate-cda@1.0.1`: both JWTs use only the
+S1 leaf in `x5c`, and the `VERIFICA` body contains only `healthDataFormat=CDA`
+and `activity=VERIFICA`, without `mode` or `attachment_hash`. Version `1.0.0`
+is immutable historical compatibility, not contract-parity qualified.
 
-## Provider, claim e transport
+## Providers, claims and transport
 
-- A1 è distinto e autorizzato per mTLS; S1 alimenta i due slot `authorization` e
-  `integrity` con RS256 e `ContentCommitment`.
+- A1 is distinct and authorized for mTLS; S1 feeds the `authorization` and
+  `integrity` slots with RS256 and `ContentCommitment`.
 - Endpoint, origin, path composition, method, timeout, response bound, DNS/restricted
-  egress e redirect deny restano autorità Published/Core.
-- Organization/locality/application, `iss`, `aud`, `sub`, `iat`, `exp` e `jti` sono
-  server-owned; purpose/action e hash necessari sono derivati; i soli business claim
-  ammessi restano allowlisted.
-- Errori e audit conservano soltanto categorie e safe code bounded; non payload, response
-  raw, JWT, header, endpoint o certificati.
+  egress and redirect denial remain Published/Core authority.
+- Organization/locality/application, `iss`, `aud`, `sub`, `iat`, `exp` and
+  `jti` are server-owned; required purpose/action and hashes are derived; permitted
+  business claims remain allowlisted.
+- Errors and audit retain only bounded categories and safe codes, not payloads,
+  raw responses, JWTs, headers, endpoints or certificates.
 
-## Workflow correlation e limiti
+## Workflow correlation and limits
 
-La correlation tecnica PostgreSQL è scoped esattamente a Tenant, Application,
-Installation, Environment, Connector/versione e configurazione Published. Conserva solo
-operation originaria, action, purpose, checksum profilo, workflow/trace e timestamp
-tecnico; non conserva contenuto clinico. Restart e repliche condividono lo stesso stato.
+Technical PostgreSQL correlation is scoped exactly to Tenant, Application,
+Installation, Environment, Connector/version and Published configuration.
+It retains only the originating operation, action, purpose, profile checksum,
+workflow/trace and technical timestamp, not clinical content. Restarts and replicas
+share the same state.
 
-Il mapper status non espone l’intero `transactionData[]` ufficiale: è una riduzione di
-sicurezza intenzionale. Accetta al massimo 1.000 eventi ordinati e soltanto i tipi
-`VALIDATION`, `PUBLICATION`, `SEND_TO_INI`, `SEND_TO_UAR`, `UAR_FINAL_STATUS`, con esito
-`SUCCESS` o `BLOCKING_ERROR` e timestamp valido. Message, subject, document ID, issuer,
-extra e response raw vengono scartati; valori sconosciuti o malformati falliscono chiusi.
-Il 404 previsto dal contratto status è una risposta tecnica valida soltanto quando il reducer
-bounded riconosce l'exact code RFC7807 allowlisted `record-not-found`: viene ridotto a
-`statusCode=404`, `statusClassification=NOT_FOUND` ed eventi vuoti, scartando l'intero
-problem body. Body assente, non JSON, malformato, code sconosciuto e ogni altro 404 seguono
-il normale upstream failure bounded. Nessun 404 attiva retry automatici; il primo caso produce
-un solo audit success, il secondo un solo audit failure.
+The status mapper does not expose the full official `transactionData[]`: this is
+an intentional security reduction. It accepts at most 1,000 ordered events and only
+types `VALIDATION`, `PUBLICATION`, `SEND_TO_INI`, `SEND_TO_UAR`,
+`UAR_FINAL_STATUS`, with outcome `SUCCESS` or `BLOCKING_ERROR` and a valid
+timestamp. Message, subject, document ID, issuer, extra fields and raw responses
+are discarded; unknown or malformed values fail closed.
+A status-contract 404 is a valid technical response only when the bounded reducer
+recognizes the exact allowlisted RFC7807 code `record-not-found`: it reduces this
+to `statusCode=404`, `statusClassification=NOT_FOUND` and empty events, discarding
+the entire problem body. Missing, non-JSON or malformed bodies, unknown codes and all
+other 404s follow normal bounded upstream failure handling. No 404 triggers automatic
+retry; the first case produces one success audit, the second one failure audit.
 
-## Esempio minimo create → status — profilo storico
+## Minimal create → status example — historical profile
 
-Questo esempio conserva la factory storica. Per il profilo corrente usare il
-[consumer contract current-spec](current-spec.md#consumer-contract), che richiede
-il workflow della precedente VALIDATION per la pubblicazione ordinaria. Il runner
-di valutazione VERIFICA/status non abilita queste operazioni di pubblicazione.
+This example preserves the historical factory. For the current profile, use the
+[current-spec consumer contract](current-spec.md#consumer-contract), which requires
+the preceding VALIDATION workflow for ordinary publication. The VERIFICA/status
+evaluation runner does not enable these publication operations.
 
-Con Installation, grant e configurazione Published già attivi, il payload applicativo
-`create` resta quello canonico già usato dal client Gateway:
+With Installation, grant and Published configuration already active, the `create`
+application payload remains the canonical one already used by the Gateway client:
 
 ```csharp
 byte[] createPayload = Fse2Request.Create(
@@ -103,36 +105,36 @@ byte[] createPayload = Fse2Request.Create(
     clinicalClaims).SerializeAuthorizedPayload();
 ```
 
-Dalla risposta normalizzata conservare `workflowInstanceId`. La richiesta status non
-richiede di reinviare patient, action, purpose, profilo o scope:
+Retain `workflowInstanceId` from the normalized response. The status request does
+not require resending patient, action, purpose, profile or scope:
 
 ```csharp
 byte[] statusPayload = Fse2Request
     .GetStatusByWorkflow(workflowInstanceId)
     .SerializeAuthorizedPayload();
-// JSON prodotto: {"resourceIdentifier":"<workflowInstanceId>"}
+// Produced JSON: {"resourceIdentifier":"<workflowInstanceId>"}
 ```
 
-Inviare entrambi i payload al normale endpoint Published del Gateway con
-l'autenticazione runtime già prevista. Non servono nuovo login, binding, grant, SQL,
-accesso store o comando di recovery tra le due invocazioni.
+Send both payloads to the normal Published Gateway endpoint with the existing runtime
+authentication. No new login, binding, grant, SQL, store access or recovery command
+is needed between the two invocations.
 
-Lo stesso modello vale per la trace restituita da `validate-cda`: la richiesta seguente
-contiene unicamente il valore opaco, mentre action, purpose e scope sono risolti dalla
-correlazione durevole prima di firma, DNS e trasporto:
+The same model applies to a trace returned by `validate-cda`: the next request
+contains only the opaque value, while action, purpose and scope are resolved from
+durable correlation before signing, DNS and transport:
 
 ```csharp
 byte[] traceStatusPayload = Fse2Request
     .GetStatusByTrace(traceId)
     .SerializeAuthorizedPayload();
-// JSON prodotto: {"resourceIdentifier":"<traceId>"}
+// Produced JSON: {"resourceIdentifier":"<traceId>"}
 ```
 
-La definition Published deve contenere entrambe le operation nella stessa esatta
-Tenant/Application/Installation/Environment/Connector/versione e configurazione che ha
-registrato la trace; non esiste fallback in-memory o cross-scope.
+The Published definition must contain both operations in the exact same
+Tenant/Application/Installation/Environment/Connector/version and configuration that
+recorded the trace; there is no in-memory or cross-scope fallback.
 
-Local PKCS#12 è un pack/laboratorio opzionale, non HSM/KMS o custody production.
-Accreditamento, produzione, Human Actor, callback inbound, direct FHIR publication
-confermata e qualifica live complessiva restano fuori scope. La copertura offline
-corrente è limitata alle 14 route e alle risoluzioni esplicite di current-spec.
+Local PKCS#12 is an optional pack/laboratory, not HSM/KMS or production custody.
+Accreditation, production, Human Actor, inbound callbacks, confirmed direct FHIR
+publication and overall live qualification remain out of scope. Current offline
+coverage is limited to the 14 routes and explicit current-spec resolutions.

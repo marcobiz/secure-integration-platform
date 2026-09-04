@@ -1,209 +1,209 @@
-# Pilot FSE2 OfficialTest — profilo validate-only storico
+# FSE2 OfficialTest pilot — historical validate-only profile
 
-Per il nuovo percorso current-spec limitato a VERIFICA e consultazione, vedere
-[FSE2 Organization: validazione e status](fse2-validation-status.md). La presente
-guida conserva il contesto del precedente profilo validate-cda 1.0.1.
+For the new current-spec path limited to VERIFICA and lookup, see
+[FSE2 Organization: validation and status](fse2-validation-status.md). This guide
+preserves the context of the previous validate-cda 1.0.1 profile.
 
-**Pubblico:** organizzazione autorizzata a usare l’ambiente OfficialTest.
-**Stato:** HISTORICAL per la prima adozione; riferimento del solo
-`fse2-officialtest-validate-cda@1.0.1` / `validate-cda` e del provisioner condiviso.
-**Claim storica:** `validate-cda` LIVE_QUALIFIED sulla propria baseline exact. I gap
-di bootstrap/sessioni/runner descritti sotto riguardano questo precedente percorso,
-non il [pilot corrente](fse2-validation-status.md). Lo
-[stato delle capability](../../IMPLEMENTATION_STATUS.md#stato-prodotto) distingue i profili.
+**Audience:** organizations authorized to use the OfficialTest environment.
+**Status:** HISTORICAL for first adoption; reference only for
+`fse2-officialtest-validate-cda@1.0.1` / `validate-cda` and the shared provisioner.
+**Historical claim:** `validate-cda` LIVE_QUALIFIED on its own exact baseline.
+The bootstrap/session/runner gaps below concern this earlier path, not the
+[current pilot](fse2-validation-status.md). The
+[capability status](../../IMPLEMENTATION_STATUS.md#product-status) distinguishes the profiles.
 
-Questa guida mette i passaggi nell’ordine reale e segnala dove il prodotto si ferma. Non
-autorizza nuove chiamate live, non crea account o materiale A1/S1 e non qualifica
-produzione o accreditamento.
+This guide puts steps in their actual order and identifies where the product stops.
+It does not authorize new live calls, create accounts or A1/S1 material, or qualify
+production or accreditation.
 
-## Validazione CDA e abilitazione alla pubblicazione
+## CDA validation and publication eligibility
 
-In OfficialTest le operazioni hanno finalità distinte:
+OfficialTest operations serve different purposes:
 
-- `VERIFICA` controlla il CDA, ma non lo abilita alla pubblicazione;
-- `VALIDATION` è la validazione propedeutica alla pubblicazione e deve restituire il
-  `workflowInstanceId` da usare nel passaggio successivo;
-- `validate-and-create` combina validazione e pubblicazione in una sola operazione.
+- `VERIFICA` checks the CDA but does not make it eligible for publication;
+- `VALIDATION` is the validation required before publication and must return the
+  `workflowInstanceId` to use in the next step;
+- `validate-and-create` combines validation and publication in one operation.
 
-I certificati di test e l’accreditamento usati per la validazione non garantiscono
-automaticamente l’ammissione alle operazioni di pubblicazione. Non è necessario avere già
-l’accreditamento definitivo di produzione per provarle nell’ambiente di test; può tuttavia
-essere necessaria un’abilitazione OfficialTest specifica per `VALIDATION`, `create` e
+The test certificates and accreditation used for validation do not automatically
+guarantee admission to publication operations. Final production accreditation is
+not necessarily required to try them in the test environment; however, specific
+OfficialTest enablement may be needed for `VALIDATION`, `create` and
 `validate-and-create`.
 
-Se `VERIFICA` risponde HTTP 200, ma sia il percorso di pubblicazione separato sia
-`validate-and-create`, costruiti conformemente, ricevono HTTP 404, classificare il caso
-come possibile anomalia di admission/routing e chiedere conferma a Sogei/Ministero. Se
-l’esito di `create` è ambiguo, riconciliare prima tramite workflow, trace o status: non
-ripetere `create` alla cieca.
+If `VERIFICA` returns HTTP 200 but both the separate publication path and
+`validate-and-create`, built in conformance with the contract, receive HTTP 404,
+classify the case as a possible admission/routing anomaly and request confirmation
+from Sogei/the Ministry. If a `create` outcome is ambiguous, reconcile through
+workflow, trace or status first: do not blindly repeat `create`.
 
-Riferimenti ufficiali:
+Official references:
 
-- [Processo di accreditamento al FSE 2.0](https://github.com/ministero-salute/it-fse-support/blob/main/doc/accreditamento/README.md)
-- [Integrazione con il Gateway FSE](https://github.com/ministero-salute/it-fse-support/blob/main/doc/integrazione-gateway/README.md)
+- [FSE 2.0 accreditation process](https://github.com/ministero-salute/it-fse-support/blob/main/doc/accreditamento/README.md)
+- [FSE Gateway integration](https://github.com/ministero-salute/it-fse-support/blob/main/doc/integrazione-gateway/README.md)
 
-## Prima di iniziare: risultato e hard stop
+## Before starting: outcome and hard stops
 
-Il pilot disponibile verifica la qualità di un CDA con una singola `validate-cda`. Non
-pubblica un documento. `create + get-status-by-workflow` sono qualificati offline sul
-product path con correlazione PostgreSQL durevole, ma non sono inclusi nella definition
-OfficialTest canonica né in una qualifica live.
+The available pilot checks CDA quality with one `validate-cda`. It does not publish
+a document. `create + get-status-by-workflow` are offline-qualified on the product
+path with durable PostgreSQL correlation, but are not included in the canonical
+OfficialTest definition or in live qualification.
 
-Fermarsi se manca anche uno solo di questi elementi:
+Stop if any of the following is missing:
 
-- accesso OfficialTest e budget di una chiamata autorizzati dall’organizzazione;
-- dataset CDA sintetico approvato per l’uso nel test;
-- deployment exact della vertical image FSE2, modulo allowlisted e migrazioni
-  PostgreSQL 18 correnti;
-- Tenant, Application, Environment OfficialTest e una Installation Direct attiva,
-  derivati e verificati server-side;
-- risorse A1 e S1 distinte, attive, scoped al Connector/operation, con custody e metadata
-  pubblici gestiti dal provider autorizzato;
-- tre sessioni Admin separate: Security Administrator, Connector Editor e un Connector
-  Approver distinto;
-- HTTPS Gateway e, se necessaria, sola CA pubblica DER pinned;
-- piano operativo protetto, fuori Git, conforme allo
-  [schema chiuso](../connectors/healthcare/fse2/fse2-officialtest-operational-plan.schema.json).
+- organization-authorized OfficialTest access and a one-call budget;
+- a synthetic CDA dataset approved for use in the test;
+- exact FSE2 vertical-image deployment, allowlisted module and current PostgreSQL 18 migrations;
+- Tenant, Application, OfficialTest Environment and an active Direct Installation,
+  derived and verified server-side;
+- distinct active A1 and S1 resources scoped to the Connector/operation, with custody
+  and public metadata managed by the authorized provider;
+- three separate Admin sessions: Security Administrator, Connector Editor and a
+  distinct Connector Approver;
+- Gateway HTTPS and, if needed, only a pinned public DER CA;
+- a protected operational plan outside Git, conforming to the
+  [closed schema](../connectors/healthcare/fse2/fse2-officialtest-operational-plan.schema.json).
 
-La repository non offre ancora un workflow supportato per creare da zero il deployment
-FSE2 reale, importare il materiale provider operativo, creare/assegnare i principal o
-acquisire le tre sessioni. Sono prerequisiti esterni espliciti. Il laboratorio Local
-PKCS#12 usa materiale sintetico e non sostituisce custody o import OfficialTest.
+For this historical path, the repository did not yet offer a supported workflow to
+create a real FSE2 deployment from scratch, import operational provider material,
+create/assign principals or acquire the three sessions. These were explicit external
+prerequisites. The Local PKCS#12 laboratory uses synthetic material and does not
+replace OfficialTest custody or import.
 
-## Confine del piano
+## Plan boundary
 
-Il piano contiene selector Tenant/Installation, un’asserzione Environment, identità
-organizzazione/località e riferimenti pubblici A1/S1 con revisioni attese. Non contiene
-P12 o relativi path, password, chiavi private, token, header Authorization, cookie,
-identità dei principal o authority runtime scelte dal client.
+The plan contains Tenant/Installation selectors, an Environment assertion,
+organization/locality identity and public A1/S1 references with expected revisions.
+It contains no P12 files or paths, passwords, private keys, tokens, Authorization
+headers, cookies, principal identities or client-selected runtime authority.
 
-Usare un path assoluto protetto fuori dalla repository:
+Use a protected absolute path outside the repository:
 
 ```powershell
-$protectedPlan = '<percorso-assoluto-protetto-fuori-repository>'
+$protectedPlan = '<protected-absolute-path-outside-repository>'
 ```
 
-## 1. Plan — zero effetti
+## 1. Plan — no effects
 
-Da exact product HEAD:
+From the exact product HEAD:
 
 ```powershell
 dotnet run --project tools/fse2/OfficialTestProvisioner/OfficialTestProvisioner.csproj -- plan $protectedPlan
 ```
 
-`plan` viene eseguito prima della costruzione del client Admin e stampa soltanto
-identità fisse/digest redatti. Un esito plan non prova che gli ID dichiarati siano
-autorevoli: `configure` deve risolvere l’Installation autenticata e derivare da essa
-l’Environment. Qualunque codice `FSE2_OFFICIALTEST_*` è un hard stop.
+`plan` runs before the Admin client is constructed and prints only fixed identities
+and redacted digests. A plan result does not prove that declared IDs are authoritative:
+`configure` must resolve the authenticated Installation and derive its Environment.
+Any `FSE2_OFFICIALTEST_*` code is a hard stop.
 
 ## 2. Apply — Security Administrator
 
-In un processo dedicato alla sessione Security Administrator, valorizzare senza usare la
-command line o il piano:
+In a process dedicated to the Security Administrator session, set these without
+using the command line or plan:
 
 ```powershell
-$env:FSE2_GATEWAY_URL = 'https://<gateway-amministrativo>'
-$env:FSE2_ADMIN_SESSION_COOKIE = '<cookie-di-sessione-protetto>'
-$env:FSE2_GATEWAY_CA_FILE = '<ca-pubblica-der-opzionale>'
+$env:FSE2_GATEWAY_URL = 'https://<admin-gateway>'
+$env:FSE2_ADMIN_SESSION_COOKIE = '<protected-session-cookie>'
+$env:FSE2_GATEWAY_CA_FILE = '<optional-public-der-ca>'
 ```
 
-Il meccanismo di autenticazione del deployment deve fornire la sessione; questa
-repository non documenta un metodo generico per estrarla o copiarla. Eseguire:
+The deployment's authentication mechanism must supply the session; this repository
+does not document a generic way to extract or copy it. Run:
 
 ```powershell
 dotnet run --project tools/fse2/OfficialTestProvisioner/OfficialTestProvisioner.csproj -- configure $protectedPlan
 dotnet run --project tools/fse2/OfficialTestProvisioner/OfficialTestProvisioner.csproj -- grant $protectedPlan
 ```
 
-`configure` valida/importa la definition canonica, valida lo stato persistito e applica
-il binding esatto. `grant` crea o verifica il grant Installation/Connector/
-`validate-cda`. Entrambi ricostruiscono lo stato dalle Admin API e saltano soltanto fasi
-già persistite e identiche.
+`configure` validates/imports the canonical definition, validates persisted state
+and applies the exact binding. `grant` creates or verifies the
+Installation/Connector/`validate-cda` grant. Both reconstruct state through Admin
+APIs and skip only phases already persisted with identical state.
 
 ## 3. Apply — Connector Editor
 
-Rimuovere la sessione Security Administrator dal processo. In una sessione separata di
-Connector Editor:
+Remove the Security Administrator session from the process. In a separate Connector
+Editor session:
 
 ```powershell
 dotnet run --project tools/fse2/OfficialTestProvisioner/OfficialTestProvisioner.csproj -- plan $protectedPlan
 dotnet run --project tools/fse2/OfficialTestProvisioner/OfficialTestProvisioner.csproj -- propose $protectedPlan
 ```
 
-Conservare nel passaggio di ruolo soltanto approval request ID, approval digest e i
-checksum/digest redatti restituiti. Non conservare definition compilata, risposte Admin,
-cookie o metadata provider.
+Retain only the approval request ID, approval digest and returned redacted
+checksums/digests for the role handoff. Do not retain compiled definitions,
+Admin responses, cookies or provider metadata.
 
-## 4. Apply — approvatore distinto e publish
+## 4. Apply — distinct approver and publication
 
-Rimuovere la sessione editor. In un nuovo processo autenticato come Connector Approver
-distinto, ripetere `plan`, confrontare i digest del passaggio di ruolo, quindi usare i
-valori redatti restituiti da `propose`:
+Remove the editor session. In a new process authenticated as a distinct Connector
+Approver, repeat `plan`, compare the handoff digests, then use the redacted values
+returned by `propose`:
 
 ```powershell
 dotnet run --project tools/fse2/OfficialTestProvisioner/OfficialTestProvisioner.csproj -- approve $protectedPlan <approval-request-id> <approval-digest-sha256>
 dotnet run --project tools/fse2/OfficialTestProvisioner/OfficialTestProvisioner.csproj -- publish $protectedPlan <expected-publication-revision>
 ```
 
-Self-approval, checksum/revision drift, binding/provider drift o publisher diverso
-dall’approvatore exact falliscono chiusi. Non modificare il piano o la versione per
-aggirare l’errore.
+Self-approval, checksum/revision drift, binding/provider drift or a publisher other
+than the exact approver fail closed. Do not change the plan or version to bypass the error.
 
 ## 5. Verify
 
-Nella stessa sessione dell’approvatore:
+In the same approver session:
 
 ```powershell
 dotnet run --project tools/fse2/OfficialTestProvisioner/OfficialTestProvisioner.csproj -- verify $protectedPlan
 ```
 
-Procedere soltanto se il read-back è `Published/Active`, la versione è `1.0.1`, esiste
-una sola operation `validate-cda`, A1 è il certificato mTLS, S1 alimenta entrambi gli slot
-JWT, non esistono ordinary secret binding e tutti i digest/revisioni coincidono.
+Proceed only if read-back is `Published/Active`, version is `1.0.1`, there is exactly
+one `validate-cda` operation, A1 is the mTLS certificate, S1 feeds both JWT slots,
+there are no ordinary secret bindings and all digests/revisions match.
 
-## 6. Invocation — blocco self-service corrente
+## 6. Invocation — historical self-service blocker
 
-La baseline ha una qualifica live redatta: una richiesta applicativa `validate-cda` ha
-attraversato il Gateway verso OfficialTest e ha ricevuto Gateway 200, con un solo
-dispatch, zero retry e zero redirect. Questo qualifica la capability sulla configurazione
-attestata; non rende riproducibile il pilot per un nuovo adottante.
+The baseline has redacted live qualification: one application `validate-cda` request
+crossed the Gateway to OfficialTest and received Gateway 200, with one dispatch,
+zero retries and zero redirects. This qualifies the capability on the attested
+configuration; it does not make the pilot reproducible for a new adopter.
 
-La repository non distribuisce ancora un runner adopter-facing che:
+This historical path did not ship an adopter-facing runner that:
 
-1. usi una Installation già enrolled e il grant esatto;
-2. acquisisca l’input CDA sintetico autorizzato senza dipendere da fixture/test Git;
-3. costruisca il payload FSE2 pubblico previsto;
-4. verifichi clock, budget di una chiamata e Published read-back;
-5. esegua una sola invocation e produca risultato/audit redatti;
-6. possa riprendere in sicurezza dopo pubblicazione ma prima della call.
+1. uses an already-enrolled Installation and the exact grant;
+2. obtains authorized synthetic CDA input without depending on Git fixtures/tests;
+3. constructs the expected public FSE2 payload;
+4. checks clock, one-call budget and Published read-back;
+5. performs one invocation and produces a redacted result/audit;
+6. can safely resume after publication but before the call.
 
-Di conseguenza il percorso supportato termina a `verify` per un adottante indipendente.
-Non usare test integration, fixture M3, Git object, payload ricostruiti a mano o endpoint
-letti da evidence come runner operativo. La prossima slice di prodotto deve consegnare
-quel runner/guided workflow e chiudere il gate black-box **time to first successful
-call**. Solo un owner già autorizzato del runner esterno usato per la qualifica può
-eseguire una nuova call, con una nuova autorizzazione live.
+Consequently, the supported path ended at `verify` for an independent adopter.
+Do not use integration tests, M3 fixtures, Git objects, hand-reconstructed payloads
+or endpoints read from evidence as an operational runner. The next product slice
+was required to deliver that runner/guided workflow and close the black-box
+**time to first successful call** gate. Only an already-authorized owner of the
+external runner used for qualification could make a new call, with new live authorization.
+The [current pilot](fse2-validation-status.md) supersedes this adoption blocker.
 
-## Resume, errori e cleanup
+## Resume, errors and cleanup
 
-- Un 429 non attiva retry automatici. Attendere l’eventuale `Retry-After` bounded e
-  ripetere lo stesso comando con lo stesso piano/sessione; il risultato indica
-  `currentState`, `nextRequiredPhase` e `retrySafe`.
-- Un drift di Installation, Environment, binding, provider o approval richiede
-  riconciliazione dell’autorità server-side; non SQL, flag force o modifica in-place.
-- Una versione Published è immutabile. Il decommissioning usa retire; rollback riattiva
-  soltanto una versione Superseded già pubblicata.
-- Non eliminare volumi o materiale provider per “ripartire”. Una configurazione Published
-  nell’Environment sbagliato richiede un nuovo stato pulito supportato e preserva la
-  precedente come evidenza storica.
+- A 429 does not trigger automatic retries. Respect any bounded `Retry-After`
+  and repeat the same command with the same plan/session; the result reports
+  `currentState`, `nextRequiredPhase` and `retrySafe`.
+- Installation, Environment, binding, provider or approval drift requires
+  reconciliation of server-side authority, not SQL, force flags or in-place edits.
+- A Published version is immutable. Decommissioning uses retire; rollback reactivates
+  only an already-published Superseded version.
+- Do not delete volumes or provider material to “start again”. A configuration
+  Published in the wrong Environment requires a new supported clean state and
+  preserves the previous configuration as historical evidence.
 
-La tabella codice → azione è in [troubleshooting.md](troubleshooting.md). La reference
-tecnica del profilo è nel [README FSE2](../connectors/healthcare/fse2/README.md).
+The code → action table is in [troubleshooting.md](troubleshooting.md). The profile's
+technical reference is the [FSE2 README](../connectors/healthcare/fse2/README.md).
 
-## Criterio di successo futuro
+## Future success criterion recorded for this path
 
-Con i prerequisiti esterni già presenti, una persona senza conoscenza della repository
-deve arrivare a una `validate-cda` sanificata e auditabile senza SQL, accesso store,
-cookie copiati, sequenze inventate o supporto ordinario. Il tempo, i passaggi e la
-recovery vanno misurati black-box; la qualifica live già ottenuta non sostituisce questa
-prova di adozione.
+With external prerequisites already available, a person without repository knowledge
+must reach a sanitized, auditable `validate-cda` without SQL, store access, copied
+cookies, invented sequences or routine support. Time, steps and recovery must be
+measured black-box; the live qualification already obtained does not replace this
+adoption test.

@@ -1,17 +1,17 @@
 # Gateway API
 
-La specifica machine-readable è [gateway-openapi.yaml](gateway-openapi.yaml).
+The machine-readable specification is [gateway-openapi.yaml](gateway-openapi.yaml).
 
-OpenAPI `info.version` identifica il product/API candidate `0.1.0-alpha.1`. Non cambia
-il protocollo runtime `1.0` né il Connector canonico `sample-secure-service/1.0.0`.
+OpenAPI `info.version` identifies the product/API candidate `0.1.0-alpha.1`. It does not change
+runtime protocol `1.0` or canonical Connector `sample-secure-service/1.0.0`.
 
 ## Runtime
 
-`POST /v1/connectors/{connectorId}/operations/{operationId}:invoke` mantiene il contratto M2/M3. Certificato Installation, firma ECDSA P-256, timestamp, nonce, content hash e `traceparent` sono obbligatori. Tenant ed Environment derivano dall'Installation autenticata; non sono autorevoli se presenti nel body.
+`POST /v1/connectors/{connectorId}/operations/{operationId}:invoke` retains the M2/M3 contract. Installation certificate, ECDSA P-256 signature, timestamp, nonce, content hash and `traceparent` are mandatory. Tenant and Environment derive from the authenticated Installation; they are not authoritative if present in the body.
 
-Il client sceglie soltanto Connector e operation già autorizzati. URL, method, endpoint binding, secret reference, algoritmo e credenziali non fanno parte della request. Il runtime accetta esclusivamente una versione Published e applica i grant deny-by-default prima di risolvere secret o invocare la rete.
+The client selects only already authorized Connector and operation IDs. URL, method, endpoint binding, secret reference, algorithm and credentials are not part of the request. The runtime accepts only a Published version and applies deny-by-default grants before resolving secrets or invoking the network.
 
-La request pubblica minima è:
+The minimal public request is:
 
 ```json
 {
@@ -25,11 +25,11 @@ La request pubblica minima è:
 }
 ```
 
-`payload.encoding` accetta `base64` o `utf8`. `idempotencyKey`, `operatorContext`,
-`metadata` ed `extensions` sono opzionali e non sono authority per Tenant, profilo
-Published, endpoint, provider, transport o credenziali. Campi ulteriori sono rifiutati.
+`payload.encoding` accepts `base64` or `utf8`. `idempotencyKey`, `operatorContext`,
+`metadata` and `extensions` are optional and provide no authority over Tenant, Published
+profile, endpoint, provider, transport or credentials. Additional fields are rejected.
 
-Il successo HTTP `200` usa `application/json` e lo schema pubblico nominato
+HTTP `200` success uses `application/json` and the public named schema
 `InvokeResponse`:
 
 ```json
@@ -44,38 +44,38 @@ Il successo HTTP `200` usa `application/json` e lo schema pubblico nominato
 }
 ```
 
-`result` contiene esclusivamente il risultato applicativo bounded restituito dal
-Connector autorizzato; non espone status/header HTTP upstream, endpoint risolti,
-provider reference o credenziali. Il caller decodifica `result.data` secondo
-`result.encoding` e deserializza il tipo applicativo previsto dall'operation.
+`result` contains only the bounded application result returned by the
+authorized Connector; it exposes no upstream HTTP status/headers, resolved endpoints,
+provider references or credentials. The caller decodes `result.data` according to
+`result.encoding` and deserializes the application type expected by the operation.
 
 ## Admin Connector API
 
-| Metodo e path | Funzione |
+| Method and path | Function |
 |---|---|
-| `POST /admin/v1/connectors:validate` | valida una definizione senza persisterla |
-| `POST /admin/v1/connectors:import` | importa una nuova versione Draft |
-| `GET /admin/v1/connectors` | elenco redatto |
-| `GET /admin/v1/connectors/{id}/versions` | versioni e lifecycle |
-| `GET /admin/v1/connectors/{id}/versions/{version}` | metadata versione |
-| `GET /admin/v1/connectors/{id}/versions/{version}:export` | JSON canonico, senza binding |
-| `POST .../{version}:validate` | Draft → Validated con `expectedRowVersion` |
-| `POST .../{version}:publish` | Validated → Published con row/publication revision |
-| `POST /admin/v1/connectors/{id}:rollback` | riattiva una Superseded già pubblicata |
-| `POST .../{version}:retire` | revoca una versione |
-| `PUT /admin/v1/connectors/{id}/bindings` | configura binding Environment server-side |
-| `POST /admin/v1/connectors/{id}:test` | verifica non distruttiva Published + binding |
+| `POST /admin/v1/connectors:validate` | validates a definition without persisting it |
+| `POST /admin/v1/connectors:import` | imports a new Draft version |
+| `GET /admin/v1/connectors` | redacted list |
+| `GET /admin/v1/connectors/{id}/versions` | versions and lifecycle |
+| `GET /admin/v1/connectors/{id}/versions/{version}` | version metadata |
+| `GET /admin/v1/connectors/{id}/versions/{version}:export` | canonical JSON, without bindings |
+| `POST .../{version}:validate` | Draft → Validated with `expectedRowVersion` |
+| `POST .../{version}:publish` | Validated → Published with row/publication revision |
+| `POST /admin/v1/connectors/{id}:rollback` | reactivates a previously published Superseded version |
+| `POST .../{version}:retire` | revokes a version |
+| `PUT /admin/v1/connectors/{id}/bindings` | configures server-side Environment bindings |
+| `POST /admin/v1/connectors/{id}:test` | nondestructive Published + binding check |
 
-Import/export usa JSON soltanto. Un expected checksum opzionale protegge l'import; export restituisce la forma canonica. Concurrency mismatch restituisce un errore stabile e non applica transizioni parziali.
+Import/export uses JSON only. An optional expected checksum protects import; export returns canonical form. A concurrency mismatch returns a stable error and applies no partial transitions.
 
-## Autenticazione Admin
+## Admin authentication
 
-La modalità predefinita è `Disabled`. `DevelopmentApiKey` è consentita soltanto negli environment non-production previsti da ADR-0012 e legge la chiave dalla variabile configurata. La CLI non accetta la chiave come argomento. Un deployment di produzione deve collegare il confine Admin a OIDC/policy senza cambiare il formato Connector.
+The default mode is `Disabled`. `DevelopmentApiKey` is allowed only in the non-production environments specified by ADR-0012 and reads the key from the configured variable. The CLI does not accept the key as an argument. A production deployment must connect the Admin boundary to OIDC/policy without changing the Connector format.
 
-## Errori e redazione
+## Errors and redaction
 
-Gli errori usano codici stabili `BGW-*`. Response e audit non includono payload, URI risolti, provider reference, header di autenticazione o secret value. Corruzione checksum/storage, stato non Published, binding assente, store indisponibile e precondition concurrency falliscono chiusi.
+Errors use stable `BGW-*` codes. Responses and audit include no payloads, resolved URIs, provider references, authentication headers or secret values. Checksum/storage corruption, non-Published state, missing bindings, unavailable stores and concurrency preconditions fail closed.
 
 ## Health
 
-`GET /health/live` verifica il processo. `GET /health/ready` verifica registry e Secret Provider. La disponibilità del runtime Connector viene inoltre verificata durante la risoluzione dello stamp Published: non è consentito stale-on-error.
+`GET /health/live` checks the process. `GET /health/ready` checks the registry and Secret Provider. Connector runtime availability is also checked during Published-stamp resolution: stale-on-error is not allowed.

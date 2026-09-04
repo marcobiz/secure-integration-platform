@@ -1,19 +1,19 @@
-# M3A split-host — esecuzione manuale nella VM
+# M3A split-host — manual execution in the VM
 
-## Mandato
+## Mandate
 
-Questa procedura non richiede Codex elevato nella VM. Un operatore apre una console
-**Windows PowerShell 5.1 come amministratore** ed esegue un solo script revisionato,
-generato e trasferito dal repository candidato. SYSTEM non è usato per orchestrare la
-fase VM: l'identità privilegiata serve soltanto a installare il vero Windows Service e a
-creare l'utente standard di test.
+This procedure does not require elevated Codex in the VM. An operator opens a
+**Windows PowerShell 5.1 console as administrator** and runs a single reviewed script,
+generated and transferred from the candidate repository. SYSTEM is not used to orchestrate
+the VM phase: the privileged identity is needed only to install the real Windows Service
+and create the standard test user.
 
-Non avviare M3B/M4, non modificare o unire la PR #3 e non dichiarare PASS senza
-`RESULT.json` PASS e attraversamento reale del Broker.
+Do not start M3B/M4, modify or merge PR #3, or declare PASS without a PASS
+`RESULT.json` and actual traversal through Broker.
 
-## Handoff atteso
+## Expected handoff
 
-`Prepare` crea e verifica nella VM la directory:
+`Prepare` creates and verifies this directory in the VM:
 
 ```text
 C:\Lab\M3A\<RUN-ID>\
@@ -24,15 +24,15 @@ C:\Lab\M3A\<RUN-ID>\
   RUNID.txt
 ```
 
-`input.zip` contiene materiale sintetico raw per-run e non deve essere aperto, stampato,
-committato o trasferito altrove. Lo script operatore non contiene segreti. Il suo hash
-SHA-256 viene restituito da `Prepare` e deve essere usato nel comando, così una modifica
-allo script o al sidecar causa un arresto fail-closed.
+`input.zip` contains per-run raw synthetic material and must not be opened, printed,
+committed or transferred elsewhere. The operator script contains no secrets. Its SHA-256
+hash is returned by `Prepare` and must be used in the command, so modifying the script
+or sidecar causes a fail-closed stop.
 
-## Comando unico
+## Single command
 
-Dalla console amministrativa nella VM eseguire esattamente il valore `operatorCommand`
-restituito da `Prepare`. La forma è:
+From the administrative console in the VM, run exactly the `operatorCommand` value
+returned by `Prepare`. Its form is:
 
 ```powershell
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `
@@ -41,46 +41,45 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass `
   -ExpectedScriptSha256 <SHA-256-SCRIPT>
 ```
 
-Non aggiungere activation code, password o contenuto del bootstrap alla command line.
+Do not add activation codes, passwords or bootstrap contents to the command line.
 
-## Contratto dello script
+## Script contract
 
-Lo script:
+The script:
 
-1. richiede una console amministrativa e verifica RunId, hash proprio, hash ZIP e sidecar;
-2. estrae l'handoff senza stampare o serializzare `bootstrap.json`;
-3. rifiuta endpoint Gateway loopback e una finestra residua inferiore a 45 minuti;
-4. richiede worktree VM pulito, esegue `fetch` e passa al candidate commit in detached HEAD;
-5. avvia `ValidateVm` in un processo PowerShell 5.1 separato;
-6. soltanto dopo `ValidateVm` PASS avvia `Run` con la stessa RunId, lo stesso input, lo
-   stesso commit e lo stesso output;
-7. lascia al runner l'installazione del Broker come vero servizio con StartName
-   `NT SERVICE\SecureIntegrationBroker` e l'esecuzione del Legacy Simulator con utente
-   standard e task `RunLevel Limited`;
-8. produce sempre il risultato canonico
-   `C:\SecureEvidence\<RUN-ID>\RESULT.json`, con soli codici redatti;
-9. restituisce exit code zero soltanto quando anche il `RESULT.json` del runner e
-   `vm-manifest.json` attestano PASS sul candidate commit.
+1. Requires an administrative console and verifies the RunId, its own hash, ZIP hash and sidecar.
+2. Extracts the handoff without printing or serializing `bootstrap.json`.
+3. Rejects loopback Gateway endpoints and a remaining window shorter than 45 minutes.
+4. Requires a clean VM worktree, runs `fetch` and switches to the candidate commit in detached HEAD.
+5. Starts `ValidateVm` in a separate PowerShell 5.1 process.
+6. Only after `ValidateVm` passes, starts `Run` with the same RunId, input, commit and output.
+7. Leaves installation of Broker as a real service with StartName
+   `NT SERVICE\SecureIntegrationBroker` and execution of the Legacy Simulator as a standard
+   user with a `RunLevel Limited` task to the runner.
+8. Always produces the canonical result
+   `C:\SecureEvidence\<RUN-ID>\RESULT.json`, containing only redacted codes.
+9. Returns exit code zero only when the runner's `RESULT.json` and `vm-manifest.json`
+   also attest PASS on the candidate commit.
 
-Un `BLOCKED`, un exit code non zero o l'assenza di uno dei due manifest impedisce il PASS.
+A `BLOCKED`, nonzero exit code or missing manifest prevents PASS.
 
-## Handoff risultato
+## Result handoff
 
-In caso di PASS, trasferire all'HOST soltanto:
+On PASS, transfer only these files to the HOST:
 
 - `<RunId>-vm-redacted.zip`;
 - `<RunId>-vm-redacted.zip.sha256`;
-- il `RESULT.json` canonico.
+- the canonical `RESULT.json`.
 
-Non trasferire input, bootstrap, PFX, Event Log raw, canary, DPAPI/CNG o directory di
-build. L'HOST verifica sidecar e manifest, esegue `Finalize`, correla gli scenari Gateway e
-completa il cleanup.
+Do not transfer input, bootstrap, PFX, raw Event Logs, canaries, DPAPI/CNG or build
+directories. The HOST verifies sidecars and manifests, runs `Finalize`, correlates
+Gateway scenarios and completes cleanup.
 
-## Cleanup VM
+## VM cleanup
 
-Il runner rimuove servizio, utente, diritto `SeBatchLogonRight`, certificato sintetico,
-task e directory protette appartenenti alla RunId. Dopo che l'HOST ha acquisito il
-risultato, l'operatore rimuove la sola directory handoff:
+The runner removes the service, user, `SeBatchLogonRight` privilege, synthetic certificate,
+tasks and protected directories owned by the RunId. After the HOST has retrieved the
+result, the operator removes only the handoff directory:
 
 ```powershell
 $runId = '<RUN-ID>'
@@ -89,6 +88,6 @@ Set-Location C:\Lab\broker-gateway
 Remove-Item -LiteralPath ("C:\Lab\M3A\" + $runId) -Recurse -Force
 ```
 
-Se il cleanup fallisce, ripristinare il checkpoint Hyper-V pre-run. Il checkpoint è la
-recovery primaria del laboratorio; i cleanup automatici esistenti sono difesa operativa,
-non proprietà di sicurezza del prodotto né criterio bloccante autonomo di M3.
+If cleanup fails, restore the pre-run Hyper-V checkpoint. The checkpoint is the
+laboratory's primary recovery mechanism; existing automatic cleanup is an operational
+defense, not a product security property or an independent M3 blocking criterion.

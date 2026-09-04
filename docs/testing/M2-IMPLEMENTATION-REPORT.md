@@ -1,52 +1,52 @@
-# M2 — Implementation e verification report
+# M2 — Implementation and verification report
 
-**Data:** 2026-08-04
+**Date:** 2026-08-04
 **Baseline:** `d1113d34a18e166c9eb0c14d8e11c3c1a1a20c12`
 
-## Risultato locale
+## Local result
 
-L'implementazione Gateway M2 è compilabile e le suite eseguibili sull'HOST sono verdi.
-L'HOST non dispone di Docker/Podman, ma contiene i binari PostgreSQL 18: è stato avviato
-un cluster effimero non privilegiato e isolato sotto `.artifacts`, senza modificare il
-servizio PostgreSQL installato.
+The M2 Gateway implementation builds and the suites executable on the HOST are green.
+The HOST has no Docker/Podman, but has PostgreSQL 18 binaries: an ephemeral,
+unprivileged, isolated cluster was started under `.artifacts` without changing the
+installed PostgreSQL service.
 
-| Controllo | Risultato locale |
+| Check | Local result |
 |---|---|
-| Build solution Release | PASS, 0 warning, 0 error |
-| Gateway unit tests | PASS, 22 test |
-| Gateway API/integration | PASS, 6 test ordinari |
+| Build solution Release | PASS, 0 warnings, 0 errors |
+| Gateway unit tests | PASS, 22 tests |
+| Gateway API/integration | PASS, 6 ordinary tests |
 | M0/M1 regression suites | PASS: 26 unit + 22 integration + 1 E2E |
-| PostgreSQL 18 reale | PASS: 2 test locali e job CI indipendente `gateway-postgresql-18` |
-| Migration runner | PASS due esecuzioni; seconda no-op; SHA-256 `182CC690E16BB986638A4B52EE1554A4B540A8E58FD673F2111A79D194C66A98` |
+| Real PostgreSQL 18 | PASS: 2 local tests and independent CI job `gateway-postgresql-18` |
+| Migration runner | PASS on two executions; second a no-op; SHA-256 `182CC690E16BB986638A4B52EE1554A4B540A8E58FD673F2111A79D194C66A98` |
 | Docker build/smoke | PASS CI `gateway-container`, run `30896803567` |
 | document/secret scan | PASS |
-| dependency vulnerability scan | PASS, nessun package vulnerabile rilevato |
+| dependency vulnerability scan | PASS, no vulnerable packages detected |
 | SBOM SPDX | PASS |
 
-La regressione ordinaria complessiva contiene 77 test PASS: 26 Broker unit, 22 Broker
-integration, 1 vertical slice storico, 22 Gateway unit e 6 Gateway integration. I due
-test PostgreSQL nominati sono stati inoltre rieseguiti con la variabile di connessione
-attiva contro PostgreSQL 18 reale.
+The overall ordinary regression contains 77 PASS tests: 26 Broker unit, 22 Broker
+integration, 1 historical vertical slice, 22 Gateway unit and 6 Gateway integration. The two
+named PostgreSQL tests were also rerun with the connection variable
+set against real PostgreSQL 18.
 
-## Evidenze nominate
+## Named evidence
 
 - enrollment/PoP/Tenant/replay:
   `UT_GTW_Enrollment_PoP_derives_tenant_and_replay_is_rejected`;
 - tamper/target/unknown certificate:
   `UT_GTW_Runtime_rejects_tampered_body_ambiguous_target_and_unknown_certificate`;
-- activation one-time e PoP negativo:
+- one-time activation and negative PoP:
   `UT_GTW_Activation_code_is_one_time_and_invalid_code_is_denied`,
   `UT_GTW_Enrollment_rejects_invalid_proof_of_possession`;
 - renewal/overlap:
   `UT_GTW_Renewal_allows_seven_day_overlap_then_expires_old_credential`;
-- revoca:
+- revocation:
   `UT_GTW_Revocation_is_immediate_for_runtime_and_grants`;
 - tenant isolation:
   `UT_GTW_Cross_tenant_grant_is_rejected`,
   `IT_DAT_PostgreSQL18_migration_and_RLS_isolate_tenants_when_configured`;
-- endpoint/secret references server-side:
+- server-side endpoint/secret references:
   `UT_GTW_Invoke_contract_has_no_client_controlled_endpoint_or_secret_reference`;
-- SSRF e deny-before-side-effect:
+- SSRF and deny-before-side-effect:
   `UT_EGR_Private_or_loopback_destination_is_rejected_before_transport`,
   `UT_EGR_Ungranted_operation_is_denied_before_DNS_vault_or_transport`;
 - Basic/API key/mTLS egress:
@@ -64,13 +64,13 @@ attiva contro PostgreSQL 18 reale.
   `IT_GTW_Runtime_without_client_certificate_returns_sanitized_problem`;
 - schema/RLS static:
   `IT_DAT_Migration_forces_RLS_and_contains_no_secret_value_columns`;
-- repository PostgreSQL reale:
+- real PostgreSQL repository:
   `IT_DAT_PostgreSQL18_registry_enrollment_grant_replay_and_revocation_when_configured`;
-- container: job CI `gateway-container` con health probe incorporato.
+- container: CI job `gateway-container` with built-in health probe.
 
-## Limiti dell'evidenza
+## Evidence limitations
 
-- Azure Key Vault/Managed Identity è implementato ma non provato live senza subscription;
-- PostgreSQL RLS reale e container hardening sono PASS nel gate CI indipendente; M2 è Done;
-- M3 non è stato avviato e non esiste ancora un E2E Broker→Gateway M2;
-- Gateway HTTP v1 e IPC v1 restano provvisori fino alla validazione M3.
+- Azure Key Vault/Managed Identity is implemented but not tested live without a subscription;
+- real PostgreSQL RLS and container hardening are PASS in the independent CI gate; M2 is Done;
+- M3 has not started and no Broker→Gateway M2 E2E exists yet;
+- Gateway HTTP v1 and IPC v1 remain provisional until M3 validation.

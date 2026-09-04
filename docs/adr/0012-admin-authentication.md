@@ -1,50 +1,50 @@
-# ADR-0012: Autenticazione Admin provider-neutral
+# ADR-0012: Provider-neutral Admin authentication
 
-**Stato:** Accepted (aggiornato da M5)
+**Status:** Accepted (updated in M5)
 
-## Contesto
+## Context
 
-Il Gateway Core deve poter essere eseguito senza Azure. Il contratto Admin non può quindi dipendere da tipi, claim o SDK Entra, pur mantenendo un confine di autenticazione obbligatorio.
+Gateway Core must run without Azure. The Admin contract therefore cannot depend on Entra types, claims or SDKs, while retaining a mandatory authentication boundary.
 
-## Decisione
+## Decision
 
-L'Admin API espone un confine di autorizzazione provider-neutral. In produzione il deployment deve collegarlo a un identity provider OIDC e a policy/ruoli amministrativi; il Core non sceglie il provider. Non esistono account o password amministrative locali.
+The Admin API exposes a provider-neutral authorization boundary. In production, the deployment must connect it to an OIDC identity provider and administrative policies/roles; Core does not choose the provider. There are no local administrative accounts or passwords.
 
-M4 include una modalità `DevelopmentApiKey` esclusivamente per ambienti `Development`, `Testing`, `M3Testing` e `M4Testing`. La chiave arriva soltanto da una variabile d'ambiente, viene confrontata in tempo costante, non è accettata dalla CLI come argomento e la modalità è rifiutata in `Production`. La modalità predefinita è `Disabled` e fallisce chiusa.
+M4 includes a `DevelopmentApiKey` mode exclusively for `Development`, `Testing`, `M3Testing` and `M4Testing` environments. The key comes only from an environment variable, is compared in constant time, is not accepted as a CLI argument and the mode is rejected in `Production`. The default mode is `Disabled` and fails closed.
 
-M5 usa Authorization Code Flow server-side con PKCE, state e nonce. ID token e callback sono validati dal middleware OIDC; i token non sono salvati nel browser. Il browser riceve soltanto un cookie `__Host-` HttpOnly, Secure, SameSite=Lax con scadenza/sliding window, e tutte le mutazioni richiedono antiforgery associato alla sessione.
+M5 uses server-side Authorization Code Flow with PKCE, state and nonce. The OIDC middleware validates ID tokens and callbacks; tokens are not saved in the browser. The browser receives only an HttpOnly, Secure, SameSite=Lax `__Host-` cookie with expiry/sliding window, and all mutations require session-bound antiforgery protection.
 
-Il rate limiter Admin protegge la disponibilità senza trasformare normali burst, onboarding concorrenti
-o operatori dietro NAT in incidenti. I default server-owned sono `AUTH=60` richieste ogni 60 secondi
-per remote IP attendibile e `API=600` richieste ogni 60 secondi per subject autenticato server-side,
-con coda zero e replenishment automatico. Login, DevelopmentAuth login, callback OIDC configurato,
-CSRF pre-login ed endpoint `/admin/auth` sconosciuti usano AUTH. CSRF post-login, `me`, logout e le
-Admin API ordinarie usano API. DevelopmentApiKey viene validata server-side prima del partizionamento
-e usa una identity API server-owned; non consuma il bucket browser AUTH.
+The Admin rate limiter protects availability without treating ordinary bursts, concurrent onboarding
+or operators behind NAT as incidents. Server-owned defaults are `AUTH=60` requests every 60 seconds
+per trusted remote IP and `API=600` requests every 60 seconds per server-authenticated subject,
+with no queue and automatic replenishment. Login, DevelopmentAuth login, the configured OIDC callback,
+pre-login CSRF and unknown `/admin/auth` endpoints use AUTH. Post-login CSRF, `me`, logout and
+ordinary Admin APIs use API. DevelopmentApiKey is validated server-side before partitioning
+and uses a server-owned API identity; it does not consume the browser AUTH bucket.
 
-La sicurezza deve prevenire abuso significativo senza trasformare normali burst, onboarding
-concorrenti o operatori dietro NAT in incidenti. Nessun golden path supportato può dipendere da
-attese della finestra, re-login o supporto tecnico. Le soglie devono lasciare almeno quattro volte il
-consumo ordinario del singolo workflow, salvo evidenza di capacità più restrittiva. Il limiter Admin
-non governa il traffico tenant/data-plane; questa configurazione non si estende al data plane senza
-capacity test dedicati.
+Security must prevent significant abuse without treating ordinary bursts, concurrent onboarding
+or operators behind NAT as incidents. No supported golden path may depend on waiting for the
+window, logging in again or technical support. Thresholds must leave at least four times the
+ordinary consumption of a single workflow, unless evidence shows a stricter capacity limit. The Admin
+limiter does not govern tenant/data-plane traffic; this configuration does not extend to the data plane without
+dedicated capacity tests.
 
-Il principal stabile è `(issuer, subject)`; email e display name non sono chiavi. Ruoli globali o tenant-scoped sono persistiti server-side. La policy four-eyes lega la decisione a version id e checksum e nega creator/requester/editor coincidenti. Production rifiuta configurazioni OIDC incomplete e DevelopmentAuth; quest'ultima usa soltanto identità sintetiche fisse, loopback/Compose e ambiente Development.
+The stable principal is `(issuer, subject)`; email and display name are not keys. Global or tenant-scoped roles are persisted server-side. The four-eyes policy binds the decision to version ID and checksum and denies overlapping creator/requester/editor identities. Production rejects incomplete OIDC configurations and DevelopmentAuth; the latter uses only fixed synthetic identities, loopback/Compose and the Development environment.
 
-## Conseguenze
+## Consequences
 
-La four-eyes approval M5 e vincolata sia al checksum canonico della ConnectorVersion sia al digest delle revisioni endpoint/secret/certificate. Il publish PostgreSQL verifica e blocca entrambi nella stessa transazione; l'attore che ha creato una revisione binding non puo approvare quel bundle. `DevelopmentAuth` verifica il peer socket con `RemoteIpAddress` loopback e il Compose locale espone il Gateway soltanto su `127.0.0.1`; Host e header forwarded client-controlled non costituiscono autorita.
+M5 four-eyes approval is bound both to the canonical ConnectorVersion checksum and to the digest of endpoint/secret/certificate revisions. PostgreSQL publication verifies and locks both in the same transaction; the actor who created a binding revision cannot approve that bundle. `DevelopmentAuth` checks the socket peer using loopback `RemoteIpAddress`, and local Compose exposes the Gateway only on `127.0.0.1`; Host and client-controlled forwarded headers are not authority.
 
-- Il quick start locale non richiede Azure né credenziali cloud.
-- I Deployment Pack possono integrare Entra o un altro provider OIDC senza cambiare i contratti Connector.
-- `DevelopmentApiKey` legacy e `DevelopmentAuth` non sono modalità supportate per produzione.
-- Audit, optimistic concurrency e Published immutabile restano obbligatori anche in sviluppo.
-- La UI same-origin non conserva access/refresh token in Web Storage e non abilita CORS permissivo.
-- Ogni ruolo tecnico riusa la sessione e il CSRF ancora validi fra le fasi supportate; expiry e
-  validazione server-side restano invariati e non esistono reset, sleep o retry nascosti del limiter.
-- Sessioni concorrenti dello stesso principal restano valide quando l'assegnazione exact di un ruolo
-  è già presente; solo una variazione reale dei privilegi revoca tutte le sessioni del principal.
-  Il gate same-NAT usa tre nuove sessioni e tre nuovi cookie jar per ciascuno dei due workflow, non
-  tre sessioni condivise fra i workflow.
-- Le soglie sono un controllo process-local contro abuso evidente, non una difesa distribuita contro
-  un attore con credenziali valide o un rate limit dell'identity provider OIDC esterno.
+- The local quick start requires neither Azure nor cloud credentials.
+- Deployment Packs can integrate Entra or another OIDC provider without changing Connector contracts.
+- Legacy `DevelopmentApiKey` and `DevelopmentAuth` are not supported production modes.
+- Audit, optimistic concurrency and Published immutability remain mandatory even in development.
+- The same-origin UI does not store access/refresh tokens in Web Storage or enable permissive CORS.
+- Each technical role reuses its still-valid session and CSRF across supported phases; expiry and
+  server-side validation remain unchanged, with no hidden limiter resets, sleeps or retries.
+- Concurrent sessions for the same principal remain valid when the exact role assignment
+  already exists; only an actual privilege change revokes all sessions for the principal.
+  The same-NAT gate uses three new sessions and three new cookie jars for each of the two workflows, not
+  three sessions shared between workflows.
+- Thresholds are a process-local control against evident abuse, not a distributed defense against
+  an actor with valid credentials or a rate limit on the external OIDC identity provider.

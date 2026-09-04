@@ -1,15 +1,15 @@
-# Runbook M2 — Gateway minimo
+# M2 runbook — minimal Gateway
 
-## Prerequisiti
+## Prerequisites
 
-- .NET SDK indicato da `global.json`;
-- PostgreSQL **18.x** per la prova RLS reale;
-- Docker per build/smoke del container;
-- per produzione: Azure Key Vault HTTPS e Managed Identity con accesso ai soli secret
-  referenziati;
-- certificati e chiavi esclusivamente sintetici negli ambienti di test.
+- .NET SDK specified by `global.json`;
+- PostgreSQL **18.x** for real RLS testing;
+- Docker for container build/smoke;
+- for production: Azure Key Vault HTTPS and Managed Identity with access only to referenced
+  secrets;
+- exclusively synthetic certificates and keys in test environments.
 
-## Build e test locali
+## Local build and tests
 
 ```powershell
 Set-Location (& git rev-parse --show-toplevel)
@@ -19,36 +19,36 @@ Set-Location (& git rev-parse --show-toplevel)
 .\eng\scan-secrets.ps1
 ```
 
-Senza `GATEWAY_POSTGRES_ADMIN_CONNECTION` il test PostgreSQL reale viene saltato per
-mancanza dell'infrastruttura esterna; non costituisce evidenza RLS. In un database di
-test dedicato PostgreSQL 18:
+Without `GATEWAY_POSTGRES_ADMIN_CONNECTION`, the real PostgreSQL test is skipped because
+external infrastructure is missing; this is not RLS evidence. In a dedicated PostgreSQL 18
+test database:
 
 ```powershell
-$env:GATEWAY_POSTGRES_ADMIN_CONNECTION = '<connection string amministrativa del DB di test>'
+$env:GATEWAY_POSTGRES_ADMIN_CONNECTION = '<test database administrative connection string>'
 .\.dotnet\dotnet.exe test .\tests\integration\Gateway.Integration.Tests\Gateway.Integration.Tests.csproj -c Release
 Remove-Item Env:GATEWAY_POSTGRES_ADMIN_CONNECTION
 ```
 
-Il job `gateway-postgresql-18` della CI configura questa variabile contro un service
-container effimero e deve risultare verde per chiudere M2.
+The CI `gateway-postgresql-18` job configures this variable against an ephemeral service
+container and must be green to close M2.
 
-## Migration esplicita
+## Explicit migration
 
-Usare una identità di deployment separata dal runtime:
+Use a deployment identity separate from runtime:
 
 ```powershell
-$env:GATEWAY_MIGRATION_CONNECTION = '<connection string migration owner>'
+$env:GATEWAY_MIGRATION_CONNECTION = '<migration owner connection string>'
 .\.dotnet\dotnet.exe run --project .\src\Gateway\Gateway.Migrations\Gateway.Migrations.csproj -c Release -- apply
 Remove-Item Env:GATEWAY_MIGRATION_CONNECTION
 ```
 
-Il runner registra nome e SHA-256. Se il contenuto di una migration già applicata è
-cambiato, termina con errore. M2 è additiva: il rollback applicativo consiste nel
-ripristino dell'immagine precedente; non è previsto un down-script distruttivo.
+The runner records the name and SHA-256. If the content of an already-applied migration
+has changed, it terminates with an error. M2 is additive: application rollback restores
+the previous image; no destructive down-script is provided.
 
-## Avvio Development con Docker Compose
+## Development startup with Docker Compose
 
-Generare valori sintetici solo per la sessione e non salvarli:
+Generate synthetic values for the session only; do not save them:
 
 ```powershell
 $env:GATEWAY_LOCAL_DB_PASSWORD = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(24))
@@ -60,44 +60,44 @@ docker compose -f .\deploy\docker-compose.m2.yml down
 Remove-Item Env:GATEWAY_LOCAL_DB_PASSWORD,Env:GATEWAY_LOCAL_ACTIVATION_HMAC_KEY
 ```
 
-Il compose esegue un container migration one-shot e avvia il Gateway solo dopo il suo
-completamento. Il processo Gateway non migra mai il DB all'avvio. Il compose è
-Development e non dimostra Managed Identity o Key Vault live.
+Compose runs a one-shot migration container and starts Gateway only after it completes.
+The Gateway process never migrates the DB on startup. This is Development Compose and
+does not demonstrate live Managed Identity or Key Vault.
 
-## Configurazione produzione
+## Production configuration
 
-Configurare tramite provider protetto, mai in `appsettings.json`:
+Configure through a protected provider, never in `appsettings.json`:
 
-- `ConnectionStrings__GatewayDatabase`: login membro di `gateway_runtime`;
+- `ConnectionStrings__GatewayDatabase`: login belonging to `gateway_runtime`;
 - `Gateway__Provider__Kind`: `ExternalPack`;
-- `Gateway__Provider__Endpoint`: endpoint HTTPS del provider;
-- `Gateway__Provider__ClientIdentity`: identità opzionale interpretata esclusivamente dal pack;
+- `Gateway__Provider__Endpoint`: provider HTTPS endpoint;
+- `Gateway__Provider__ClientIdentity`: optional identity interpreted exclusively by the pack;
 - `Gateway__ActivationHmacSecretReference`:
   `keyvault://<vault>.vault.azure.net/<secret>[/<version>]`;
-- `Gateway__Operations__<n>__*`: catalogo allowlisted; endpoint HTTPS, auth e riferimenti
-  Vault sono configurazione server-side.
+- `Gateway__Operations__<n>__*`: allowlisted catalog; HTTPS endpoints, auth and Vault
+  references are server-side configuration.
 
-Con ambiente diverso da Development/Testing, l'avvio fallisce se database, Vault o
-activation HMAC reference mancano. Terminare TLS a un ingress fidato oppure configurare
-Kestrel HTTPS; non fidarsi di header di certificato inoltrato senza il middleware e la
-rete trusted previsti dal deployment Azure.
+Outside Development/Testing, startup fails if the database, Vault or activation HMAC
+reference is missing. Terminate TLS at a trusted ingress or configure Kestrel HTTPS; do
+not trust forwarded certificate headers without the middleware and trusted network
+required by the Azure deployment.
 
-## Verifiche operative
+## Operational checks
 
-1. `/health/live` deve rispondere 200 se il processo è vivo.
-2. `/health/ready` deve rispondere 200 soltanto con registry e provider secret pronti.
-3. Verificare che il container esegua come utente non-root e filesystem read-only.
-4. Verificare nei log solo code/correlation metadata; nessun payload, header auth,
-   certificate DER, activation code o vault reference.
-5. Una revoca deve produrre `BGW-INSTALLATION-REVOKED` prima di DNS/Vault/HTTP.
-6. Errori pubblici devono essere `application/problem+json` sanificati.
+1. `/health/live` must return 200 if the process is alive.
+2. `/health/ready` must return 200 only when the registry and secret provider are ready.
+3. Verify the container runs as a non-root user with a read-only filesystem.
+4. Verify logs contain only code/correlation metadata; no payloads, auth headers,
+   certificate DER, activation codes or Vault references.
+5. Revocation must produce `BGW-INSTALLATION-REVOKED` before DNS/Vault/HTTP.
+6. Public errors must be sanitized `application/problem+json`.
 
-## Diagnostica e rollback
+## Diagnostics and rollback
 
-- readiness DB non verde: verificare schema migration, membership `gateway_runtime` e
-  connettività; non elevare il ruolo runtime a owner/superuser;
-- Vault non verde: verificare Managed Identity, host allowlisted e RBAC del singolo
-  Vault; non sostituire con secret in file;
-- egress negato: controllare operation catalog e DNS; non disabilitare i controlli IP;
-- rollback: fermare nuova immagine e ridistribuire quella precedente. La migration M2
-  resta presente perché è additiva; qualsiasi rollback dati richiede change approvato.
+- DB readiness not green: check schema migrations, `gateway_runtime` membership and
+  connectivity; do not elevate the runtime role to owner/superuser.
+- Vault not green: check Managed Identity, allowlisted host and per-Vault RBAC; do not
+  replace it with secrets in files.
+- Egress denied: check the operation catalog and DNS; do not disable IP checks.
+- Rollback: stop the new image and redeploy the previous one. The M2 migration remains
+  because it is additive; any data rollback requires an approved change.

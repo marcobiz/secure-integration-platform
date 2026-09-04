@@ -1,28 +1,27 @@
-# ADR-0019: confini fisici dei provider pack
+# ADR-0019: Physical provider-pack boundaries
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Contesto
+## Context
 
-Il Core M4 contieneva tipi e pacchetti Azure in `Gateway.Infrastructure` e nella composition root. La separazione era logica ma non sufficiente a dimostrare che il prodotto open source potesse compilare, essere testato e distribuito senza Azure.
+M4 Core contained Azure types and packages in `Gateway.Infrastructure` and the composition root. Separation was logical but insufficient to demonstrate that the open-source product could build, be tested and be distributed without Azure.
 
-## Decisione
+## Decision
 
-- Le capability sono contratti stretti e separati: secret value retrieval, certificate retrieval, signing/key use, MAC, health e capability discovery. Non esiste una generica `IKms`.
-- I contratti vivono in `src/Providers/Abstractions` e non dipendono da SDK cloud.
-- Il provider sintetico vive in `src/Providers/Synthetic` ed è parte del Core testabile localmente.
-- I provider deployment-specific vivono sotto `packs/deployment/<provider>` e dipendono dal Core, mai il contrario.
-- Il Gateway carica un pack opzionale attraverso un contratto provider-neutral e configurazione esplicita. Tipi, URI scheme, credential classes e SDK del provider non attraversano il confine Core.
-- Una solution Core, un architecture test e l'export OSS verificano l'assenza di riferimenti provider-specific.
-- Il pack Azure è opzionale e resta escluso dall'export OSS finché la strategia di pubblicazione/licenza non viene deliberata.
+- Capabilities are narrow, separate contracts: secret value retrieval, certificate retrieval, signing/key use, MAC, health and capability discovery. There is no generic `IKms`.
+- Contracts live in `src/Providers/Abstractions` and do not depend on cloud SDKs.
+- The synthetic provider lives in `src/Providers/Synthetic` and is part of the locally testable Core.
+- Deployment-specific providers live under `packs/deployment/<provider>` and depend on Core, never the reverse.
+- The Gateway loads an optional pack through a provider-neutral contract and explicit configuration. Provider types, URI schemes, credential classes and SDKs do not cross the Core boundary.
+- A Core solution, an architecture test and the OSS export verify the absence of provider-specific references.
+- The Azure pack is optional and remains excluded from the OSS export until the publication/licensing strategy is decided.
 
-## Conseguenze
+## Consequences
 
-Il Core compila senza pacchetti Azure e può usare il provider sintetico per CI e quickstart. Un deployment pack conserva ownership di autenticazione cloud, parsing dei propri riferimenti e health specifico. L'assemblaggio deployment-specific richiede packaging esplicito e non può essere ottenuto aggiungendo condizioni Azure nella composition root Core.
+Core builds without Azure packages and can use the synthetic provider for CI and quickstart. A deployment pack retains ownership of cloud authentication, parsing its own references and provider-specific health. Deployment-specific assembly requires explicit packaging and cannot be achieved by adding Azure conditions in the Core composition root.
 
-## Alternative escluse
+## Rejected alternatives
 
-- Un'interfaccia generica `IKms`, perché nasconde capability e amplia privilegi.
-- Riferimenti condizionali ad Azure nel progetto Core, perché non dimostrano indipendenza fisica.
-- `#if AZURE`, reflection su tipi Azure nella composition root o fallback automatici, perché rendono il confine ambiguo e non fail-closed.
-
+- A generic `IKms` interface, because it hides capabilities and broadens privileges.
+- Conditional Azure references in the Core project, because they do not demonstrate physical independence.
+- `#if AZURE`, reflection on Azure types in the composition root or automatic fallbacks, because they make the boundary ambiguous and not fail-closed.

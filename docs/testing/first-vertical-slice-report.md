@@ -1,8 +1,8 @@
-# Primo vertical slice Secure Layer — rapporto
+# First Secure Layer vertical slice — report
 
-## Perimetro
+## Scope
 
-Il test `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` esegue il flusso:
+The test `E2E_CON_SecureLayer_success_boundaries_failures_timeout_and_replay` executes this flow:
 
 ```text
 legacy simulator (.NET SDK)
@@ -12,25 +12,25 @@ legacy simulator (.NET SDK)
   -> HTTPS/mTLS external REST mock
 ```
 
-Il Gateway e il provider sintetico vivono esclusivamente nella suite E2E. Non costituiscono l'implementazione anticipata di M2: non sono presenti PostgreSQL, registry Tenant/Installation, enrollment, revoca, Azure Key Vault, Admin API o deployment centrale.
+The Gateway and synthetic provider exist exclusively in the E2E suite. They are not an early M2 implementation: there is no PostgreSQL, Tenant/Installation registry, enrollment, revocation, Azure Key Vault, Admin API or central deployment.
 
-## Evidenze automatiche
+## Automated evidence
 
-- successo con body JSON pre-costruito e ConnectorVersion `1.0.0`;
-- certificato client Broker verificato dal Gateway e certificato Gateway verificato dal mock esterno;
-- API key vendor applicata soltanto dal Gateway harness;
-- assenza della API key in input SDK, payload Broker-Gateway, risultato e audit della piattaforma;
-- Connector/operation non concesso negato prima della rete esterna;
-- nessun campo URL o secret reference nell'input `InvokeGatewayRequest`;
-- certificato server non trusted rifiutato;
-- deadline propagata e risposta redatta `deadline_exceeded`;
-- riuso del nonce sulla stessa connessione rifiutato chiudendo la pipe;
-- servizi, certificati e directory sono sintetici e creati/distrutti dal test.
+- success with a pre-built JSON body and ConnectorVersion `1.0.0`;
+- Broker client certificate verified by the Gateway and Gateway certificate verified by the external mock;
+- vendor API key applied only by the Gateway harness;
+- no API key in SDK input, Broker-Gateway payload, result or platform audit;
+- ungranted Connector/operation denied before external network access;
+- no URL or secret reference field in `InvokeGatewayRequest` input;
+- untrusted server certificate rejected;
+- propagated deadline and redacted `deadline_exceeded` response;
+- nonce reuse on the same connection rejected by closing the pipe;
+- services, certificates and directories are synthetic and created/destroyed by the test.
 
-## Riproduzione
+## Reproduction
 
 ```powershell
 .\.dotnet\dotnet.exe test tests\e2e\VerticalSlice.Tests\VerticalSlice.Tests.csproj --configuration Release
 ```
 
-Il test richiede Windows e non usa credenziali o servizi esterni reali.
+The test requires Windows and uses no real external credentials or services.

@@ -1,27 +1,27 @@
-# Runbook: matrice live M0/M1 su VM Windows pulita
+# Runbook: M0/M1 live matrix on a clean Windows VM
 
-## Scopo e risultato atteso
+## Scope and expected result
 
-Il runbook installa il Broker tramite SCM come vero Windows Service, usa `NT SERVICE\SecureIntegrationBroker`, crea due account locali standard, esegue la matrice A-F, riavvia la VM e produce un evidence bundle redatto e hashato. Non avvia né implementa M2.
+This runbook installs Broker through SCM as a real Windows Service, uses `NT SERVICE\SecureIntegrationBroker`, creates two standard local accounts, runs matrix A-F, restarts the VM and produces a redacted, hashed evidence bundle. It neither starts nor implements M2.
 
-Una run è valida soltanto se termina con `post-reboot-summary.json` avente `passed: true` e matrice A-F tutta `PASS`. Output automatici creati senza reboot o con un failure non sono evidenze di accettazione.
+A run is valid only if it ends with `post-reboot-summary.json` containing `passed: true` and all of matrix A-F marked `PASS`. Automatic output created without reboot or with a failure is not acceptance evidence.
 
-## 1. Preparazione della VM
+## 1. Preparing the VM
 
-Usare una nuova VM x64 non unita a dominio, Windows 11 Pro/Enterprise o Windows Server supportato, filesystem NTFS e almeno 10 GB liberi. Acquisire uno snapshot prima dell'esecuzione. Non usare una VM clonata dopo un precedente primo avvio del Broker.
+Use a new x64 VM not joined to a domain, with Windows 11 Pro/Enterprise or a supported Windows Server, NTFS and at least 10 GB free. Take a snapshot before execution. Do not use a VM cloned after a previous first Broker startup.
 
-Installare:
+Install:
 
-1. Windows PowerShell 5.1, normalmente incluso;
-2. Git per Windows, se il repository viene clonato;
-3. .NET SDK indicato da `global.json` (`10.0.302` per questa revisione);
-4. aggiornamenti Windows richiesti dalla policy del laboratorio.
+1. Windows PowerShell 5.1, normally included.
+2. Git for Windows, if cloning the repository.
+3. The .NET SDK specified by `global.json` (`10.0.302` for this revision).
+4. Windows updates required by laboratory policy.
 
-Copiare o clonare il repository nella VM. Non trasferire `.artifacts`, `.dotnet`, precedenti directory `%ProgramData%\SecureIntegration` o output di altre run.
+Copy or clone the repository into the VM. Do not transfer `.artifacts`, `.dotnet`, previous `%ProgramData%\SecureIntegration` directories or output from other runs.
 
-## 2. Verifica iniziale
+## 2. Initial verification
 
-Aprire **Windows PowerShell come amministratore** e posizionarsi nella root del repository:
+Open **Windows PowerShell as administrator** and move to the repository root:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
@@ -29,41 +29,41 @@ $runId = 'm0-m1-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
 .\tools\live-matrix\Test-Prerequisites.ps1 -RunId $runId
 ```
 
-Il comando deve fallire se la sessione non è elevata, l'host non è riconosciuto come VM, il filesystem non è NTFS, l'SDK non coincide con `global.json` o esiste un servizio omonimo non posseduto dall'harness.
+The command must fail if the session is not elevated, the host is not recognized as a VM, the filesystem is not NTFS, the SDK does not match `global.json` or a same-named service exists that is not owned by the harness.
 
-Conservare separatamente l'identificativo snapshot e l'hash del commit:
+Keep the snapshot identifier and commit hash separately:
 
 ```powershell
 git rev-parse HEAD
 git status --short
 ```
 
-Il worktree deve essere pulito prima della prova; il prerequisite check fallisce altrimenti. L'aggiornamento automatico della matrice documentale renderà il worktree modificato soltanto al PASS finale.
+The worktree must be clean before testing; the prerequisite check fails otherwise. The automatic documentation matrix update will modify the worktree only at final PASS.
 
-## 3. Esecuzione automatica completa
+## 3. Complete automatic execution
 
-Avviare la run, includendo il reboot reale:
+Start the run, including a real reboot:
 
 ```powershell
 .\tools\live-matrix\Invoke-LiveMatrix.ps1 -Phase All -RunId $runId -Reboot
 ```
 
-La fase iniziale:
+The initial phase:
 
-1. pubblica Broker e probe dal commit corrente;
-2. crea `SibLiveAuthorized` e `SibLiveDenied` come utenti standard con password casuali custodite mediante DPAPI LocalMachine e ACL amministrative;
-3. registra `SecureIntegrationBroker` con `StartName = NT SERVICE\SecureIntegrationBroker` e service SID unrestricted;
-4. configura manifest applicativo con SID, path e SHA-256 dell'apphost autorizzato;
-5. verifica token del processo servizio, DACL pipe e ACL ricorsive storage;
-6. esegue A-D, stop/start SCM e manomissione/ripristino della key DPAPI;
-7. registra `SecureIntegration-LiveMatrix-PostReboot-<RunId>` come task `SYSTEM` AtStartup;
-8. riavvia la VM.
+1. Publishes Broker and the probe from the current commit.
+2. Creates `SibLiveAuthorized` and `SibLiveDenied` as standard users with random passwords protected by DPAPI LocalMachine and administrative ACLs.
+3. Registers `SecureIntegrationBroker` with `StartName = NT SERVICE\SecureIntegrationBroker` and an unrestricted service SID.
+4. Configures the application manifest with the authorized apphost SID, path and SHA-256.
+5. Verifies the service process token, pipe DACL and recursive storage ACLs.
+6. Runs A-D, SCM stop/start and DPAPI key tampering/restoration.
+7. Registers `SecureIntegration-LiveMatrix-PostReboot-<RunId>` as a `SYSTEM` AtStartup task.
+8. Reboots the VM.
 
-Dopo il reboot il task verifica il cambio di boot session, attende il servizio automatico, riusa secret reference ed envelope creati prima del reboot, ripete le negazioni critiche, analizza l'Event Log e crea il bundle.
+After reboot, the task verifies the boot-session change, waits for the automatic service, reuses secret references and envelopes created before reboot, repeats critical denials, analyzes the Event Log and creates the bundle.
 
-## 4. Controllo del risultato
+## 4. Checking the result
 
-Dopo essersi riconnessi alla VM, aprire una PowerShell elevata:
+After reconnecting to the VM, open elevated PowerShell:
 
 ```powershell
 $runId = Get-Content "$env:ProgramData\SecureIntegration\LiveMatrix\last-run-id.txt"
@@ -75,36 +75,36 @@ Get-Content "$runRoot\evidence\M0-M1-live-matrix-$runId.zip.sha256"
 git diff -- docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md
 ```
 
-I due hash ZIP devono coincidere. Aprire `bundle/manifest.json` e verificare gli hash per-file. Il bundle include configurazione SCM, SID/token, SDDL pipe, ACL storage, report dei processi, Event Log redatto e summary pre/post reboot; esclude password, input con canary, plaintext, secret, key blob, copia DPAPI ed envelope persistente.
+The two ZIP hashes must match. Open `bundle/manifest.json` and verify per-file hashes. The bundle includes SCM configuration, SID/token, pipe SDDL, storage ACLs, process reports, redacted Event Logs and pre/post-reboot summaries; it excludes passwords, canary inputs, plaintext, secrets, key blobs, DPAPI copies and persistent envelopes.
 
-## 5. Criteri fail-closed
+## 5. Fail-closed criteria
 
-La run termina con exit code non zero e non aggiorna la matrice documentale se si verifica almeno uno dei seguenti casi:
+The run terminates with a nonzero exit code and does not update the documentation matrix if any of the following occurs:
 
-- PowerShell non elevata o host non qualificato come VM;
-- `StartName` o SID del token servizio diversi dalla virtual identity prevista;
-- DACL pipe diversa da service SID più SID autorizzato;
-- storage accessibile a un SID diverso da service, SYSTEM o Administrators;
-- processo con path non registrato accettato dalla policy;
-- secondo utente capace di aprire pipe o storage;
-- DPAPI CurrentUser capace di unwrap sotto un'identità diversa;
-- operazione non concessa o API di estrazione key/secret disponibile;
-- envelope o key blob manomessi accettati;
-- HMAC o Unprotect non utilizzabili dopo stop/start o reboot;
-- Event Log privo di normal path, authentication denied, payload invalido, failure crittografico o key unwrap failure;
-- presenza di un canary/secret pattern nei log.
+- PowerShell is not elevated or the host is not qualified as a VM.
+- `StartName` or service token SID differs from the expected virtual identity.
+- Pipe DACL differs from service SID plus authorized SID.
+- Storage is accessible to a SID other than service, SYSTEM or Administrators.
+- Policy accepts a process with an unregistered path.
+- A second user can open the pipe or storage.
+- DPAPI CurrentUser can unwrap under a different identity.
+- An ungranted operation or key/secret extraction API is available.
+- Tampered envelopes or key blobs are accepted.
+- HMAC or Unprotect is unusable after stop/start or reboot.
+- Event Log lacks the normal path, authentication denied, invalid payload, cryptographic failure or key unwrap failure.
+- A canary/secret pattern appears in logs.
 
-Un failure è un risultato della review, non va convertito manualmente in PASS. Conservare `failure-<Phase>.json`, diagnosticare e ripetere sulla stessa snapshot o su una nuova VM.
+A failure is a review result; do not manually convert it to PASS. Preserve `failure-<Phase>.json`, diagnose and repeat from the same snapshot or on a new VM.
 
-## 6. Ripresa e diagnostica
+## 6. Resuming and diagnostics
 
-Se il reboot è stato eseguito ma il task non è partito, non simulare la fase. Avviarla manualmente, sempre elevata e sulla stessa boot session post-reboot:
+If reboot occurred but the task did not start, do not simulate the phase. Start it manually, still elevated and in the same post-reboot boot session:
 
 ```powershell
 .\tools\live-matrix\Invoke-LiveMatrix.ps1 -Phase PostReboot -RunId $runId
 ```
 
-Per ispezionare un failure:
+To inspect a failure:
 
 ```powershell
 Get-ScheduledTask -TaskName "SecureIntegration-LiveMatrix-PostReboot-$runId" -ErrorAction SilentlyContinue
@@ -114,20 +114,20 @@ Get-WinEvent -FilterHashtable @{ LogName='Application'; ProviderName='SecureInte
 sc.exe qc SecureIntegrationBroker
 ```
 
-La fase post-reboot rifiuta esplicitamente di procedere se non osserva un nuovo `LastBootUpTime`.
+The post-reboot phase explicitly refuses to proceed unless it observes a new `LastBootUpTime`.
 
 ## 7. Cleanup
 
-Dopo avere copiato il bundle e il relativo hash fuori dalla VM:
+After copying the bundle and its hash outside the VM:
 
 ```powershell
 .\tools\live-matrix\Remove-LiveMatrix.ps1 -RunId $runId -Confirm:$false
 ```
 
-Questo rimuove servizio, task, account sintetici, binari, storage Broker, credenziali e exchange, preservando evidence/raw della run. Su una VM destinata al revert si può eliminare anche l'evidenza locale:
+This removes the service, tasks, synthetic accounts, binaries, Broker storage, credentials and exchange data, preserving the run's evidence/raw. On a VM intended for revert, local evidence may also be deleted:
 
 ```powershell
 .\tools\live-matrix\Remove-LiveMatrix.ps1 -RunId $runId -PurgeEvidence -Confirm:$false
 ```
 
-Infine ripristinare o eliminare la snapshot/VM secondo la policy del laboratorio.
+Finally restore or delete the snapshot/VM according to laboratory policy.

@@ -1,20 +1,19 @@
-# ADR-0003: Named Pipe e protocollo IPC
+# ADR-0003: Named Pipe and IPC protocol
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Contesto
+## Context
 
-Il Local Broker deve servire .NET, VB6, Delphi, COBOL e applicazioni native, autenticando il chiamante Windows senza aprire una porta locale.
+The Local Broker must serve .NET, VB6, Delphi, COBOL and native applications, authenticating the Windows caller without opening a local port.
 
-## Decisione
+## Decision
 
-Windows Named Pipe come trasporto primario. Framing binario versionato con body JSON UTF-8 e chunk binari. Pipe ACL, client PID, impersonation, challenge, sequence number, nonce e limiti obbligatori.
+Windows Named Pipe is the primary transport. Versioned binary framing with a UTF-8 JSON body and binary chunks. Pipe ACLs, client PID, impersonation, challenge, sequence number, nonce and limits are mandatory.
 
-## Conseguenze
+## Consequences
 
-Il trasporto è locale, language-neutral e compatibile x86/x64. Il protocollo deve essere implementato due volte: .NET e C++. L'API localhost resta fuori dall'MVP.
+The transport is local, language-neutral and x86/x64-compatible. The protocol must be implemented twice: in .NET and C++. A localhost API remains outside the MVP.
 
-## Alternative escluse
+## Rejected alternatives
 
-HTTP localhost aumenta CSRF/DNS-rebinding e gestione token; gRPC named pipes aggiunge complessità agli adapter legacy; COM-only non copre tutti i linguaggi.
-
+Localhost HTTP increases CSRF/DNS-rebinding exposure and token management; gRPC named pipes add complexity to legacy adapters; COM-only does not cover every language.

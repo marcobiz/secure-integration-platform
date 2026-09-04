@@ -1,29 +1,29 @@
 # PostgreSQL schema as-built
 
-Baseline: migration runner e migration additive `0001`..`0017` su PostgreSQL 18.
-Le migration SQL sono la fonte eseguibile; questo documento non promuove modelli target
-a stato corrente.
+Baseline: migration runner and additive migrations `0001`..`0019` on PostgreSQL 18.
+SQL migrations are the executable source; this document does not promote target models
+to current status.
 
-## Principi correnti
+## Current principles
 
-- UUID applicativi e timestamp `timestamptz` UTC.
-- Nessun secret value nel database: soltanto metadata, certificato pubblico e logical/
-  opaque provider locator server-side.
-- Connector JSON canonico in `jsonb`, checksum SHA-256 e lifecycle Published immutabile.
-- Tenant identity derivata dall'autenticazione, composite FK e FORCE RLS sulle tabelle
-  tenant-scoped.
-- Identità migration, runtime, admin, readonly e locator-owner con responsabilità
-  distinte.
-- Migrazioni additive con nome e checksum registrati in `gateway.schema_migration`.
+- Application UUIDs and UTC `timestamptz` timestamps.
+- No secret values in the database: only metadata, public certificates and logical/
+  opaque server-side provider locators.
+- Canonical Connector JSON in `jsonb`, SHA-256 checksum and immutable Published lifecycle.
+- Authentication-derived Tenant identity, composite FKs and FORCE RLS on
+  tenant-scoped tables.
+- Migration, runtime, admin, readonly and locator-owner identities with
+  separate responsibilities.
+- Additive migrations with name and checksum recorded in `gateway.schema_migration`.
 
-Le tabelle audit/invocation sono ordinarie, non partizionate. La migration 0017 rende i
-record append-only rispetto ai ruoli applicativi: `gateway_runtime` conserva solo INSERT
-su entrambe; `gateway_admin` conserva SELECT e INSERT su `audit_event` e non ha privilegi
-su `invocation_event`, che non ha un consumer Admin prodotto. Owner/migration e
-amministratori host/DB privilegiati restano nella TCB: non esistono firma, notarizzazione
-o protezione assoluta contro il DBA.
+Audit/invocation tables are ordinary, nonpartitioned tables. Migration 0017 makes
+records append-only for application roles: `gateway_runtime` retains only INSERT
+on both; `gateway_admin` retains SELECT and INSERT on `audit_event` and has no privileges
+on `invocation_event`, which has no product Admin consumer. Owner/migration and
+privileged host/DB administrators remain in the TCB: there is no signing, notarization
+or absolute protection against the DBA.
 
-## ER corrente
+## Current ER diagram
 
 ```mermaid
 erDiagram
@@ -44,152 +44,161 @@ erDiagram
   PROVIDER_RESOURCE_CATALOG_VERSION ||--o{ PROVIDER_RESOURCE_LOCATOR : resolves
 ```
 
-I locator di identità (`installation_locator`, `credential_locator`,
-`activation_locator`) e i provider locator sono separati dai cataloghi tenant-scoped.
+Identity locators (`installation_locator`, `credential_locator`,
+`activation_locator`) and provider locators are separate from tenant-scoped catalogs.
 
-## Inventario delle tabelle
+## Table inventory
 
-| Gruppo | Tabelle correnti |
+| Group | Current tables |
 |---|---|
 | Migration | `schema_migration` |
 | Directory | `tenant`, `application`, `environment`, `installation`, `installation_credential`, `activation_code` |
-| Runtime | `connector_definition`, `installation_connector_grant`, `replay_nonce`, `audit_event`, `invocation_event` |
+| Runtime | `connector_definition`, `installation_connector_grant`, `replay_nonce`, `audit_event`, `invocation_event`, `connector_workflow_context` |
 | Identity locator | `installation_locator`, `credential_locator`, `activation_locator` |
 | Connector | `connector_version`, `connector_environment_binding`, `connector_binding_bundle_version` |
 | Admin | `admin_principal`, `admin_role_assignment`, `admin_bootstrap`, `connector_approval`, `admin_session` |
 | Provider | `provider_resource_catalog_version`, `provider_resource_locator` |
 
-## Directory ed enrollment
+Migration 0018 adds `connector_workflow_context`: server-derived scope and Published
+configuration hashes bind technical workflow/trace correlation, operation, action,
+purpose and timestamp, without payloads, patient data or credentials. Forced RLS
+checks Tenant and Installation; only `gateway_runtime` receives SELECT/INSERT.
+Migration 0019 adds `predecessor_trace_id` and permits a protocol-authorized successor
+without replacing the immutable origin. This is durable technical correlation,
+not a general durable session store or clinical-data archive.
+
+## Directory and enrollment
 
 ### `tenant`, `application`, `environment`
 
-Contengono identità, display/status, compatibility/version policy ed environment policy.
-`application` rappresenta un prodotto autorizzabile; la process identity locale è
-vincolata dal manifest Broker.
+Contain identities, display/status, compatibility/version policy and environment policy.
+`application` represents an authorizable product; local process identity is
+bound by the Broker manifest.
 
 ### `installation`
 
-Lega Tenant, Application ed Environment. Dalla migration 0011 contiene
-`installation_kind` (`broker`/`direct`), `client_version` e `updated_at`, oltre a stato,
-Broker version, last-seen, revoca e row version. Tenant/Application/Environment diventano
-immutabili dopo activation.
+Binds Tenant, Application and Environment. Since migration 0011 it contains
+`installation_kind` (`broker`/`direct`), `client_version` and `updated_at`, plus state,
+Broker version, last-seen, revocation and row version. Tenant/Application/Environment become
+immutable after activation.
 
 ### `installation_credential`
 
-Contiene fingerprint, SPKI, DER pubblico, seriale, validità, stato e relazione di
-sostituzione. La chiave privata non è nel database. Un indice parziale consente una sola
-credential `active` per Installation.
+Contains fingerprint, SPKI, public DER, serial, validity, state and replacement
+relationship. The private key is not in the database. A partial index allows only one
+`active` credential per Installation.
 
 ### `activation_code`
 
-Conserva HMAC, expiry, uso e attempt count. Il codice in chiaro non è persistito. Le
-challenge brevi restano in uno store applicativo dedicato.
+Stores HMAC, expiry, use and attempt count. The plaintext code is not persisted. Short-lived
+challenges remain in a dedicated application store.
 
-## Runtime e Connector lifecycle
+## Runtime and Connector lifecycle
 
-### `connector_definition` e `connector_version`
+### `connector_definition` and `connector_version`
 
-`connector_definition` conserva slug, metadata, `active_version_id`,
-`publication_revision` e `row_version`. `connector_version` conserva JSON canonico,
-checksum, schema/version, lifecycle e attori/timestamp. Trigger impediscono la modifica
-del contenuto già Published; una sola versione è Published per Connector.
+`connector_definition` stores slug, metadata, `active_version_id`,
+`publication_revision` and `row_version`. `connector_version` stores canonical JSON,
+checksum, schema/version, lifecycle and actors/timestamps. Triggers prevent modification
+of already Published content; only one version is Published per Connector.
 
 ### `connector_environment_binding`
 
-Tabella M4 legacy ancora presente nella lineage ma non letta dal runtime dopo la
-migration 0004. Non è una seconda source of truth corrente.
+Legacy M4 table still present in the lineage but not read by the runtime after
+migration 0004. It is not a second current source of truth.
 
 ### `connector_binding_bundle_version`
 
-Revisioni immutabili per ConnectorVersion/Environment con endpoint e soli riferimenti
-server-side a secret/certificati. Checksum e stato draft/active/retired sono legati al
-`binding_digest_sha256` dell'approvazione. Publish/four-eyes verifica e attiva revisioni
-exact nella transazione che pubblica la versione.
+Immutable revisions per ConnectorVersion/Environment with endpoints and only server-side
+secret/certificate references. Checksum and draft/active/retired state are bound to the
+approval's `binding_digest_sha256`. Publication/four-eyes checks and activates
+exact revisions in the transaction publishing the version.
 
 ### `installation_connector_grant`
 
-Grant deny-by-default per Installation/Tenant/Connector/operation, con validità e
-constraint JSON. La composite FK impedisce associazioni cross-Tenant incoerenti.
+Deny-by-default grant per Installation/Tenant/Connector/operation, with validity and
+JSON constraints. The composite FK prevents inconsistent cross-Tenant associations.
 
 ### `replay_nonce`
 
-Registra nonce bounded/TTL consumati dal runtime anti-replay.
+Records bounded/TTL nonces consumed by runtime replay protection.
 
 ## Admin
 
-- `admin_principal`: chiave stabile issuer+subject e metadata visuali;
-- `admin_role_assignment`: ruolo globale o tenant-scoped, revocabile;
-- `admin_bootstrap`: stato del bootstrap Security Administrator;
-- `admin_session`: sessione server-side, digest cookie, scadenza e revoca;
-- `connector_approval`: request/decision four-eyes legata a version checksum e binding
+- `admin_principal`: stable issuer+subject key and visual metadata;
+- `admin_role_assignment`: revocable global or tenant-scoped role;
+- `admin_bootstrap`: Security Administrator bootstrap state;
+- `admin_session`: server-side session, cookie digest, expiry and revocation;
+- `connector_approval`: four-eyes request/decision bound to version checksum and binding
   digest.
 
-## Provider catalog e locator
+## Provider catalog and locators
 
-`provider_resource_catalog_version` contiene metadata pubblici/revisionati, scope
-Environment/Connector/operation, checksum e stato. `provider_resource_locator` associa
-la risorsa logica al locator fisico server-side; il client non lo seleziona e il normale
-runtime non può enumerarlo.
+`provider_resource_catalog_version` contains public/versioned metadata,
+Environment/Connector/operation scope, checksum and state. `provider_resource_locator` maps
+a logical resource to its physical server-side locator; the client cannot select it and ordinary
+runtime cannot enumerate it.
 
-Le funzioni `gateway.resolve_published_provider_locator(...)` sono
-`SECURITY DEFINER`, hanno `search_path` fisso e owner
-`gateway_locator_owner NOLOGIN/NOINHERIT`. Le migration 0009-0014 restringono il
-predicato a principal, grant, Published authority, binding/resource revision,
-capability, signing slot e input tipizzato pertinenti.
+The `gateway.resolve_published_provider_locator(...)` functions are
+`SECURITY DEFINER`, with a fixed `search_path` and
+`gateway_locator_owner NOLOGIN/NOINHERIT` owner. Migrations 0009–0014 restrict the
+predicate to relevant principal, grant, Published authority, binding/resource revision,
+capability, signing slot and typed input.
 
-I locator possono rappresentare secret, certificati o chiavi server-side, ma non il
-valore. `SecretValues=false` del pack local PKCS#12 significa che nessuna funzione DB o
-fallback Gateway trasforma quel pack in generic secret provider.
+Locators may represent server-side secrets, certificates or keys, but not their
+values. `SecretValues=false` on the local PKCS#12 pack means no DB function or
+Gateway fallback turns that pack into a generic secret provider.
 
-## Audit e invocation metadata
+## Audit and invocation metadata
 
-`audit_event` contiene attore, azione, target, outcome, reason, correlation e metadata
-redatti. `invocation_event` contiene Tenant/Installation/Connector/operation,
-correlation, outcome, durata, categoria esterna, error code e dimensione payload.
+`audit_event` contains actor, action, target, outcome, reason, correlation and redacted
+metadata. `invocation_event` contains Tenant/Installation/Connector/operation,
+correlation, outcome, duration, external category, error code and payload size.
 
-Non contengono body, Authorization/Cookie, secret, private key o response raw. Le primary
-key includono `(occurred_at, id)`, ma non esistono `PARTITION BY`, child partition o
-retention job nella baseline.
+They contain no bodies, Authorization/Cookie, secrets, private keys or raw responses. Primary
+keys include `(occurred_at, id)`, but there is no `PARTITION BY`, child partition or
+retention job in the baseline.
 
-## RLS e ruoli effettivi
+## RLS and effective roles
 
-| Ruolo/identità | Uso corrente |
+| Role/identity | Current use |
 |---|---|
-| owner che esegue le migration | DDL e bootstrap; le migration non creano un ruolo nominato `migration_owner`. |
-| `gateway_runtime` | Runtime/enrollment, replay, letture autorizzate e INSERT audit/invocation secondo grant/RLS. |
-| `gateway_admin` | Directory e amministrazione; su `audit_event` conserva solo SELECT/INSERT, mentre non ha privilegi su `invocation_event`. |
-| `gateway_readonly` | Subset di metadata sanificato. |
-| `gateway_locator_owner` | Owner NOLOGIN delle funzioni locator; CREATE sullo schema viene revocato dopo la definizione. |
+| Owner running migrations | DDL and bootstrap; migrations do not create a role named `migration_owner`. |
+| `gateway_runtime` | Runtime/enrollment, replay, authorized reads and audit/invocation INSERT according to grants/RLS. |
+| `gateway_admin` | Directory and administration; retains only SELECT/INSERT on `audit_event`, with no privileges on `invocation_event`. |
+| `gateway_readonly` | Sanitized metadata subset. |
+| `gateway_locator_owner` | NOLOGIN owner of locator functions; CREATE on the schema is revoked after definition. |
 
-RLS è `ENABLE` e `FORCE` sulle tabelle tenant-scoped. Le transazioni impostano il Tenant
-server-derived; le funzioni cross-scope hanno superficie stretta e grant espliciti. La
-revoca 0017 non modifica la tenant policy né la semantica degli audit globali con
+RLS is `ENABLE` and `FORCE` on tenant-scoped tables. Transactions set the
+server-derived Tenant; cross-scope functions have a narrow surface and explicit grants.
+Revocation in 0017 changes neither tenant policy nor global-audit semantics with
 `tenant_id IS NULL`.
 
-## Vincoli e indici rilevanti
+## Relevant constraints and indexes
 
-- uniqueness/status per Tenant/Application/Environment e Installation;
-- credential attiva unica e indici per Installation/status/expiry;
-- grant unico per Installation/Connector/operation;
-- una Published version per Connector e revisioni binding uniche;
-- principal issuer+subject e session digest unici;
-- catalog/locator revision e scope vincolati;
-- trigger di immutabilità per Published definition e active binding bundles.
+- uniqueness/status for Tenant/Application/Environment and Installation;
+- unique active credential and Installation/status/expiry indexes;
+- unique Installation/Connector/operation grant;
+- one Published version per Connector and unique binding revisions;
+- unique principal issuer+subject and session digest;
+- constrained catalog/locator revision and scope;
+- immutability triggers for Published definitions and active binding bundles.
 
-## Modello target, non implementato
+## Target model, not implemented
 
-Le seguenti entità descritte in roadmap precedenti non esistono nelle migration
-`0001`..`0014`: `connector_operation`, `secret_binding`, `deployment`,
-`plugin_definition`, `session_reference`, `idempotency_record` e `health_status`.
+The following entities described in earlier roadmaps do not exist in migrations
+`0001`..`0019`: `connector_operation`, `secret_binding`, `deployment`,
+`plugin_definition`, `session_reference`, `idempotency_record` and `health_status`.
 
-Sono inoltre target, non claim correnti:
+The following are also targets, not current claims:
 
-- partizionamento e retention automatica di audit/invocation;
-- deployment revision multi-environment dedicato;
-- workflow/session durability PostgreSQL;
-- backup/PITR/restore e HA qualificati;
-- firma/notarizzazione dell'audit o protezione da owner/migration e DBA privilegiati.
+- partitioning and automatic audit/invocation retention;
+- dedicated multi-environment deployment revisions;
+- general-purpose durable protocol sessions; technical workflow correlation is
+  already persisted in `connector_workflow_context`;
+- qualified backup/PITR/restore and HA;
+- audit signing/notarization or protection from owner/migration and privileged DBAs.
 
-Ogni adozione richiede migration additiva, fresh/upgrade/no-op, privilege/RLS test,
-documentazione e rollback application-compatible. Connector rollback non implica
+Each adoption requires an additive migration, fresh/upgrade/no-op checks, privilege/RLS tests,
+documentation and application-compatible rollback. Connector rollback does not imply
 database downgrade.

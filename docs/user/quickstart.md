@@ -1,49 +1,48 @@
 # Quick start
 
-**Pubblico:** nuovo adottante.
-**Stato:** CURRENT.
+**Audience:** new adopters.
+**Status:** CURRENT.
 
-## Vuoi vedere il prodotto funzionare?
+## Running the Core locally
 
-Usa il [pilot locale Core](local-pilot.md), percorso principale di valutazione:
-richiede soltanto Git, PowerShell e Docker Linux/Compose; non richiede .NET SDK, Node,
-npm, curl, PostgreSQL, cloud, FSE2, `.env`, SQL, accesso agli store o una CA installata
-sull'host. Dalla root del checkout:
+Use the [local Core pilot](local-pilot.md), the primary evaluation path:
+it requires only Git, PowerShell and Linux Docker/Compose, with no host .NET SDK,
+Node, npm, curl or PostgreSQL. It needs no cloud, FSE2, `.env`, SQL, store access
+or host CA installation. From the checkout root:
 
 ```powershell
 ./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Validate
 ./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Run
 ```
 
-Risultato: una chiamata Direct .NET attraversa il Gateway e un Connector Published,
-raggiunge un mock HTTPS/mTLS e torna con risposta sanificata e audit metadata-only.
-Il marker finale è `ALPHA_GOLDEN_PATH_PASS`; la run rimuove le proprie risorse.
-In caso di interruzione, eseguire `./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Stop`.
+Result: a Direct .NET call crosses the Gateway and a Published Connector, reaches
+an HTTPS/mTLS mock and returns a sanitized response with metadata-only audit.
+The final marker is `ALPHA_GOLDEN_PATH_PASS`; the run removes its own resources.
+If interrupted, run `./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Stop`.
 
-## Vuoi capire il confine Windows / Local Broker?
+## Windows / Local Broker path
 
-Il pilot Direct non attraversa il Local Broker. Le
-[prove Windows già disponibili](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/history/README.md#prove-windows--local-broker)
-sono laboratori storici su Windows Service reale, con prerequisiti dedicati; non sono
-un secondo quickstart, un MSI o una nuova qualifica della baseline corrente.
+The Direct pilot does not go through the Local Broker.
+[Existing Windows tests](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/history/README.md#windows--local-broker-evidence)
+are historical laboratories using a real Windows Service, with dedicated prerequisites;
+they are not a second quickstart, an MSI or a new qualification of the current baseline.
 
-## Vuoi provare FSE2 OfficialTest?
+## Optional FSE2 OfficialTest pilot
 
-Usa il [pilot corrente di validazione e status](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md).
-È un pack opzionale, con SDK .NET sull'host, materiale A1/S1 e accesso OfficialTest già
-autorizzati: la promessa Docker-only del Core non si applica a questo percorso.
-Il runner gestisce bootstrap locale, enrollment e ruoli; consente VERIFICA e
-consultazione, non pubblicazione documentale.
+Use the [current validation/status pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md).
+This optional pack requires a host .NET SDK, previously authorized A1/S1 material
+and OfficialTest access: the Core's container-only application-tooling prerequisites
+do not apply here. The runner handles local bootstrap, enrollment and roles;
+it permits VERIFICA and lookup, not document publication.
 
-CDA e workflow status dopo riavvio sono qualificati live nei casi osservati; FHIR
-rimane non qualificato live (500, causa non determinata). Vedi la
-[sintesi delle capability e dei limiti](../../IMPLEMENTATION_STATUS.md#stato-prodotto).
+CDA and workflow status after restart are live-qualified for the observed cases;
+FHIR remains not live-qualified (HTTP 500, cause undetermined). See the
+[capability and limitations summary](../../IMPLEMENTATION_STATUS.md#product-status).
 
-Non sostituire i prerequisiti mancanti con SQL, accesso diretto al catalogo, endpoint copiati
-da evidence, test integration o un `curl` costruito a mano.
+Do not replace missing prerequisites with SQL, direct catalog access, endpoints copied
+from evidence, integration tests or a hand-built `curl` command.
 
-## Vuoi soltanto esplorare l’Admin UI?
+## Administration and Admin UI
 
-Completa prima il pilot locale, poi usa la
-[guida di amministrazione](administration.md). Il quickstart Admin di milestone è un
-laboratorio di ispezione, non un secondo percorso di adozione.
+Complete the local pilot first, then use the [administration guide](administration.md).
+The milestone Admin quickstart is an inspection laboratory, not a second adoption path.

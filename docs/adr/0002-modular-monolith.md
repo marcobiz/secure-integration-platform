@@ -1,20 +1,19 @@
 # ADR-0002: Gateway modular monolith
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Contesto
+## Context
 
-La piattaforma richiede runtime, enrollment, configurazione, admin e audit, ma non esistono ancora volumi o team che giustifichino microservizi.
+The platform needs runtime, enrollment, configuration, administration and audit, but there are no workloads or teams yet that justify microservices.
 
-## Decisione
+## Decision
 
-Un solo processo e una sola immagine Gateway, con moduli Domain/Application/Infrastructure separati e dipendenze controllate. Un solo PostgreSQL operativo.
+A single Gateway process and image, with separate Domain/Application/Infrastructure modules and controlled dependencies. A single operational PostgreSQL database.
 
-## Conseguenze
+## Consequences
 
-Deployment, transazioni e sviluppo restano semplici. I confini modulari permettono estrazione futura basata su evidenze. Un guasto del processo impatta tutti i moduli e richiede buoni health check.
+Deployment, transactions and development remain simple. Modular boundaries allow future extraction based on evidence. A process failure affects all modules and requires effective health checks.
 
-## Alternative escluse
+## Rejected alternatives
 
-Microservizi, service mesh e broker di messaggi non sono giustificati nell'MVP.
-
+Microservices, a service mesh and message brokers are not justified in the MVP.

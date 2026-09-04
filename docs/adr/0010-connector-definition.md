@@ -1,17 +1,17 @@
-# ADR-0010: Definizione Connector
+# ADR-0010: Connector definition
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Decisione
+## Decision
 
-Modello dichiarativo ristretto con pipeline fissa: resolve, grant, validate, bind, authenticate, invoke, normalize, redact. Configurazione JSON canonica; trasformazioni complesse esclusivamente in plugin compilati.
+A restricted declarative model with a fixed pipeline: resolve, grant, validate, bind, authenticate, invoke, normalize, redact. Canonical JSON configuration; complex transformations exclusively in compiled plugins.
 
-Da M5 i valori server-side sono revisioni immutabili di un binding bundle scoped a ConnectorVersion ed Environment. Endpoint, secret reference e certificate reference restano distinti; il loro checksum entra in un digest con il checksum canonico del Connector. Una revisione diventa runtime `Active` solo nella stessa transazione PostgreSQL che verifica una approval four-eyes sul digest esatto e pubblica la ConnectorVersion. Una modifica crea una nuova revisione e non cambia mai il comportamento gia Published.
+Since M5, server-side values are immutable revisions of a binding bundle scoped to ConnectorVersion and Environment. Endpoints, secret references and certificate references remain distinct; their checksum is included in a digest with the canonical Connector checksum. A revision becomes runtime `Active` only in the same PostgreSQL transaction that verifies a four-eyes approval for the exact digest and publishes the ConnectorVersion. A change creates a new revision and never changes already Published behavior.
 
-## Conseguenze
+## Consequences
 
-Endpoint, autenticazione e retry sono reviewabili e validabili. Non si possono modellare flussi arbitrari; nuovi pattern richiedono un adapter tipizzato o un plugin.
+Endpoints, authentication and retries can be reviewed and validated. Arbitrary flows cannot be modeled; new patterns require a typed adapter or a plugin.
 
-## Alternative escluse
+## Rejected alternatives
 
-Workflow engine, PowerShell, JavaScript, C# dinamico, loop ed espressioni generiche.
+Workflow engines, PowerShell, JavaScript, dynamic C#, loops and generic expressions.

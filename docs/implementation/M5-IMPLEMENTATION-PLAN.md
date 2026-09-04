@@ -1,50 +1,49 @@
-# M5 — Admin UI MVP: piano di implementazione
+# M5 — Admin UI MVP: implementation plan
 
-## Baseline e vincoli
+## Baseline and constraints
 
-Baseline immutabile: tag `m4-connector-configuration-baseline-20260805`, commit `49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b`.
+Immutable baseline: tag `m4-connector-configuration-baseline-20260805`, commit `49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b`.
 
-Branch: `m5/admin-ui-mvp`. M3B, cloud reale, Connector sanitari reali, adapter legacy commerciali e M6+ sono fuori scope. La PR M5 non sarà unita automaticamente.
+Branch: `m5/admin-ui-mvp`. M3B, real cloud, real healthcare Connectors, commercial legacy adapters and M6+ are out of scope. The M5 PR will not be merged automatically.
 
-## Incrementi verificabili
+## Verifiable increments
 
-1. **Boundary OSS/provider**: astrazioni per capability, provider sintetico separato, Azure pack opzionale, solution filter Core, architecture test ed export allowlist.
-2. **Schema amministrativo**: AdminPrincipal `(issuer, subject)`, ruoli tenant-scoped, bootstrap auditato, approval records checksum-specific, migrazione additiva e RLS.
-3. **Autenticazione**: OIDC authorization-code server-side con PKCE/state/nonce, cookie sicuro, CSRF, logout e scadenza; fixture Development isolata e fail-closed in Production.
-4. **Admin API v1**: DTO provider-neutral, RBAC, ProblemDetails, correlation ID, ETag/If-Match, paginazione, audit e four-eyes.
-5. **Frontend**: React/TypeScript strict, routing, query cache, form/schema validation, editor JSON e diff, i18n IT/EN, temi e accessibilità.
-6. **Pagine operative**: dashboard, tenant, application, installation/enrollment/revoca, Connector lifecycle, binding, grant, test controllato, audit e health.
-7. **Packaging locale**: asset same-origin, container non-root, no sourcemap pubbliche, quickstart Compose provider-neutral e dati sintetici.
-8. **Gate**: backend/frontend/E2E/a11y, PostgreSQL 18, scansioni, SBOM, clean-clone, open-source boundary, evidence redatta esterna e PR #5.
+1. **OSS/provider boundary**: capability-specific abstractions, separate synthetic provider, optional Azure pack, Core solution filter, architecture test and export allowlist.
+2. **Administrative schema**: AdminPrincipal `(issuer, subject)`, tenant-scoped roles, audited bootstrap, checksum-specific approval records, additive migration and RLS.
+3. **Authentication**: server-side OIDC authorization-code with PKCE/state/nonce, secure cookie, CSRF, logout and expiry; isolated Development fixture that fails closed in Production.
+4. **Admin API v1**: provider-neutral DTOs, RBAC, ProblemDetails, correlation ID, ETag/If-Match, pagination, audit and four-eyes.
+5. **Frontend**: strict React/TypeScript, routing, query cache, form/schema validation, JSON editor and diff, IT/EN i18n, themes and accessibility.
+6. **Operational pages**: dashboard, tenant, application, installation/enrollment/revocation, Connector lifecycle, binding, grant, controlled test, audit and health.
+7. **Local packaging**: same-origin assets, non-root container, no public sourcemaps, provider-neutral Compose quickstart and synthetic data.
+8. **Gate**: backend/frontend/E2E/a11y, PostgreSQL 18, scans, SBOM, clean-clone, open-source boundary, external redacted evidence and PR #5.
 
-Ogni incremento termina con build/test pertinenti e commit tematico. Una failure viene corretta sul commit successivo con regressione automatica; non si riscrive la storia.
+Every increment ends with relevant builds/tests and a focused commit. A failure is corrected in the next commit with an automated regression test; history is not rewritten.
 
-## Criteri fail-closed principali
+## Main fail-closed criteria
 
-- Production non parte con DevelopmentAuth, API key admin o OIDC incompleto.
-- Mutazioni senza sessione, CSRF, ruolo o `If-Match` valido sono negate e auditate.
-- Il requester/editor non approva il proprio checksum; modifica successiva invalida l'approvazione.
-- Pubblicazione senza approvazione distinta è negata nella policy production predefinita.
-- Tenant scope deriva dal principal e non da dati client non autorizzati.
-- API/UI non restituiscono valori segreti, activation code dopo la risposta one-time o riferimenti provider arbitrari.
-- UI non usa CDN, telemetry, `dangerouslySetInnerHTML`, `eval` o `new Function`.
+- Production does not start with DevelopmentAuth, an admin API key or incomplete OIDC.
+- Mutations without a valid session, CSRF, role or `If-Match` are denied and audited.
+- The requester/editor cannot approve their own checksum; a later change invalidates approval.
+- Publication without distinct approval is denied by the default production policy.
+- Tenant scope derives from the principal, not from unauthorized client data.
+- API/UI do not return secret values, activation codes after the one-time response or arbitrary provider references.
+- The UI uses no CDNs, telemetry, `dangerouslySetInnerHTML`, `eval` or `new Function`.
 
-## Strategia di test
+## Test strategy
 
-- Unit test di policy e dominio per ogni ruolo, tenant scope, bootstrap e four-eyes.
-- Integration test HTTP per cookie/OIDC/CSRF/security headers/ProblemDetails/ETag/paginazione/audit.
-- Integration test PostgreSQL 18 per migrazione apply/no-op, RLS e concorrenza.
-- Vitest/Testing Library per componenti, i18n, temi, validazione e gestione errori.
-- Playwright per i 20 scenari richiesti e axe per WCAG 2.1 AA automatizzabile.
-- Container/quickstart/clean-clone e regressione completa M0–M4.
+- Policy and domain unit tests for every role, tenant scope, bootstrap and four-eyes.
+- HTTP integration tests for cookies/OIDC/CSRF/security headers/ProblemDetails/ETag/pagination/audit.
+- PostgreSQL 18 integration tests for migration apply/no-op, RLS and concurrency.
+- Vitest/Testing Library for components, i18n, themes, validation and error handling.
+- Playwright for the 20 required scenarios and axe for automatable WCAG 2.1 AA checks.
+- Container/quickstart/clean-clone and full M0–M4 regression.
 
-## Evidenze
+## Evidence
 
-Le evidenze raw sono temporanee e ignorate. Il bundle redatto è scritto fuori repository in `C:\SecureEvidence\m5-gate-<timestamp>`, include commit, runtime/tool versions, job, hash immagini/SBOM/migrazioni, test nominativi, cleanup e manifest hashato.
+Raw evidence is temporary and ignored. The redacted bundle is written outside the repository to `C:\SecureEvidence\m5-gate-<timestamp>` and includes the commit, runtime/tool versions, jobs, image/SBOM/migration hashes, named tests, cleanup and hashed manifest.
 
-## Decisioni non incluse
+## Decisions not included
 
-- Licenza finale: scelta proprietario ancora aperta tra Apache-2.0 e MPL-2.0.
-- Provider OIDC di produzione specifico: deployment concern; il Core resta standard OIDC.
-- Azure smoke M3B e pack sanitari reali: milestone successive e non bloccanti per l'implementazione M5, salvo la relativa readiness dichiarata.
-
+- Final license: the owner's choice between Apache-2.0 and MPL-2.0 remains open.
+- Specific production OIDC provider: a deployment concern; Core remains standard OIDC.
+- M3B Azure smoke and real healthcare packs: later milestones that do not block M5 implementation, except for their respective declared readiness.

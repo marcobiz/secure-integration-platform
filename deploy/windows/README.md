@@ -1,5 +1,5 @@
 # Windows packaging boundary
 
-M0 riserva questa directory per WiX/MSI. M1 fornisce servizio e script di installazione verificabile; l'MSI firmato e l'hardening completo appartengono alla milestone enterprise indicata dal piano.
+M0 reserves this directory for WiX/MSI. M1 provides the service and a verifiable installation script; the signed MSI and full hardening belong to the enterprise milestone identified by the plan.
 
-`install-service.ps1` registra `SecureIntegrationBroker` con la virtual service identity `NT SERVICE\SecureIntegrationBroker`. L'Installation ID, i manifest applicativi e gli eventuali endpoint/certificati Gateway devono essere materializzati dal futuro installer; non inserire segreti in `appsettings.json`.
+`install-service.ps1` registers `SecureIntegrationBroker` with virtual service identity `NT SERVICE\SecureIntegrationBroker`. The future installer must materialize the Installation ID, application manifests and any Gateway endpoints/certificates; do not put secrets in `appsettings.json`.

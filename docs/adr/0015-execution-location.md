@@ -1,12 +1,11 @@
-# ADR-0015: Esecuzione locale, centrale e ibrida
+# ADR-0015: Local, central and hybrid execution
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Decisione
+## Decision
 
-Ogni operation dichiara `gateway`, `broker` o `hybrid`. `hybrid` ammette solo handoff tipizzati: authorization-code exchange, local signature o local MFA.
+Each operation declares `gateway`, `broker` or `hybrid`. `hybrid` allows only typed handoffs: authorization-code exchange, local signature or local MFA.
 
-## Conseguenze
+## Consequences
 
-Vendor Secret forza Gateway; smart card, VPN e chiave non esportabile forzano Broker. Il client non cambia la location. Flussi ibridi ulteriori richiedono ADR e threat analysis.
-
+A Vendor Secret requires Gateway execution; smart cards, VPNs and non-exportable keys require Broker execution. The client cannot change the location. Additional hybrid flows require an ADR and threat analysis.

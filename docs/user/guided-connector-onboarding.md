@@ -1,66 +1,65 @@
-# Onboarding guidato di un Connector
+# Guided Connector onboarding
 
-**Pubblico:** Security Administrator, Connector Editor e Connector Approver.
-**Stato:** CURRENT per l’Admin UI integrata; il laboratorio locale usa soltanto dati
-sintetici e non qualifica un deployment production.
+**Audience:** Security Administrator, Connector Editor and Connector Approver.
+**Status:** CURRENT for the integrated Admin UI; the local laboratory uses only
+synthetic data and does not qualify a production deployment.
 
-La pagina **Onboarding guidato** (`/admin/onboarding`) porta una nuova Installation da
-stato vuoto a una versione Connector `Published` e invocabile. Il percorso normale non
-richiede UUID, checksum, JSON di binding, riferimenti provider, SQL o accesso allo store.
-La pagina legge sempre lo stato autorevole e mostra:
+The **Guided onboarding** page (`/admin/onboarding`) takes a new Installation from
+empty state to a `Published`, invocable Connector version. The normal path requires
+no UUIDs, checksums, binding JSON, provider references, SQL or store access.
+The page always reads authoritative state and shows:
 
-- stato corrente e prerequisito mancante;
-- ruolo che deve proseguire;
-- prossima azione autorizzata;
-- conferma che reload e retry della stessa azione sono sicuri.
+- current state and missing prerequisite;
+- the role that must continue;
+- the next authorized action;
+- confirmation that reloading and retrying the same action are safe.
 
-## Le cinque azioni
+## The five actions
 
-| # | Ruolo | Azione primaria | Risultato |
+| # | Role | Primary action | Outcome |
 |---|---|---|---|
-| 1 | Security Administrator | Selezionare Tenant, Application ed Environment per nome e creare l’Installation. | Compare il passaggio di enrollment monouso. |
-| 2 | Connector Editor | Scegliere un normale file `.json` e premere **Valida e importa**. | Il Gateway calcola e verifica ID, versione e checksum, poi conserva una versione `Validated`. |
-| 3 | Security Administrator | Scegliere, se necessario, endpoint e credenziali dal catalogo e premere **Configura binding e autorizzazioni**. | Binding completo e grant esatti vengono creati da selezioni server-owned per la versione riletta dal server. |
-| 4 | Connector Editor | Premere **Richiedi approvazione**. | Viene congelata la richiesta per la versione e il digest di binding esatti. |
-| 5 | Connector Approver | Leggere la review effettiva e premere **Verifica, approva e pubblica**. | Lo stesso Approver approva e pubblica quella versione esatta. |
+| 1 | Security Administrator | Select Tenant, Application and Environment by name and create the Installation. | The one-time enrollment handoff appears. |
+| 2 | Connector Editor | Choose a normal `.json` file and press **Validate and import**. | The Gateway computes and verifies ID, version and checksum, then stores a `Validated` version. |
+| 3 | Security Administrator | If needed, select endpoints and credentials from the catalog and press **Configure binding and grants**. | Complete bindings and exact grants are created from server-owned selections for the version reread by the server. |
+| 4 | Connector Editor | Press **Request approval**. | The request is frozen for the exact version and binding digest. |
+| 5 | Connector Approver | Read the actual review and press **Verify, approve and publish**. | The same Approver approves and publishes that exact version. |
 
-La pagina **Connettori** conserva l’editor JSON completo come percorso avanzato; non è
-necessario nel flusso guidato.
+The **Connectors** page retains the full JSON editor as an advanced path; it is
+not required for the guided flow.
 
-## Handoff di enrollment monouso
+## One-time enrollment handoff
 
-Dopo la prima azione il dialog mostra insieme:
+After the first action, the dialog shows these together:
 
-- **ID codice di attivazione**;
-- **codice di attivazione**;
-- scadenza.
+- **Activation code ID**;
+- **Activation code**;
+- expiry.
 
-ID e codice hanno pulsanti di copia separati. Consegnarli all’operatore di enrollment
-attraverso il canale sicuro approvato e chiudere il dialog dopo l’uso. Non inserirli in
-URL, log, screenshot, ticket o file di evidenza. Il browser non li salva in Web Storage
-e il Gateway non consente di recuperarli in seguito.
+ID and code have separate copy buttons. Hand them to the enrollment operator through
+the approved secure channel and close the dialog after use. Do not put them in URLs,
+logs, screenshots, tickets or evidence files. The browser does not save them in Web
+Storage, and the Gateway does not allow them to be retrieved later.
 
-## Ripresa e recovery
+## Resume and recovery
 
-Ogni azione rilegge lo stato server-side prima di mutare. Se una richiesta si interrompe:
+Each action rereads server-side state before mutating it. If a request is interrupted:
 
-1. ricaricare la stessa pagina;
-2. verificare stato, prerequisito e ruolo mostrati;
-3. ripetere soltanto la stessa azione indicata.
+1. reload the same page;
+2. check the displayed state, prerequisite and role;
+3. repeat only the same indicated action.
 
-Il retry non ricrea un binding già presente. La pagina rilegge la versione autorevole e
-presenta di nuovo ogni grant canonico alla Admin API: una tupla identica già enabled con
-la stessa scadenza è un no-op, non una seconda mutazione o un secondo audit. Una versione
-mancante, diversa, `Draft`/`Retired` o un’operation non canonica viene negata prima della
-mutazione. Non
-attendere una finestra, non rifare login e non ripartire dall’inizio salvo che la pagina
-segnali una sessione realmente scaduta. Un drift di endpoint o risorsa provider viene
-negato: ricaricare il catalogo autorevole e sottoporre una nuova configurazione alla
-normale four-eyes approval.
+A retry does not recreate an existing binding. The page rereads the authoritative
+version and resubmits each canonical grant to the Admin API: an identical, already
+enabled tuple with the same expiry is a no-op, not a second mutation or audit event.
+A missing, different, `Draft`/`Retired` version or non-canonical operation is denied
+before mutation. Do not wait for a window, log in again or restart from the beginning
+unless the page reports a genuinely expired session. Endpoint or provider-resource
+drift is denied: reload the authoritative catalog and submit a new configuration
+through normal four-eyes approval.
 
-## Verifica finale
+## Final verification
 
-Il banner finale prova che la versione è `Published`; l’Installation selezionata deve
-essere `Active` e avere il grant per l’operazione. Concludere con una sola invocation
-bounded tramite la Runtime API supportata e controllare l’audit metadata-only. La pagina
-non trasforma l’Admin UI in un proxy verso destinazioni arbitrarie.
+The final banner proves that the version is `Published`; the selected Installation
+must be `Active` and have an operation grant. Finish with one bounded invocation
+through the supported Runtime API and check metadata-only audit. The page does not
+turn the Admin UI into a proxy to arbitrary destinations.

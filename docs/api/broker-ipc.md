@@ -1,28 +1,28 @@
-# Protocollo IPC del Local Broker
+# Local Broker IPC protocol
 
-> **Stato del contratto:** provvisorio dopo M1. Framing e operazioni implementate sono stabili per i test interni, ma IPC v1 non è congelato per COM/C ABI/CLI. Il freeze richiede validazione attraverso M2 e il vertical slice M3 production-like, inclusi streaming e compatibility matrix.
+> **Contract status:** provisional after M1. Implemented framing and operations are stable for internal tests, but IPC v1 is not frozen for COM/C ABI/CLI. Freezing requires validation through M2 and the production-like M3 vertical slice, including streaming and the compatibility matrix.
 
-## Trasporto
+## Transport
 
-Named Pipe Windows `\\.\pipe\<Vendor>.<Product>.Broker.v1`, byte mode, full duplex. L'API localhost è fuori dall'MVP.
+Windows Named Pipe `\\.\pipe\<Vendor>.<Product>.Broker.v1`, byte mode, full duplex. A localhost API is outside the MVP.
 
 ## Framing
 
-Ogni frame usa network byte order:
+Each frame uses network byte order:
 
-| Campo | Byte | Descrizione |
+| Field | Bytes | Description |
 |---|---:|---|
 | Magic | 4 | ASCII `BGR1`. |
 | Major | 1 | Protocol major. |
 | Minor | 1 | Protocol minor. |
-| Type | 1 | Control, Data, End, Cancel o Error. |
-| Flags | 1 | Riservati; devono essere zero in v1. |
-| Length | 4 | Lunghezza body, massimo in base al frame type. |
+| Type | 1 | Control, Data, End, Cancel or Error. |
+| Flags | 1 | Reserved; must be zero in v1. |
+| Length | 4 | Body length, maximum depends on frame type. |
 | Correlation ID | 16 | UUID bytes. |
-| Sequence | 8 | Contatore monotono per connessione. |
-| Body | N | JSON UTF-8 o bytes. |
+| Sequence | 8 | Monotonic counter per connection. |
+| Body | N | UTF-8 JSON or bytes. |
 
-Control frame massimo 1 MiB. Data chunk massimo 64 KiB. Payload aggregato standard 16 MiB; stream massimo 64 MiB. Frame incompleti, magic/version errati, sequence duplicate o reserved flag non zero chiudono la connessione.
+Maximum control frame 1 MiB. Maximum data chunk 64 KiB. Standard aggregate payload 16 MiB; maximum stream 64 MiB. Incomplete frames, incorrect magic/version, duplicate sequences or nonzero reserved flags close the connection.
 
 ## Handshake
 
@@ -49,9 +49,9 @@ Server:
 }
 ```
 
-Prima della risposta il Broker acquisisce client PID, process handle, creation time e Windows identity. Il manifest Application determina path, publisher/hash e operation grants.
+Before responding, the Broker acquires the client PID, process handle, creation time and Windows identity. The Application manifest determines path, publisher/hash and operation grants.
 
-## Envelope di richiesta
+## Request envelope
 
 ```json
 {
@@ -66,28 +66,28 @@ Prima della risposta il Broker acquisisce client PID, process handle, creation t
 }
 ```
 
-Unknown property rifiutate, salvo `extensions`. Deadline massima 60 secondi. Nonce duplicate rifiutate.
+Unknown properties are rejected, except within `extensions`. Maximum deadline 60 seconds. Duplicate nonces are rejected.
 
-## Operazioni v1
+## v1 operations
 
-| Operazione | Input essenziale | Output | Note |
+| Operation | Essential input | Output | Notes |
 |---|---|---|---|
-| `PutLocalSecret` | logical name, class, bytes, allowed uses | opaque ref | Tenant/Session only; mai Vendor Secret. |
-| `DeleteLocalSecret` | opaque ref | status | Idempotente. |
-| `ProtectData` | purpose, content type, bytes | AEAD envelope | Key/AAD scoped all'Application. |
-| `UnprotectData` | purpose, envelope | bytes | Fallisce integralmente su auth error. |
+| `PutLocalSecret` | logical name, class, bytes, allowed uses | opaque ref | Tenant/Session only; never Vendor Secret. |
+| `DeleteLocalSecret` | opaque ref | status | Idempotent. |
+| `ProtectData` | purpose, content type, bytes | AEAD envelope | Key/AAD scoped to the Application. |
+| `UnprotectData` | purpose, envelope | bytes | Fails entirely on authentication error. |
 | `PutSession` | connector, operation, value, expiry | sessionRef | Memory default, DPAPI only if requested/allowed. |
-| `DeleteSession` | sessionRef | status | Idempotente. |
-| `ComputeHmac` | connector, operation, secretRef, message | digest | Algoritmo fissato dalla policy. |
-| `SignData` | connector, operation, key policy, digest/data | signature | Claims/payload constraints applicati. |
-| `UseLocalCertificate` | connector, operation, certificate policy, request | result | Private key mai esportata. |
-| `InvokeGateway` | connector, operation, payload/context | result/sessionRef | Nessun URL o secret name arbitrario. |
-| `GetBrokerStatus` | detail level | health/version | Nessun metadata sensibile. |
+| `DeleteSession` | sessionRef | status | Idempotent. |
+| `ComputeHmac` | connector, operation, secretRef, message | digest | Algorithm fixed by policy. |
+| `SignData` | connector, operation, key policy, digest/data | signature | Claims/payload constraints enforced. |
+| `UseLocalCertificate` | connector, operation, certificate policy, request | result | Private key never exported. |
+| `InvokeGateway` | connector, operation, payload/context | result/sessionRef | No arbitrary URLs or secret names. |
+| `GetBrokerStatus` | detail level | health/version | No sensitive metadata. |
 | `Cancel` | target correlation ID | status | Best effort. |
 
-`GetSecret` non esiste. Un futuro `RevealCompatibilitySecret` richiede feature flag, Application/secret allowlist, scadenza, audit e ADR; non potrà mai esporre Vendor Secret.
+`GetSecret` does not exist. A future `RevealCompatibilitySecret` requires a feature flag, Application/secret allowlist, expiry, audit and an ADR; it must never expose Vendor Secrets.
 
-## Response ed errori
+## Responses and errors
 
 ```json
 {
@@ -102,20 +102,20 @@ Unknown property rifiutate, salvo `extensions`. Deadline massima 60 secondi. Non
 }
 ```
 
-Categorie: protocol, identity, authorization, validation, storage, cryptography, gateway, timeout, cancelled e internal. Errori e exception non contengono path riservati, valori, payload o stack trace.
+Categories: protocol, identity, authorization, validation, storage, cryptography, gateway, timeout, cancelled and internal. Errors and exceptions contain no confidential paths, values, payloads or stack traces.
 
-## Concorrenza e cancellation
+## Concurrency and cancellation
 
-- Più connessioni per processo sono ammesse entro policy.
-- Ogni connessione supporta richieste concorrenti distinte per correlation ID.
-- Default: 16 richieste concorrenti per Application; configurabile solo dall'amministratore.
-- Backpressure prima di leggere grandi payload.
-- Cancel non interrompe una primitive crittografica già iniziata, ma impedisce le fasi successive.
+- Multiple connections per process are allowed within policy.
+- Each connection supports concurrent requests distinguished by correlation ID.
+- Default: 16 concurrent requests per Application; configurable only by the administrator.
+- Backpressure before reading large payloads.
+- Cancel does not interrupt a cryptographic primitive already in progress, but prevents subsequent phases.
 
-## Compatibilità
+## Compatibility
 
-- Major diversa: handshake rifiutato.
-- Minor selezionata come massimo valore comune.
-- Nuove operazioni richiedono minor increment.
-- Nuovi campi opzionali sono ammessi solo dentro `extensions` finché la minor non viene negoziata.
-- SDK e Broker mantengono una matrice di compatibilità testata.
+- Different major: handshake rejected.
+- Minor selected as the highest common value.
+- New operations require a minor increment.
+- New optional fields are allowed only within `extensions` until the minor is negotiated.
+- SDK and Broker maintain a tested compatibility matrix.

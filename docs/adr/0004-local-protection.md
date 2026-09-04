@@ -1,23 +1,22 @@
-# ADR-0004: DPAPI CurrentUser e cifratura locale
+# ADR-0004: DPAPI CurrentUser and local encryption
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Contesto
+## Context
 
-I dati locali devono resistere a copia offline, backup rubato e processi non privilegiati senza introdurre una PKI locale complessa.
+Local data must resist offline copying, stolen backups and unprivileged processes without introducing a complex local PKI.
 
-## Decisione
+## Decision
 
-- DPAPI CurrentUser sotto la virtual service identity per piccoli segreti e wrapping delle data key.
-- AES-256-GCM per dati, con key version per Installation e AAD scoped.
-- ECDSA P-256 non esportabile in Windows CNG per l'identità Installation.
-- Nessun `CRYPTPROTECT_LOCAL_MACHINE` come root predefinita.
+- DPAPI CurrentUser under the virtual service identity for small secrets and data-key wrapping.
+- AES-256-GCM for data, with per-Installation key versions and scoped AAD.
+- Non-exportable ECDSA P-256 in Windows CNG for Installation identity.
+- No `CRYPTPROTECT_LOCAL_MACHINE` as the default root.
 
-## Conseguenze
+## Consequences
 
-Le chiavi sono isolate dal processo legacy e differiscono per Installation. SYSTEM/amministratore locale resta capace di compromettere il servizio. La perdita completa del profilo servizio limita il recovery MVP.
+Keys are isolated from the legacy process and differ per Installation. SYSTEM/local Administrator can still compromise the service. Complete loss of the service profile limits MVP recovery.
 
-## Alternative escluse
+## Rejected alternatives
 
-TPM obbligatorio ridurrebbe compatibilità; chiave universale centrale introdurrebbe rischio sistemico; crittografia custom è vietata.
-
+A mandatory TPM would reduce compatibility; a central universal key would introduce systemic risk; custom cryptography is prohibited.

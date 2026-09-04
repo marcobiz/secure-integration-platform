@@ -17,7 +17,7 @@ qualified CDA VERIFICA and workflow status with one event after an actual Gatewa
 on 4 September 2026. FHIR VERIFICA returned upstream 500 `generic-error` and is not live
 qualified; the cause of that 500 is undetermined. This partial observation does not qualify
 all 14 routes or document publication. The integrated
-[capability summary](../../../../IMPLEMENTATION_STATUS.md#stato-prodotto) owns current status;
+[capability summary](../../../../IMPLEMENTATION_STATUS.md#product-status) owns current status;
 this document owns the frozen route contract and its offline acceptance limits.
 
 ## Frozen authority and resolved differences
@@ -153,7 +153,7 @@ transformation bodies are not returned to the consumer or made unbounded to fit.
 
 ## Supported provisioning (same tool, no SQL)
 
-Use the existing [plan/apply/verify role workflow](../../../user/fse2-officialtest.md#1-plan--zero-effetti)
+Use the existing [plan/apply/verify role workflow](../../../user/fse2-officialtest.md#1-plan--no-effects)
 and its authenticated Admin session mechanism. For this new definition, start from the
 same protected plan shape but set `schemaVersion: "2.0"` and add exactly:
 

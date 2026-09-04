@@ -1,6 +1,6 @@
 # M0/M1 live matrix harness
 
-Questo pacchetto esegue la matrice live A-F su una **VM Windows x64 pulita**, con Windows PowerShell elevato. Non contiene fallback simulati: se non può creare account, servizio, token, ACL, reboot o Event Log reali, termina con exit code non zero.
+This package runs live matrix A-F on a **clean Windows x64 VM**, with elevated Windows PowerShell. It contains no simulated fallbacks: if it cannot create real accounts, service, tokens, ACLs, reboot or Event Log, it exits with a nonzero code.
 
 Entry point:
 
@@ -8,22 +8,22 @@ Entry point:
 .\tools\live-matrix\Invoke-LiveMatrix.ps1 -Phase All -RunId 'm0-m1-YYYYMMDD-01' -Reboot
 ```
 
-La fase pre-reboot registra un task `SYSTEM`, poi riavvia la VM. Il task esegue la fase post-reboot, crea il bundle redatto sotto `%ProgramData%\SecureIntegration\LiveMatrix\<RunId>\evidence` e aggiorna la sezione generata di `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md` soltanto dopo il PASS completo.
+The pre-reboot phase registers a `SYSTEM` task, then reboots the VM. The task runs the post-reboot phase, creates the redacted bundle under `%ProgramData%\SecureIntegration\LiveMatrix\<RunId>\evidence` and updates the generated section of `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md` only after a complete PASS.
 
-## Componenti
+## Components
 
-| File | Responsabilità |
+| File | Responsibility |
 |---|---|
-| `Invoke-LiveMatrix.ps1` | orchestrazione idempotente e ripresa post-reboot |
-| `Test-Prerequisites.ps1` | elevazione, VM, OS/NTFS, SDK e collisioni SCM |
-| `Install-LiveBroker.ps1` | build/publish, account locali, policy, servizio e virtual identity |
-| `Invoke-PreReboot.ps1` | matrici A-D, restart, tamper, ACL e DPAPI cross-identity |
-| `Invoke-PostReboot.ps1` | persistenza E, Event Log/redaction F e chiusura A-F |
-| `New-EvidenceBundle.ps1` | allowlist degli artefatti, manifest per-file, ZIP e SHA-256 |
-| `Update-RequirementEvidence.ps1` | aggiornamento documentale solo da summary PASS post-reboot |
-| `Remove-LiveMatrix.ps1` | cleanup esplicito degli oggetti posseduti dall'harness |
-| `probe/` | client reale copiato in path autorizzato/non autorizzato e avviato con token distinti |
+| `Invoke-LiveMatrix.ps1` | idempotent orchestration and post-reboot resumption |
+| `Test-Prerequisites.ps1` | elevation, VM, OS/NTFS, SDK and SCM collisions |
+| `Install-LiveBroker.ps1` | build/publish, local accounts, policy, service and virtual identity |
+| `Invoke-PreReboot.ps1` | matrices A-D, restart, tamper, ACL and cross-identity DPAPI |
+| `Invoke-PostReboot.ps1` | persistence E, Event Log/redaction F and A-F closure |
+| `New-EvidenceBundle.ps1` | artifact allowlist, per-file manifest, ZIP and SHA-256 |
+| `Update-RequirementEvidence.ps1` | documentation update only from a post-reboot PASS summary |
+| `Remove-LiveMatrix.ps1` | explicit cleanup of harness-owned objects |
+| `probe/` | real client copied to authorized/unauthorized paths and started with distinct tokens |
 
-Credenziali e canary sintetici restano nello state directory protetto da ACL; sono esclusi dal bundle. I probe sono avviati mediante Task Scheduler con logon reale dei due account locali. L'account autorizzato rappresenta il gestionale/legacy simulator; una copia dello stesso apphost in un path diverso rappresenta il processo non autorizzato sotto lo stesso SID.
+Synthetic credentials and canaries remain in the ACL-protected state directory; they are excluded from the bundle. Probes are started through Task Scheduler using real logons for the two local accounts. The authorized account represents the installed business application/legacy simulator; a copy of the same apphost in a different path represents the unauthorized process under the same SID.
 
-Il runbook operativo completo è in `docs/operations/M0-M1-LIVE-MATRIX-RUNBOOK.md`.
+The complete operational runbook is in `docs/operations/M0-M1-LIVE-MATRIX-RUNBOOK.md`.

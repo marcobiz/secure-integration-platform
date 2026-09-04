@@ -1,82 +1,82 @@
-# M3A — chiusura del product gate split-host
+# M3A — Split-host product gate closure
 
-Data: 2026-08-05
+Date: 2026-08-05
 
 RunId: `m3a-live-20260805-094131`
 
-Commit candidato: `86b4e0f56d2b1f6f1ee28cc669362177007e896b`
+Candidate commit: `86b4e0f56d2b1f6f1ee28cc669362177007e896b`
 
-Esito: **PASS — M3A PRODUCT GATE**.
+Result: **PASS — M3A PRODUCT GATE**.
 
-Il finalizzatore del laboratorio rimane separatamente **BLOCKED**. Questa distinzione è
-intenzionale: il gate misura le proprietà del prodotto elencate nella Gate Review, non la
-capacità dell'harness di produrre autonomamente un singolo riepilogo formale.
+The laboratory finalizer remains separately **BLOCKED**. This distinction is
+intentional: the gate measures the product properties listed in the Gate Review, not the
+harness's ability to independently produce a single formal summary.
 
-## Evidenze originali
+## Original evidence
 
-La VM ha prodotto un archive redatto originale, non ricostruito:
+The VM produced an original redacted archive, not a reconstruction:
 
 - `m3a-live-20260805-094131-vm-redacted.zip`;
 - SHA-256 `966C9B301B3F6E3E6679B0C00408391E736B9BBCC0808F45EC9C3ED188FA2CAA`;
-- `RESULT.json` interno `PASS`, classification `COMPLETED`;
-- `vm-manifest.json` `PASS` sul commit candidato;
-- cleanup VM `PASS`, zero servizi, task e utenti sintetici residui.
+- internal `RESULT.json` `PASS`, classification `COMPLETED`;
+- `vm-manifest.json` `PASS` on the candidate commit;
+- VM cleanup `PASS`, zero residual synthetic services, tasks and users.
 
-Il manifest dimostra:
+The manifest demonstrates:
 
-- Broker reale `Running` con StartName `NT SERVICE\SecureIntegrationBroker` e service SID;
-- Legacy Simulator standard user, token `Limited` e batch logon assegnato;
-- P02 Legacy → SDK → Named Pipe → Windows Service → Gateway HOST → PostgreSQL 18 →
-  synthetic Vault → vendor mock HTTPS/mTLS `PASS`;
-- operation grant negato e applicazione locale non autorizzata negata;
-- vendor secret e backend endpoint assenti dalla VM;
-- Event Log/canary scan VM `PASS`.
+- real Broker `Running` with StartName `NT SERVICE\SecureIntegrationBroker` and service SID;
+- standard-user Legacy Simulator, `Limited` token and assigned batch logon;
+- P02 Legacy → SDK → Named Pipe → Windows Service → HOST Gateway → PostgreSQL 18 →
+  synthetic Vault → HTTPS/mTLS vendor mock `PASS`;
+- denied operation grant and denied unauthorized local application;
+- vendor secrets and backend endpoints absent from the VM;
+- VM Event Log/canary scan `PASS`.
 
-Il `SecurityDriver` HOST ha prodotto `security-scenarios.json` prima del cleanup. P01,
-P03–P07 e tutti gli scenari obbligatori N01–N14 sono `PASS`, inclusi revoca, firma
-invalida, replay, tenant alterato, connector/operation grant, URL/secret reference,
-SSRF, redirect, certificato client errato, Vault e PostgreSQL indisponibili.
+The HOST `SecurityDriver` produced `security-scenarios.json` before cleanup. P01,
+P03–P07 and all mandatory N01–N14 scenarios are `PASS`, including revocation, invalid
+signature, replay, altered tenant, connector/operation grant, URL/secret reference,
+SSRF, redirect, wrong client certificate, unavailable Vault and PostgreSQL.
 
-La CI deterministica `30985805020` sullo stesso commit è interamente verde: Windows
-build/test, Gitleaks, Gateway container, PostgreSQL 18 e M3 deterministic container
-slice. Il canary scan container completo è `PASS-CI`.
+Deterministic CI `30985805020` on the same commit is entirely green: Windows
+build/tests, Gitleaks, Gateway container, PostgreSQL 18 and M3 deterministic container
+slice. The complete container canary scan is `PASS-CI`.
 
-## Blocco del finalizzatore
+## Finalizer blocker
 
-Il controllo opzionale `M3-TLS-SELF-SIGNED-APPLICATION-BOUNDARY` ha restituito
-`TLS-HANDSHAKE-REJECTED` sull'HOST Windows: il probe creava ancora la propria chiave
-self-signed come effimera, non presentabile da Schannel. Non è un rifiuto prodotto del
-certificato dopo il TLS e non invalida P02 o gli scenari obbligatori. Il fix è nel commit
-`d0e235e` ed è coperto da validazione source fail-closed e dall'integration test Schannel.
-La run non è stata ripetuta.
+The optional `M3-TLS-SELF-SIGNED-APPLICATION-BOUNDARY` check returned
+`TLS-HANDSHAKE-REJECTED` on the Windows HOST: the probe still created its self-signed
+key as ephemeral, which Schannel could not present. This is not a product rejection of
+the certificate after TLS and does not invalidate P02 or the mandatory scenarios. The fix is in commit
+`d0e235e` and is covered by fail-closed source validation and the Schannel integration test.
+The run was not repeated.
 
-Anche il wrapper operatore aveva rifiutato la stringa vuota usata per scrivere il
-riepilogo canonico PASS, benché `ValidateVm=PASS` e `Run=PASS`; il fix è `b869a33`.
-Entrambi sono difetti del laboratorio, non di Broker, SDK o Gateway.
+The operator wrapper had also rejected the empty string used to write the canonical
+PASS summary, despite `ValidateVm=PASS` and `Run=PASS`; the fix is `b869a33`.
+Both are laboratory defects, not Broker, SDK or Gateway defects.
 
-## Evidence bundle correlato
+## Correlated evidence bundle
 
-Le evidenze originali sono state correlate senza alterarle nel bundle redatto:
+The original evidence was correlated without alteration in the redacted bundle:
 
 `C:\SecureEvidence\m3a-live-20260805-094131\m3a-live-20260805-094131-product-gate-redacted-evidence.zip`
 
 SHA-256:
 `FCDC09ED215949E82D2C0955A930F5C70D964E61B6D9E463E86FC876019CD5AF`.
 
-Il sidecar coincide. La scansione byte-for-byte dei valori sintetici conosciuti non trova
-activation code, API key, token, password o HMAC key. Il manifest dichiara esplicitamente
-`productGateStatus: PASS` e `laboratoryFinalizerStatus: BLOCKED`; non presenta il
-finalizzatore come PASS.
+The sidecar matches. The byte-for-byte scan for known synthetic values finds no
+activation codes, API keys, tokens, passwords or HMAC keys. The manifest explicitly declares
+`productGateStatus: PASS` and `laboratoryFinalizerStatus: BLOCKED`; it does not present the
+finalizer as PASS.
 
-## Cleanup e limite residuo
+## Cleanup and residual limitation
 
-Cleanup HOST verificato: zero container, volumi, network e adattatori M3A della run;
-profili Firewall ripristinati allo stato originario. Cleanup VM attestato nel manifest.
+Verified HOST cleanup: zero run containers, volumes, networks and M3A adapters;
+Firewall profiles restored to their original state. VM cleanup attested in the manifest.
 
-Il canary scan aggregato dei log container di questa specifica run non è stato raggiunto
-dal finalizzatore dopo il probe opzionale. La proprietà di redazione è coperta dal canary
-VM live e dalla CI deterministica sullo stesso commit. Questo limite di evidence del
-laboratorio è non bloccante e resta dichiarato nel bundle.
+The aggregate container-log canary scan for this specific run was not reached
+by the finalizer after the optional probe. Redaction is covered by the live VM
+canary check and deterministic CI on the same commit. This laboratory evidence limitation
+is non-blocking and remains declared in the bundle.
 
-M3A è chiuso come product gate. M3B non è iniziato; M3 non è Done, non viene creato alcun
-tag M3 e M4 resta vietata.
+M3A is closed as a product gate. M3B has not started; M3 is not Done, no
+M3 tag is created and M4 remains prohibited.

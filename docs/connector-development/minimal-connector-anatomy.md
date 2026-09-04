@@ -1,50 +1,50 @@
-# Anatomia minima di un Connector
+# Minimal Connector anatomy
 
-**Pubblico:** sviluppatori di Connector.
-**Stato:** CURRENT per Connector Definition JSON v1.
+**Audience:** Connector developers.
+**Status:** CURRENT for Connector Definition JSON v1.
 
-La sorgente machine-readable è
-[connector-definition.schema.json](../connectors/connector-definition.schema.json). Il
-[sample REST](../connectors/examples/sample-secure-service.connector.json) è il punto di
-partenza eseguibile.
+The machine-readable source is
+[connector-definition.schema.json](../connectors/connector-definition.schema.json).
+The [REST sample](../connectors/examples/sample-secure-service.connector.json)
+is the executable starting point.
 
-## Contenuto necessario
+## Required content
 
-| Parte | Contiene | Non contiene |
+| Part | Contains | Does not contain |
 |---|---|---|
-| Identità | `schemaVersion`, Connector ID, versione semantica, nome. | Tenant, Environment o identità runtime. |
-| Binding logici | Nomi di endpoint, secret e certificati richiesti. | URI, secret value, P12, path o provider locator. |
-| Operation | ID, metodo/path/template autorizzati, content type, timeout e limiti bounded. | URL scelto dal caller, header arbitrari o workflow. |
-| Autenticazione | Uno dei profili supportati e riferimenti logici alle capability. | Algoritmi, chiavi o certificati selezionabili a runtime. |
-| Affidabilità | Idempotenza/retry coerenti e redirect deny. | Retry illimitato o fallback stale. |
-| Estensione | Solo configurazione chiusa coperta dal checksum, se serve una strategy tipizzata. | Script, reflection, codice dinamico o service locator. |
+| Identity | `schemaVersion`, Connector ID, semantic version, name. | Tenant, Environment or runtime identity. |
+| Logical bindings | Required endpoint, secret and certificate names. | URIs, secret values, P12 files, paths or provider locators. |
+| Operation | Authorized ID, method/path/template, content type, timeout and bounded limits. | Caller-selected URLs, arbitrary headers or workflows. |
+| Authentication | A supported profile and logical capability references. | Runtime-selectable algorithms, keys or certificates. |
+| Reliability | Consistent idempotency/retry and redirect denial. | Unlimited retries or stale fallback. |
+| Extension | Only closed configuration covered by the checksum, if a typed strategy is needed. | Scripts, reflection, dynamic code or service locators. |
 
-## Binding server-owned
+## Server-owned bindings
 
-Per ogni Environment l’amministratore associa i nomi logici a endpoint HTTPS e risorse
-provider revisionate. Secret retrieval, certificato client, signing/MAC, health e
-capability discovery restano contratti separati. La definition esportata e la request
-runtime non contengono i valori concreti.
+For each Environment, the administrator associates logical names with HTTPS endpoints
+and revisioned provider resources. Secret retrieval, client certificates, signing/MAC,
+health and capability discovery remain separate contracts. The exported definition
+and runtime request do not contain concrete values.
 
-## Quando serve codice compilato
+## When compiled code is needed
 
-Usare prima le operation REST e i profili già supportati. Una strategy/modulo compilato
-è giustificato soltanto da un requisito corrente che non può essere espresso in modo
-sicuro e tipizzato. Deve ricevere una invocation già autenticata, granted e Published,
-senza accesso generico a store, provider, segreti, HTTP o firma.
+Use existing REST operations and supported profiles first. A compiled strategy/module
+is justified only by a current requirement that cannot be expressed safely with typed
+primitives. It must receive an already-authenticated, granted and Published invocation,
+without general-purpose store, provider, secret, HTTP or signing access.
 
-Non introdurre un framework/plugin generico per un possibile Connector futuro. Se
-un’astrazione non rimuove duplicazione misurata in almeno due casi correnti, mantenerla
-locale alla capability che la richiede.
+Do not introduce a generic framework/plugin for a possible future Connector.
+If an abstraction does not remove measured duplication in at least two current cases,
+keep it local to the capability that requires it.
 
-## Checklist minima prima dell’import
+## Minimum pre-import checklist
 
-- JSON conforme allo schema, campi sconosciuti negati e checksum canonico stabile;
-- logical binding dichiarati una sola volta e usati da operation note;
-- nessun header sensibile/hop-by-hop controllabile dal client;
-- request/response/timeouts bounded;
-- retry consentito solo con semantica idempotente o idempotency key obbligatoria;
-- destination, auth e provider non presenti nel payload caller-owned;
-- test negativi per grant assente, binding assente/drifted, operation sconosciuta e input
-  oltre i limiti;
-- percorso di [prima chiamata](golden-path.md) definito prima di ampliare la superficie.
+- Schema-compliant JSON, unknown fields denied and stable canonical checksum;
+- logical bindings declared once and used by known operations;
+- no client-controlled sensitive/hop-by-hop headers;
+- bounded requests/responses/timeouts;
+- retries allowed only with idempotent semantics or a mandatory idempotency key;
+- destination, authentication and provider absent from caller-owned payloads;
+- negative tests for missing grants, missing/drifted bindings, unknown operations and
+  oversized input;
+- [first-call path](golden-path.md) defined before expanding the surface.

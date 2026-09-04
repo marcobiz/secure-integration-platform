@@ -1,16 +1,15 @@
 # ADR-0009: Plugin model
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Decisione
+## Decision
 
-Plugin .NET compilati, in-process, caricati solo all'avvio e distribuiti dalla pipeline. Manifest, hash SHA-256, firma CMS, publisher allowlist e compatibilità dichiarata. Nessun upload dalla UI.
+Compiled, in-process .NET plugins, loaded only at startup and distributed by the pipeline. Manifest, SHA-256 hash, CMS signature, publisher allowlist and declared compatibility. No uploads through the UI.
 
-## Conseguenze
+## Consequences
 
-Implementazione e operations restano semplici, ma un plugin malevolo equivale a Gateway compromesso. Il contratto fornisce servizi ristretti, senza promettere sandbox. Un worker isolato sarà valutato solo con casi third-party reali.
+Implementation and operations remain simple, but a malicious plugin is equivalent to a compromised Gateway. The contract supplies restricted services without promising a sandbox. An isolated worker will only be considered for real third-party use cases.
 
-## Alternative escluse
+## Rejected alternatives
 
-Script, assembly dalla UI e hot-loading sono vietati; process isolation obbligatorio nell'MVP sarebbe costo senza requisito dimostrato.
-
+Scripts, assemblies uploaded through the UI and hot-loading are prohibited; mandatory process isolation in the MVP would add cost without a demonstrated requirement.

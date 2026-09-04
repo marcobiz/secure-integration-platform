@@ -1,39 +1,39 @@
-# Analisi pubblica degli input architetturali
+# Public analysis of architectural inputs
 
-## Perimetro
+## Scope
 
-Le decisioni architetturali pubbliche sono basate sulla documentazione ufficiale dei servizi, su standard pubblici e su fixture sintetiche mantenute nel repository. Valutazioni esterne a questo perimetro non costituiscono input normativi per la specifica pubblica del prodotto.
+Public architectural decisions are based on official service documentation, public standards and synthetic fixtures maintained in the repository. Assessments outside this scope are not normative inputs to the public product specification.
 
-La documentazione pubblica non deve contenere credenziali, materiale crittografico privato, dati personali o sanitari, endpoint operativi non pubblici o artefatti non necessari alla progettazione.
+Public documentation must contain no credentials, private cryptographic material, personal or health data, nonpublic operational endpoints or artifacts unnecessary for design.
 
-## Input normativi pubblici
+## Public normative inputs
 
-- specifiche ufficiali correnti di FSE 2.0, Sistema TS, VetInfo e dei servizi sanitari regionali pertinenti;
-- standard pubblici per SOAP, REST, OAuth 2.0, mTLS, JWT, PKCE, Basic Authentication e gestione delle sessioni;
-- fixture e caratterizzazioni sintetiche prive di dati reali;
-- requisiti architetturali generici del Connector Runtime, del ciclo di vita dei connector e delle provider abstraction.
+- current official specifications for FSE 2.0, Sistema TS, VetInfo and relevant regional healthcare services;
+- public standards for SOAP, REST, OAuth 2.0, mTLS, JWT, PKCE, Basic Authentication and session management;
+- synthetic fixtures and characterizations without real data;
+- generic architectural requirements of Connector Runtime, connector lifecycle and provider abstractions.
 
-## Requisiti architetturali
+## Architectural requirements
 
-1. Credenziali, certificati e token outbound sono risolti e gestiti da componenti server-owned tramite provider distinti per secret, certificati e operazioni con chiavi.
-2. Identità, tenant, installazione e autorizzazioni sono derivati da stato autenticato lato server e non da parametri client considerati autoritativi.
-3. Le operazioni esposte ai client sono limitate da grant espliciti per connector e operation; endpoint e binding delle credenziali restano configurazione server-side.
-4. Le chiavi esportabili possono essere custodite centralmente; le chiavi realmente non esportabili richiedono una capability locale controllata senza esporre il materiale privato.
-5. Token e riferimenti di sessione sono stato runtime opaco, con durata, rinnovo e invalidazione governati dal connector.
-6. Trasporto, egress, logging e audit applicano validazione TLS, minimizzazione dei dati e comportamento fail-closed.
-7. Il ciclo di vita dei connector separa definizione, validazione, approvazione, pubblicazione immutabile ed esecuzione.
+1. Outbound credentials, certificates and tokens are resolved and managed by server-owned components through separate providers for secrets, certificates and key operations.
+2. Identity, tenant, installation and authorization derive from authenticated server-side state, not client parameters treated as authoritative.
+3. Operations exposed to clients are limited by explicit connector/operation grants; endpoints and credential bindings remain server-side configuration.
+4. Exportable keys can be held centrally; truly non-exportable keys require a controlled local capability without exposing private material.
+5. Tokens and session references are opaque runtime state, with lifetime, renewal and invalidation governed by the connector.
+6. Transport, egress, logging and audit enforce TLS validation, data minimization and fail-closed behavior.
+7. Connector lifecycle separates definition, validation, approval, immutable publication and execution.
 
-## Protocolli da coprire
+## Protocols to cover
 
-- SOAP/XML con Basic Authentication o riferimenti di sessione quando previsti dalla specifica ufficiale;
-- REST/JSON e SOAP/XML protetti da OAuth 2.0;
-- Authorization Code con PKCE e interazione dell'utente quando richiesta dal servizio;
-- mTLS con certificati risolti tramite provider centrale o capability locale controllata;
-- JWT con algoritmo, claim, issuer, audience e durata vincolati dalla definizione del connector.
+- SOAP/XML with Basic Authentication or session references when specified by the official specification;
+- REST/JSON and SOAP/XML protected by OAuth 2.0;
+- Authorization Code with PKCE and user interaction when required by the service;
+- mTLS with certificates resolved through a central provider or controlled local capability;
+- JWT with algorithm, claims, issuer, audience and lifetime constrained by the connector definition.
 
-## Tracciabilità pubblica e caratterizzazione sintetica
+## Public traceability and synthetic characterization
 
-- Ogni specifica pubblica dichiara una provenance tra `OFFICIAL_SPEC`, `PUBLIC_STANDARD` e `SYNTHETIC_CHARACTERIZATION`.
-- Le fixture descrivono esclusivamente forme di request, response, fault e transizioni di stato sintetiche.
-- Una conclusione non sostenuta da una fonte pubblica o da una caratterizzazione sintetica non è normativa per il prodotto pubblico.
-- La caratterizzazione sintetica non include dati reali, identificativi operativi, credenziali o materiale crittografico privato.
+- Each public specification declares provenance as `OFFICIAL_SPEC`, `PUBLIC_STANDARD` or `SYNTHETIC_CHARACTERIZATION`.
+- Fixtures describe only synthetic request, response and fault shapes and state transitions.
+- A conclusion unsupported by a public source or synthetic characterization is not normative for the public product.
+- Synthetic characterization includes no real data, operational identifiers, credentials or private cryptographic material.

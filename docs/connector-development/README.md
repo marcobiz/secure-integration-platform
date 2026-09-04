@@ -1,38 +1,36 @@
-# Sviluppare un Connector
+# Developing a Connector
 
-**Pubblico:** sviluppatori di Connector e maintainer del runtime.
-**Stato:** CURRENT.
+**Audience:** Connector developers and runtime maintainers.
+**Status:** CURRENT.
 
-Un Connector è una definition JSON dichiarativa e versionata, più un’eventuale
-estensione compilata strettamente necessaria a un protocollo non esprimibile dal runtime
-esistente. Non è un workflow engine e non contiene endpoint concreti, credenziali,
-provider locator, tenant, script o codice dinamico.
+A Connector is a declarative, versioned JSON definition, plus a compiled extension
+only where strictly necessary for a protocol that the existing runtime cannot express.
+It is not a workflow engine and contains no concrete endpoints, credentials,
+provider locators, tenants, scripts or dynamic code.
 
-## Percorso minimo
+## Minimum path
 
-1. Leggere [anatomia minima](minimal-connector-anatomy.md).
-2. Copiare il
-   [sample REST](../connectors/examples/sample-secure-service.connector.json).
-3. Validare contro lo
-   [schema](../connectors/connector-definition.schema.json) e le regole della
-   [specifica](../connectors/connector-specification.md).
-4. Implementare il [golden path](golden-path.md) da stato pulito fino alla prima chiamata.
-5. Aggiungere test positivi e negativi soltanto per i confini realmente introdotti.
+1. Read the [minimal anatomy](minimal-connector-anatomy.md).
+2. Copy the [REST sample](../connectors/examples/sample-secure-service.connector.json).
+3. Validate against the [schema](../connectors/connector-definition.schema.json)
+   and [specification](../connectors/connector-specification.md) rules.
+4. Implement the [golden path](golden-path.md) from clean state to the first call.
+5. Add positive and negative tests only for boundaries actually introduced.
 
-## Regole di prodotto
+## Product rules
 
-- Il caller seleziona soltanto Connector e operation già autorizzati. Tenant,
-  Installation, Environment, endpoint, provider e credenziali restano server-owned.
-- Lifecycle: `Draft → Validated → Published → Superseded → Retired`; Published è
-  immutabile e richiede four-eyes sul checksum/digest esatto.
-- Grant deny-by-default e binding completi precedono ogni invocation.
-- La procedura di prima adozione è funzionalità del Connector: deve esistere un unico
-  `plan → apply → verify` idempotente o workflow Admin equivalente.
-- Nessun adottante deve conoscere migrazioni, tabelle, test fixture, milestone o
-  struttura interna della repository.
-- Se lo stesso attrito di onboarding compare in un secondo Connector, risolverlo al più
-  stretto confine condiviso; non duplicare runbook o bootstrap verticali.
+- Callers select only already-authorized Connectors and operations. Tenant,
+  Installation, Environment, endpoints, providers and credentials remain server-owned.
+- Lifecycle: `Draft → Validated → Published → Superseded → Retired`; Published is
+  immutable and requires four-eyes approval of the exact checksum/digest.
+- Deny-by-default grants and complete bindings precede every invocation.
+- First-use adoption is Connector functionality: one idempotent
+  `plan → apply → verify` or equivalent Admin workflow must exist.
+- No adopter should need to know migrations, tables, test fixtures, milestones or
+  internal repository structure.
+- If the same onboarding friction appears in a second Connector, resolve it at the
+  narrowest shared boundary; do not duplicate vertical runbooks or bootstrap.
 
-Il riferimento SDK è [docs/connectors/connector-sdk.md](../connectors/connector-sdk.md).
-Le regole di semplicità e compensazione sono in
+The SDK reference is [docs/connectors/connector-sdk.md](../connectors/connector-sdk.md).
+Simplicity and compensation rules are in
 [docs/internal/complexity-governance.md](../internal/complexity-governance.md).

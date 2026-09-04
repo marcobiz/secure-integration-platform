@@ -1,106 +1,106 @@
-# M2 — Piano implementativo del Gateway minimo
+# M2 — Minimal Gateway implementation plan
 
-**Stato:** implementazione e PostgreSQL 18 locale completati; container/CI pendente
+**Status:** implementation and local PostgreSQL 18 complete; container/CI pending
 **Baseline:** `d1113d34a18e166c9eb0c14d8e11c3c1a1a20c12`
-**Gate precedente:** M0/M1 PASS-LIVE, AC-002 e AC-004 PASS-LIVE
+**Previous gate:** M0/M1 PASS-LIVE, AC-002 and AC-004 PASS-LIVE
 
-## Obiettivo e perimetro
+## Objective and scope
 
-M2 introduce un Gateway modular monolith eseguibile che assegna a ogni Installation
-un'identità distinta, deriva sempre il Tenant dall'identità autenticata e consente
-soltanto invocazioni verso operation configurate dal server. Il Gateway usa PostgreSQL
-come source of truth, Azure Key Vault come provider produttivo e un provider sintetico
-esclusivamente nei test.
+M2 introduces an executable modular-monolith Gateway that assigns each Installation
+a distinct identity, always derives the Tenant from the authenticated identity and allows
+only invocations of server-configured operations. The Gateway uses PostgreSQL
+as its source of truth, Azure Key Vault as its production provider and a synthetic provider
+exclusively in tests.
 
-Sono inclusi:
+Included:
 
-- host ASP.NET Core con health/readiness e Problem Details redatti;
-- registry Tenant/Application/Environment/Installation e grant;
-- migrazione PostgreSQL 18 esplicita, composite FK, ruoli e RLS `FORCE`;
-- activation code monouso, challenge breve e proof-of-possession ECDSA P-256;
-- registrazione, rinnovo con overlap e revoca della credential Installation;
-- autenticazione runtime con certificato ClientAuth, firma envelope, timestamp,
-  digest e nonce anti-replay;
-- catalogo operation configurato esclusivamente sul server;
-- provider Azure Key Vault tramite Managed Identity e provider sintetico con guard;
-- egress HTTPS ristretto, host/path/method/header fissati, redirect/proxy disabilitati,
-  limiti, timeout e Basic/API key/mTLS centralizzati;
-- audit metadata-only e correlation W3C;
-- Dockerfile non-root con health check;
-- test unit, integration, security e PostgreSQL 18 reale in CI.
+- ASP.NET Core host with health/readiness and redacted Problem Details;
+- Tenant/Application/Environment/Installation registry and grants;
+- explicit PostgreSQL 18 migration, composite FKs, roles and `FORCE` RLS;
+- single-use activation code, short-lived challenge and ECDSA P-256 proof of possession;
+- Installation credential registration, renewal with overlap and revocation;
+- runtime authentication with a ClientAuth certificate, envelope signature, timestamp,
+  digest and anti-replay nonce;
+- operation catalog configured exclusively on the server;
+- Azure Key Vault provider through Managed Identity and a guarded synthetic provider;
+- restricted HTTPS egress, fixed host/path/method/headers, disabled redirects/proxies,
+  bounds, timeouts and centralized Basic/API key/mTLS;
+- metadata-only audit and W3C correlation;
+- non-root Dockerfile with health check;
+- unit, integration, security and real PostgreSQL 18 tests in CI.
 
-Non sono inclusi:
+Excluded:
 
-- lifecycle/versioning/publish/rollback dei Connector (M4);
-- Admin UI, Entra OIDC e four-eyes (M5);
+- Connector lifecycle/versioning/publish/rollback (M4);
+- Admin UI, Entra OIDC and four-eyes (M5);
 - adapter COM/C ABI/CLI (M6);
-- OAuth/JWT/SOAP e moduli di autenticazione estesi (M7);
-- il nuovo vertical slice Broker→Gateway→Vault→mock, che resta il gate M3;
-- CA enterprise, recovery/rotation operativa completa e deployment Azure completo (M9).
+- OAuth/JWT/SOAP and extended authentication modules (M7);
+- the new Broker→Gateway→Vault→mock vertical slice, which remains the M3 gate;
+- enterprise CA, complete operational recovery/rotation and full Azure deployment (M9).
 
-Per M2 le operation sono configurazione di startup immutabile. Non sono ConnectorVersion
-e non anticipano lo state machine M4.
+For M2, operations are immutable startup configuration. They are not ConnectorVersions
+and do not introduce the M4 state machine ahead of schedule.
 
-## Incrementi compilabili
+## Buildable increments
 
-1. **Gateway foundation:** progetti Domain/Application/Infrastructure/API e test;
-   contratti, error model, clock e repository in-memory.
-2. **Persistence:** migrazione SQL, repository Npgsql, tenant context transaction-local,
-   RLS e test PostgreSQL reali.
-3. **Enrollment:** activation hash HMAC, challenge TTL, certificato ClientAuth e PoP,
-   rinnovo, overlap e revoca.
-4. **Runtime identity:** estrazione certificato, lookup registry, Tenant server-side,
-   body hash, canonical signing input, timestamp e nonce replay.
-5. **Vault ed egress:** Key Vault/Managed Identity, synthetic guard, operation catalog,
-   Basic/API key/mTLS e trasporto ristretto.
-6. **Hosting/package:** endpoint OpenAPI M2, health/readiness, Dockerfile e runbook.
-7. **Gate:** build, test, PostgreSQL CI, secret/dependency scan, traceability e stato.
+1. **Gateway foundation:** Domain/Application/Infrastructure/API projects and tests;
+   contracts, error model, clock and in-memory repository.
+2. **Persistence:** SQL migration, Npgsql repository, transaction-local tenant context,
+   RLS and real PostgreSQL tests.
+3. **Enrollment:** HMAC activation hash, challenge TTL, ClientAuth certificate and PoP,
+   renewal, overlap and revocation.
+4. **Runtime identity:** certificate extraction, registry lookup, server-side Tenant,
+   body hash, canonical signing input, timestamp and nonce replay.
+5. **Vault and egress:** Key Vault/Managed Identity, synthetic guard, operation catalog,
+   Basic/API key/mTLS and restricted transport.
+6. **Hosting/package:** M2 OpenAPI endpoints, health/readiness, Dockerfile and runbook.
+7. **Gate:** build, tests, PostgreSQL CI, secret/dependency scan, traceability and status.
 
-Ogni incremento deve lasciare `eng/build.ps1` e `eng/test.ps1` verdi.
+Every increment must leave `eng/build.ps1` and `eng/test.ps1` green.
 
-## Tracciabilità M2
+## M2 traceability
 
-| Requisito | Evidenza prevista |
+| Requirement | Expected evidence |
 |---|---|
 | FR-001 | `IT_DAT_PostgreSQL18_registry_enrollment_grant_replay_and_revocation_when_configured` |
-| FR-002 | `UT_GTW_Enrollment_PoP_derives_tenant_and_replay_is_rejected`, renewal e revocation tests |
+| FR-002 | `UT_GTW_Enrollment_PoP_derives_tenant_and_replay_is_rejected`, renewal and revocation tests |
 | FR-007 / AC-011 | `UT_GTW_Enrollment_PoP_derives_tenant_and_replay_is_rejected` |
 | AC-012 | `UT_GTW_Cross_tenant_grant_is_rejected`; `IT_DAT_PostgreSQL18_migration_and_RLS_isolate_tenants_when_configured` |
-| AC-013 | `UT_GTW_Revocation_is_immediate_for_runtime_and_grants`; E2E completo nel gate M3 |
-| AC-007/009/010 | invoke-contract, fixed endpoint, Basic/API key/mTLS e deny-before-side-effect tests |
+| AC-013 | `UT_GTW_Revocation_is_immediate_for_runtime_and_grants`; full E2E in the M3 gate |
+| AC-007/009/010 | invoke-contract, fixed endpoint, Basic/API key/mTLS and deny-before-side-effect tests |
 | FR-016 / NFR-001 | `UT_SEC_Audit_is_metadata_only_and_excludes_payload_and_credentials`; API log/Problem canary tests |
-| NFR-002/003 | SSRF/private IP, catalog HTTPS, DNS pinning e TLS configuration tests/review |
+| NFR-002/003 | SSRF/private IP, catalog HTTPS, DNS pinning and TLS configuration tests/review |
 | NFR-005 | `UT_EGR_Transient_retry_occurs_only_for_idempotent_operation` |
-| NFR-006 | correlation ID firmato/auditato; `traceparent` richiesto dall'endpoint invoke |
-| AC-018 | container build/smoke in CI con health endpoint |
+| NFR-006 | signed/audited correlation ID; `traceparent` required by the invoke endpoint |
+| AC-018 | container build/smoke in CI with health endpoint |
 
-## PostgreSQL e ambiente di test
+## PostgreSQL and test environment
 
-L'HOST corrente non dispone di Docker/Podman né di un'istanza PostgreSQL attiva. È stata
-però usata l'installazione binaria PostgreSQL 18 già presente per avviare un cluster
-effimero non privilegiato sotto `.artifacts`; la suite reale richiede
+The current HOST has neither Docker/Podman nor a running PostgreSQL instance. However,
+the existing PostgreSQL 18 binary installation was used to start an ephemeral,
+unprivileged cluster under `.artifacts`; the real suite requires
 `GATEWAY_POSTGRES_ADMIN_CONNECTION`.
-GitHub Actions avvia PostgreSQL 18 come service container, applica la migrazione da zero
-e verifica CRUD, composite FK, `SET LOCAL app.tenant_id`, RLS cross-Tenant e replay nonce.
-Il test locale PostgreSQL 18 è PASS; un risultato CI/container mancante non può chiudere
-il gate M2.
+GitHub Actions starts PostgreSQL 18 as a service container, applies the migration from scratch
+and verifies CRUD, composite FKs, `SET LOCAL app.tenant_id`, cross-Tenant RLS and nonce replay.
+The local PostgreSQL 18 test is PASS; a missing CI/container result cannot close
+the M2 gate.
 
-## Invarianti di sicurezza
+## Security invariants
 
-- Activation code memorizzato soltanto come HMAC; challenge e nonce hanno TTL.
-- Il certificato presentato deve corrispondere a SPKI/certificate hash registrati.
-- La firma copre method, path/query normalizzati, timestamp, nonce e body esatto.
-- Tenant, endpoint, method, header sensibili e secret reference non provengono dal client.
-- Il database non conserva secret value o response body.
-- Il provider sintetico fallisce all'avvio fuori da Development/Testing.
-- Egress è HTTPS, senza redirect/proxy, con DNS/IP filtering e limiti espliciti.
-- Log, Problem Details e audit non contengono body, credential, vault reference o header.
-- Revoca e replay sono controllati prima di qualsiasi accesso Vault/egress.
+- Activation codes are stored only as HMACs; challenges and nonces have TTLs.
+- The presented certificate must match the registered SPKI/certificate hashes.
+- The signature covers method, normalized path/query, timestamp, nonce and exact body.
+- Tenant, endpoint, method, sensitive headers and secret references do not come from the client.
+- The database stores no secret values or response bodies.
+- The synthetic provider fails at startup outside Development/Testing.
+- Egress uses HTTPS, without redirects/proxies, with DNS/IP filtering and explicit bounds.
+- Logs, Problem Details and audit contain no bodies, credentials, vault references or headers.
+- Revocation and replay are checked before any Vault/egress access.
 
-## Criterio di completamento
+## Completion criterion
 
-M2 è Done solo quando build e test locali sono verdi, la suite PostgreSQL 18 e il
-container smoke passano in CI, secret/vulnerability scan sono verdi, la documentazione
-e la matrice di tracciabilità riportano nomi di test reali e non resta alcun bypass
-nel perimetro dichiarato. L'assenza di credenziali Azure autorizza test con mock del
-client SDK ma non la dichiarazione di una prova live Key Vault.
+M2 is Done only when local builds and tests are green, the PostgreSQL 18 suite and
+container smoke pass in CI, secret/vulnerability scans are green, documentation
+and the traceability matrix list real test names and no bypass remains
+within the declared scope. Missing Azure credentials allow tests with SDK client
+mocks, but not a claim of live Key Vault evidence.

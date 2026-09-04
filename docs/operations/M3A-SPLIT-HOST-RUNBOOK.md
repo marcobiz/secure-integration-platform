@@ -1,53 +1,53 @@
 # M3A live gate — split-host runbook
 
-## Stato e confini
+## Status and boundaries
 
-Questo runbook prepara il gate manuale M3A; non autorizza M3B, M4, il merge della PR
-#3 o l'uso di un runner GitHub self-hosted permanente. Il commit candidato è sempre lo
-SHA completo scritto da `Prepare` nel pacchetto VM. Una run è valida soltanto se HOST e
-VM attestano quello stesso SHA.
+This runbook prepares the manual M3A gate; it does not authorize M3B, M4, merging PR
+#3 or using a permanent self-hosted GitHub runner. The candidate commit is always the
+full SHA written by `Prepare` into the VM package. A run is valid only if HOST and
+VM attest that same SHA.
 
-Il gate adotta deliberatamente un handoff manuale: `Prepare` si ferma in
-`WAITING_FOR_OPERATOR` e un operatore esegue nella VM un unico script revisionato. Un
-executor generico SYSTEM, l'autonomia di Codex VM e la ricreazione perfetta del laboratorio
-non sono criteri M3; l'eventuale automazione appartiene alla qualificazione di release.
-Il checkpoint Hyper-V creato prima della run è la recovery primaria del laboratorio.
+The gate deliberately uses a manual handoff: `Prepare` stops at
+`WAITING_FOR_OPERATOR` and an operator runs one reviewed script in the VM. A generic
+SYSTEM executor, autonomous Codex in the VM and perfect laboratory reconstruction
+are not M3 criteria; any automation belongs to release qualification.
+The Hyper-V checkpoint created before the run is the laboratory's primary recovery mechanism.
 
 ```mermaid
 flowchart LR
     subgraph VM[Windows 11 Hyper-V]
-        L[Legacy Simulator<br/>utente standard] -->|Named Pipe ACL| B[Local Broker<br/>Windows Service<br/>NT SERVICE\\SecureIntegrationBroker]
+        L[Legacy Simulator<br/>standard user] -->|Named Pipe ACL| B[Local Broker<br/>Windows Service<br/>NT SERVICE\\SecureIntegrationBroker]
     end
     subgraph HOST[Windows 10 + Docker Desktop WSL 2]
         G[Gateway HTTPS] --> P[(PostgreSQL 18)]
         G --> V[Synthetic vault HTTPS]
         G -->|API key + mTLS| M[Vendor mock HTTPS/mTLS]
     end
-    B -->|installation auth + PoP<br/>solo IP Hyper-V:porta Gateway| G
-    F[Windows Firewall<br/>VM IP + Gateway port] -. limita .-> G
+    B -->|installation auth + PoP<br/>only Hyper-V IP:Gateway port| G
+    F[Windows Firewall<br/>VM IP + Gateway port] -. restricts .-> G
 ```
 
-PostgreSQL, vault e mock sono pubblicati soltanto su `127.0.0.1` dell'HOST. Il
-Gateway è associato esclusivamente all'IPv4 dell'adattatore Hyper-V. Il firewall
-consente TCP in ingresso soltanto dall'IPv4 della VM e soltanto sulla porta Gateway.
-Il pacchetto VM non contiene indirizzi di PostgreSQL, vault o mock.
+PostgreSQL, Vault and the mock are published only on HOST `127.0.0.1`. Gateway is
+bound exclusively to the Hyper-V adapter's IPv4 address. The firewall permits inbound
+TCP only from the VM IPv4 address and only on the Gateway port.
+The VM package contains no PostgreSQL, Vault or mock addresses.
 
-Il profilo Windows Firewall non è dedotto dal nome della VM o da un profilo scelto
-manualmente: deve esistere un solo `Get-NetConnectionProfile` per l'`InterfaceIndex`
-dell'IPv4 HOST. Il runner rifiuta l'interfaccia se il profilo non è risolvibile o se
-lo stesso profilo è usato da un'altra connessione attiva. Una regola appartenente a
-un profilo disabilitato non costituisce enforcement.
+The Windows Firewall profile is not inferred from the VM name or a manually selected
+profile: exactly one `Get-NetConnectionProfile` must exist for the HOST IPv4
+`InterfaceIndex`. The runner rejects the interface if its profile cannot be resolved
+or another active connection uses the same profile. A rule belonging to a disabled
+profile does not constitute enforcement.
 
-## Prerequisiti HOST
+## HOST prerequisites
 
-- Windows 10 22H2 supportato, virtualizzazione e WSL 2 attivi;
-- Docker Desktop avviato con Linux containers e backend WSL 2;
-- PowerShell 5.1 elevato per firewall e trust store;
-- branch `m3/production-like-vertical-slice` pulito e sincronizzato;
-- VM Windows 11 Running e IPv4 stabile sulla rete Hyper-V;
-- `C:\SecureEvidence` fuori dal repository.
+- Supported Windows 10 22H2, virtualization and WSL 2 enabled;
+- Docker Desktop running with Linux containers and the WSL 2 backend;
+- elevated PowerShell 5.1 for firewall and trust-store operations;
+- clean, synchronized `m3/production-like-vertical-slice` branch;
+- Windows 11 VM Running with stable IPv4 on the Hyper-V network;
+- `C:\SecureEvidence` outside the repository.
 
-Verifica non mutante:
+Non-mutating verification:
 
 ```powershell
 Set-Location C:\Codice\broker-gateway
@@ -55,21 +55,21 @@ $runId = 'm3a-split-' + (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
 .\tools\m3\split-host\Invoke-M3ASplitHost.ps1 -Phase ValidateHost -RunId $runId
 ```
 
-Se compare `M3A_SPLIT_DOCKER_DESKTOP_NOT_INSTALLED`, fermarsi. Scaricare solo
-l'installer dalla [pagina ufficiale Docker Desktop per
-Windows](https://docs.docker.com/desktop/setup/install/windows-install/), verificare i
-requisiti e ottenere l'approvazione dell'utente per licenza, installer ed eventuale
-UAC. Per il requisito di questo gate scegliere backend WSL 2 e Linux containers. Non
-usare `--accept-license` senza approvazione esplicita. Dopo l'avvio, selezionare **Use
-WSL 2 based engine** come indicato dalla [documentazione ufficiale
-WSL](https://docs.docker.com/desktop/features/wsl/) e rieseguire `ValidateHost`.
+If `M3A_SPLIT_DOCKER_DESKTOP_NOT_INSTALLED` appears, stop. Download the installer
+only from the [official Docker Desktop for Windows
+page](https://docs.docker.com/desktop/setup/install/windows-install/), check requirements
+and obtain user approval for the license, installer and any UAC prompt. This gate
+requires the WSL 2 backend and Linux containers. Do not use `--accept-license` without
+explicit approval. After startup, select **Use WSL 2 based engine** as described in the
+[official WSL documentation](https://docs.docker.com/desktop/features/wsl/) and rerun
+`ValidateHost`.
 
-## Selezione rete e VM
+## Network and VM selection
 
-Non usare il nome VM come identificatore. In una console Hyper-V elevata:
+Do not use the VM name as an identifier. In an elevated Hyper-V console:
 
 ```powershell
-$vmId = [guid]'<VM-ID-UNIVOCO>'
+$vmId = [guid]'<UNIQUE-VM-ID>'
 $vm = Get-VM -Id $vmId -ErrorAction Stop
 $vm | Format-List Name,Id,State,Status,ConfigurationLocation,Path,Uptime
 $vm | Get-VMNetworkAdapter | Format-Table Name,SwitchName,Status,IPAddresses
@@ -78,25 +78,24 @@ Get-NetIPAddress -AddressFamily IPv4 |
     Format-Table InterfaceAlias,IPAddress,PrefixLength
 ```
 
-La run usa un secondo switch Hyper-V Internal chiamato `M3A-Isolated` e una seconda
-NIC VM omonima. La NIC di management collegata al Default Switch non viene sostituita
-o scollegata. La configurazione predefinita, subordinata al controllo conflitti, è:
+The run uses a second Hyper-V Internal switch named `M3A-Isolated` and a second
+same-named VM NIC. The management NIC connected to Default Switch is neither replaced
+nor disconnected. The default configuration, subject to conflict checks, is:
 
 - subnet `192.168.250.0/29`;
 - HOST `192.168.250.1/29`;
 - VM `192.168.250.2/29`;
-- nessun DHCP, NAT, gateway, DNS o forwarding sul segmento;
-- DHCP Guard, Router Guard e MAC spoofing disabilitato sulla NIC VM M3A.
+- no DHCP, NAT, gateway, DNS or forwarding on the segment;
+- DHCP Guard, Router Guard and disabled MAC spoofing on the M3A VM NIC.
 
-Il runner registra inventario e checkpoint prima della mutazione. Un task SYSTEM
-per-run ripristina profili firewall e Tailscale e rimuove esclusivamente la NIC e lo
-switch M3A. Il timeout predefinito è 30 minuti; `-RollbackTimeoutMinutes`, validato
-fra 30 e 180 minuti, consente di riservare esplicitamente una finestra operativa più
-lunga per una nuova run. La deadline UTC è registrata negli state file prima della
-mutazione. Il parametro non estende né sostituisce task di run già avviate. Il
-Default Switch è fuori dai target di rollback.
+The runner records inventory and checkpoint before mutation. A per-run SYSTEM task
+restores firewall profiles and Tailscale and removes only the M3A NIC and switch. The
+default timeout is 30 minutes; `-RollbackTimeoutMinutes`, validated between 30 and
+180 minutes, explicitly reserves a longer operational window for a new run. The UTC
+deadline is recorded in state files before mutation. The parameter neither extends
+nor replaces tasks for runs already started. Default Switch is outside rollback targets.
 
-Verificare anche l'associazione firewall, senza mutazioni:
+Also verify firewall association without mutations:
 
 ```powershell
 $hostAddress = '192.168.250.1'
@@ -106,12 +105,11 @@ Get-NetFirewallProfile -PolicyStore ActiveStore -Name Domain,Private,Public |
     Format-Table Name,Enabled
 ```
 
-`M3A_SPLIT_FIREWALL_PROFILE_UNRESOLVED_DEDICATED_SWITCH_REQUIRED` e
-`M3A_SPLIT_FIREWALL_PROFILE_SHARED_DEDICATED_SWITCH_REQUIRED` sono blocker
-pre-handoff. Non aggirarli con `-Profile Any` o abilitando tutti i profili. Predisporre
-una rete Hyper-V interna dedicata e sottoporla a nuova verifica; se il relativo profilo
-è condiviso con una rete necessaria all'HOST, valutarne prima l'impatto o rendere la
-categoria realmente isolata.
+`M3A_SPLIT_FIREWALL_PROFILE_UNRESOLVED_DEDICATED_SWITCH_REQUIRED` and
+`M3A_SPLIT_FIREWALL_PROFILE_SHARED_DEDICATED_SWITCH_REQUIRED` are pre-handoff
+blockers. Do not bypass them with `-Profile Any` or by enabling every profile. Prepare
+a dedicated internal Hyper-V network and verify it again; if its profile is shared
+with a network the HOST needs, first assess the impact or make the category truly isolated.
 
 ## Prepare HOST
 
@@ -121,13 +119,13 @@ git fetch --prune origin
 git switch m3/production-like-vertical-slice
 git pull --ff-only
 $candidate = (git rev-parse HEAD).Trim()
-if (git status --porcelain) { throw 'Worktree non pulito' }
+if (git status --porcelain) { throw 'Worktree is not clean' }
 
 $hostHyperVAddress = '192.168.250.1'
 $vmAddress = '192.168.250.2'
 $vmId = [guid]'5ff35721-5181-4b69-b30a-6ff53fa8c842'
 $vmCredential = Get-Credential -UserName 'LabAdmin' `
-    -Message 'Credenziale locale VM per configurare esclusivamente la NIC M3A-Isolated'
+    -Message 'Local VM credential to configure only the M3A-Isolated NIC'
 .\tools\m3\split-host\Invoke-M3ASplitHost.ps1 `
     -Phase Prepare `
     -RunId $runId `
@@ -147,64 +145,63 @@ $vmCredential = $null
 
 `Prepare`:
 
-- genera CA e certificati sintetici per-run; il SAN Gateway contiene l'IP HOST e le
-  identità realmente usate dal probe interno (`localhost` e `127.0.0.1`);
-- avvia Gateway, PostgreSQL 18, vault e mock con un Compose project per-run;
-- richiede `healthy` per Gateway/PostgreSQL oltre a live/readiness HTTP 200;
-- salva gli stati originali Domain/Private/Public, crea un rollback SYSTEM a scadenza,
-  abilita soltanto il profilo associato e crea una regola limitata a interfaccia, IP VM,
-  IP HOST e porta Gateway;
-- verifica la regola nell'`ActiveStore` e rifiuta un profilo non enforcing;
-- disabilita temporaneamente soltanto l'adattatore HOST Tailscale dopo l'attivazione
-  del rollback; Private deve risultare associato soltanto a `M3A-Isolated`;
-- tramite PowerShell Direct verifica la connettività Internet della NIC management e
-  prova che dalla VM siano raggiungibili soltanto HOST `192.168.250.1:28443`, non la
-  stessa porta su Default Switch/LAN né PostgreSQL, vault e vendor mock;
-- produce `C:\SecureEvidence\<RunId>\<RunId>-vm-input.zip` e sidecar;
-- trasferisce handoff e script revisionato, verifica gli hash nella VM e restituisce
-  `WAITING_FOR_OPERATOR`, non un PASS.
+- generates per-run synthetic CAs and certificates; the Gateway SAN contains the HOST IP
+  and identities actually used by the internal probe (`localhost` and `127.0.0.1`);
+- starts Gateway, PostgreSQL 18, Vault and the mock with a per-run Compose project;
+- requires `healthy` for Gateway/PostgreSQL as well as live/readiness HTTP 200;
+- saves original Domain/Private/Public states, creates a deadline-bound SYSTEM rollback,
+  enables only the associated profile and creates a rule limited to interface, VM IP,
+  HOST IP and Gateway port;
+- verifies the rule in `ActiveStore` and rejects a non-enforcing profile;
+- temporarily disables only the HOST Tailscale adapter after rollback activation;
+  Private must be associated only with `M3A-Isolated`;
+- through PowerShell Direct, verifies management-NIC Internet connectivity and proves
+  the VM can reach only HOST `192.168.250.1:28443`, not the same port on Default Switch/LAN
+  or PostgreSQL, Vault and the vendor mock;
+- produces `C:\SecureEvidence\<RunId>\<RunId>-vm-input.zip` and sidecar;
+- transfers the handoff and reviewed script, checks hashes in the VM and returns
+  `WAITING_FOR_OPERATOR`, not PASS.
 
-Il ZIP VM contiene activation code monouso ed è materiale raw temporaneo. Non
-caricarlo su GitHub, non inserirlo in evidence redatta e non copiarlo nel repository.
-Il task fail-safe scade dopo il timeout scelto durante `Prepare` (30 minuti per
-default): completare l'handoff e il test VM entro tale finestra oppure eseguire
-cleanup e iniziare una nuova run con nuovi certificati e activation code. Non
-posticipare task di run già avviate.
+The VM ZIP contains a one-time activation code and is temporary raw material. Do not
+upload it to GitHub, include it in redacted evidence or copy it into the repository.
+The fail-safe task expires after the timeout selected during `Prepare` (30 minutes
+by default): complete the handoff and VM test within that window or clean up and start
+a new run with new certificates and activation code. Do not postpone tasks for runs
+already started.
 
-Riservare 60–75 minuti continui per preparazione, esecuzione VM, acquisizione risultato,
-Finalize e cleanup. La finestra da 150 minuti lascia margine per l'inserimento manuale e
-per un cleanup controllato; non iniziare l'esecuzione VM con meno di 45 minuti residui.
+Reserve 60–75 continuous minutes for preparation, VM execution, result retrieval,
+Finalize and cleanup. The 150-minute window leaves margin for manual input and controlled
+cleanup; do not begin VM execution with fewer than 45 minutes remaining.
 
-## Handoff e stato WAITING_FOR_OPERATOR
+## Handoff and WAITING_FOR_OPERATOR status
 
-`Prepare` usa PowerShell Direct con il solo `VMId` esatto e la credenziale `LabAdmin`
-mantenuta in memoria per copiare, senza eseguirli:
+`Prepare` uses PowerShell Direct with only the exact `VMId` and the in-memory
+`LabAdmin` credential to copy, without executing:
 
-- ZIP e sidecar dell'input sintetico;
-- `Invoke-M3ASplitVmOperator.ps1` e relativo sidecar SHA-256;
+- synthetic-input ZIP and sidecar;
+- `Invoke-M3ASplitVmOperator.ps1` and its SHA-256 sidecar;
 - `RUNID.txt`.
 
-La destinazione è `C:\Lab\M3A\<RunId>`. Gli hash vengono ricalcolati nella VM; il runner
-restituisce `WAITING_FOR_OPERATOR`, `operatorScriptSha256` e `operatorCommand`. A questo
-punto l'HOST non avvia alcun task privilegiato e mantiene lo stack in esecuzione.
+The destination is `C:\Lab\M3A\<RunId>`. Hashes are recalculated in the VM; the runner
+returns `WAITING_FOR_OPERATOR`, `operatorScriptSha256` and `operatorCommand`. At this
+point the HOST starts no privileged task and keeps the stack running.
 
-## Esecuzione manuale VM
+## Manual VM execution
 
-Seguire [M3A split-host — esecuzione manuale nella VM](M3A-SPLIT-HOST-CODEX-VM.md).
-L'operatore apre Windows PowerShell 5.1 come amministratore ed esegue un solo comando,
-quello restituito da `Prepare`. Non è necessario avviare Codex come amministratore.
+Follow [M3A split-host — manual execution in the VM](M3A-SPLIT-HOST-CODEX-VM.md).
+The operator opens Windows PowerShell 5.1 as administrator and runs one command,
+the one returned by `Prepare`. Starting Codex as administrator is unnecessary.
 
-Il risultato accettabile è `RESULT.json` PASS e un archivio **redatto** con sidecar,
-`vm-manifest.json`, `legacy-simulator.json` e cleanup PASS. Il Broker deve essere stato
-osservato Running con process token del service SID; il Legacy Simulator deve essere
-un utente standard e deve aver attraversato realmente Named Pipe e Gateway HOST.
+The acceptable result is PASS `RESULT.json` and a **redacted** archive with sidecar,
+`vm-manifest.json`, `legacy-simulator.json` and cleanup PASS. Broker must have been
+observed Running with the service-SID process token; Legacy Simulator must be a standard
+user and must have actually traversed the Named Pipe and HOST Gateway.
 
-Il risultato VM può essere trasferito tramite asset di una release privata temporanea
-GitHub o un canale amministrativo approvato. Non committare evidence. Per una release
-privata:
+The VM result may be transferred through a temporary private GitHub release asset or
+an approved administrative channel. Do not commit evidence. For a private release:
 
 ```powershell
-# nella VM, dopo aver verificato che l'archivio sia soltanto redatto
+# in the VM, after verifying that the archive contains only redacted material
 $tag = "evidence-$runId"
 gh release create $tag --repo marcobiz/secure-integration-platform `
     --prerelease --title "Redacted $runId" --notes "M3A VM redacted evidence only"
@@ -213,8 +210,8 @@ gh release upload $tag "C:\SecureEvidence\$runId\$runId-vm-redacted.zip" `
     --repo marcobiz/secure-integration-platform
 ```
 
-Sul HOST scaricare in `C:\SecureEvidence\<RunId>\vm-transfer`, verificare il sidecar
-e decomprimere in `vm-result`. Il repository Git resta estraneo al trasferimento.
+On the HOST, download into `C:\SecureEvidence\<RunId>\vm-transfer`, verify the sidecar
+and extract into `vm-result`. The Git repository is not involved in the transfer.
 
 ## Finalize HOST
 
@@ -230,32 +227,32 @@ $vmResult = "C:\SecureEvidence\$runId\vm-result"
     -VmResultDirectory $vmResult
 ```
 
-`Finalize` verifica il manifest VM, esegue sullo stack reale N01–N14 con il
-SecurityDriver, scansiona log e report usando tutte le canary note all'HOST, registra
-digest immagini, checksum migration, fingerprint pubblici, SID, firewall e scenari,
-quindi esegue il cleanup prima di creare il bundle redatto.
+`Finalize` verifies the VM manifest, runs N01–N14 on the real stack using SecurityDriver,
+scans logs and reports using all HOST-known canaries, records image digests, migration
+checksums, public fingerprints, SIDs, firewall and scenarios, then cleans up before
+creating the redacted bundle.
 
-PASS richiede contemporaneamente:
+PASS simultaneously requires:
 
-- P02 e operation-grant denial attraverso il vero Broker Service;
-- applicazione locale non autorizzata negata e auditata;
-- N01 revoca, N03 replay, N04 tenant alterato, N07 URL arbitrario, N10 secret
-  reference arbitraria e gli altri scenari SecurityDriver PASS;
-- nessun activation code, vendor key, token, password o payload canary nei log;
-- zero container e volumi del project, zero regole firewall temporanee;
-- zero network e task rollback temporanei e ripristino esatto degli stati originali
-  Domain/Private/Public;
-- attestazione VM con zero servizi e task di test residui.
+- P02 and operation-grant denial through the real Broker Service;
+- unauthorized local application denied and audited;
+- N01 revocation, N03 replay, N04 altered tenant, N07 arbitrary URL, N10 arbitrary secret
+  reference and the other SecurityDriver scenarios PASS;
+- no activation codes, vendor keys, tokens, passwords or payload canaries in logs;
+- zero project containers and volumes, zero temporary firewall rules;
+- zero temporary networks and rollback tasks, and exact restoration of original
+  Domain/Private/Public states;
+- VM attestation with zero remaining test services and tasks.
 
-Il risultato è `C:\SecureEvidence\<RunId>\<RunId>-redacted-evidence.zip` con sidecar
-SHA-256. Raw evidence rimane fuori Git e soggetta alla retention del laboratorio.
+The result is `C:\SecureEvidence\<RunId>\<RunId>-redacted-evidence.zip` with SHA-256
+sidecar. Raw evidence stays outside Git and is subject to laboratory retention policy.
 
-Il runner VM produce inoltre `RESULT.json`. Un percorso completato usa `PASS`; una
-failure runtime produce un archive distinto `*-vm-redacted-failure.zip` con stato
-`BLOCKED` e solo codice errore, cleanup e metadati redatti. File parziali non vengono
-inclusi e non possono essere interpretati come PASS.
+The VM runner also produces `RESULT.json`. A completed path uses `PASS`; a runtime
+failure produces a separate `*-vm-redacted-failure.zip` archive with `BLOCKED` status
+and only error codes, cleanup and redacted metadata. Partial files are not included and
+cannot be interpreted as PASS.
 
-## Cleanup di emergenza
+## Emergency cleanup
 
 HOST:
 
@@ -263,20 +260,20 @@ HOST:
 .\tools\m3\split-host\Invoke-M3ASplitHost.ps1 -Phase Cleanup -RunId $runId
 ```
 
-VM, dentro una console elevata:
+VM, in an elevated console:
 
 ```powershell
 Set-Location C:\Lab\broker-gateway
 .\tools\m3\split-host\Invoke-M3ASplitVm.ps1 -Phase Cleanup -RunId $runId
 ```
 
-Gli script rifiutano di eliminare un servizio con binary path esterno alla directory
-della run. Una collisione con un `SecureIntegrationBroker` preesistente è un blocker:
-identificarne proprietà e ownership prima di rimuoverlo con il relativo harness.
+The scripts refuse to delete a service whose binary path is outside the run directory.
+A collision with an existing `SecureIntegrationBroker` is a blocker: identify its
+properties and ownership before removing it using its own harness.
 
-Il cleanup HOST rimuove regola, container, volumi e network, ripristina i tre stati
-firewall dal record per-run, riabilita Tailscale se originariamente attivo, rimuove
-soltanto la NIC VM e lo switch `M3A-Isolated` e cancella i task di rollback. Se la
-sessione termina prima, il task SYSTEM esegue lo stesso ripristino alla deadline
-registrata, senza password persistite. Un esito con `firewallProfileRestored=false` o
-`isolatedNetworkRestored=false` non è PASS.
+HOST cleanup removes the rule, containers, volumes and networks, restores all three
+firewall states from the per-run record, re-enables Tailscale if originally active,
+removes only the VM NIC and `M3A-Isolated` switch and deletes rollback tasks. If the
+session ends earlier, the SYSTEM task performs the same restoration at the recorded
+deadline, without persisted passwords. A result with `firewallProfileRestored=false`
+or `isolatedNetworkRestored=false` is not PASS.

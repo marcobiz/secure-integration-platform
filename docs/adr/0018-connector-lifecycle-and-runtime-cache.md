@@ -1,27 +1,27 @@
-# ADR-0018: Lifecycle, pubblicazione e cache dei Connector
+# ADR-0018: Connector lifecycle, publication and cache
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Contesto
+## Context
 
-ADR-0010 definisce la pipeline dichiarativa, ma non specifica lifecycle, concorrenza, rollback, binding e comportamento della cache necessari al Connector Configuration MVP.
+ADR-0010 defines the declarative pipeline, but does not specify the lifecycle, concurrency, rollback, binding and cache behavior needed by the Connector Configuration MVP.
 
-## Decisione
+## Decision
 
-- Una Connector Definition v1 è JSON conforme a Draft 2020-12 e contiene solo riferimenti logici a endpoint e segreti.
-- Il lifecycle è `Draft → Validated → Published → Superseded → Retired`. Non esiste uno stato implicito o un bypass di validazione.
-- Una versione che è stata Published non può più cambiare definizione, checksum, versione o schema. Il database applica anche un trigger di immutabilità.
-- Pubblicare una nuova versione rende la precedente `Superseded`. Il rollback riattiva soltanto una versione `Superseded` già pubblicata; non copia o modifica il JSON.
-- Il checksum SHA-256 è calcolato sul JSON UTF-8 canonico. Il dominio numerico v1 ammette solo interi, così la canonicalizzazione resta deterministica e senza ambiguità floating point.
-- `row_version` protegge ogni transizione e `publication_revision` serializza pubblicazioni concorrenti sul Connector.
-- Endpoint URI e riferimenti provider sono binding per Environment, amministrati server-side e assenti da definizione, runtime request, export e audit.
-- Il runtime risolve esclusivamente la versione `Published`. Una cache TTL conserva lo snapshot completo, ma verifica a ogni invocazione uno stamp leggero di pubblicazione. Cambio di stato/revisione, invalidazione locale, corruzione o indisponibilità dello store impediscono l'uso dello snapshot: nessun fallback stale.
-- L'Admin API è l'unico confine supportato da CLI e strumenti; non è consentito accesso diretto al database.
+- A Connector Definition v1 is Draft 2020-12-compliant JSON and contains only logical endpoint and secret references.
+- The lifecycle is `Draft → Validated → Published → Superseded → Retired`. There is no implicit state or validation bypass.
+- A version that has been Published can no longer change its definition, checksum, version or schema. The database also enforces an immutability trigger.
+- Publishing a new version makes the previous one `Superseded`. Rollback reactivates only a previously published `Superseded` version; it does not copy or change JSON.
+- The SHA-256 checksum is computed over canonical UTF-8 JSON. The v1 numeric domain allows only integers, keeping canonicalization deterministic and free of floating-point ambiguity.
+- `row_version` protects every transition and `publication_revision` serializes concurrent publications for the Connector.
+- Endpoint URIs and provider references are per-Environment bindings, managed server-side and absent from the definition, runtime request, export and audit.
+- The runtime resolves only the `Published` version. A TTL cache retains the complete snapshot, but checks a lightweight publication stamp on every invocation. State/revision changes, local invalidation, corruption or store unavailability prevent snapshot use: no stale fallback.
+- The Admin API is the only supported boundary for CLI and tools; direct database access is not allowed.
 
-## Conseguenze
+## Consequences
 
-La revoca/retirement è effettiva anche entro il TTL, il rollback mantiene provenance e checksum, e due publisher non possono vincere in silenzio. Una temporanea indisponibilità PostgreSQL interrompe le nuove invocazioni invece di usare configurazione potenzialmente revocata.
+Revocation/retirement is effective even within the TTL, rollback preserves provenance and checksum, and two publishers cannot silently succeed. Temporary PostgreSQL unavailability interrupts new invocations instead of using potentially revoked configuration.
 
-## Alternative escluse
+## Rejected alternatives
 
-Cache che usa stale-on-error, modifica in-place di Published, rollback tramite nuova copia, URL/secret reference nel payload client, workflow/script arbitrari e accesso CLI diretto al database.
+Stale-on-error cache, in-place modification of Published versions, rollback through a new copy, URLs/secret references in client payloads, arbitrary workflows/scripts and direct CLI database access.

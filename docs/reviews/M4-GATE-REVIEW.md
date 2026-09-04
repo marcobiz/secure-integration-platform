@@ -1,89 +1,89 @@
 # M4 — Connector Configuration MVP Gate Review
 
-Data: 2026-08-05
+Date: 2026-08-05
 
 Baseline: `m3a-product-gate-pass-20260805` / `5301b61546f814fd32874570ff667218ffe002a2`
 
-Commit implementativo: `cf59a36e71ee899dfbbe4918345090a2cd4d402d`
+Implementation commit: `cf59a36e71ee899dfbbe4918345090a2cd4d402d`
 
-Commit test negativi: `1485a0d`
+Negative-test commit: `1485a0d`
 
 Branch: `m4/connector-configuration`
 
-## Esito
+## Result
 
-**M4 Done.** Il gate HOST è PASS e la CI PR #4 run `30992487718` è PASS 6/6 sul candidate correttivo `cf3cf6c7d8fb7deddcaa6886c29bef8b329eae1b`. M3B non è stata eseguita ed è correttamente non bloccante perché appartiene al Deployment Pack Azure; M5 e provider/pack ulteriori non sono iniziati.
+**M4 Done.** The HOST gate is PASS and PR #4 CI run `30992487718` is PASS 6/6 on corrective candidate `cf3cf6c7d8fb7deddcaa6886c29bef8b329eae1b`. M3B was not executed and is correctly non-blocking because it belongs to the Azure Deployment Pack; M5 and further providers/packs have not started.
 
-La prima run CI `30992197169` è stata conservata come failure: il nuovo job quick start non rendeva scrivibile su Linux la directory fixture bind-mounted per il Provisioner non-root. Il fix `cf3cf6c` applica soltanto il permesso alla directory raw effimera su host non-Windows; non eleva container né amplia permessi runtime. La run completa successiva dimostra la regressione chiusa.
+The first CI run `30992197169` was preserved as a failure: the new quick-start job did not make the bind-mounted fixture directory writable on Linux for the non-root Provisioner. Fix `cf3cf6c` applies permission only to the ephemeral raw directory on non-Windows hosts; it neither elevates containers nor broadens runtime permissions. The subsequent complete run demonstrates closure of the regression.
 
-## Confini architetturali
+## Architectural boundaries
 
-- Domain, Application, JSON Schema, runtime/Admin contract e CLI non espongono tipi Azure.
-- Connector Definition ed export contengono solo logical endpoint/secret names.
-- URI e provider reference esistono soltanto nei binding Environment server-side.
-- Le capability provider-neutral sono separate da M5 secondo ADR-0019; il provider sintetico abilita setup locale senza Azure.
-- L'adapter Azure pre-M4 resta fisicamente in Infrastructure/API per compatibilità M3. La sua estrazione in un package Deployment Pack è debito di packaging e non rende Azure necessario al Core runtime locale.
+- Domain, Application, JSON Schema, runtime/Admin contracts and CLI expose no Azure types.
+- Connector Definitions and exports contain only logical endpoint/secret names.
+- URIs and provider references exist only in server-side Environment bindings.
+- Provider-neutral capabilities are separated from M5 per ADR-0019; the synthetic provider enables local setup without Azure.
+- The pre-M4 Azure adapter remains physically in Infrastructure/API for M3 compatibility. Its extraction into a Deployment Pack package is packaging debt and does not make Azure necessary for local Core runtime.
 
-ADR-0010 già copriva la pipeline dichiarativa. ADR-0012 è stato reso provider-neutral; ADR-0018 documenta lifecycle, concurrency, binding e cache perché erano decisioni nuove.
+ADR-0010 already covered the declarative pipeline. ADR-0012 was made provider-neutral; ADR-0018 documents lifecycle, concurrency, bindings and cache because these were new decisions.
 
-## Requisiti e test
+## Requirements and tests
 
-| Proprietà/scenario | Evidenza automatica |
+| Property/scenario | Automated evidence |
 |---|---|
-| Draft 2020-12, sample e checksum canonico | `M4_CT_Sample_conforms_to_Draft_2020_12_and_is_canonical` |
-| JSON/schemaVersion/header/binding/retry invalidi | `M4_CT_Invalid_schema_version_binding_header_and_retry_are_rejected` |
-| checksum incompatibile | `M4_CT_Checksum_mismatch_is_rejected` |
-| lifecycle, Published immutabile, rollback, concorrenza | `M4_UT_Lifecycle_is_immutable_concurrent_and_rollback_reactivates_prior_publication` |
-| rollback target mai Published | stesso test, `BGW-CONNECTOR-ROLLBACK-TARGET` |
-| Draft/Validated/Retired/inesistente | `M4_UT_Runtime_denies_Draft_Validated_Retired_missing_and_missing_bindings` |
-| endpoint, secret binding e operation mancanti | `M4_UT_Runtime_denies_missing_endpoint_secret_and_operation` |
-| endpoint binding HTTPS senza query/IP | `M4_UT_Endpoint_bindings_reject_query_IP_and_non_HTTPS_values` |
-| Published-only, binding server-side, stale cache | `M4_UT_Published_runtime_resolves_only_server_side_bindings_and_rejects_stale_cache` |
-| storage corrotto | `M4_UT_Corrupted_configuration_is_rejected_fail_closed` e test PG tamper |
-| request/response oltre limite | `M4_UT_EGR_Request_and_response_bounds_fail_closed` |
-| operation grant mancante | `UT_EGR_Ungranted_operation_is_denied_before_DNS_vault_or_transport` |
-| URL/secret reference client-side assenti | `UT_GTW_Invoke_contract_has_no_client_controlled_endpoint_or_secret_reference` |
-| canary/log e audit redatti | `IT_GTW_Invalid_JSON_does_not_echo_canary_or_exception_details`, lifecycle audit assertion, secret scan |
+| Draft 2020-12, sample and canonical checksum | `M4_CT_Sample_conforms_to_Draft_2020_12_and_is_canonical` |
+| Invalid JSON/schemaVersion/header/binding/retry | `M4_CT_Invalid_schema_version_binding_header_and_retry_are_rejected` |
+| Incompatible checksum | `M4_CT_Checksum_mismatch_is_rejected` |
+| Lifecycle, immutable Published, rollback, concurrency | `M4_UT_Lifecycle_is_immutable_concurrent_and_rollback_reactivates_prior_publication` |
+| Rollback target never Published | Same test, `BGW-CONNECTOR-ROLLBACK-TARGET` |
+| Draft/Validated/Retired/missing | `M4_UT_Runtime_denies_Draft_Validated_Retired_missing_and_missing_bindings` |
+| Missing endpoint, secret binding and operation | `M4_UT_Runtime_denies_missing_endpoint_secret_and_operation` |
+| HTTPS endpoint binding without query/IP | `M4_UT_Endpoint_bindings_reject_query_IP_and_non_HTTPS_values` |
+| Published-only, server-side bindings, stale cache | `M4_UT_Published_runtime_resolves_only_server_side_bindings_and_rejects_stale_cache` |
+| Corrupted storage | `M4_UT_Corrupted_configuration_is_rejected_fail_closed` and PG tamper test |
+| Request/response over bounds | `M4_UT_EGR_Request_and_response_bounds_fail_closed` |
+| Missing operation grant | `UT_EGR_Ungranted_operation_is_denied_before_DNS_vault_or_transport` |
+| No client-side URLs/secret references | `UT_GTW_Invoke_contract_has_no_client_controlled_endpoint_or_secret_reference` |
+| Redacted canary/log and audit | `IT_GTW_Invalid_JSON_does_not_echo_canary_or_exception_details`, lifecycle audit assertion, secret scan |
 | Admin API auth/import/export/publish/test | `M4_IT_Admin_API_requires_key_and_supports_import_validate_publish_export_and_test` |
-| migration real PG, publish/binding/rollback/immutabilità | `M4_IT_DAT_PostgreSQL18_connector_publication_binding_and_rollback_when_configured` |
-| sample completo Legacy→Broker→Gateway→Published→API key+mTLS | `M4_E2E_sample_secure_service_uses_Published_definition_and_server_side_bindings` |
+| Real PG migration, publish/binding/rollback/immutability | `M4_IT_DAT_PostgreSQL18_connector_publication_binding_and_rollback_when_configured` |
+| Complete sample Legacy→Broker→Gateway→Published→API key+mTLS | `M4_E2E_sample_secure_service_uses_Published_definition_and_server_side_bindings` |
 
-La modifica di Published non è esposta da alcuna API e il trigger `connector_version_immutable` rifiuta anche un UPDATE diretto. L'indice `ux_connector_one_published_version` protegge l'unicità a livello DB.
+No API exposes modification of Published configuration, and the `connector_version_immutable` trigger rejects even a direct UPDATE. The `ux_connector_one_published_version` index protects uniqueness at DB level.
 
-## Gate HOST
+## HOST gate
 
-| Controllo | Risultato |
+| Check | Result |
 |---|---|
-| Release build | PASS, zero warning/error |
-| suite ordinarie | PASS, 99 test |
-| PostgreSQL 18 reale | PASS, apply 0001+0002, seconda apply no-op, lifecycle/tamper |
-| migration M4 SHA-256 | `9D991B0E4E8268D47C32121DECE2D3593B183623059BB17F4A82A479DC8D322C` |
-| M4 quick start Compose | PASS, Published list/test e cleanup zero risorse |
+| Release build | PASS, zero warnings/errors |
+| Ordinary suites | PASS, 99 tests |
+| Real PostgreSQL 18 | PASS, apply 0001+0002, second apply no-op, lifecycle/tamper |
+| M4 migration SHA-256 | `9D991B0E4E8268D47C32121DECE2D3593B183623059BB17F4A82A479DC8D322C` |
+| M4 Compose quick start | PASS, Published list/test and zero-resource cleanup |
 | PowerShell 5.1 parse | PASS |
 | document validation | PASS |
 | secret scan | PASS |
-| vulnerable NuGet packages | zero rilevate |
+| vulnerable NuGet packages | zero detected |
 | SBOM SPDX | PASS |
 | `git diff --check` | PASS |
-| CI PR #4 | PASS 6/6, run `30992487718` |
+| PR #4 CI | PASS 6/6, run `30992487718` |
 
-Il quick start è stato eseguito con Docker Engine 29.6.2 e Compose 5.3.1, anche da clone pulito del branch. L'HOST aveva globalmente solo .NET 8, quindi l'SDK 10.0.302 richiesto da `global.json` è stato esposto esplicitamente come prerequisito installato; non è una dipendenza implicita del repository. Il job CI `m4-connector-quickstart` ripete Start/Stop su un runner pulito e verifica zero container, volumi e network residui.
+The quick start ran with Docker Engine 29.6.2 and Compose 5.3.1, including from a clean branch clone. The HOST had only .NET 8 globally, so the 10.0.302 SDK required by `global.json` was explicitly identified as an installed prerequisite; it is not an implicit repository dependency. The `m4-connector-quickstart` CI job repeats Start/Stop on a clean runner and verifies zero residual containers, volumes and networks.
 
 ## Open source readiness
 
-Pronti: build pinned, quick start senza Azure, compose/synthetic fixtures, sample, schema, API/CLI/SDK docs, threat model, CONTRIBUTING, SECURITY, scans e SBOM. Non sono presenti connector proprietari o evidence raw.
+Ready: pinned build, quick start without Azure, Compose/synthetic fixtures, sample, schema, API/CLI/SDK docs, threat model, CONTRIBUTING, SECURITY, scans and SBOM. No proprietary connectors or raw evidence are present.
 
-Prima di una pubblicazione open source generale restano obbligatori: decisione/licenza definitiva, canale security definitivo e separazione fisica dell'adapter Azure in un Deployment Pack. Questi non bloccano il gate funzionale M4 né un pilot privato/sintetico.
+Before general open-source publication, the following remain mandatory: final license decision/text, final security channel and physical separation of the Azure adapter into a Deployment Pack. These do not block the M4 functional gate or a private/synthetic pilot.
 
-## Debito e decisioni aperte
+## Debt and open decisions
 
-- estrarre gli adapter provider-specific da Infrastructure/API in pack installabili separati;
-- sostituire `DevelopmentApiKey` con OIDC/RBAC nel deployment production; la modalità development è già rifiutata in Production;
-- YAML è intenzionalmente non implementato;
-- modifica di Draft avviene creando/importando una nuova versione, non con editing in-place;
-- cache usa uno stamp DB a ogni invoke per garantire revoca immediata: ottimizzazione/scaling futura deve preservare fail-closed;
-- API streaming, plugin e nuovi auth/protocol adapter restano milestone successive.
+- extract provider-specific adapters from Infrastructure/API into separately installable packs;
+- replace `DevelopmentApiKey` with OIDC/RBAC in production deployment; development mode is already rejected in Production;
+- YAML is intentionally unimplemented;
+- a Draft is changed by creating/importing a new version, not through in-place editing;
+- cache uses a DB stamp on every invocation to guarantee immediate revocation: future optimization/scaling must preserve fail-closed behavior;
+- API streaming, plugins and new auth/protocol adapters remain later milestones.
 
-## Decisione gate
+## Gate decision
 
-**PASS — M4 Done. GO tecnico per M5 e GO per un primo Connector Pack pilota sintetico/privato; nessun avvio automatico.** La distribuzione pubblica generale resta NO-GO fino alla scelta della licenza e al completamento degli altri punti di preview indicati sopra.
+**PASS — M4 Done. Technical GO for M5 and GO for a first synthetic/private pilot Connector Pack; no automatic start.** General public distribution remains NO-GO until the license is chosen and the other preview items above are completed.

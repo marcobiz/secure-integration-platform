@@ -1,78 +1,75 @@
-# Governance di adozione e complessità
+# Adoption and complexity governance
 
-**Pubblico:** product owner, maintainer, reviewer e agenti.
-**Stato:** CURRENT; sintetizza le regole operative vincolanti di
+**Audience:** product owners, maintainers, reviewers and agents.
+**Status:** CURRENT; summarizes the binding operational rules in
 [AGENTS.md](https://github.com/marcobiz/secure-integration-platform/blob/main/AGENTS.md).
 
-## Outcome prima della macchina
+## Outcome before machinery
 
-Costruire il più piccolo sistema coerente che chiude un problema dimostrato. Sicurezza e
-usabilità sono criteri congiunti: un controllo non è completo se il percorso normale
-richiede attese evitabili, login ripetuti, conoscenza della repository, SQL, accesso
-store o supporto ordinario.
+Build the smallest coherent system that solves a demonstrated problem. Security and
+usability are joint criteria: a control is incomplete if the normal path requires
+avoidable waiting, repeated login, repository knowledge, SQL, store access or routine support.
 
-Per ogni slice congelare:
+For each slice, freeze:
 
-- outcome visibile e non-goal;
-- authority/confini da preservare;
-- negative set minimo;
-- metrica black-box di adozione;
-- criteri di stop e di review.
+- visible outcome and non-goals;
+- authorities/boundaries to preserve;
+- minimum negative set;
+- black-box adoption metric;
+- stop and review criteria.
 
-Stimare separatamente prodotto, laboratorio/test ed evidence. Se test+evidence superano
-probabilmente l’implementazione o la stessa slice entra in due cicli consecutivi di
-remediation/re-review, eseguire un checkpoint esplicito di scope e complessità.
+Estimate product, laboratory/test and evidence effort separately. If test plus
+evidence will probably exceed implementation, or the same slice enters two consecutive
+remediation/re-review cycles, hold an explicit scope-and-complexity checkpoint.
 
 ## Compensation stop rule
 
-Una soluzione temporanea deve avere confine, owner e condizione di rimozione. Quando una
-seconda eccezione, procedura, coordinazione o macchina di test serve soprattutto a
-compensare una scelta precedente, fermarsi prima di aggiungere un terzo livello.
+A temporary solution must have a boundary, owner and removal condition. When a second
+exception, procedure, coordination mechanism or test apparatus mainly compensates for
+an earlier choice, stop before adding a third layer.
 
-Chiedere:
+Ask:
 
-1. qual è la causa autorevole più precoce;
-2. quali componenti, stati e procedure sparirebbero cambiando quell’assunzione;
-3. se la nuova astrazione rimuove duplicazione misurata in casi correnti;
-4. se l’instrumentation ha valore operativo indipendente dall’evidence;
-5. se il laboratorio è più semplice del comportamento che verifica.
+1. what the earliest authoritative cause is;
+2. which components, states and procedures would disappear by changing that assumption;
+3. whether the new abstraction removes measured duplication in current cases;
+4. whether instrumentation has operational value independent of evidence;
+5. whether the laboratory is simpler than the behavior it verifies.
 
-Non normalizzare un difetto di prodotto come conoscenza dell’operatore. Se onboarding,
-recovery o test ordinari richiedono intervento specialistico, l’esperienza di adozione è
-fallita. Documentare il blocker e proporre una correzione bounded; non aggiungere un
-runbook di workaround salvo vincolo esterno inevitabile ed esplicito.
+Do not normalize a product defect as operator knowledge. If ordinary onboarding,
+recovery or testing requires specialist intervention, the adoption experience has
+failed. Document the blocker and propose a bounded correction; do not add a workaround
+runbook unless the external constraint is unavoidable and explicit.
 
-## Minimalismo e riuso
+## Minimalism and reuse
 
-- Preferire flusso diretto, stato esplicito e strutture ordinarie a framework,
-  reflection o indirection.
-- Aggiungere un’astrazione solo quando riduce complessità o duplicazione corrente
-  misurata.
-- Tenere bassi layer, interface, servizi, configurazioni e dipendenze longeve.
-- Ottimizzare prima architettura, round-trip e rappresentazione; misurare prima delle
-  micro-ottimizzazioni.
-- Rimuovere path morti, compatibilità senza consumer ed evidence-only machinery dopo
-  aver preservato l’autorità necessaria.
-- Risolvere il secondo caso di attrito al più stretto confine condiviso, non con due
-  runbook verticali.
+- Prefer direct flow, explicit state and ordinary structures over frameworks,
+  reflection or indirection.
+- Add an abstraction only when it reduces measured current complexity or duplication.
+- Keep layers, interfaces, services, configurations and long-lived dependencies few.
+- Optimize architecture, round trips and representation first; measure before micro-optimizing.
+- Remove dead paths, compatibility without consumers and evidence-only machinery
+  after preserving the necessary authority.
+- Resolve the second case of friction at the narrowest shared boundary, not through
+  two vertical runbooks.
 
-## Ownership e parallelizzazione
+## Ownership and parallelization
 
-Un owner capace mantiene responsabilità end-to-end fino all’outcome. Le iterazioni
-purposeful testano ipotesi diverse, validano una correzione o confermano un esito
-transiente; retry identici e non spiegati sono vietati.
+One capable owner retains end-to-end responsibility until the outcome. Purposeful
+iterations test distinct hypotheses, validate a correction or confirm a transient
+result; unexplained identical retries are prohibited.
 
-Parallelizzare solo task indipendenti con file/output disgiunti e piano di integrazione
-esplicito. Non moltiplicare writer su contratti, migrazioni, client generati,
-documentazione centrale o lo stesso runtime path: il costo di merge e riqualifica supera
-spesso il guadagno. I worker paralleli restituiscono normalmente finding/evidence a un
-solo writer designato.
+Parallelize only independent tasks with disjoint files/outputs and an explicit
+integration plan. Do not multiply writers on contracts, migrations, generated clients,
+central documentation or the same runtime path: merge and requalification costs often
+exceed the gain. Parallel workers normally return findings/evidence to one designated writer.
 
-## Review e closure
+## Review and closure
 
-La review avviene a punti di convergenza. P0/P1 bloccano; un P2 blocca solo se invalida un
-criterio concordato o dimostra rischio concreto di sicurezza, correttezza, adozione od
-operabilità. Gli altri P2/P3 sono follow-up e non riaprono un ciclo indefinito.
+Review occurs at convergence points. P0/P1 findings block; a P2 blocks only if it
+invalidates an agreed criterion or demonstrates concrete security, correctness,
+adoption or operability risk. Other P2/P3 findings are follow-ups and do not reopen
+an indefinite cycle.
 
-L’evidence è minima e veritiera: niente contatori costruiti come prova di comportamento
-più ampio, niente dati sensibili e nessun overclaim da synthetic a live/production.
+Evidence is minimal and truthful: no constructed counters as proof of broader behavior,
+no sensitive data and no overclaim from synthetic to live/production.

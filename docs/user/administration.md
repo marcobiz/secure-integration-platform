@@ -1,93 +1,94 @@
-# Amministrazione
+# Administration
 
-**Pubblico:** amministratori e operatori autorizzati.
-**Stato:** CURRENT per Admin UI/API integrate; la modalità DevelopmentAuth è soltanto
-locale e sintetica.
+**Audience:** authorized administrators and operators.
+**Status:** CURRENT for the integrated Admin UI/API; DevelopmentAuth mode is local
+and synthetic only.
 
-L’Admin UI comunica esclusivamente con Admin API same-origin autenticate. Non accede a
-PostgreSQL, provider o filesystem. Tenant, Installation ed Environment sono autorità
-server-side; endpoint e riferimenti provider non sono selezionabili dal runtime caller.
+The Admin UI communicates exclusively with authenticated same-origin Admin APIs.
+It does not access PostgreSQL, providers or the filesystem. Tenant, Installation and
+Environment are server-side authorities; runtime callers cannot select endpoints
+or provider references.
 
-## Ruoli e separazione delle responsabilità
+## Roles and separation of responsibilities
 
-| Ruolo | Compito normale |
+| Role | Normal task |
 |---|---|
-| Viewer | Leggere stato non sensibile. |
-| Connector Editor | Importare/validare una definition e proporre l’approvazione. |
-| Connector Approver | Approvare il checksum esatto; deve essere distinto dal proposer. |
-| Security Administrator | Gestire Installation, binding server-owned, grant, audit diagnostico autorizzato e health. |
-| Operator | Eseguire test controllati sulle superfici consentite. |
+| Viewer | Read non-sensitive state. |
+| Connector Editor | Import/validate a definition and propose approval. |
+| Connector Approver | Approve the exact checksum; must be distinct from the proposer. |
+| Security Administrator | Manage Installations, server-owned bindings, grants, authorized diagnostic audit and health. |
+| Operator | Run controlled tests on permitted surfaces. |
 
-La UI può nascondere azioni non autorizzate, ma RBAC, tenant scope, CSRF, concurrency e
-four-eyes sono sempre applicati dal server.
+The UI may hide unauthorized actions, but the server always enforces RBAC, tenant
+scope, CSRF, concurrency and four-eyes checks.
 
-## Ordine canonico di onboarding
+## Canonical onboarding order
 
-Per un nuovo Connector usare la pagina **Onboarding guidato** e la procedura a cinque
-azioni in [Onboarding guidato di un Connector](guided-connector-onboarding.md). La pagina
-seleziona le autorità server-owned, mostra il ruolo successivo e riprende dallo stato
-persistito senza chiedere UUID, checksum o JSON di binding.
+For a new Connector, use the **Guided onboarding** page and the five-action procedure
+in [Guided Connector onboarding](guided-connector-onboarding.md). The page selects
+server-owned authorities, shows the next role and resumes from persisted state
+without asking for UUIDs, checksums or binding JSON.
 
 ```text
 deployment/provider bootstrap
-→ Environment e Installation enrollment
+→ Environment and Installation enrollment
 → definition validate/import
 → stored validation
-→ binding server-owned
-→ grant Installation/Connector/operation
+→ server-owned binding
+→ Installation/Connector/operation grant
 → editor proposal
 → distinct approval
 → publish
 → verify Published/Active
-→ una invocation bounded
-→ audit metadata-only
+→ one bounded invocation
+→ metadata-only audit
 ```
 
-Il normale percorso usa Admin UI/API o un provisioner supportato e idempotente
-`plan → apply → verify`. Non usare SQL, accesso diretto allo store, modifica di righe
-Published o valori recuperati dai log.
+The normal path uses Admin UI/API or a supported, idempotent
+`plan → apply → verify` provisioner. Do not use SQL, direct store access, edits to
+Published rows or values recovered from logs.
 
-## Lifecycle del Connector
+## Connector lifecycle
 
 `Draft → Validated → Published → Superseded → Retired`.
 
-- Una versione Published è immutabile.
-- Pubblicare una nuova versione rende Superseded quella precedente.
-- Il rollback riattiva una versione Superseded già pubblicata; non copia o modifica JSON.
-- Ogni mutazione usa la row/publication revision osservata. Un conflitto richiede nuovo
-  read-back, non un force.
-- Una modifica del binding crea una nuova revisione e invalida approval precedenti.
+- A Published version is immutable.
+- Publishing a new version makes the previous one Superseded.
+- Rollback reactivates an already-published Superseded version; it does not copy or edit JSON.
+- Each mutation uses the observed row/publication revision. A conflict requires
+  a new read-back, not force.
+- A binding change creates a new revision and invalidates previous approvals.
 
-## Binding, provider e grant
+## Bindings, providers and grants
 
-Una definition contiene solo nomi logici. L’amministratore sceglie per Environment
-endpoint HTTPS e risorse provider dai cataloghi server-owned; il browser invia soltanto
-identificatore, revisione e checksum come assertion, mentre il server risolve l’autorità
-effettiva. Secret retrieval, certificato client,
-signing e health sono capability separate. Il browser e il client runtime non ricevono
-secret value, chiavi private, P12, provider locator o URL arbitrari.
+A definition contains only logical names. For each Environment, the administrator
+selects HTTPS endpoints and provider resources from server-owned catalogs. The browser
+sends only identifiers, revisions and checksums as assertions; the server resolves
+the actual authority. Secret retrieval, client certificates, signing and health are
+separate capabilities. Neither browser nor runtime client receives secret values,
+private keys, P12 files, provider locators or arbitrary URLs.
 
-Il grant è deny-by-default e lega una Installation a Connector/operation. La richiesta
-indica anche l’esatta `connectorVersion`, che il server rilegge dal configuration store:
-solo una versione `Validated` o `Published` e un’operation canonica della sua definition
-possono autorizzare la creazione. L’Environment non è scelto dal grant o dal client:
-deriva dall’Installation autenticata. Il retry dell’identica tupla enabled con la stessa
-scadenza è un no-op 200; la prima creazione è 201. Un retry non richiede una GET preventiva
-e non produce righe o audit duplicati, anche quando due richieste arrivano insieme.
+A grant is deny-by-default and binds an Installation to a Connector/operation.
+The request also specifies the exact `connectorVersion`, which the server rereads
+from the configuration store: only a `Validated` or `Published` version and a
+canonical operation from its definition can authorize creation. Neither the grant
+nor the client chooses the Environment: it derives from the authenticated Installation.
+Retrying an identical enabled tuple with the same expiry is a 200 no-op; first creation
+returns 201. A retry needs no preliminary GET and produces no duplicate rows or audit,
+including when two requests arrive concurrently.
 
-## Audit, health e recovery
+## Audit, health and recovery
 
-- `/health/live` verifica il processo; `/health/ready` include dipendenze necessarie.
-- Audit conserva metadata bounded, non payload, credenziali, cookie, header o response
-  raw.
-- In locale la pagina **Audit** è `/admin/audit`.
-- Su 429 o sessione scaduta, leggere lo stato server-side e ripetere la sola azione
-  dichiarata retry-safe. Non attendere in loop o rifare l’intero onboarding.
-- Un provider/binding drift rende stale l’autorità Published prima di firma/rete; prima
-  si corregge la causa autorevole, poi si ripubblica secondo lifecycle.
+- `/health/live` checks the process; `/health/ready` includes required dependencies.
+- Audit retains bounded metadata, not payloads, credentials, cookies, headers or raw responses.
+- Locally, the **Audit** page is `/admin/audit`.
+- On 429 or an expired session, read server-side state and repeat only the action
+  declared retry-safe. Do not wait in a loop or restart the whole onboarding process.
+- Provider/binding drift makes Published authority stale before signing/network use;
+  correct the authoritative cause first, then republish through the lifecycle.
 
-Per esplorare l’UI dopo il [pilot locale](local-pilot.md), il laboratorio Admin può essere
-avviato con `./tools/m5/Invoke-M5Quickstart.ps1 -Phase Start` e chiuso con `-Phase Stop`.
-È un ambiente sintetico di ispezione, non un secondo pilot canonico né una configurazione
-production. Per le azioni specifiche FSE2 usare
-[fse2-officialtest.md](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-officialtest.md).
+To explore the UI after the [local pilot](local-pilot.md), start the Admin laboratory
+with `./tools/m5/Invoke-M5Quickstart.ps1 -Phase Start` and stop it with `-Phase Stop`.
+This is a synthetic inspection environment, not a second canonical pilot or a production
+configuration. For FSE2-specific actions, use the
+[current validation/status guide](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md).

@@ -1,40 +1,40 @@
-# ADR-0020: Direct Gateway Access e principal runtime unificato
+# ADR-0020: Direct Gateway Access and unified runtime principal
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Contesto
+## Context
 
-Fino a M5 l'unico client runtime del Gateway era il Local Broker. Tuttavia enrollment,
-mTLS, firma BGW1, replay protection, grants e risoluzione Tenant/Application erano gia
-concetti di `Installation`, non proprieta del processo Broker. Un secondo runtime o un
-secondo protocollo avrebbe duplicato controlli security-critical.
+Until M5, the Local Broker was the Gateway's only runtime client. However, enrollment,
+mTLS, BGW1 signing, replay protection, grants and Tenant/Application resolution were already
+`Installation` concepts, not properties of the Broker process. A second runtime or
+protocol would have duplicated security-critical controls.
 
-## Decisione
+## Decision
 
-- `InstallationKind` distingue `Broker` e `Direct`; le righe M5 esistenti sono migrate
-  additivamente a `Broker`.
-- entrambi i tipi usano ClientAuth mTLS, chiave ECDSA P-256, PoP di enrollment, BGW1,
-  timestamp, nonce, renewal, overlap e revoca esistenti;
-- `BrokerVersion` resta compatibile e soggetta alla policy Application per le
-  installazioni Broker; una Direct installation usa `ClientVersion` e non puo inviare
+- `InstallationKind` distinguishes `Broker` and `Direct`; existing M5 rows are migrated
+  additively to `Broker`.
+- both kinds use the existing ClientAuth mTLS, ECDSA P-256 key, enrollment PoP, BGW1,
+  timestamp, nonce, renewal, overlap and revocation;
+- `BrokerVersion` remains compatible and subject to Application policy for
+  Broker installations; a Direct installation uses `ClientVersion` and cannot send
   `BrokerVersion`;
-- l'autenticazione produce un solo `GatewayClientPrincipal`, derivato esclusivamente
-  dal registry server-side;
-- Connector Runtime, grants, binding, provider, cache, restricted egress e audit
-  consumano quel principal e non creano pipeline specifiche per il caller;
-- `/v1/broker-policy` resta intenzionalmente Broker-only; enrollment, renewal e invoke
-  mantengono le route esistenti;
-- le richieste runtime non contengono Tenant, Application, destinazione, provider o
-  riferimenti a secret/certificati.
+- authentication produces one `GatewayClientPrincipal`, derived exclusively
+  from the server-side registry;
+- Connector Runtime, grants, binding, providers, cache, restricted egress and audit
+  consume that principal and do not create caller-specific pipelines;
+- `/v1/broker-policy` intentionally remains Broker-only; enrollment, renewal and invoke
+  retain the existing routes;
+- runtime requests contain no Tenant, Application, destination, provider or
+  secret/certificate references.
 
-## Conseguenze
+## Consequences
 
-Un'applicazione moderna puo invocare il Gateway senza installare o simulare il Broker,
-ma deve custodire la propria chiave client. Il furto della chiave di una Direct
-installation resta un rischio del client endpoint e richiede revoca/rotazione. Non
-cambia la trusted computing base del Gateway e non nasce un nuovo `GetSecret`.
+A modern application can invoke the Gateway without installing or simulating the Broker,
+but must protect its own client key. Theft of a Direct installation key remains
+a client-endpoint risk and requires revocation/rotation. The Gateway's trusted computing
+base does not change and no new `GetSecret` is introduced.
 
-## Alternative escluse
+## Rejected alternatives
 
-BGW2, `DirectConnectorRuntime`, bearer token statici, Tenant/Application forniti dal
-client, Named Pipe o DPAPI nel percorso Direct e binding tardivi scelti dal caller.
+BGW2, `DirectConnectorRuntime`, static bearer tokens, client-supplied Tenant/Application,
+Named Pipe or DPAPI in the Direct path and late bindings chosen by the caller.

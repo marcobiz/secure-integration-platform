@@ -1,121 +1,121 @@
-# HISTORICAL — Architettura implementata M2 — Gateway minimo
+# HISTORICAL — M2 implemented architecture — minimal Gateway
 
-**Baseline di partenza:** `d1113d34a18e166c9eb0c14d8e11c3c1a1a20c12`
-**Perimetro:** M2; nessun adapter o vertical slice M3
+**Starting baseline:** `d1113d34a18e166c9eb0c14d8e11c3c1a1a20c12`
+**Scope:** M2; no adapters or M3 vertical slice
 
-> Questo documento conserva l'architettura della baseline M2. Non descrive le
-> dipendenze correnti: da ADR-0019 il Core usa capability provider-neutral e i pack
-> Azure/local PKCS#12 dipendono dal Core, mai il contrario. Per la vista corrente vedere
+> This document preserves the M2 baseline architecture. It does not describe current
+> dependencies: since ADR-0019, Core uses provider-neutral capabilities and
+> Azure/local PKCS#12 packs depend on Core, never the reverse. For the current view, see
 > [system architecture](system-architecture.md).
 
-## Vista dei componenti
+## Component view
 
 ```mermaid
 flowchart LR
-  B[Broker con chiave ECDSA P-256] -->|TLS ClientAuth + firma BGW1| API[Gateway.Api]
+  B[Broker with ECDSA P-256 key] -->|TLS ClientAuth + BGW1 signature| API[Gateway.Api]
   API --> ID[RuntimeIdentityService]
   API --> ENR[InstallationEnrollmentService]
   API --> EGR[RestrictedEgressService]
   ID --> REG[IGatewayRegistry]
   ENR --> REG
   EGR --> REG
-  EGR --> CAT[Catalogo operation immutabile]
+  EGR --> CAT[Immutable operation catalog]
   EGR --> VAULT[Provider capability interfaces]
   EGR --> DNS[DNS validation]
-  EGR --> HTTP[Trasporto HTTPS pinned]
+  EGR --> HTTP[Pinned HTTPS transport]
   REG --> PG[(PostgreSQL 18 + FORCE RLS)]
   VAULT --> AKV[Azure Key Vault]
-  HTTP --> EXT[Endpoint esterno allowlisted]
+  HTTP --> EXT[Allowlisted external endpoint]
 ```
 
-I progetti seguono ADR-0002: Domain non dipende da infrastruttura; Application contiene
-policy e porte; Infrastructure implementa PostgreSQL, Key Vault, DNS e trasporto;
-Gateway.Api compone l'host. Le migration sono un eseguibile distinto e non vengono
-applicate automaticamente dal processo runtime.
+Projects follow ADR-0002: Domain does not depend on infrastructure; Application contains
+policies and ports; Infrastructure implements PostgreSQL, Key Vault, DNS and transport;
+Gateway.Api composes the host. Migrations are a separate executable and are not
+automatically applied by the runtime process.
 
-## Confini di fiducia e identità
+## Trust and identity boundaries
 
 ```mermaid
 sequenceDiagram
   participant B as Broker/Installation
   participant G as Gateway API
-  participant R as Registry PostgreSQL
+  participant R as PostgreSQL registry
   participant V as Key Vault
-  participant X as Sistema esterno
-  B->>G: certificato + timestamp + nonce + body hash + firma
-  G->>R: lookup SHA-256 certificato
-  R-->>G: Installation, Tenant, Application, credential pubblica
-  G->>G: verifica stato, scadenza, firma e target canonico
+  participant X as External system
+  B->>G: certificate + timestamp + nonce + body hash + signature
+  G->>R: certificate SHA-256 lookup
+  R-->>G: Installation, Tenant, Application, public credential
+  G->>G: verify state, expiry, signature and canonical target
   G->>R: INSERT nonce hash (unique, TTL)
-  G->>R: verifica grant con Tenant derivato
-  G->>V: legge secret tramite riferimento server-side
-  G->>G: risolve DNS e rifiuta indirizzi non pubblici
-  G->>X: socket vincolato all'IP validato; HTTPS; auth centralizzata
-  X-->>G: risposta entro limite
-  G->>R: audit metadata-only
-  G-->>B: risultato, mai credential o vault reference
+  G->>R: verify grant with derived Tenant
+  G->>V: read secret through server-side reference
+  G->>G: resolve DNS and reject non-public addresses
+  G->>X: socket bound to validated IP; HTTPS; centralized auth
+  X-->>G: bounded response
+  G->>R: metadata-only audit
+  G-->>B: result, never credentials or vault references
 ```
 
-Il client seleziona soltanto `connectorId` e `operationId`. Tenant, URL, metodo,
-header di autenticazione, secret reference, timeout e limiti provengono dal server.
-La risoluzione DNS avviene una sola volta per invocazione e il socket usa gli stessi
-indirizzi validati, chiudendo la finestra di DNS rebinding.
+The client selects only `connectorId` and `operationId`. Tenant, URL, method,
+authentication headers, secret references, timeout and limits come from the server.
+DNS resolution occurs once per invocation and the socket uses the same
+validated addresses, closing the DNS-rebinding window.
 
-## Enrollment e lifecycle
+## Enrollment and lifecycle
 
 ```mermaid
 stateDiagram-v2
   [*] --> Pending: provisioning + activation HMAC
   Pending --> Active: challenge + code + certificate + PoP
-  Active --> Active: renewal; vecchia credential Overlap max 7 giorni
-  Active --> Revoked: revoca
-  Overlap --> Expired: fine overlap/scadenza
+  Active --> Active: renewal; old credential Overlap at most 7 days
+  Active --> Revoked: revocation
+  Overlap --> Expired: overlap end/expiry
   Revoked --> [*]
 ```
 
-- activation code: 256 bit casuali, conservato solo come HMAC, TTL 24 ore, massimo
-  cinque tentativi e consumo atomico;
-- challenge: 256 bit, memoria del nodo, TTL 5 minuti, consumo singolo;
-- credential: ECDSA P-256, EKU ClientAuth, durata massima 93 giorni;
-- renewal: consentito negli ultimi 30 giorni, PoP della nuova chiave e overlap massimo
-  sette giorni;
-- revoca: Installation e credential attive/overlap diventano inutilizzabili prima di
-  grant, Vault o rete.
+- activation code: 256 random bits, stored only as an HMAC, 24-hour TTL, at most
+  five attempts and atomic consumption;
+- challenge: 256 bits, node memory, 5-minute TTL, single use;
+- credential: ECDSA P-256, ClientAuth EKU, maximum lifetime 93 days;
+- renewal: allowed in the final 30 days, PoP of the new key and at most
+  seven days of overlap;
+- revocation: Installation and active/overlap credentials become unusable before
+  grants, Vault or network access.
 
-## Isolamento PostgreSQL
+## PostgreSQL isolation
 
-Le tabelle tenant-scoped hanno composite FK, `ENABLE ROW LEVEL SECURITY` e `FORCE ROW
-LEVEL SECURITY`. Ogni transazione runtime imposta `app.tenant_id` con `SET LOCAL`.
-Tre locator globali contengono soltanto identificatori e digest pubblici necessari ad
-avviare l'autenticazione; non sono concessi ai ruoli runtime. Funzioni
-`SECURITY DEFINER` a superficie stretta leggono il locator, impostano il Tenant RLS e
-solo allora accedono alle righe tenant-scoped. I ruoli sono `gateway_runtime`,
-`gateway_admin` e `gateway_readonly`; l'identità che applica le migration non è usata
-dal runtime.
+Tenant-scoped tables have composite FKs, `ENABLE ROW LEVEL SECURITY` and `FORCE ROW
+LEVEL SECURITY`. Every runtime transaction sets `app.tenant_id` with `SET LOCAL`.
+Three global locators contain only identifiers and public digests needed to
+start authentication; runtime roles have no access. Narrow
+`SECURITY DEFINER` functions read the locator, set the RLS Tenant and
+only then access tenant-scoped rows. Roles are `gateway_runtime`,
+`gateway_admin` and `gateway_readonly`; the migration identity is not used
+by the runtime.
 
-## Vault ed egress
+## Vault and egress
 
-In produzione il Gateway usa Managed Identity e un solo Vault HTTPS configurato.
-I riferimenti `keyvault://<vault-host>/<name>[/<version>]` sono validati contro l'host
-del Vault; i valori non entrano in database, response, Problem Details o audit. Il
-provider in-memory è registrabile dall'host soltanto in `Development`/`Testing`.
-I valori produttivi hanno una cache in-process di cinque minuti; i riferimenti versionati
-restano preferibili quando la rotazione richiede determinismo.
+In production, the Gateway uses Managed Identity and a single configured HTTPS Vault.
+`keyvault://<vault-host>/<name>[/<version>]` references are validated against the Vault
+host; values do not enter the database, responses, Problem Details or audit. The
+host can register the in-memory provider only in `Development`/`Testing`.
+Production values have a five-minute in-process cache; versioned references
+remain preferable when rotation requires determinism.
 
-Il trasporto disabilita proxy ambientale, cookie, decompressione e redirect; consente
-TLS 1.2/1.3, applica timeout e limiti di response durante lo streaming e supporta
-Basic, API key e certificato client caricati in memoria effimera. I retry (massimo due)
-sono accettati soltanto per operation dichiarate idempotenti.
+Transport disables ambient proxies, cookies, decompression and redirects; allows
+TLS 1.2/1.3, enforces timeouts and response limits during streaming and supports
+Basic, API keys and client certificates loaded into ephemeral memory. Retries (at most two)
+are accepted only for operations declared idempotent.
 
-## Stato dei protocolli
+## Protocol status
 
-- Gateway HTTP v1/BGW1: implementazione M2 iniziale, **provvisoria fino al gate M3**;
-- IPC Broker v1: resta **provvisorio** e non è congelato per COM/C ABI/CLI prima della
-  validazione M3, come richiesto dalla Gate Review M0/M1.
+- Gateway HTTP v1/BGW1: initial M2 implementation, **provisional until the M3 gate**;
+- Broker IPC v1: remains **provisional** and is not frozen for COM/C ABI/CLI before
+  M3 validation, as required by the M0/M1 Gate Review.
 
-Nessuna decisione ADR è stata deviata: l'operation catalog di startup è intenzionalmente
-un meccanismo M2 e non anticipa ConnectorVersion, publish o rollback M4.
+No ADR decision was deviated from: the startup operation catalog is intentionally
+an M2 mechanism and does not bring forward M4 ConnectorVersion, publication or rollback.
 
-Le sezioni Azure/Key Vault sopra sono quindi evidence storica M2, non una claim di
-qualifica cloud corrente. La baseline attuale usa per default il Synthetic Provider e
-non include pack verticali nell'immagine Gateway Core.
+The Azure/Key Vault sections above are therefore historical M2 evidence, not a current
+cloud-qualification claim. The current baseline uses the Synthetic Provider by default and
+includes no vertical packs in the Core Gateway image.

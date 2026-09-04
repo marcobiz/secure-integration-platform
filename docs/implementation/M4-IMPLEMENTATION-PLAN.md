@@ -1,12 +1,12 @@
 # M4 — Connector Configuration MVP
 
-## Baseline e obiettivo
+## Baseline and objective
 
 Baseline: tag `m3a-product-gate-pass-20260805`, commit `5301b61546f814fd32874570ff667218ffe002a2`.
 
-Consentire a uno sviluppatore esterno di definire, validare, importare, pubblicare, invocare e fare rollback di un Connector REST senza modificare il Gateway Core e senza configurare Azure.
+Allow an external developer to define, validate, import, publish, invoke and roll back a REST Connector without changing Gateway Core or configuring Azure.
 
-## Architettura effettiva
+## Implemented architecture
 
 ```mermaid
 flowchart LR
@@ -22,22 +22,22 @@ flowchart LR
   RUN --> EXT[HTTPS/mTLS external service]
 ```
 
-Domain e Application dipendono solo da contratti provider-neutral. Da M5 il seam è fisicamente separato in interfacce per capability e il pack Azure è esterno al grafo Core, come definito da ADR-0019.
+Domain and Application depend only on provider-neutral contracts. From M5, the seam is physically separated into capability-specific interfaces and the Azure pack is outside the Core dependency graph, as defined by ADR-0019.
 
-## Incrementi
+## Increments
 
-1. JSON Schema v1, sample e canonical checksum.
-2. State machine, immutable Published, rollback e optimistic concurrency.
-3. Store in-memory/PG e migration additiva.
-4. Published-only catalog, binding logici, cache TTL + stamp e fail-closed.
-5. Admin API, CLI senza DB e audit redatto.
+1. JSON Schema v1, sample and canonical checksum.
+2. State machine, immutable Published, rollback and optimistic concurrency.
+3. In-memory/PG store and additive migration.
+4. Published-only catalog, logical bindings, TTL + stamp cache and fail-closed behavior.
+5. Admin API, CLI without DB access and redacted audit.
 6. Contract test, PG18, E2E Legacy→Broker→Published Connector→synthetic provider→mTLS mock.
-7. Quick start compose, documentazione e open-source hygiene.
+7. Compose quick start, documentation and open-source hygiene.
 
 ## Non-goal
 
-M3B, M5, UI, YAML, plugin, provider aggiuntivi, workflow/scripting, adapter COM/C/Java e Connector Pack reali.
+M3B, M5, UI, YAML, plugins, additional providers, workflow/scripting, COM/C/Java adapters and real Connector Packs.
 
 ## Gate
 
-Build/test/scans/SBOM/document validation verdi; migration real PG apply/no-op; sample E2E; publication/rollback/cache; quick start clean; evidence redatta fuori repository; nessuna regressione M0–M3A.
+Green build/tests/scans/SBOM/document validation; real PG migration apply/no-op; sample E2E; publication/rollback/cache; clean quick start; redacted evidence outside the repository; no M0–M3A regressions.

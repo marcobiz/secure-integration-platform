@@ -1,14 +1,15 @@
 # Executive architecture
 
-Le etichette **CURRENT** e **TARGET** distinguono ciò che è presente da ciò che richiede
-ancora implementazione o qualifica. Nel repository completo la dashboard autorevole è
-`IMPLEMENTATION_STATUS.md`, che non fa parte dell'export Core.
+**CURRENT** and **TARGET** labels distinguish what exists from what still requires
+implementation or qualification. The authoritative capability summary is
+[IMPLEMENTATION_STATUS.md](../../IMPLEMENTATION_STATUS.md), included in the Core export;
+its optional-pack links point to the full repository.
 
-## CURRENT — problema e soluzione
+## CURRENT — problem and solution
 
-La piattaforma rimuove credenziali distribuite e authority client-controlled dai flussi
-di integrazione on-premise senza richiedere una riscrittura completa. I due ingressi
-implementati convergono sullo stesso runtime:
+The platform removes distributed credentials and client-controlled authority from
+on-premises integration flows without requiring a complete rewrite. The two implemented
+entry points converge on the same runtime:
 
 ```mermaid
 flowchart LR
@@ -22,84 +23,87 @@ flowchart LR
   Gateway --> DB[(PostgreSQL 18)]
 ```
 
-- Il **Local Broker** autorizza l'applicazione Windows, protegge secret e data key
-  locali con DPAPI/CNG, offre operation bounded e invoca il Gateway. Non offre generic
+- The **Local Broker** authorizes the Windows application, protects local secrets and data
+  keys with DPAPI/CNG, offers bounded operations and invokes the Gateway. It offers no generic
   secret retrieval.
-- Il **Gateway** deriva Installation, Application, Tenant ed Environment dal registry,
-  applica grant, risolve la sola versione Published e usa capability provider
-  server-side prima dell'egress ristretto.
-- Il **Connector Runtime** esegue operation bounded da configurazioni Published
-  immutabili; non è un workflow engine o proxy arbitrario.
-- L'**Admin Plane** usa UI/API same-origin, OIDC, sessione server-side, CSRF, RBAC,
-  concorrenza e four-eyes senza esporre secret value o private key.
-- I **deployment e vertical pack** dipendono dalle astrazioni Core. Il Synthetic
-  Provider è il percorso predefinito; Azure e local PKCS#12 sono pack opzionali.
+- The **Gateway** derives Installation, Application, Tenant and Environment from the registry,
+  applies grants, resolves only the Published version and uses server-side provider
+  capabilities before restricted egress.
+- The **Connector Runtime** executes bounded operations from immutable Published
+  configurations; it is not a workflow engine or arbitrary proxy.
+- The **Admin Plane** uses same-origin UI/API, OIDC, server-side sessions, CSRF, RBAC,
+  concurrency and four-eyes controls without exposing secret values or private keys.
+- **Deployment and vertical packs** depend on Core abstractions. The Synthetic
+  Provider is the default path; Azure and local PKCS#12 are optional packs.
 
-## CURRENT — percorsi e capability
+## CURRENT — paths and capabilities
 
-Il Secure Layer REST è il percorso generico dimostrato: il caller conserva il payload,
-mentre Gateway e configurazione Published possiedono endpoint, metodo, auth e limiti.
-Broker e Direct client attraversano gli stessi grant, binding, provider e controlli di
-egress.
+REST Secure Layer is the demonstrated generic path: the caller retains the payload,
+while the Gateway and Published configuration own endpoint, method, authentication and limits.
+Broker and Direct clients pass through the same grants, bindings, providers and egress
+controls.
 
-Il Core integra inoltre foundation SOAP/session, OAuth, JWT/X.509, signing slot, mTLS e
-un seam per moduli di execution. Queste primitive non equivalgono a un Managed Connector
-generico distribuibile né alla qualifica di un servizio esterno. I moduli sono
-allowlisted dal deployment e full-trust in-process; non ricevono provider/store generici,
-endpoint caller-owned o private key tramite il contratto supportato.
+Core also integrates SOAP/session, OAuth, JWT/X.509, signing-slot and mTLS foundations and
+an execution-module seam. These primitives are not equivalent to a distributable generic
+Managed Connector or qualification of an external service. Modules are
+deployment-allowlisted and full-trust in-process; they do not receive generic providers/stores,
+caller-owned endpoints or private keys through the supported contract.
 
-## CURRENT — garanzie implementate
+## CURRENT — implemented guarantees
 
-- Nessun Vendor Secret è restituito al legacy, Broker, Direct client o browser.
-- Tenant/Application/Installation derivano dallo stato autenticato server-side.
-- Endpoint, path, metodo, header auth e resource binding provengono dalla Published
-  authority approvata, non dal payload runtime.
-- Provider capabilities sono separate; capability assenti non sono emulate.
-- Pubblicazione e rollback conservano checksum/provenance e non modificano in place una
-  versione già Published.
-- Replay protection, TLS, DNS/IP validation, redirect deny, response bounds, redaction e
-  audit metadata-only sono applicati server-side.
-- Il runtime ricontrolla lo stamp PostgreSQL a ogni invocazione e non usa stale-on-error.
-- Le operazioni puramente locali del Broker possono funzionare senza Gateway.
+- No Vendor Secret is returned to legacy applications, Broker, Direct clients or browsers.
+- Tenant/Application/Installation derive from authenticated server-side state.
+- Endpoints, paths, methods, authentication headers and resource bindings come from approved
+  Published authority, not the runtime payload.
+- Provider capabilities are separate; missing capabilities are not emulated.
+- Publication and rollback preserve checksum/provenance and do not modify an already
+  Published version in place.
+- Replay protection, TLS, DNS/IP validation, redirect denial, response bounds, redaction and
+  metadata-only audit are enforced server-side.
+- The runtime rechecks the PostgreSQL stamp on every invocation and does not use stale-on-error.
+- Purely local Broker operations can work without the Gateway.
 
-Queste garanzie descrivono prodotto e test deterministici. Non implicano packaging
-pubblico, cloud, HA/DR, provider reale o servizio esterno qualificato.
+These guarantees describe product behavior and deterministic tests. They do not imply qualified
+public packaging, cloud, HA/DR, real providers or external services.
 
-## CURRENT — limiti e finding
+## CURRENT — limits and findings
 
-- Local Administrator e SYSTEM possono compromettere servizio, filesystem o memoria e
-  restano minacce privilegiate residue.
-- Il Gateway/provider è nella TCB e osserva temporaneamente il materiale necessario.
-- Il Local PKCS#12 pack è qualificato solo con materiale sintetico per-run; non è HSM/KMS,
-  import operativo o custody production.
-- L'audit applicativo è metadata-only. La migration 0017 rende audit/invocation
-  append-only rispetto ai ruoli applicativi; `gateway_admin` conserva SELECT/INSERT solo
-  sull'audit. Owner/migration e amministratori host/DB restano nella TCB e non esistono
-  firma o notarizzazione.
-- Cache OAuth/session e workflow verticali correnti sono process-local, non distribuiti
-  o durevoli attraverso restart.
-- Il sample Direct mantiene la chiave client in memoria e non è una strategia di custody
-  production.
+- Local Administrator and SYSTEM can compromise the service, filesystem or memory and
+  remain residual privileged threats.
+- The Gateway/provider is in the TCB and temporarily observes necessary material.
+- The Local PKCS#12 pack is qualified only with per-run synthetic material; it is not HSM/KMS,
+  operational import or production custody.
+- Application audit is metadata-only. Migration 0017 makes audit/invocation
+  append-only for application roles; `gateway_admin` retains SELECT/INSERT only
+  on audit. Owner/migration and host/DB administrators remain in the TCB, and there is no
+  signing or notarization.
+- OAuth/session caches remain process-local. FSE2 technical workflow correlation is
+  durable in PostgreSQL; this does not make every session or cache distributed.
+- The Direct sample keeps the client key in memory and is not a production custody
+  strategy.
 
-## Evidenza e claim
+## Evidence and claims
 
-- **Automated synthetic:** test unit/integration/hosted con fixture e servizi controllati.
-- **Live lab sintetico:** processi/container o Windows host reali con materiale sintetico.
-- **OfficialTest:** ambiente ufficiale esterno, con outcome e precondizioni attestati.
-- **Production:** operatività, custody, monitoring, recovery e accreditamento production.
+- **Automated synthetic:** unit/integration/hosted tests with controlled fixtures and services.
+- **Synthetic live lab:** real processes/containers or Windows hosts with synthetic material.
+- **OfficialTest:** an official external environment with attested outcomes and prerequisites.
+- **Production:** production operations, custody, monitoring, recovery and accreditation.
 
-Un livello non promuove automaticamente al successivo. Certificati ricevuti e correlati
-non significano import operativo. Nessuna chiamata FSE2 live è parte della baseline;
-`validate-cda` resta il primo outcome OfficialTest futuro.
+One level does not automatically promote to the next. Received and correlated certificates
+do not mean operational import. The [capability summary](../../IMPLEMENTATION_STATUS.md)
+owns the current FSE2 offline/live distinction and residual limits; the
+[current optional pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
+records the observed CDA and workflow results. Neither is overall live qualification.
 
-## TARGET — track attive
+## TARGET — active tracks
 
-Il Core punta a una developer `0.1.0-alpha` non-production con un solo golden path REST
-sintetico. Packaging, licenza, security channel, clean-clone e `ALPHA-ADOPT` devono
-chiudersi prima di dichiarare completata l'adozione early-adopter.
+Core targets a non-production developer `0.1.0-alpha` with a single synthetic REST
+golden path. [Licensing](../../LICENSING.md) and the [security-reporting channel](../../SECURITY.md)
+are already documented. Their presence does not close publication or `ALPHA-ADOPT`:
+early-adopter adoption must not be declared complete before its acceptance gate closes.
 
-La track FSE2 Organization OfficialTest è separata: provider/custody, import, ambiente
-ufficiale, driver e evidence redatta hanno gate propri e non bloccano la release Core.
+The FSE2 Organization OfficialTest track is separate: provider/custody, import, official
+environment, driver and redacted evidence have their own gates and do not block Core release.
 
 MSI/native/COM, Azure qualification, artifact signing/provenance, HA/DR, backup/restore,
-load/soak, pentest e pilot production restano target ulteriori.
+load/soak, pentest and production pilot remain further targets.

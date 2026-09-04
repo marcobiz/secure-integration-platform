@@ -1,23 +1,23 @@
 # M4 local quick start
 
-## Prerequisiti
+## Prerequisites
 
-- Docker Engine con Linux containers e Docker Compose;
-- .NET SDK fissato da `global.json`;
-- PowerShell 7 o Windows PowerShell 5.1.
+- Docker Engine with Linux containers and Docker Compose;
+- .NET SDK pinned by `global.json`;
+- PowerShell 7 or Windows PowerShell 5.1.
 
-Non servono Azure, account cloud, Docker Hub login o segreti reali.
+Azure, cloud accounts, Docker Hub login and real secrets are not required.
 
-## Avvio verificato
+## Verified startup
 
-Dalla root del repository:
+From the repository root:
 
 ```powershell
 ./tools/m4/Invoke-M4Quickstart.ps1 -Phase Validate
 ./tools/m4/Invoke-M4Quickstart.ps1 -Phase Start
 ```
 
-Lo script genera fixture sintetiche sotto `.artifacts/m4/quickstart`, avvia PostgreSQL 18, migration runner, Gateway, Synthetic Vault e mock HTTPS/mTLS, quindi usa la CLI per elencare i Connector e testare `sample-secure-service/submit`. Il test risolve versione Published, endpoint e riferimenti secret soltanto server-side.
+The script generates synthetic fixtures under `.artifacts/m4/quickstart`, starts PostgreSQL 18, the migration runner, Gateway, Synthetic Vault and HTTPS/mTLS mock, then uses the CLI to list Connectors and test `sample-secure-service/submit`. The test resolves the Published version, endpoint and secret references exclusively server-side.
 
 ## Cleanup
 
@@ -25,8 +25,8 @@ Lo script genera fixture sintetiche sotto `.artifacts/m4/quickstart`, avvia Post
 ./tools/m4/Invoke-M4Quickstart.ps1 -Phase Stop
 ```
 
-Il comando rimuove container, network e volume del progetto `broker-gateway-m4-quickstart`. `.artifacts` è ignorata da Git e contiene materiale sintetico raw: non pubblicarla.
+The command removes the containers, network and volume for project `broker-gateway-m4-quickstart`. `.artifacts` is ignored by Git and contains raw synthetic material: do not publish it.
 
-## Esito atteso
+## Expected result
 
-`M4_QUICKSTART_START_PASS` e, dopo lo stop, `M4_QUICKSTART_STOP_PASS`. Qualsiasi prerequisito, health check, CLI call o cleanup non riuscito termina con exit code non zero.
+`M4_QUICKSTART_START_PASS` and, after stopping, `M4_QUICKSTART_STOP_PASS`. Any failed prerequisite, health check, CLI call or cleanup terminates with a nonzero exit code.

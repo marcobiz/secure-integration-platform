@@ -1,9 +1,9 @@
-# Diagrammi di sequenza
+# Sequence diagrams
 
-Le etichette distinguono sequenze **CURRENT**, foundation correnti non qualificate
-end-to-end e target. La numerazione è conservata per continuità storica.
+Labels distinguish **CURRENT** sequences, current foundations not qualified
+end-to-end, and targets. Numbering is retained for historical continuity.
 
-## 1. CURRENT — Protezione di un segreto locale
+## 1. CURRENT — Protecting a local secret
 
 ```mermaid
 sequenceDiagram
@@ -19,7 +19,7 @@ sequenceDiagram
   B-->>L: Opaque localSecretRef
 ```
 
-## 2. CURRENT — Cifratura di un dato locale
+## 2. CURRENT — Encrypting local data
 
 ```mermaid
 sequenceDiagram
@@ -34,7 +34,7 @@ sequenceDiagram
   B-->>L: Versioned authenticated envelope
 ```
 
-## 3. CURRENT — HMAC tramite Local Broker
+## 3. CURRENT — HMAC through Local Broker
 
 ```mermaid
 sequenceDiagram
@@ -48,7 +48,7 @@ sequenceDiagram
   B-->>L: Digest only
 ```
 
-## 4. CURRENT sintetico — Chiamata mTLS centralizzata
+## 4. CURRENT synthetic — Centralized mTLS call
 
 ```mermaid
 sequenceDiagram
@@ -67,7 +67,7 @@ sequenceDiagram
   B-->>L: Response
 ```
 
-## 5. FOUNDATION CURRENT — OAuth authorization code e token exchange centrale
+## 5. FOUNDATION CURRENT — OAuth authorization code and central token exchange
 
 ```mermaid
 sequenceDiagram
@@ -90,10 +90,10 @@ sequenceDiagram
   B-->>L: sessionRef
 ```
 
-La foundation è implementata e testata a livello modulo. Non costituisce una execution
-strategy OAuth host E2E o una qualifica di identity provider esterno.
+The foundation is implemented and tested at module level. It is not an E2E hosted OAuth execution
+strategy or qualification of an external identity provider.
 
-## 6. TARGET — Smart card locale
+## 6. TARGET — Local smart card
 
 ```mermaid
 sequenceDiagram
@@ -110,7 +110,7 @@ sequenceDiagram
   B-->>L: Signature and public certificate metadata
 ```
 
-## 7. CURRENT — Enrollment Installation
+## 7. CURRENT — Installation enrollment
 
 ```mermaid
 sequenceDiagram
@@ -128,7 +128,7 @@ sequenceDiagram
   G-->>B: Enrollment policy and certificate metadata
 ```
 
-## 8. CURRENT — Revoca Installation
+## 8. CURRENT — Installation revocation
 
 ```mermaid
 sequenceDiagram
@@ -143,7 +143,7 @@ sequenceDiagram
   G-->>B: 403 BGW-INSTALLATION-REVOKED
 ```
 
-## 9. CURRENT — Pubblicazione Connector
+## 9. CURRENT — Connector publication
 
 ```mermaid
 sequenceDiagram
@@ -162,7 +162,7 @@ sequenceDiagram
   R->>D: Next invocation rechecks current Published stamp
 ```
 
-## 10. CURRENT — Rollback Connector
+## 10. CURRENT — Connector rollback
 
 ```mermaid
 sequenceDiagram

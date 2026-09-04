@@ -1,57 +1,57 @@
-# Runbook M3 — M3A deterministico e M3B Azure smoke
+# M3 runbook — deterministic M3A and M3B Azure smoke
 
-## Prerequisiti comuni
+## Common prerequisites
 
-- checkout pulito del commit candidato, discendente dal tag M2;
-- PowerShell 5.1 e 7, .NET SDK fissato da `global.json`;
-- nessun file di credenziali o certificato in Git;
-- directory raw sotto `.artifacts/m3/<run-id>`;
-- clock sincronizzato e outbound HTTPS controllato.
+- clean checkout of the candidate commit, descended from the M2 tag;
+- PowerShell 5.1 and 7, .NET SDK pinned by `global.json`;
+- no credential files or certificates in Git;
+- raw directory under `.artifacts/m3/<run-id>`;
+- synchronized clock and controlled outbound HTTPS.
 
-## M3A — laboratorio split-host con operatore VM
+## M3A — split-host laboratory with a VM operator
 
-L'HOST usa Docker Linux; la VM espone Windows Service Control Manager. La fase elevata è
-un singolo script PowerShell revisionato eseguito manualmente dall'operatore, non un
-runner Codex o un executor SYSTEM generico. Vedere `M3A-SPLIT-HOST-RUNBOOK.md`.
+The HOST uses Docker Linux; the VM exposes Windows Service Control Manager. The elevated
+phase is a single reviewed PowerShell script run manually by the operator, not a Codex
+runner or generic SYSTEM executor. See `M3A-SPLIT-HOST-RUNBOOK.md`.
 
-1. eseguire preflight e verificare elevazione, engine, porte e commit;
-2. generare CA, certificato Gateway/mock e certificati client esclusivamente sintetici;
-3. avviare PostgreSQL 18, migration runner, synthetic Vault, mock vendor e Gateway;
-4. applicare seed Tenant/Application/Installation/activation/grant con tool separato;
-5. installare Broker come `NT SERVICE\\SecureIntegrationBroker` e verificare service identity/ACL;
-6. eseguire il Legacy Simulator sotto l'identità autorizzata;
-7. eseguire P01–P07 e N01–N15, controllando contatori Vault/mock e audit;
-8. fermare servizio/container, redigere i log, cercare tutte le canary;
-9. produrre bundle redatto, manifest e sidecar SHA-256;
-10. rimuovere account/servizio/container e verificare zero task/processi residui.
+1. Run preflight and verify elevation, engine, ports and commit.
+2. Generate an exclusively synthetic CA, Gateway/mock certificate and client certificates.
+3. Start PostgreSQL 18, the migration runner, synthetic Vault, vendor mock and Gateway.
+4. Apply Tenant/Application/Installation/activation/grant seed using a separate tool.
+5. Install Broker as `NT SERVICE\\SecureIntegrationBroker` and verify service identity/ACLs.
+6. Run the Legacy Simulator under the authorized identity.
+7. Run P01–P07 and N01–N15, checking Vault/mock counters and audit.
+8. Stop the service/containers, redact logs and search for all canaries.
+9. Produce the redacted bundle, manifest and SHA-256 sidecar.
+10. Remove the account/service/containers and verify zero remaining tasks/processes.
 
-La run fallisce se usa fixture in-process al posto del servizio/container, se una
-credential non autorizzata ottiene accesso, se i contatori mostrano side effect prima
-dell'autorizzazione, se compare una canary o se il cleanup è incompleto.
+The run fails if it uses in-process fixtures instead of the service/containers, if an
+unauthorized credential gains access, if counters show side effects before authorization,
+if any canary appears or if cleanup is incomplete.
 
 ## M3B — GitHub Environment `azure-dev`
 
-L'Environment deve usare OIDC (`id-token: write`) e variabili non segrete per tenant,
-subscription, resource group e location. Non sono ammessi client secret Azure. Un
-reviewer approva il deployment dev.
+The Environment must use OIDC (`id-token: write`) and non-secret variables for tenant,
+subscription, resource group and location. Azure client secrets are not allowed. A
+reviewer approves the dev deployment.
 
-1. autenticare l'Action tramite federated credential;
-2. creare/aggiornare con Bicep risorse dev nominate dal RunId;
-3. assegnare alla Managed Identity del Gateway soltanto i permessi Key Vault necessari;
-4. inserire API key e PFX sintetici in Key Vault tramite la sessione OIDC;
-5. pubblicare l'immagine identificata dal digest del commit candidato;
-6. applicare migration da identity/ruolo separato e avviare il Gateway;
-7. eseguire enrollment e P01–P07/N01–N15 applicabili al cloud;
-8. raccogliere deployment output, digest, audit/log query redatti e risultati;
-9. cercare le canary anche in Application Insights/Log Analytics;
-10. eliminare i valori sintetici e le risorse effimere secondo la retention dev.
+1. Authenticate the Action through a federated credential.
+2. Create/update RunId-named dev resources using Bicep.
+3. Assign only the necessary Key Vault permissions to the Gateway Managed Identity.
+4. Insert synthetic API keys and PFX into Key Vault through the OIDC session.
+5. Publish the image identified by the candidate commit digest.
+6. Apply migrations using a separate identity/role and start the Gateway.
+7. Run enrollment and P01–P07/N01–N15 applicable to cloud.
+8. Collect deployment outputs, digests, redacted audit/log queries and results.
+9. Search for canaries in Application Insights/Log Analytics as well.
+10. Delete synthetic values and ephemeral resources according to dev retention policy.
 
-La Managed Identity è l'unica identità del Gateway verso Key Vault. Il Broker non ha
-route, token o ruolo Key Vault. I token OIDC/Azure non sono inclusi negli artifact.
+Managed Identity is the Gateway's only identity toward Key Vault. Broker has no Key Vault
+route, token or role. OIDC/Azure tokens are not included in artifacts.
 
-## Evidence e diagnosi
+## Evidence and diagnostics
 
-Un risultato è valido solo se il manifest riporta commit esatto, RunId, ambiente,
-identità servizio, digest immagini, migration checksum, test IDs, timestamp UTC e hash
-dei file redatti. In caso di failure preservare raw evidence nell'area protetta del
-runner/Azure, pubblicare soltanto un report redatto `BLOCKED` e non creare il tag M3.
+A result is valid only if the manifest records the exact commit, RunId, environment,
+service identity, image digests, migration checksums, test IDs, UTC timestamps and hashes
+of redacted files. On failure, preserve raw evidence in the protected runner/Azure area,
+publish only a redacted `BLOCKED` report and do not create the M3 tag.

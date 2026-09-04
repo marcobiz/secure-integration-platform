@@ -1,11 +1,11 @@
-# Golden path di un Connector
+# Connector golden path
 
-**Pubblico:** owner end-to-end del Connector.
-**Stato:** CURRENT come contratto di adozione per nuovi Connector.
+**Audience:** end-to-end Connector owners.
+**Status:** CURRENT as an adoption contract for new Connectors.
 
-Congelare prima dell’implementazione un solo outcome visibile e i negativi che lo
-proteggono. Il golden path parte da deployment vuoto e termina con una chiamata bounded,
-non con una definition validata o una suite sintetica isolata.
+Before implementation, freeze one visible outcome and the negative tests that protect
+it. The golden path starts with an empty deployment and ends with a bounded call,
+not a validated definition or an isolated synthetic suite.
 
 ```text
 prerequisite preflight
@@ -23,56 +23,56 @@ prerequisite preflight
 
 ## Plan
 
-`plan` è read-only e descrive:
+`plan` is read-only and describes:
 
-- stato corrente osservato da superfici supportate;
-- prerequisito mancante più precoce;
-- differenza proposta e authority server-owned coinvolte;
-- ruolo autorizzato alla prossima azione;
-- se la stessa operazione può essere ripetuta in sicurezza.
+- current state observed through supported surfaces;
+- the earliest missing prerequisite;
+- the proposed difference and server-owned authorities involved;
+- the role authorized for the next action;
+- whether the same operation can be safely repeated.
 
-Non leggere store, non compilare authority da file esterni non fidati e non stampare
-endpoint, provider locator, secret, certificati, cookie o payload.
+Do not read stores, construct authority from untrusted external files or print
+endpoints, provider locators, secrets, certificates, cookies or payloads.
 
 ## Apply
 
-`apply` esegue soltanto la prossima transizione mancante e poi fa read-back. Deve essere
-idempotente e monotono. Un 429 o una sessione scaduta mette in pausa lo stesso workflow;
-non attiva retry nascosti, reimport, cleanup o una nuova state machine.
+`apply` performs only the next missing transition, then reads back state.
+It must be idempotent and monotonic. A 429 or expired session pauses the same workflow;
+it does not trigger hidden retries, reimport, cleanup or a new state machine.
 
-Four-eyes resta reale: proposer e approver distinti, checksum/digest esatto e
-autorizzazione server-side. Un workflow guidato può trasportare stato e revisioni, ma
-non fondere i principal o permettere self-approval.
+Four-eyes approval remains real: distinct proposer and approver, exact checksum/digest
+and server-side authorization. A guided workflow may carry state and revisions,
+but cannot merge principals or allow self-approval.
 
 ## Verify
 
-Verificare da Admin API/UI:
+Verify through Admin API/UI:
 
-- Installation attiva e Environment server-derived;
-- Connector/versione esatti, `Published/Active` e checksum atteso;
-- binding completo con revisioni provider correnti;
-- grant enabled per Installation/operation;
-- approval distinta valida per l’artefatto corrente;
-- health/readiness necessarie alla call.
+- active Installation and server-derived Environment;
+- exact Connector/version, `Published/Active` and expected checksum;
+- complete bindings with current provider revisions;
+- enabled Installation/operation grant;
+- valid distinct approval for the current artifact;
+- health/readiness required for the call.
 
-## First call e negative set
+## First call and negative set
 
-La prova black-box usa l’API/SDK pubblico, l’endpoint effettivo risolto dal server e una
-fixture sintetica autorizzata. Misura **time to first successful call** da stato pulito e
-verifica almeno:
+The black-box test uses the public API/SDK, the effective server-resolved endpoint and
+an authorized synthetic fixture. It measures **time to first successful call** from
+clean state and verifies at least:
 
-- una sola invocation/outbound entro il budget;
-- risposta bounded e sanificata;
-- un audit correlato metadata-only;
-- denial prima degli effetti per grant assente, binding/provider drift e input invalido;
-- resume dopo l’ultima fase persistita e cleanup limitato a risorse task-owned.
+- exactly one invocation/outbound within budget;
+- a bounded, sanitized response;
+- correlated metadata-only audit;
+- denial before effects for missing grants, binding/provider drift and invalid input;
+- resume after the last persisted phase and cleanup limited to task-owned resources.
 
-Non usare un totale test come prova, non creare instrumentation production solo per
-l’evidence e non sostituire il product path con fixture, SQL o test host.
+Do not use a total test count as proof, create production instrumentation solely
+for evidence or replace the product path with fixtures, SQL or test hosts.
 
 ## Stop rule
 
-Se una seconda eccezione, procedura o macchina di test esiste soprattutto per
-compensare una scelta precedente, fermarsi e riesaminare la causa autorevole prima di
-aggiungere un terzo livello. Se onboarding, recovery o test normali richiedono supporto
-specialistico, il golden path non è chiuso.
+If a second exception, procedure or test apparatus exists mainly to compensate for an
+earlier choice, stop and re-examine the authoritative cause before adding a third layer.
+If ordinary onboarding, recovery or testing requires specialist support, the golden
+path is not complete.

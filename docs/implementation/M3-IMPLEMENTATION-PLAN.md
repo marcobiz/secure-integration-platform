@@ -1,64 +1,64 @@
-# M3 — piano di implementazione del vertical slice production-like
+# M3 — Production-like vertical slice implementation plan
 
-**Baseline:** `m2-gateway-baseline-2026-08-04`  
-**Branch di lavoro:** `m3/production-like-vertical-slice`  
-**Regola:** nessuna funzionalità M4.
+**Baseline:** `m2-gateway-baseline-2026-08-04`
+**Working branch:** `m3/production-like-vertical-slice`
+**Rule:** no M4 functionality.
 
-## Incrementi compilabili
+## Buildable increments
 
-1. **Documentazione e contratti:** architettura, sequenza, runbook, evidence schema e
-   tracciabilità dei 7 scenari positivi e 15 negativi.
-2. **Installation client del Broker:** chiave CNG ECDSA P-256 non esportabile,
-   certificato ClientAuth, enrollment/PoP, persistenza DPAPI CurrentUser della sola
-   configurazione non segreta e invoke BGW1 firmato.
-3. **Fixture M3A:** synthetic Vault HTTPS, vendor mock HTTPS/mTLS, CA/certificati per-run,
-   provisioning PostgreSQL e operation/grant server-side.
-4. **Orchestratore deterministico:** installa il vero Windows Service, avvia i container,
-   esegue legacy simulator e matrice positiva/negativa, reboot non richiesto da M3,
-   redige e valida evidence.
-5. **CI M3A:** job dedicato con label esplicite; nessuna sostituzione in-process del
-   Broker o dei container.
-6. **M3B Azure:** Bicep dev, OIDC, Managed Identity, Key Vault, secret/cert sintetici,
-   deploy immagine esatta e smoke contro mock mTLS.
-7. **Gate:** review critica, CI sul commit esatto, evidence hash, documenti/stato e tag
-   annotato soltanto dopo PASS M3A+M3B.
+1. **Documentation and contracts:** architecture, sequence, runbook, evidence schema and
+   traceability for the 7 positive and 15 negative scenarios.
+2. **Broker Installation client:** non-exportable CNG ECDSA P-256 key,
+   ClientAuth certificate, enrollment/PoP, DPAPI CurrentUser persistence of non-secret
+   configuration only and signed BGW1 invocation.
+3. **M3A fixture:** synthetic HTTPS Vault, HTTPS/mTLS vendor mock, per-run CA/certificates,
+   PostgreSQL provisioning and server-side operations/grants.
+4. **Deterministic orchestrator:** installs the real Windows Service, starts containers,
+   runs the legacy simulator and positive/negative matrix, no reboot required by M3,
+   redacts and validates evidence.
+5. **M3A CI:** dedicated job with explicit labels; no in-process replacement of
+   the Broker or containers.
+6. **M3B Azure:** dev Bicep, OIDC, Managed Identity, Key Vault, synthetic secrets/certificates,
+   exact-image deployment and smoke against the mTLS mock.
+7. **Gate:** critical review, CI on the exact commit, evidence hash, documents/status and
+   annotated tag only after M3A+M3B PASS.
 
-Ogni incremento deve lasciare `eng/build.ps1`, `eng/test.ps1`,
-`eng/validate-docs.ps1`, secret scan e `git diff --check` verdi.
+Every increment must leave `eng/build.ps1`, `eng/test.ps1`,
+`eng/validate-docs.ps1`, secret scan and `git diff --check` green.
 
-## Scenari e punti di osservazione
+## Scenarios and observation points
 
-| ID | Scenario | Assert principale | Nessun side effect |
+| ID | Scenario | Main assertion | No side effects |
 |---|---|---|---|
-| M3-P01 | enrollment | code consumato, PoP P-256 valido | code non riusabile |
-| M3-P02 | invoke via Broker | pipe e service reali | legacy senza vendor secret |
-| M3-P03 | tenant server-side | audit/DB sul Tenant autenticato | tenant client ignorato/rifiutato |
-| M3-P04 | grant valido | una sola operation concessa | altre operation negate |
-| M3-P05 | API key da Vault | mock riceve canary attesa | Broker/log non la ricevono |
-| M3-P06 | mTLS vendor | mock vede cert atteso | cert errato negato |
-| M3-P07 | response sanitizzata | schema/limiti rispettati | header/provider detail assenti |
-| M3-N01..N15 | negative richieste | codice stabile atteso | Vault/egress non raggiunti quando applicabile |
+| M3-P01 | enrollment | code consumed, valid P-256 PoP | code cannot be reused |
+| M3-P02 | invoke via Broker | real pipe and service | legacy has no vendor secret |
+| M3-P03 | server-side tenant | audit/DB use the authenticated Tenant | client tenant ignored/rejected |
+| M3-P04 | valid grant | exactly one operation granted | other operations denied |
+| M3-P05 | API key from Vault | mock receives the expected canary | Broker/logs do not receive it |
+| M3-P06 | vendor mTLS | mock sees the expected certificate | wrong certificate denied |
+| M3-P07 | sanitized response | schema/bounds respected | no headers/provider details |
+| M3-N01..N15 | required negatives | expected stable code | Vault/egress not reached where applicable |
 
-La matrice completa con nome dei test ed evidence path viene aggiornata solo con test
-realmente presenti; i controlli non eseguiti restano `PENDING`, mai `PASS` inferito.
+The complete matrix with test names and evidence paths is updated only with tests
+that actually exist; unexecuted checks remain `PENDING`, never an inferred `PASS`.
 
-## Separazione dei commit
+## Commit separation
 
-- `M3 implementation`: codice prodotto, infrastruttura e test;
-- `M3 synthetic test configuration`: compose, generatori e valori pubblici non segreti;
-- `M3 redacted evidence`: solo manifest/report/hash della run approvata;
-- `M3 closure`: stato, tracciabilità, review e tag.
+- `M3 implementation`: product code, infrastructure and tests;
+- `M3 synthetic test configuration`: Compose, generators and public non-secret values;
+- `M3 redacted evidence`: approved-run manifest/report/hash only;
+- `M3 closure`: status, traceability, review and tag.
 
-Raw evidence, chiavi, certificati privati, activation code, token OIDC, dump, EVTX e log
-non redatti sono vietati in Git e coperti da `.gitignore`/secret scan.
+Raw evidence, keys, private certificates, activation codes, OIDC tokens, dumps, EVTX and
+unredacted logs are prohibited in Git and covered by `.gitignore`/secret scan.
 
-## Dipendenze operative non sostituibili
+## Operational dependencies that cannot be substituted
 
-- laboratorio split-host con Docker Linux sull'HOST e singolo script revisionato eseguito
-  manualmente da console amministrativa VM;
-- GitHub Environment `azure-dev` con federazione OIDC e reviewer/protection rules;
-- subscription/resource group Azure dev autorizzati;
-- DNS pubblico o endpoint di mock dev compatibile mTLS.
+- split-host lab with Linux Docker on the HOST and a single reviewed script run
+  manually from the VM administrative console;
+- GitHub Environment `azure-dev` with OIDC federation and reviewer/protection rules;
+- authorized Azure dev subscription/resource group;
+- public DNS or an mTLS-compatible dev mock endpoint.
 
-Se una dipendenza manca, implementazione e test isolati possono avanzare ma il gate M3
-rimane `NO-GO`; non viene creato alcun tag baseline.
+If a dependency is missing, implementation and isolated tests can advance, but the M3 gate
+remains `NO-GO`; no baseline tag is created.

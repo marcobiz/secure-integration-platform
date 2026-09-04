@@ -1,68 +1,67 @@
-# Documentazione
+# Documentation
 
-Questo indice separa le procedure CURRENT dai riferimenti tecnici e dalla storia. Un
-adottante non deve leggere l’intera repository per trovare il percorso supportato.
+This index separates CURRENT procedures from technical references and history.
+An adopter should not have to read the whole repository to find the supported path.
 
-## CURRENT — scegli il pubblico
+## CURRENT — entry points by responsibility
 
-| Pubblico | Entry point | Autorità |
+| Audience | Entry point | Authority |
 |---|---|---|
-| Adottante / operatore | [Guida utente](user/README.md) | Procedure CURRENT per quickstart, pilot locale, FSE2, amministrazione, troubleshooting e limiti. |
-| Sviluppatore Connector | [Connector development](connector-development/README.md) | Contratto minimo, binding server-owned e golden path di prima chiamata. |
-| Maintainer / agente interno | [Documentazione interna](internal/README.md) | Stato, regole di scope, semplicità e review. |
-| Architettura / security | [ARCHITECTURE.md](../ARCHITECTURE.md), [ADR](adr/README.md), [security model](security/security-model.md), [threat model](security/threat-model.md) | Decisioni e confini; non sono runbook di adozione. |
-| API / contratti | [Gateway API](api/gateway-api.md), [OpenAPI](api/gateway-openapi.yaml), [Connector specification](connectors/connector-specification.md), [schema JSON](connectors/connector-definition.schema.json) | Contratti eseguibili; non forniscono sequenze operative mancanti. |
-| Stato e tracciabilità | [sintesi capability](../IMPLEMENTATION_STATUS.md), [matrice requisiti-test](traceability/requirements-traceability.md) | Un solo riepilogo autorevole CURRENT; mapping di evidence con le rispettive baseline. |
+| Adopter / operator | [User guide](user/README.md) | CURRENT procedures for quickstart, local pilot, FSE2, administration, troubleshooting and limits. |
+| Connector developer | [Connector development](connector-development/README.md) | Minimum contract, server-owned bindings and first-call golden path. |
+| Maintainer / internal agent | [Internal documentation](internal/README.md) | Status, scope, simplicity and review rules. |
+| Architecture / security | [ARCHITECTURE.md](../ARCHITECTURE.md), [ADRs](adr/README.md), [security model](security/security-model.md), [threat model](security/threat-model.md) | Decisions and boundaries; not adoption runbooks. |
+| APIs / contracts | [Gateway API](api/gateway-api.md), [OpenAPI](api/gateway-openapi.yaml), [Connector specification](connectors/connector-specification.md), [JSON schema](connectors/connector-definition.schema.json) | Executable contracts; not substitutes for missing operational sequences. |
+| Status and traceability | [Capability summary](../IMPLEMENTATION_STATUS.md), [requirements-to-tests matrix](traceability/requirements-traceability.md) | One authoritative CURRENT summary; evidence mapping with the respective baselines. |
 
-## Percorsi utente supportati
+## Supported user paths
 
-1. [Prova il prodotto](user/quickstart.md).
-2. [Esegui il pilot Core Docker-first](user/local-pilot.md), senza SDK o curl host.
-3. [Amministra Connector, binding, grant e audit](user/administration.md).
-4. [Valuta il pilot FSE2 corrente di validazione e status](user/fse2-validation-status.md),
-   opzionale e con prerequisiti propri, incluso SDK .NET host.
-5. [Risolvi un errore senza SQL o accesso agli store](user/troubleshooting.md).
+1. [Core quickstart](user/quickstart.md).
+2. [Docker-first Core local pilot](user/local-pilot.md), without a host SDK or curl.
+3. [Connector, binding, grant and audit administration](user/administration.md).
+4. [Current optional FSE2 validation/status pilot](user/fse2-validation-status.md),
+   with its own prerequisites, including a host .NET SDK.
+5. [Troubleshooting without SQL or store access](user/troubleshooting.md).
 
-Per il confine software installato → Local Broker sono disponibili
-[prove Windows storiche](history/README.md#prove-windows--local-broker), non un secondo
-quickstart corrente. Il [vecchio pilot FSE2 validate-only](user/fse2-officialtest.md)
-resta un riferimento storico di profilo/provisioner, non l'ingresso per nuovi adottanti.
+[Historical Windows tests](history/README.md#windows--local-broker-evidence) cover the
+installed-software → Local Broker boundary; they are not a second current quickstart.
+The [old FSE2 validate-only pilot](user/fse2-officialtest.md) remains a historical
+profile/provisioner reference, not the entry point for new adopters.
 
-## Riferimenti CURRENT
+## CURRENT references
 
-Sono CURRENT come riferimenti, non come ordine di lettura per l’adottante:
+These are CURRENT references, not an adopter's reading order:
 
-- `docs/adr/` per decisioni Accepted;
-- `docs/api/`, `docs/connectors/connector-specification.md` e
-  `docs/connectors/connector-sdk.md` per contratti pubblici;
-- `docs/architecture/` eccetto il documento M2 esplicitamente storico;
-- [FSE2 current-spec](connectors/healthcare/fse2/current-spec.md) per la matrice tecnica
-  delle 14 route offline e i limiti della specifica congelata, nel solo pack opzionale;
-- `docs/data/database-schema.md`, `docs/requirements/requirements.md` e
-  `docs/testing/test-strategy.md` per maintainer e reviewer;
-- `docs/implementation/0.1.0-alpha-scope.md`, `implementation-plan.md`, `backlog.md` e
-  `definition-of-done.md` come pianificazione interna, subordinata alla dashboard.
+- `docs/adr/` for Accepted decisions;
+- `docs/api/`, `docs/connectors/connector-specification.md` and
+  `docs/connectors/connector-sdk.md` for public contracts;
+- `docs/architecture/` except the explicitly historical M2 document;
+- [FSE2 current-spec](connectors/healthcare/fse2/current-spec.md) for the technical
+  matrix of 14 offline routes and frozen-specification limits, in the optional pack only;
+- `docs/data/database-schema.md`, `docs/requirements/requirements.md` and
+  `docs/testing/test-strategy.md` for maintainers and reviewers;
+- `docs/implementation/0.1.0-alpha-scope.md`, `implementation-plan.md`, `backlog.md` and
+  `definition-of-done.md` as internal planning, subordinate to the implementation dashboard.
 
-I documenti non inclusi in questi gruppi non sono procedure CURRENT. Prima di usarli,
-consultare l’[indice storico](history/README.md); i documenti stale o di target restano
-non autoritativi finché non vengono riclassificati esplicitamente.
+Documents outside these groups are not CURRENT procedures. Before using them,
+consult the [historical index](history/README.md); stale or target-state documents
+remain non-authoritative until explicitly reclassified.
 
 ## HISTORICAL
 
-L’[indice storico](history/README.md) conserva la classificazione iniziale dei 53 piani,
-report, review e runbook di milestone e identifica i percorsi FSE2 precedenti. I path
-rimangono stabili, ma non devono essere usati per ricostruire lo stato o inventare una
-procedura.
+The [historical index](history/README.md) preserves the initial classification of
+53 milestone plans, reports, reviews and runbooks and identifies earlier FSE2 paths.
+Paths remain stable but must not be used to reconstruct status or invent a procedure.
 
-## Regole di manutenzione
+## Maintenance rules
 
-- Ogni pagina operativa dichiara pubblico, stato e risultato supportato.
-- Una sola pagina possiede la sequenza di ciascun pilot; le altre la linkano.
-- [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md) possiede la sintesi delle
-  capability: gli indici non mantengono matrici parallele.
-- OpenAPI/schema/migration/test restano autorità eseguibili, ma non sostituiscono passaggi
-  operativi mancanti.
-- Le guide non contengono SHA di evidence, diari di PR, dettagli del laboratorio, P12,
-  token, identificatori reali, endpoint riservati o risposte raw.
-- Un problema ripetuto in due Connector è un problema del workflow condiviso, non una
-  ragione per duplicare runbook verticali.
+- Each operational page declares its audience, status and supported outcome.
+- One page owns each pilot's sequence; other pages link to it.
+- [IMPLEMENTATION_STATUS.md](../IMPLEMENTATION_STATUS.md) owns the capability summary:
+  indices do not maintain parallel matrices.
+- OpenAPI/schemas/migrations/tests remain executable authorities, but do not replace
+  missing operational steps.
+- Guides do not contain evidence SHAs, PR diaries, laboratory details, P12 files,
+  tokens, real identifiers, private endpoints or raw responses.
+- A problem repeated across two Connectors belongs to the shared workflow; it is
+  not a reason to duplicate vertical runbooks.

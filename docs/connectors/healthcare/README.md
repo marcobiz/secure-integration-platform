@@ -8,7 +8,7 @@ on Healthcare. No production qualification or overall certification is claimed.
 
 - [FSE2 Organization](fse2/README.md): [current validation/status pilot](../../user/fse2-validation-status.md),
   [frozen offline route contract](fse2/current-spec.md) and historical profile references.
-  The [capability summary](../../../IMPLEMENTATION_STATUS.md#stato-prodotto) owns current status.
+  The [capability summary](../../../IMPLEMENTATION_STATUS.md#product-status) owns current status.
 - [Complete integration inventory](integration-inventory.md)
 - [Protocol matrix](protocol-matrix.md)
 - [Execution-location matrix](execution-location-matrix.md)

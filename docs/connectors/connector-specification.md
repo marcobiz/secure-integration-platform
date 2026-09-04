@@ -1,56 +1,56 @@
 # Connector Definition JSON v1
 
-La fonte machine-readable è [connector-definition.schema.json](connector-definition.schema.json), JSON Schema Draft 2020-12. Il sample eseguibile è [sample-secure-service.connector.json](examples/sample-secure-service.connector.json).
+The machine-readable source is [connector-definition.schema.json](connector-definition.schema.json), JSON Schema Draft 2020-12. The executable sample is [sample-secure-service.connector.json](examples/sample-secure-service.connector.json).
 
-## Confine del formato
+## Format boundary
 
-Una definizione dichiara:
+A definition declares:
 
-- `schemaVersion`, identità e versione semantica;
-- nomi logici di endpoint e segreti;
-- operation REST con method/path fissi;
-- limiti request/response e timeout;
-- autenticazione REST built-in `none`, `basic`, `apiKey`, `mtls` o `apiKeyAndMtls`, profili OAuth capability-bound e modalita opt-in `opaqueSessionHttp`/`soapBasicOpaqueSession` applicate dal Gateway;
-- redirect deny, client header allowlist, idempotenza e retry limitato.
+- `schemaVersion`, identity and semantic version;
+- logical endpoint and secret names;
+- REST operations with fixed method/path;
+- request/response limits and timeout;
+- built-in REST authentication `none`, `basic`, `apiKey`, `mtls` or `apiKeyAndMtls`, capability-bound OAuth profiles and opt-in `opaqueSessionHttp`/`soapBasicOpaqueSession` modes applied by the Gateway;
+- redirect denial, client-header allowlist, idempotency and bounded retries.
 
-Non contiene URI, secret value, provider reference, tenant, codice, script, espressioni o workflow. Il client runtime seleziona soltanto `connectorId` e `operationId`; endpoint, credenziali e versione Published sono risolti server-side.
+It contains no URIs, secret values, provider references, tenant, code, scripts, expressions or workflows. The runtime client selects only `connectorId` and `operationId`; endpoints, credentials and Published version are resolved server-side.
 
 ## Lifecycle
 
-| Stato | Uso amministrativo | Invocabile |
+| State | Administrative use | Invocable |
 |---|---|---|
-| Draft | import iniziale | No |
-| Validated | schema e semantica verificati | No |
-| Published | versione attiva e immutabile | Sì |
-| Superseded | versione già pubblicata sostituita | No; può essere rollback target |
-| Retired | revocata definitivamente | No |
+| Draft | Initial import | No |
+| Validated | Schema and semantics verified | No |
+| Published | Active immutable version | Yes |
+| Superseded | Previously published version replaced | No; may be a rollback target |
+| Retired | Permanently revoked | No |
 
-Importare nuovamente la stessa versione è rifiutato. Validazione, publish, rollback e retire richiedono la `rowVersion` osservata; publish richiede anche `publicationRevision`. Il rollback riattiva una versione Superseded già pubblicata e non crea una copia.
+Reimporting the same version is rejected. Validation, publication, rollback and retirement require the observed `rowVersion`; publication also requires `publicationRevision`. Rollback reactivates a previously published Superseded version and does not create a copy.
 
-## Canonicalizzazione e checksum
+## Canonicalization and checksum
 
-Gli object member sono ordinati ordinalmente, il whitespace insignificante è rimosso e gli interi sono normalizzati. JSON v1 non accetta numeri non interi. SHA-256 uppercase del JSON UTF-8 canonico accompagna import/export e rileva trasferimenti o storage corrotti.
+Object members are ordered ordinally, insignificant whitespace is removed and integers are normalized. JSON v1 accepts no noninteger numbers. Uppercase SHA-256 of canonical UTF-8 JSON accompanies import/export and detects transfer or storage corruption.
 
-## Binding server-side
+## Server-side bindings
 
-Per ogni Environment, l'amministratore associa i logical name a URI HTTPS endpoint e riferimenti opachi del Secret Provider. I valori non sono restituiti dall'export e non compaiono nell'audit. Binding assente, Connector non Published, operation assente o store non disponibile falliscono chiusi.
+For each Environment, the administrator maps logical names to HTTPS endpoint URIs and opaque Secret Provider references. Values are not returned by export or included in audit. Missing bindings, non-Published Connectors, missing operations or unavailable stores fail closed.
 
-## Cache runtime
+## Runtime cache
 
-Lo snapshot Published ha TTL configurabile. Prima di ogni invocazione il Gateway legge uno stamp ridotto (`version`, checksum, publication revision e binding revision). Se lo stamp cambia, la cache viene invalidata e ricaricata; se il caricamento fallisce non viene usato lo snapshot precedente. Publish, rollback, retire e modifica binding invalidano inoltre la cache locale.
+The Published snapshot has a configurable TTL. Before every invocation, the Gateway reads a reduced stamp (`version`, checksum, publication revision and binding revision). If the stamp changes, the cache is invalidated and reloaded; if loading fails, the previous snapshot is not used. Publication, rollback, retirement and binding changes also invalidate the local cache.
 
-## Regole semantiche aggiuntive
+## Additional semantic rules
 
-- ogni logical binding e `operationId` è univoco;
-- ogni riferimento usato dall'operation deve essere dichiarato;
-- header sensibili o hop-by-hop non possono essere client-controlled;
-- `opaqueSessionHttp` usa soltanto una placement custom tipizzata (`headerName`, `valueFormat`, eventuale `fixedScheme`) e non puo usare Authorization, SOAPAction, Content-Type, routing, proxy, forwarding, tracing o correlation header;
-- `soapBasicOpaqueSession` richiede POST, binding logici username/password/session, placement opaque e `soapHttp` tipizzato (`version` 1.1/1.2 e action assoluta); Content-Type e SOAPAction sono derivati e non esiste un header bag;
-- retry richiede operazione idempotente o idempotency key obbligatoria;
-- redirect è sempre `deny` in v1;
-- endpoint e path non sono sovrascrivibili dal payload;
-- grant Installation/Connector/operation è deny-by-default.
+- every logical binding and `operationId` is unique;
+- every reference used by an operation must be declared;
+- sensitive or hop-by-hop headers cannot be client-controlled;
+- `opaqueSessionHttp` uses only typed custom placement (`headerName`, `valueFormat`, optional `fixedScheme`) and cannot use Authorization, SOAPAction, Content-Type, routing, proxy, forwarding, tracing or correlation headers;
+- `soapBasicOpaqueSession` requires POST, logical username/password/session bindings, opaque placement and typed `soapHttp` (`version` 1.1/1.2 and absolute action); Content-Type and SOAPAction are derived and there is no header bag;
+- retries require an idempotent operation or mandatory idempotency key;
+- redirect is always `deny` in v1;
+- endpoints and paths cannot be overridden by payloads;
+- Installation/Connector/operation grants are deny-by-default.
 
-## Fuori perimetro M4 e delle capability generiche
+## Outside M4 and generic capability scope
 
-YAML, UI, plugin, scripting, workflow arbitrario, SAML, WS-Security, XML-DSig, provider cloud aggiuntivi e connector reali. Le capability OAuth/SOAP/session generiche non qualificano automaticamente alcun profilo esterno production. I vecchi esempi managed/secure-layer descrivono analisi pre-M4 e non sono Connector Definition v1 eseguibili.
+YAML, UI, plugins, scripting, arbitrary workflows, SAML, WS-Security, XML-DSig, additional cloud providers and real connectors. Generic OAuth/SOAP/session capabilities do not automatically qualify any external production profile. Older managed/secure-layer examples describe pre-M4 analysis and are not executable Connector Definition v1 files.

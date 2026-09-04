@@ -1,49 +1,55 @@
-# Piano di implementazione corrente
+# Implementation plan
 
-Aggiornato: 2026-08-24
-Baseline CURRENT: `97daa565f582d575da5d61665126c50ea52be3ed`
+Updated: 2026-08-24
+Recorded planning baseline: `97daa565f582d575da5d61665126c50ea52be3ed`
 
-Questa è la roadmap attiva. Lo stato sintetico è in
-[`IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md), i gate in
-[`0.1.0-alpha-scope.md`](0.1.0-alpha-scope.md) e le slice ordinate nel
-[`backlog`](backlog.md). La cronologia dettagliata resta nei tag e nei report esistenti.
+The status tables and gate outcomes below are planning snapshots, not current
+qualification claims. In particular, the earlier 11-operation/no-live FSE2 snapshot
+is superseded by the integrated PR #65 status and
+[current pilot](../user/fse2-validation-status.md). Gate criteria remain references;
+this note does not attest new gate outcomes or authorize publication.
 
-## Principi di pianificazione
+Current summary status is in
+[`IMPLEMENTATION_STATUS.md`](../../IMPLEMENTATION_STATUS.md), gates in
+[`0.1.0-alpha-scope.md`](0.1.0-alpha-scope.md) and ordered slices in the
+[`backlog`](backlog.md). Detailed history remains in the existing tags and reports.
 
-- una capability è CURRENT solo se integrata in `main`; una release o qualifica esterna
-  richiede inoltre il proprio gate exact-head;
-- synthetic, live lab, official-test e production sono stati distinti;
-- i pack opzionali dipendono dai contratti Core; il Core non dipende da cloud o
-  verticali;
-- nessuna capability generica entra nella fase senza un blocker riproducibile del golden
-  path Core o del gate FSE2;
-- una dichiarazione del maintainer non diventa evidence repository;
-- le baseline attestate non vengono riscritte;
-- esistono due sole track attive: Core alpha e FSE2 Organization OfficialTest.
+## Planning principles
 
-## Baseline CURRENT
+- a capability is CURRENT only when integrated into `main`; a release or external
+  qualification also requires its own exact-head gate;
+- synthetic, live lab, official-test and production are distinct states;
+- optional packs depend on Core contracts; Core does not depend on cloud or
+  vertical packs;
+- no generic capability enters this phase without a reproducible Core golden-path
+  or FSE2 gate blocker;
+- a maintainer statement does not become repository evidence;
+- attested baselines are not rewritten;
+- there are only two active tracks: Core alpha and FSE2 Organization OfficialTest.
 
-| Area | Stato | Limite corrente |
+## Recorded baseline
+
+| Area | Status | Current limitation |
 |---|---|---|
-| M0-M2 | Done | Fondamenta, Broker e Gateway integrati; i gate live storici non sono un installer release. |
-| M3A | PASS live lab | M3B Azure resta non qualificato. |
-| M4/M5/M5.5 | Done | Connector lifecycle, Admin e Direct Gateway integrati; Direct sample key storage resta non-production. |
-| Authentication foundation / Wave 1 | Integrata | Primitive provider-neutral e moduli esterni non qualificano automaticamente un servizio esterno. |
-| FSE2 Organization | Synthetic-qualified | 11 operation, dual JWT, S1 `contentCommitment`, A1 mTLS distinta e PostgreSQL canonico; nessuna call live. |
-| Local PKCS12 / FSE2 vertical image | Integrati da PR #33, synthetic lab qualified | Provider opzionale `SecretValues=false`, importer offline, overlay e vertical image; custody e OfficialTest aperti. |
-| Productization alpha | Governance candidate | Versione/artefatti e golden path sono candidate; ALPHA-LIC/SEC/DOC-04 sono implementate sul branch ma attendono review/integrazione. ALPHA-REL non è chiusa. |
-| Legacy/enterprise | Deferred | MSI, native/COM, cloud live, HA/DR e production non sono track attive. |
+| M0-M2 | Done | Foundations, Broker and Gateway integrated; historical live gates are not an installer release. |
+| M3A | PASS live lab | M3B Azure remains unqualified. |
+| M4/M5/M5.5 | Done | Connector lifecycle, Admin and Direct Gateway integrated; Direct sample key storage remains non-production. |
+| Authentication foundation / Wave 1 | Integrated | Provider-neutral primitives and external modules do not automatically qualify an external service. |
+| FSE2 Organization | Synthetic-qualified | 11 operations, dual JWT, S1 `contentCommitment`, distinct A1 mTLS and canonical PostgreSQL; no live calls. |
+| Local PKCS12 / FSE2 vertical image | Integrated by PR #33, synthetic lab qualified | Optional `SecretValues=false` provider, offline importer, overlay and vertical image; custody and OfficialTest open. |
+| Productization alpha | Governance candidate | Version/artifacts and golden path are candidates; ALPHA-LIC/SEC/DOC-04 are implemented on the branch but await review/integration. ALPHA-REL is not closed. |
+| Legacy/enterprise | Deferred | MSI, native/COM, live cloud, HA/DR and production are not active tracks. |
 
-PR #33 è merged tramite fast-forward sull'exact main. General 6/6, M5/Admin 15/15,
-PostgreSQL FSE2 1/1 zero skip, provider 30/30, architecture 42/42, provider-active
-synthetic lab e security micro-review sono PASS/GO nel perimetro attestato. Questi gate
-non includono materiale reale, import operativo o chiamate FSE2.
+PR #33 was merged by fast-forward onto exact main. General 6/6, M5/Admin 15/15,
+PostgreSQL FSE2 1/1 zero skips, provider 30/30, architecture 42/42, provider-active
+synthetic lab and security micro-review are PASS/GO within the attested scope. These gates
+do not include real material, operational import or FSE2 calls.
 
 ## Track A — Core `0.1.0-alpha`
 
 ### Outcome
 
-Una developer alpha non-production e provider-neutral con un solo golden path:
+A non-production, provider-neutral developer alpha with one golden path:
 
 ```text
 Direct .NET
@@ -51,102 +57,102 @@ Direct .NET
 → Connector REST Published
 → Synthetic Provider
 → mock HTTPS/mTLS
-→ risposta sanificata e audit metadata-only
+→ sanitized response and metadata-only audit
 ```
 
-### Dipendenze e lavoro parallelo
+### Dependencies and parallel work
 
-DOC-01 è il solo prerequisito comune iniziale. Dopo DOC-01 procedono in parallelo:
+DOC-01 is the only initial common prerequisite. After DOC-01, these proceed in parallel:
 
-- **documentazione Core:** DOC-02 per architecture/security/deployment e DOC-03 per
+- **Core documentation:** DOC-02 for architecture/security/deployment and DOC-03 for
   OpenAPI/API/generated types;
-- **consumption Core:** ALPHA-REST, ALPHA-DIRECT e ALPHA-CLEAN;
-- **productization:** ALPHA-VER può iniziare senza attendere DOC-02/03; ALPHA-ART segue
+- **Core consumption:** ALPHA-REST, ALPHA-DIRECT and ALPHA-CLEAN;
+- **productization:** ALPHA-VER may start without waiting for DOC-02/03; ALPHA-ART follows
   ALPHA-VER;
-- **governance:** le decisioni umane ALPHA-LIC e ALPHA-SEC sono implementate nella slice ALPHA-GOV-REL e restano pending independent review/integration;
-- **documentazione FSE2:** DOC-04 riallinea il pack opzionale allo stato integrato da
-  PR #33, senza eseguire o richiedere FSE2-T01..T06.
+- **governance:** human decisions ALPHA-LIC and ALPHA-SEC are implemented in the ALPHA-GOV-REL slice and remain pending independent review/integration;
+- **FSE2 documentation:** DOC-04 aligns the optional pack with the state integrated by
+  PR #33, without executing or requiring FSE2-T01..T06.
 
-ALPHA-ADOPT inizia quando il golden path è documentato e ripetibile: richiede
-ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN e la documentazione Core applicabile DOC-02/03.
+ALPHA-ADOPT starts when the golden path is documented and repeatable: it requires
+ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN and applicable Core documentation DOC-02/03.
 
-ALPHA-REL è l'ultimo step e richiede esplicitamente ALPHA-DOC-01, ALPHA-DOC-02,
+ALPHA-REL is the final step and explicitly requires ALPHA-DOC-01, ALPHA-DOC-02,
 ALPHA-DOC-03, ALPHA-DOC-04, ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN, ALPHA-ADOPT,
-ALPHA-VER, ALPHA-ART, ALPHA-LIC e ALPHA-SEC, oltre ad ALPHA-01..08 verdi sull'exact
-release candidate. ALPHA-DOC-04 è una dipendenza di verità documentale soltanto: non
-richiede `validate-cda` live né FSE2-T01..T06. La qualifica FSE2 OfficialTest non blocca
-la release Core alpha.
+ALPHA-VER, ALPHA-ART, ALPHA-LIC and ALPHA-SEC, plus green ALPHA-01..08 on the exact
+release candidate. ALPHA-DOC-04 is a documentation-truth dependency only: it does not
+require live `validate-cda` or FSE2-T01..T06. FSE2 OfficialTest qualification does not block
+the Core alpha release.
 
-### Vincoli
+### Constraints
 
-- FSE2 e pack vendor-specific non entrano nel golden path Core;
-- MSI, COM/C ABI, Azure live, HA/DR e API compatibility stabile restano esclusi;
-- il raw SHA del Core export è evidence della singola run. `ALPHA-ART` aggiunge un digest
-  normalizzato dell'inventario perché `generatedAtUtc` rende il raw manifest run-specific;
-- nessuna pubblicazione precede review indipendente, integrazione e publication gate di ALPHA-LIC e ALPHA-SEC.
+- FSE2 and vendor-specific packs do not enter the Core golden path;
+- MSI, COM/C ABI, Azure live, HA/DR and stable API compatibility remain excluded;
+- the raw Core export SHA is evidence for a single run. `ALPHA-ART` adds a normalized
+  inventory digest because `generatedAtUtc` makes the raw manifest run-specific;
+- no publication precedes independent review, integration and the ALPHA-LIC and ALPHA-SEC publication gate.
 
 ## Track B — FSE2 Organization OfficialTest
 
 ### Outcome
 
-Il primo outcome è `validate-cda` nell'ambiente ufficiale di test, con dataset sintetico
-autorizzato, exact configuration ed evidence redatta. Attachment hash, create/replace e
-status seguono; non sono prerequisiti di `validate-cda` senza nuova evidenza ufficiale.
+The first outcome is `validate-cda` in the official test environment, with an authorized
+synthetic dataset, exact configuration and redacted evidence. Attachment hash, create/replace and
+status follow; they are not `validate-cda` prerequisites without new official evidence.
 
-### CURRENT integrato
+### Integrated CURRENT
 
-- pack Local PKCS12 opzionale, senza generic secret retrieval e con
+- optional Local PKCS12 pack, without generic secret retrieval and with
   `SecretValues=false`/deny-only slot;
-- importer offline e path/CSR/ACL/custody guard sintetiche;
-- vertical image che include `Healthcare.FSE2`, mentre l'immagine Gateway Core
-  predefinita continua a escluderlo;
-- overlay Compose e provider-active synthetic lab;
-- S1 `contentCommitment`, A1 mTLS distinta, CI e review sul perimetro sintetico.
+- offline importer and synthetic path/CSR/ACL/custody guards;
+- vertical image including `Healthcare.FSE2`, while the default Gateway Core
+  image continues to exclude it;
+- Compose overlay and provider-active synthetic lab;
+- S1 `contentCommitment`, distinct A1 mTLS, CI and review within the synthetic scope.
 
-### TARGET ancora aperto
+### TARGET still open
 
-- accesso/import operativo e verifica della custody reale;
-- distinzione verificata tra accesso test e software accreditation;
-- eventuale `ActivationHmacSecretReference` composta come capability server-owned
-  separata, mai come generic secret retrieval del pack certificati;
-- warning mapping bounded per `validate-cda`;
-- exact OfficialTest image/configuration e driver operativo redatto;
-- qualunque chiamata FSE2, `validate-cda`, create/replace o status live.
+- operational access/import and verification of real custody;
+- verified distinction between test access and software accreditation;
+- any `ActivationHmacSecretReference` composed as a separate server-owned
+  capability, never as generic secret retrieval by the certificate pack;
+- bounded warning mapping for `validate-cda`;
+- exact OfficialTest image/configuration and redacted operational driver;
+- any live FSE2, `validate-cda`, create/replace or status call.
 
 ### Candidate operationalization slice
 
-La slice `FSE2-OFFICIALTEST-OPERATIONALIZATION`, ancora soggetta a exact-head gate e review, fissa
-la source canonica del solo `validate-cda`, il piano esterno chiuso, A1 mTLS/S1 authorization+integrity,
-il dry-run a zero effetti e il workflow Admin configure/propose/approve/publish/read-back. Non
-importa materiale operativo, non aggiunge primitive Core e non esegue una chiamata live. La sua
-autorità usa lookup A1/S1 esatti server-side, publisher autenticato uguale all'exact approver e
-composizione URI che conserva il prefisso OfficialTest senza accettare override del caller. La
-integrazione chiude soltanto il tooling software del punto 6; i punti 1-5 e 7-8 restano gate
-operativi separati.
+The `FSE2-OFFICIALTEST-OPERATIONALIZATION` slice, still subject to exact-head gate and review, fixes
+the canonical source for `validate-cda` only, the closed external plan, A1 mTLS/S1 authorization+integrity,
+the zero-effect dry run and the Admin configure/propose/approve/publish/read-back workflow. It does not
+import operational material, add Core primitives or make a live call. Its
+authority uses exact server-side A1/S1 lookups, an authenticated publisher identical to the exact approver and
+URI composition that preserves the OfficialTest prefix without accepting caller overrides.
+Integration closes only the software tooling in step 6; steps 1-5 and 7-8 remain separate
+operational gates.
 
-### Sequenza
+### Sequence
 
-1. intake esterno: distinguere accesso test e accreditamento software;
-2. import/custody preflight fuori Git;
-3. composition delle capability server-owned richieste;
-4. public metadata, chain, signing S1 e mTLS A1 preflight senza rete FSE2;
-5. warning mapping bounded necessario a `validate-cda`;
-6. vertical image e configurazione exact OfficialTest;
-7. E2E sintetico dalla medesima immagine/configurazione;
-8. `validate-cda` OfficialTest con dataset sintetico autorizzato;
-9. `attachment_hash` sugli exact file bytes;
-10. create/replace autorizzati;
-11. status bounded/redatto;
-12. workflow successivi soltanto se previsti dal piano.
+1. external intake: distinguish test access and software accreditation;
+2. import/custody preflight outside Git;
+3. composition of required server-owned capabilities;
+4. public metadata, chain, S1 signing and A1 mTLS preflight without FSE2 network access;
+5. bounded warning mapping required for `validate-cda`;
+6. vertical image and exact OfficialTest configuration;
+7. synthetic E2E from the same image/configuration;
+8. `validate-cda` OfficialTest with an authorized synthetic dataset;
+9. `attachment_hash` over exact file bytes;
+10. authorized create/replace;
+11. bounded/redacted status;
+12. subsequent workflows only if included in the plan.
 
-### Gate e claim
+### Gates and claims
 
-FSE2-T01..T04 e T06 abilitano soltanto la claim `validate-cda` official-test sull'exact
-configurazione attestata. FSE2-T05 abilita soltanto i successivi workflow effettivamente
-eseguiti. I test sintetici delle 11 operation non diventano una claim 11/11 live. Nessun
-gate di questa track implica production.
+FSE2-T01..T04 and T06 enable only the `validate-cda` official-test claim on the exact
+attested configuration. FSE2-T05 enables only subsequent workflows actually
+executed. Synthetic tests of the 11 operations do not become an 11/11 live claim. No
+gate in this track implies production.
 
-## Relazione tra le track
+## Relationship between tracks
 
 ```text
 DOC-01
@@ -160,20 +166,20 @@ DOC-01
   └─→ ALPHA-DOC-04 (truth only; no validate-cda/FSE2 gates) ──────────────────┘
                                                                                 └─→ ALPHA-REL + ALPHA-01..08
 
-Track B indipendente: intake/custody/composition → offline preflight → exact synthetic E2E
+Independent Track B: intake/custody/composition → offline preflight → exact synthetic E2E
                                                 → validate-cda → hash/create/status
 ```
 
-Le due track possono avanzare separatamente. Un problema FSE2 non blocca il Core alpha,
-salvo che dimostri un difetto di sicurezza generale. Una nuova astrazione Core richiede
-un blocker e un test concreti. DOC-04 non converte i gate FSE2 in gate Core: mantiene
-soltanto veritiera la documentazione del pack opzionale.
+The two tracks can advance independently. An FSE2 problem does not block Core alpha
+unless it demonstrates a general security defect. A new Core abstraction requires
+a concrete blocker and test. DOC-04 does not convert FSE2 gates into Core gates: it only
+keeps the optional pack documentation truthful.
 
-## HISTORICAL e lavoro deferred
+## HISTORICAL and deferred work
 
-La roadmap originaria usava M0-M9. I nomi M6/M7 sono ambigui perché l'authentication
-foundation è stata anticipata rispetto agli adapter legacy. Tag e report storici restano
-immutabili, ma nuovo lavoro e nuovi status usano gli ID ALPHA/FSE2.
+The original roadmap used M0-M9. The M6/M7 names are ambiguous because the authentication
+foundation was brought forward ahead of legacy adapters. Historical tags and reports remain
+immutable, but new work and statuses use ALPHA/FSE2 IDs.
 
-Legacy beta, altri provider, altri verticali ed enterprise/production restano backlog
-deferred, non track attive. Non vengono stimati né avviati da questo piano.
+Legacy beta, other providers, other verticals and enterprise/production remain deferred
+backlog, not active tracks. This plan neither estimates nor starts them.

@@ -1,9 +1,9 @@
 # Connector Runtime authentication contract
 
-## Freeze per M6
+## M6 freeze
 
-Questo documento congela il confine che i moduli di autenticazione Connector successivi
-possono assumere. Distingue due direzioni indipendenti:
+This document freezes the boundary that subsequent Connector authentication modules
+may assume. It distinguishes two independent directions:
 
 ```mermaid
 sequenceDiagram
@@ -21,124 +21,124 @@ sequenceDiagram
   R-->>C: sanitized application response
 ```
 
-### Inbound: client verso Gateway
+### Inbound: client to Gateway
 
-Responsabilita del Gateway Core:
+Gateway Core responsibilities:
 
-- autenticare certificate/PoP/BGW1;
-- derivare Tenant, Application, Installation, Environment e caller kind dal registry;
-- verificare stato, revoca, replay e grant;
-- produrre il `GatewayClientPrincipal` provider-neutral;
-- impedire che il client selezioni endpoint o credential binding.
+- authenticate certificate/PoP/BGW1;
+- derive Tenant, Application, Installation, Environment and caller kind from the registry;
+- check state, revocation, replay and grants;
+- produce the provider-neutral `GatewayClientPrincipal`;
+- prevent client selection of endpoints or credential bindings.
 
-Il Connector Runtime riceve un caller gia autenticato. M6 non deve reinterpretare il
-certificato inbound, fidarsi di Tenant/Application nel payload o creare un principal
-alternativo.
+The Connector Runtime receives an already authenticated caller. M6 must not reinterpret the
+inbound certificate, trust Tenant/Application in the payload or create an alternative
+principal.
 
-I vertical pack che necessitano una prova esplicita post-auth usano
-`IGatewayInvocationAuthorizer`: il Gateway Core verifica stato attivo e grant esatto per
-Connector/operation e produce `AuthorizedGatewayInvocation`, una capability opaca con costruttore
-non pubblico. Il pack non riceve `IGatewayRegistry`, DER/certificato o metodi di identity lookup e
-non puo costruire autonomamente la prova di autorizzazione. Il controllo grant avviene anche per
-operation senza secret/certificate binding.
+Vertical packs needing explicit post-authentication proof use
+`IGatewayInvocationAuthorizer`: Gateway Core checks active state and the exact
+Connector/operation grant and produces `AuthorizedGatewayInvocation`, an opaque capability with a
+non-public constructor. The pack receives no `IGatewayRegistry`, DER/certificate or identity-lookup methods and
+cannot construct its own authorization proof. Grant checks also apply to
+operations without secret/certificate bindings.
 
-### Outbound: Gateway verso servizio vendor/pubblico
+### Outbound: Gateway to vendor/public service
 
-Responsabilita di un auth module Connector:
+Connector authentication-module responsibilities:
 
-- consumare esclusivamente `OperationBindingDependencies` pubblicate e approvate;
-- richiedere capability provider strette (secret use, certificate use, signing o MAC)
-  senza introdurre un `GetSecret` per client/Broker/UI;
-- applicare credenziali solo alla richiesta outbound autorizzata;
-- non restituire password, API key, token non necessari, private key, PFX o locator;
-- rispettare restricted egress, timeout, redirect, header e redaction comuni.
+- consume only Published and approved `OperationBindingDependencies`;
+- request narrow provider capabilities (secret use, certificate use, signing or MAC)
+  without introducing `GetSecret` for clients/Broker/UI;
+- apply credentials only to the authorized outbound request;
+- return no passwords, API keys, unnecessary tokens, private keys, PFX or locators;
+- follow shared restricted-egress, timeout, redirect, header and redaction controls.
 
-Per OAuth Authorization Code il Connector fornisce soltanto un logical profile ID. Il
-runtime crea una `OAuthAuthorizedInvocation` non costruibile dal Connector dopo grant e
-autenticazione. `PublishedOAuthAuthorityResolver` combina quella capability, il relativo
-`GatewayClientPrincipal` e lo snapshot Published corrente con le
-`OperationBindingDependencies`, la binding revision e la provider resource esatta. Il
-risultato e una `OAuthResolvedExecutionContext` immutabile, con costruttore non pubblico;
-raw profile, endpoint, client ID, scope/audience e provider locator non fanno parte della
-superficie Connector-facing.
+For OAuth Authorization Code, the Connector supplies only a logical profile ID. The
+runtime creates an `OAuthAuthorizedInvocation`, which the Connector cannot construct, after grants and
+authentication. `PublishedOAuthAuthorityResolver` combines that capability, its
+`GatewayClientPrincipal` and the current Published snapshot with
+`OperationBindingDependencies`, binding revision and the exact provider resource. The
+result is an immutable `OAuthResolvedExecutionContext` with a non-public constructor;
+raw profiles, endpoints, client IDs, scope/audience and provider locators are not part of the
+Connector-facing surface.
 
-La capability di secret use e scoped al solo provider reference risolto per quel binding.
-Il client OAuth non riceve un `ISecretValueProvider` generico e non accetta reference dal
-consumer.
+The secret-use capability is scoped only to the provider reference resolved for that binding.
+The OAuth client receives no generic `ISecretValueProvider` and accepts no references from
+the consumer.
 
-Per l'estensione generica Phase 2, la stessa capability risolve Authorization Code oppure
-Client Credentials dal `kind` Published. Authorization Code usa `NONE` solo per compatibilita
-esplicitamente pubblicata; `S256_REQUIRED` genera e conserva il verifier nel tentativo one-time.
-Client Credentials riusa lo stesso token-session store e la stessa reference opaca. Il Connector
-continua a fornire solo il logical profile ID e non puo selezionare grant, modalita PKCE, token
-endpoint, client identity, secret, scope, audience, resource o client-auth method.
+For the generic Phase 2 extension, the same capability resolves Authorization Code or
+Client Credentials from the Published `kind`. Authorization Code uses `NONE` only for
+explicitly published compatibility; `S256_REQUIRED` generates and retains the verifier in the one-time attempt.
+Client Credentials reuses the same token-session store and opaque reference. The Connector
+continues to supply only the logical profile ID and cannot select grant, PKCE mode, token
+endpoint, client identity, secret, scope, audience, resource or client-auth method.
 
-## Contratto minimo stabile
+## Stable minimum contract
 
-Un writer M6 puo dipendere da:
+An M6 implementer may depend on:
 
-- `GatewayClientPrincipal` gia autenticato;
-- Connector e operation ID gia autorizzati;
-- Environment e Tenant derivati server-side;
-- ConnectorVersion Published e binding revision immutabili;
-- `OperationBindingDependencies` con riferimenti logici;
-- capability provider-neutral e trasporto ristretto;
-- correlation ID e audit sink metadata-only.
+- an already authenticated `GatewayClientPrincipal`;
+- already authorized Connector and operation IDs;
+- server-derived Environment and Tenant;
+- immutable Published ConnectorVersion and binding revision;
+- `OperationBindingDependencies` with logical references;
+- provider-neutral capabilities and restricted transport;
+- correlation ID and metadata-only audit sink.
 
-Una token session outbound e legata a ConnectorVersion, operation, Environment, endpoint
-e binding revision, scope/audience, provider resource revision e resource stamp. Il bearer
-non puo essere attached a un `HttpRequestMessage` del consumer: il modulo costruisce la
-request verso il protected-resource endpoint Published, inietta il bearer immediatamente
-prima del dispatch e usa sempre `IRestrictedTransport`.
+An outbound token session is bound to ConnectorVersion, operation, Environment, endpoint
+and binding revision, scope/audience, provider resource revision and resource stamp. The bearer
+cannot be attached to a consumer's `HttpRequestMessage`: the module constructs the
+request to the Published protected-resource endpoint, injects the bearer immediately
+before dispatch and always uses `IRestrictedTransport`.
 
-L'authorization endpoint e un confine differente: `BeginAuthorizationAsync` valida il
-Published HTTPS endpoint e produce una navigation per external user agent, senza fetch
-server-side. Token endpoint e protected-resource endpoint sono invece sempre dereferenziati
-dal Gateway tramite restricted transport.
+The authorization endpoint is a different boundary: `BeginAuthorizationAsync` validates the
+Published HTTPS endpoint and produces navigation for an external user agent, without a
+server-side fetch. Token and protected-resource endpoints are instead always dereferenced
+by the Gateway through restricted transport.
 
-Non puo dipendere da:
+It may not depend on:
 
-- presenza del Local Broker;
-- `InstallationKind` per cambiare business logic o auth outbound;
-- URL, provider reference, secret/certificate binding forniti dal caller;
-- accesso diretto a PostgreSQL, Vault o filesystem dal frontend/client;
-- secret value nel principal, audit o risposta.
+- the presence of a Local Broker;
+- `InstallationKind` to change business logic or outbound authentication;
+- caller-supplied URLs, provider references or secret/certificate bindings;
+- direct frontend/client access to PostgreSQL, Vault or the filesystem;
+- secret values in the principal, audit or response.
 
-## Compatibilita
+## Compatibility
 
-BGW1 e le route runtime restano il contratto inbound corrente per Broker e Direct. Nuovi
-metodi inbound futuri devono terminare nello stesso `GatewayClientPrincipal`; nuovi auth
-module outbound devono innestarsi dopo authorization e publication resolution. Qualsiasi
-deviazione richiede ADR, threat-model update e test positivi/negativi.
+BGW1 and runtime routes remain the current inbound contract for Broker and Direct. Future new
+inbound methods must terminate at the same `GatewayClientPrincipal`; new outbound authentication
+modules must attach after authorization and publication resolution. Any
+deviation requires an ADR, threat-model update and positive/negative tests.
 
-## Implementazione Track A sintetica
+## Synthetic Track A implementation
 
-`Gateway.ConnectorRuntime.Auth.Soap` implementa AP-01/AP-02/AP-07 senza modificare il
-contratto inbound. Il runtime costruisce `ConnectorAuthExecutionContext`,
-`SoapEndpointBinding` e `SoapSessionProfile` soltanto dopo grant, publication e binding
-resolution. Il connector dichiara operazioni, QName, action, mapping di campi bounded,
-estrazione/placement sessione, fault di expiry e policy di retry; non riceve un raw HTTP
-client, un parser configurabile o un motore di scripting.
+`Gateway.ConnectorRuntime.Auth.Soap` implements AP-01/AP-02/AP-07 without changing the
+inbound contract. The runtime constructs `ConnectorAuthExecutionContext`,
+`SoapEndpointBinding` and `SoapSessionProfile` only after grants, publication and binding
+resolution. The connector declares operations, QNames, actions, bounded field mappings,
+session extraction/placement, expiry faults and retry policy; it receives no raw HTTP
+client, configurable parser or scripting engine.
 
-Le sole reference restituibili al runtime sono opache. Username, password, challenge
-state upstream e session value restano nell'assembly e non sono parte di cache key,
-audit, errori o risposta. La cache include Tenant/Installation/Application,
+Only opaque references may be returned to the runtime. Username, password, upstream challenge
+state and session values remain inside the assembly and are not part of cache keys,
+audit, errors or responses. The cache includes Tenant/Installation/Application,
 Connector/version, Environment, binding revision, endpoint revision, credential revision
-e profile. Per key esistono al massimo una interaction e una session generation corrente;
-la promotion dopo challenge è atomica, il digest precedente non è più risolvibile e il
-numero globale di key è limitato a 256 con sweep lazy delle entry scadute.
+and profile. Each key has at most one interaction and one current session generation;
+promotion after challenge is atomic, the previous digest is no longer resolvable and the
+global number of keys is limited to 256 with lazy sweeping of expired entries.
 
-`ISoapSessionResourceStampProvider` è obbligatorio: prima della risoluzione e subito prima
-dell'uso il client confronta lo stamp server-side corrente con credential resource
-revision/status `Active`, binding revision ed endpoint revision. Un disable o rotate
-fallisce prima di secret provider, DNS o transport. La deadline effettiva resta collegata
-fino al completamento del response body bounded e del parsing XML. Il subset Fault SOAP
-1.1/1.2 ha struttura e cardinalità esatte; un Fault ambiguo produce
-`SOAP-FAULT-STRUCTURE` e non può attivare la riacquisizione di sessione.
+`ISoapSessionResourceStampProvider` is mandatory: before resolution and immediately before
+use, the client compares the current server-side stamp with credential resource
+revision/`Active` status, binding revision and endpoint revision. Disabling or rotating
+fails before the secret provider, DNS or transport. The effective deadline stays linked
+until completion of the bounded response body and XML parsing. The SOAP
+1.1/1.2 Fault subset has exact structure and cardinality; an ambiguous Fault produces
+`SOAP-FAULT-STRUCTURE` and cannot trigger session reacquisition.
 
-Il server Kestrel sotto `tools/m6/SyntheticSoapServer` e i test associati qualificano
-esclusivamente il profilo sintetico. Non costituiscono caratterizzazione o conformità
-SOGEI e non autorizzano un connector healthcare production.
+The Kestrel server under `tools/m6/SyntheticSoapServer` and its tests qualify
+only the synthetic profile. They do not constitute SOGEI characterization or compliance
+and do not authorize a production healthcare connector.
 
 ## M6 Wave 2 certificate/signing implementation note
 

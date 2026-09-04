@@ -1,36 +1,36 @@
 # FSE2 local PKCS#12 provider runbook
 
-## Scopo e limite
+## Scope and limits
 
-Questo runbook abilita un laboratorio locale con PostgreSQL, Gateway/Admin UI, Connector Runtime,
-Synthetic Provider e il pack FSE2. Aggiunge un provider file-mounted per A1 mTLS e S1 signing senza
-richiedere Azure. Non accredita l'installazione, non pubblica automaticamente un Connector FSE2 e
-non effettua chiamate live.
+This runbook enables a local laboratory with PostgreSQL, Gateway/Admin UI, Connector Runtime,
+Synthetic Provider and the FSE2 pack. It adds a file-mounted provider for A1 mTLS and S1 signing
+without requiring Azure. It does not accredit the installation, automatically publish an FSE2
+Connector or make live calls.
 
-Certificati, chiavi, CSR, P12, password, manifest runtime ed evidenze devono restare fuori dal
-repository. Le estensioni sensibili sono già negate da `.gitignore`, ma questo non sostituisce ACL
-e controllo operatore.
+Certificates, keys, CSRs, P12, passwords, runtime manifests and evidence must remain outside the
+repository. Sensitive extensions are already excluded by `.gitignore`, but this does not replace
+ACLs and operator checks.
 
-## Prerequisiti
+## Prerequisites
 
-- Docker Desktop con Compose;
+- Docker Desktop with Compose;
 - Windows PowerShell 5.1;
-- OpenSSL 1.1.1 o successivo;
-- A1, CSR A1, chiave A1, S1, CSR S1, chiave S1 e trust anchor ufficiale in una directory protetta
-  esterna a Git, soltanto quando esiste un mandato operativo separato;
-- fingerprint SHA-256 attese di A1, S1 e trust anchor ottenute da un canale autorizzato;
-- directory di output nuova, esterna al repository.
+- OpenSSL 1.1.1 or later;
+- A1, A1 CSR, A1 key, S1, S1 CSR, S1 key and official trust anchor in a protected directory
+  outside Git, only when a separate operational mandate exists;
+- expected A1, S1 and trust-anchor SHA-256 fingerprints obtained through an authorized channel;
+- a new output directory outside the repository.
 
-Il processo non supporta chiavi sorgente cifrate in modo interattivo: evita prompt e fallisce. Le
-chiavi sorgente ricevute restano temporanee e devono essere eliminate o archiviate secondo la
-policy di custody solo dopo aver verificato import, backup e rollback.
+The process does not support interactively encrypted source keys: it avoids prompts and fails.
+Received source keys remain temporary and must be deleted or archived according to custody
+policy only after import, backup and rollback have been verified.
 
-## 1. Preflight read-only
+## 1. Read-only preflight
 
-La modalità predefinita non crea output. Verifica crittograficamente la firma dei CSR, exact SPKI
-`key ↔ CSR ↔ certificate`, fingerprint, distinzione A1/S1, chain diretta alla root fornita, validità
-temporale e Key Usage/EKU. Tutti i path devono essere assoluti, locali, esterni al repository e
-senza UNC, device path, ADS, junction/symlink/reparse point nel leaf o negli ancestor.
+The default mode creates no output. It cryptographically verifies CSR signatures, exact SPKI
+`key ↔ CSR ↔ certificate`, fingerprints, A1/S1 separation, a direct chain to the supplied root,
+validity periods and Key Usage/EKU. All paths must be absolute, local, outside the repository and
+without UNC, device paths, ADS, junctions/symlinks/reparse points in the leaf or ancestors.
 
 ```powershell
 $arguments = @{
@@ -41,42 +41,43 @@ $arguments = @{
   SignPrivateKeyPath = 'C:\SecureInput\SIGN.key'
   SignCsrPath = 'C:\SecureInput\SIGN.csr'
   TrustAnchorPath = 'C:\SecureInput\ministero-test-root.pem'
-  ExpectedAuthFingerprintSha256 = '<64 hex ottenuti out-of-band>'
-  ExpectedSignFingerprintSha256 = '<64 hex ottenuti out-of-band>'
-  ExpectedTrustAnchorFingerprintSha256 = '<64 hex ottenuti out-of-band>'
+  ExpectedAuthFingerprintSha256 = '<64 hex characters obtained out of band>'
+  ExpectedSignFingerprintSha256 = '<64 hex characters obtained out of band>'
+  ExpectedTrustAnchorFingerprintSha256 = '<64 hex characters obtained out of band>'
   OutputDirectory = 'C:\SecureRuntime\fse2-local'
   RuntimePrincipal = 'NT SERVICE\SecureIntegrationGateway'
 }
 ./tools/fse2/New-Fse2LocalPkcs12Material.ps1 @arguments
 ```
 
-L'esito richiesto è `PASS_READ_ONLY_PREFLIGHT` e `outputCreated=false`. Un mismatch non va corretto
-abbassando il controllo: occorre verificare la provenienza del materiale.
+The required result is `PASS_READ_ONLY_PREFLIGHT` and `outputCreated=false`. Do not correct a
+mismatch by weakening the check: verify the provenance of the material.
 
-## 2. Creazione del materiale runtime
+## 2. Creating runtime material
 
-Solo dopo review del preflight:
+Only after reviewing preflight:
 
 ```powershell
 ./tools/fse2/New-Fse2LocalPkcs12Material.ps1 @arguments -Execute -Confirm:$false
 ```
 
-L'importer crea una directory con ACL ristrette, manifest con sidecar SHA-256, due P12 con password
-casuali indipendenti, leaf A1/S1 e trust anchor pubblico. Non stampa password o chiavi. Verificare
-che `status=PASS_CREATED`, `privateKeysExportedByProvider=false` e `liveFse2Calls=0`.
+The importer creates a directory with restrictive ACLs, a manifest with SHA-256 sidecar, two P12
+files with independent random passwords, A1/S1 leaves and the public trust anchor. It does not
+print passwords or keys. Verify `status=PASS_CREATED`, `privateKeysExportedByProvider=false`
+and `liveFse2Calls=0`.
 
-Su Windows `RuntimePrincipal` deve risolvere a un account utente o service SID specifico; Everyone,
-Anonymous, Authenticated Users, Users, Administrators e gruppi non esplicitamente autorizzati sono
-negati. Le ACL finali sono protette ed exact: SYSTEM/Administrators FullControl e runtime identity
-soltanto Read/Execute sulle directory e Read sui file. Su Linux si usa un utente/`uid:N` non-root,
-owner runtime, directory `0550` e file `0440`. Per Docker Desktop il laboratorio sintetico mappa
-l'UID container dichiarato da `FSE2_CONTAINER_RUNTIME_UID`; ciò dimostra solo leggibilità bounded
-del bind mount locale e non equivale a HSM, Key Vault o storage production-grade.
+On Windows, `RuntimePrincipal` must resolve to a specific user account or service SID; Everyone,
+Anonymous, Authenticated Users, Users, Administrators and groups not explicitly authorized are
+denied. Final ACLs are protected and exact: SYSTEM/Administrators FullControl and the runtime
+identity only Read/Execute on directories and Read on files. Linux uses a non-root user/`uid:N`,
+runtime ownership, `0550` directories and `0440` files. For Docker Desktop, the synthetic lab maps
+the container UID declared by `FSE2_CONTAINER_RUNTIME_UID`; this demonstrates only bounded
+readability of the local bind mount, not HSM, Key Vault or production-grade storage.
 
-Il manifest e la directory `material` costituiscono materiale operativo sensibile anche se alcuni
-file sono pubblici. Non copiarli nella repo, negli artifact CI o nei log.
+The manifest and `material` directory are sensitive operational material even if some files are
+public. Do not copy them into the repository, CI artifacts or logs.
 
-## 3. Validazione e avvio
+## 3. Validation and startup
 
 ```powershell
 $manifest = 'C:\SecureRuntime\fse2-local\manifest.json'
@@ -91,50 +92,52 @@ $labArtifacts = 'C:\SecureEvidence\fse2-lab-per-run'
   -QuickstartArtifactRoot $labArtifacts
 ```
 
-Se il pinned SDK non è sotto `.dotnet` nel worktree e non è il `dotnet` di sistema, indicare
-esplicitamente il relativo eseguibile con `-DotNetPath`.
+If the pinned SDK is neither under `.dotnet` in the worktree nor the system `dotnet`, explicitly
+specify its executable with `-DotNetPath`.
 
-`Validate` ripete build/test del pack e richiama l'unico validator Compose canonico, con valori
-sintetici process-local non stampati e senza `--no-interpolate`. `Start` usa l'overlay opt-in
-`deploy/fse2/docker-compose.fse2-local.yml`, verifica utente non-root, filesystem read-only, mount
-read-only, presenza dei due pack e health live/ready via TLS con CA sintetica. Il quickstart
-ordinario resta invariato. La fixture canonica per-run è:
+`Validate` repeats the pack build/tests and invokes the single canonical Compose validator,
+using unprinted process-local synthetic values and no `--no-interpolate`. `Start` uses the
+opt-in `deploy/fse2/docker-compose.fse2-local.yml` overlay and verifies non-root user, read-only
+filesystem, read-only mounts, both packs and live/ready health over TLS with a synthetic CA.
+The ordinary quickstart remains unchanged. The canonical per-run fixture is:
 
 ```powershell
 ./tools/fse2/Test-Fse2PathPolicy.ps1
 ./tools/fse2/Test-Fse2LocalPkcs12Material.ps1 -ValidateCompose -StartLab
 ```
 
-Questa genera soltanto key/CSR/certificati/P12 sintetici per-run, prova firma e certificato client,
-tamper con `live=200`/`ready=503`, stop degradato e cleanup; rimuove fixture e artefatti temporanei.
+It generates only per-run synthetic keys/CSRs/certificates/P12, tests signing and client
+certificates, tampering with `live=200`/`ready=503`, degraded stop and cleanup, and removes
+fixtures and temporary artifacts.
 
-La presenza dei pack e delle identità non autorizza un outbound reale. Pubblicazione del profilo,
-endpoint ufficiale, grant e invocazione FSE2 richiedono un piano e un mandato separati con evidenza
-redatta.
+The presence of packs and identities does not authorize real outbound traffic. Profile
+publication, official endpoint, grants and FSE2 invocation require a separate plan and mandate
+with redacted evidence.
 
-## 4. Arresto e cleanup
+## 4. Shutdown and cleanup
 
 ```powershell
 ./tools/fse2/Invoke-Fse2LocalProviderLab.ps1 -Phase Stop
 ```
 
-`Stop` non legge né richiede manifest, P12, chain, password, env file o readiness. Enumera soltanto
-container, network e volume con label project exact-match, riverifica l'ownership di ciascun target,
-li rimuove e deve restituire `FSE2_LOCAL_PROVIDER_STOP_PASS` con container/network/volume/helper a
-zero. Una risorsa con nome simile ma project label diversa deve essere preservata. Conservare solo
-manifest di evidenza redatti fuori Git; non includere P12, password, chiavi, token, header o payload.
+`Stop` neither reads nor requires manifests, P12, chains, passwords, env files or readiness.
+It enumerates only containers, networks and volumes with exact-match project labels, rechecks
+ownership of each target, removes them and must return `FSE2_LOCAL_PROVIDER_STOP_PASS` with
+zero containers/networks/volumes/helpers. A similarly named resource with a different project
+label must be preserved. Retain only redacted evidence manifests outside Git; do not include
+P12, passwords, keys, tokens, headers or payloads.
 
-## Criteri prima di una call live
+## Criteria before a live call
 
-- review indipendente del candidate exact-head;
-- fingerprint e chain riesaminate prima dell'import;
-- binding server-owned: A1 soltanto mTLS, la stessa S1 per authorization e integrity;
-- endpoint/profilo Published approvati four-eyes e exact checksum;
-- piano revoca/rotazione, logging redatto e cleanup;
-- autorizzazione esplicita alla chiamata e perimetro dell'accreditamento.
+- Independent review of the exact-head candidate.
+- Fingerprints and chains rechecked before import.
+- Server-owned bindings: A1 for mTLS only, the same S1 for authorization and integrity.
+- Published endpoint/profile approved four-eyes with the exact checksum.
+- Revocation/rotation plan, redacted logging and cleanup.
+- Explicit call authorization and accreditation scope.
 
-Il profilo locale resta inadatto alla custody production: Administrator/SYSTEM e chi controlla la
-directory host possono leggere o sostituire il materiale, e la chiave è in memoria durante l'uso.
-La remediation e i suoi test usano esclusivamente fixture sintetiche: nessun certificato/CSR/chiave
-reale è stato consultato, nessun P12 reale è stato creato o importato e nessun endpoint FSE2 è stato
-chiamato. Custody operativa, revoca/rotazione, accreditamento e qualifica live restano blocker esterni.
+The local profile remains unsuitable for production custody: Administrator/SYSTEM and anyone
+controlling the host directory can read or replace material, and the key is in memory during use.
+The remediation and its tests use exclusively synthetic fixtures: no real certificate/CSR/key
+was accessed, no real P12 was created or imported, and no FSE2 endpoint was called. Operational
+custody, revocation/rotation, accreditation and live qualification remain external blockers.

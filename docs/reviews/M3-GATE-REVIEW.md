@@ -1,127 +1,127 @@
-# M3 — Gate Review del vertical slice production-like
+# M3 — Production-like vertical slice Gate Review
 
-Data review: 2026-08-04
+Review date: 2026-08-04
 
-Baseline di partenza: `m2-gateway-baseline-2026-08-04` (`abee866e683ed38b2a2c8350288c7a93ab0550ff`)
+Starting baseline: `m2-gateway-baseline-2026-08-04` (`abee866e683ed38b2a2c8350288c7a93ab0550ff`)
 
-Commit implementativo testato: `91963cedca1a5c4165aa3c751c08d48755c6fc9f`
+Tested implementation commit: `91963cedca1a5c4165aa3c751c08d48755c6fc9f`
 
 Pull request: `#3`, branch `m3/production-like-vertical-slice`
 
 CI: run `30903757495`
 
-## Esito aggiornato per la strategia Core/Deployment Pack
+## Updated result for the Core/Deployment Pack strategy
 
-**M3A product gate PASS. GO per M4 Core. M3B è non bloccante.**
+**M3A product gate PASS. GO for M4 Core. M3B is non-blocking.**
 
-La parte container deterministica e il product gate split-host M3A sono PASS: Gateway reale,
-PostgreSQL 18.4, synthetic Vault HTTPS, vendor mock HTTPS/mTLS, enrollment, percorso
-positivo, vero Broker Windows Service, Legacy standard user, 14 negative applicative e
-canary/log scan correlati. I bundle redatti sono fuori dal repository e verificati.
+The deterministic container portion and M3A split-host product gate are PASS: real Gateway,
+PostgreSQL 18.4, synthetic HTTPS Vault, HTTPS/mTLS vendor mock, enrollment, positive
+path, real Broker Windows Service, standard-user Legacy, 14 application negatives and
+correlated canary/log scans. Redacted bundles are outside the repository and verified.
 
-La qualificazione M3B richiede ancora un environment Azure dev, OIDC federato, Managed
-Identity e Key Vault reale. Dal 2026-08-05 è classificata come gate dell'Azure Deployment
-Pack separato, non come requisito del Gateway Core provider-neutral. La baseline usata da
-M4 è il tag `m3a-product-gate-pass-20260805` sul product gate attestato. Questa modifica di
-sequenziamento non trasforma M3B in PASS e non autorizza l'avvio di M5.
+M3B qualification still requires an Azure dev environment, federated OIDC, Managed
+Identity and real Key Vault. Since 2026-08-05, it is classified as a gate of the separate Azure Deployment
+Pack, not a requirement of the provider-neutral Gateway Core. M4 uses
+tag `m3a-product-gate-pass-20260805` on the attested product gate as its baseline. This sequencing
+change does not turn M3B into PASS and does not authorize starting M5.
 
-## Perimetro del gate M3A semplificato
+## Simplified M3A gate scope
 
-La Gate Review distingue le proprietà del prodotto dall'automazione del laboratorio. Il
-gate non misura la capacità di Codex di acquisire un token elevato né richiede un
-orchestratore privilegiato generico.
+The Gate Review distinguishes product properties from laboratory automation. The
+gate does not measure Codex's ability to acquire an elevated token and does not require a
+generic privileged orchestrator.
 
-| Classe | Contenuto | Effetto sul gate |
+| Class | Content | Effect on gate |
 |---|---|---|
-| A — prodotto obbligatorio | vero Windows Service, StartName `NT SERVICE\SecureIntegrationBroker`, service SID effettivo, Legacy standard user, P02 completo, installation authentication, tenant server-side, operation grant, revoca, replay, API key/mTLS solo Gateway, rifiuto URL/secret reference client-side, redazione e cleanup | ogni voce deve avere evidenza live PASS; una failure blocca M3A |
-| B — laboratorio utile | checkpoint Hyper-V, rete isolata, firewall mirato, rollback assistito, Tailscale pre-disabilitato, handoff e sidecar | aumenta ripetibilità e sicurezza operativa; un limite di automazione non invalida il prodotto se isolamento e cleanup sono verificati manualmente |
-| C — automazione futura | Codex VM autonomo, executor SYSTEM generico, rollback completamente automatico, gestione Tailscale/profili firewall perfettamente automatizzata, laboratorio ricreato a ogni run, evidence formale di ogni tentativo preparatorio | rinviata alla qualificazione di release; non è blocker M3 |
+| A — mandatory product | Real Windows Service, StartName `NT SERVICE\SecureIntegrationBroker`, effective service SID, standard-user Legacy, complete P02, installation authentication, server-side tenant, operation grant, revocation, replay, API key/mTLS only in Gateway, rejection of client-side URLs/secret references, redaction and cleanup | Every item must have live PASS evidence; a failure blocks M3A |
+| B — useful laboratory | Hyper-V checkpoint, isolated network, targeted firewall, assisted rollback, pre-disabled Tailscale, handoff and sidecar | Improves repeatability and operational safety; an automation limitation does not invalidate the product if isolation and cleanup are manually verified |
+| C — future automation | Autonomous VM Codex, generic SYSTEM executor, fully automatic rollback, fully automated Tailscale/firewall-profile management, lab recreated for each run, formal evidence for every preparatory attempt | Deferred to release qualification; not an M3 blocker |
 
-Il flusso approvato è HOST `Prepare` → `WAITING_FOR_OPERATOR` → singolo script PowerShell
-5.1 eseguito manualmente in console amministrativa VM → acquisizione `RESULT.json` e ZIP
-redatto → HOST `Finalize` → cleanup. Lo script è prodotto dal repository, trasferito con
-SHA-256, non contiene segreti, non stampa il bootstrap ed esegue `ValidateVm` prima di
-`Run`. Il checkpoint Hyper-V è la recovery primaria.
+The approved flow is HOST `Prepare` → `WAITING_FOR_OPERATOR` → single PowerShell
+5.1 script manually executed in the VM administrative console → acquire `RESULT.json` and redacted
+ZIP → HOST `Finalize` → cleanup. The script is produced by the repository, transferred with
+SHA-256, contains no secrets, does not print the bootstrap and executes `ValidateVm` before
+`Run`. The Hyper-V checkpoint is the primary recovery mechanism.
 
-Il prototipo di executor SYSTEM, interrotto prima di diventare requisito, è preservato
-senza riscritture nel branch `experimental/m3a-system-executor`, commit
-`b081c527186d4b66b1c03511c0c17856b9ea217a`. Non appartiene al candidate commit M3 e
-non è richiesto per dichiarare M3A PASS.
+The SYSTEM executor prototype, stopped before becoming a requirement, is preserved
+without rewriting in branch `experimental/m3a-system-executor`, commit
+`b081c527186d4b66b1c03511c0c17856b9ea217a`. It is not part of the M3 candidate commit and
+is not required to declare M3A PASS.
 
-## Lineage e review dei commit
+## Commit lineage and review
 
-La storia da M2 è lineare e non contiene merge, rebase o squash.
+History from M2 is linear and contains no merges, rebases or squashes.
 
-| Commit | Contenuto/review |
+| Commit | Content/review |
 |---|---|
-| `4078c01` | architettura, piano, runbook ed evidence contract prima del codice |
-| `5d200d9` | invoker Broker production: CNG P-256 non esportabile, enrollment e BGW1; Gateway combinato API key+mTLS e confini App Service |
-| `11bb465` | fixture, compose, Windows orchestrator, SecurityDriver, Legacy Simulator, Bicep e job M3A |
-| `5d32968` | rimosso riferimento a una action Bicep inesistente; validazione tramite Azure CLI ufficiale |
-| `03dfd98` | lock file inclusi nei Docker restore; timeout solo del client ordinario E2E portato a 15 s, lasciando il test deadline dedicato a 150 ms |
-| `2b3faee` | workflow M3B manuale con OIDC, environment protetto, Managed Identity, Key Vault e cleanup resource group |
-| `1c9b7c0` | `M3Testing` può usare esclusivamente l'HMAC sintetico per-run; Production continua a richiedere Key Vault; aggiunto test startup regressivo |
-| `022d12c` | alias DNS TLS espliciti per Vault/vendor e probe HTTPS coerente; nessuna validazione TLS disabilitata |
-| `5b7fc57` | CA sintetica emessa in PEM reale; eliminato il precedente trust failure, senza `-k` o callback permissive |
-| `1c2752b` | revoca atomica mantenuta ma divisa in prepared command Npgsql singoli; nessun controllo o grant indebolito |
-| `dd3602e` | bundle CI redatto conservato prima del cleanup, con scope dichiarato e digest |
-| `953b7a7` | evidence vincolata a `CANDIDATE_COMMIT_SHA` e assert sul checkout; il merge SHA sintetico PR non è più usato come identità del prodotto |
-| `91963ce` | manifest arricchito e ZIP finalizzato soltanto dopo cleanup PASS con zero container/volumi residui |
-| `d88be56` | handoff operatore verificato con SHA-256, `WAITING_FOR_OPERATOR`, script VM unico e test regressivo; nessun executor SYSTEM |
+| `4078c01` | Architecture, plan, runbook and evidence contract before code |
+| `5d200d9` | Production Broker invoker: non-exportable CNG P-256, enrollment and BGW1; Gateway combined API key+mTLS and App Service boundaries |
+| `11bb465` | Fixtures, Compose, Windows orchestrator, SecurityDriver, Legacy Simulator, Bicep and M3A job |
+| `5d32968` | Removed reference to a nonexistent Bicep action; validation through official Azure CLI |
+| `03dfd98` | Lock files included in Docker restores; only the ordinary E2E client timeout raised to 15 s, leaving the dedicated deadline test at 150 ms |
+| `2b3faee` | Manual M3B workflow with OIDC, protected environment, Managed Identity, Key Vault and resource-group cleanup |
+| `1c9b7c0` | `M3Testing` may use only the per-run synthetic HMAC; Production continues to require Key Vault; startup regression test added |
+| `022d12c` | Explicit TLS DNS aliases for Vault/vendor and consistent HTTPS probe; no TLS validation disabled |
+| `5b7fc57` | Synthetic CA emitted as real PEM; previous trust failure eliminated without `-k` or permissive callbacks |
+| `1c2752b` | Atomic revocation retained but split into individual Npgsql prepared commands; no control or grant weakened |
+| `dd3602e` | Redacted CI bundle retained before cleanup, with declared scope and digest |
+| `953b7a7` | Evidence bound to `CANDIDATE_COMMIT_SHA` and checkout assertion; synthetic PR merge SHA no longer used as product identity |
+| `91963ce` | Enriched manifest and ZIP finalized only after cleanup PASS with zero residual containers/volumes |
+| `d88be56` | SHA-256-verified operator handoff, `WAITING_FOR_OPERATOR`, single VM script and regression test; no SYSTEM executor |
 
-I fix derivano tutti da run bloccate preservate (`30900135811`, `30900263348`,
-`30901085026`, `30901570191`, `30902042566`, `30902477494`). Nessuno introduce bypass
-di autenticazione, autorizzazione, TLS, egress o redazione.
+All fixes derive from preserved blocked runs (`30900135811`, `30900263348`,
+`30901085026`, `30901570191`, `30902042566`, `30902477494`). None introduces authentication,
+authorization, TLS, egress or redaction bypasses.
 
-## Evidenza M3A container
+## M3A container evidence
 
-Bundle HOST: `C:\SecureEvidence\m3a-ci-30903757495\m3a-ci-30903757495-redacted-evidence.zip`
+HOST bundle: `C:\SecureEvidence\m3a-ci-30903757495\m3a-ci-30903757495-redacted-evidence.zip`
 
 SHA-256: `A52CACB8460F1B9B8D5B12CF8C4B784B3DA434466EAF133235B328AFD43FCA30`
 
-Il sidecar coincide; il manifest attesta commit `91963cedca1a5c4165aa3c751c08d48755c6fc9f`,
-scope `gateway-container-only`, 16 record scenario PASS, canary scan PASS,
-cleanup PASS con zero container/volumi residui, `brokerWindowsServiceVerified: false` e
-`azureVerified: false`. Lo ZIP contiene soltanto:
-`manifest.json`, `security-scenarios.json` e `fixture-public.json`; non contiene raw
-evidence, PFX, chiavi, environment, canary o log.
+The sidecar matches; the manifest attests commit `91963cedca1a5c4165aa3c751c08d48755c6fc9f`,
+scope `gateway-container-only`, 16 PASS scenario records, canary scan PASS,
+cleanup PASS with zero residual containers/volumes, `brokerWindowsServiceVerified: false` and
+`azureVerified: false`. The ZIP contains only:
+`manifest.json`, `security-scenarios.json` and `fixture-public.json`; it contains no raw
+evidence, PFX, keys, environment, canaries or logs.
 
-Digest osservati:
+Observed digests:
 
 - M3A Gateway: `sha256:13e0292073ab4db87bb27f99dbbdb19dea38917d4538c7f31bd0da0aed45e9b5`;
 - synthetic Vault: `sha256:aa4009b47f94fdcfcd359de81341f9f42f2bc4d9347d1f6c04a79af133441a82`;
 - vendor mock: `sha256:bbbaf5a34d602f5f8905b0420244e94ce54e45a45e3f4256f52330db195993ab`;
-- immagine Gateway M2/M3 hardening job: `sha256:d5178d47b9a3e68ac5fd18c9de5dc673828cd74edfcf27351a63de5f5586dcbd`;
+- M2/M3 hardening-job Gateway image: `sha256:d5178d47b9a3e68ac5fd18c9de5dc673828cd74edfcf27351a63de5f5586dcbd`;
 - migration runner: `sha256:6f52428750ba5176180a184b1c9177b33166b2bd4ef62a3d52fbbfb799317779`;
 - migration SQL: `182CC690E16BB986638A4B52EE1554A4B540A8E58FD673F2111A79D194C66A98`.
 
-### Matrice scenario
+### Scenario matrix
 
-| Scenario | Stato | Evidenza/codice |
+| Scenario | Status | Evidence/code |
 |---|---|---|
 | P01 enrollment | PASS-CI | `BGW-ENROLLMENT-OK` |
-| P02 invocazione tramite vero Broker Service | **PASS-LIVE** | run `m3a-live-20260805-094131`, vero service/virtual account e Legacy standard user |
-| P03 tenant server-side | PASS-CI | risposta positiva e tenant override N04 negato |
-| P04 grant valido | PASS-CI | `BGW-OK`; connector/operation N05/N06 negati |
-| P05 API key letta dal Vault | PASS-CI | vendor accetta il canary soltanto dal Gateway |
-| P06 mTLS Gateway→vendor | PASS-CI | cert corretto accettato, N12 errato rifiutato |
-| P07 risposta sanitizzata | PASS-CI | `BGW-OK`, nessun secret/header vendor nel risultato |
-| N01 revoca | PASS-CI | `BGW-INSTALLATION-REVOKED` |
-| N02 firma/PoP invalida | PASS-CI | `BGW-AUTHN-SIGNATURE` |
+| P02 invocation through real Broker Service | **PASS-LIVE** | Run `m3a-live-20260805-094131`, real service/virtual account and standard-user Legacy |
+| P03 server-side tenant | PASS-CI | Positive response and N04 tenant override denied |
+| P04 valid grant | PASS-CI | `BGW-OK`; connector/operation N05/N06 denied |
+| P05 API key read from Vault | PASS-CI | Vendor accepts the canary only from Gateway |
+| P06 mTLS Gateway→vendor | PASS-CI | Correct certificate accepted, wrong N12 rejected |
+| P07 sanitized response | PASS-CI | `BGW-OK`, no vendor secret/header in result |
+| N01 revocation | PASS-CI | `BGW-INSTALLATION-REVOKED` |
+| N02 invalid signature/PoP | PASS-CI | `BGW-AUTHN-SIGNATURE` |
 | N03 replay | PASS-CI | `BGW-AUTHN-REPLAY` |
-| N04 tenant differente | PASS-CI | `BGW-PROTOCOL-JSON` |
+| N04 different tenant | PASS-CI | `BGW-PROTOCOL-JSON` |
 | N05/N06 connector/operation | PASS-CI | `BGW-OPERATION-NOT-FOUND` |
-| N07 URL arbitrario | PASS-CI | `BGW-PROTOCOL-JSON` |
-| N08 loopback/privato/metadata | PASS-CI | tre `BGW-EGRESS-DESTINATION-DENIED` |
-| N09 DNS override/rebinding input | PASS-CI | campo rifiutato; transport usa risoluzione/pinning server-side |
-| N10 secret reference arbitraria | PASS-CI | `BGW-PROTOCOL-JSON` |
+| N07 arbitrary URL | PASS-CI | `BGW-PROTOCOL-JSON` |
+| N08 loopback/private/metadata | PASS-CI | Three `BGW-EGRESS-DESTINATION-DENIED` |
+| N09 DNS override/rebinding input | PASS-CI | Field rejected; transport uses server-side resolution/pinning |
+| N10 arbitrary secret reference | PASS-CI | `BGW-PROTOCOL-JSON` |
 | N11 redirect | PASS-CI | `BGW-EGRESS-REDIRECT-DENIED` |
-| N12 certificato client errato | PASS-CI | `BGW-EGRESS-UPSTREAM-REJECTED` |
-| N13 Vault indisponibile | PASS-CI | `BGW-VAULT-UNAVAILABLE` |
-| N14 PostgreSQL indisponibile | PASS-CI | errore sanitizzato `BGW-INTERNAL` |
-| N15 canary/secret nei log | PASS-CI | ricerca byte-for-byte sulle canary, nessuna corrispondenza |
+| N12 wrong client certificate | PASS-CI | `BGW-EGRESS-UPSTREAM-REJECTED` |
+| N13 unavailable Vault | PASS-CI | `BGW-VAULT-UNAVAILABLE` |
+| N14 unavailable PostgreSQL | PASS-CI | Sanitized error `BGW-INTERNAL` |
+| N15 canary/secret in logs | PASS-CI | Byte-for-byte canary search, no matches |
 
-## Sequenza effettivamente eseguita in CI
+## Sequence actually executed in CI
 
 ```mermaid
 sequenceDiagram
@@ -132,86 +132,86 @@ sequenceDiagram
     participant X as Vendor mock HTTPS/mTLS
 
     D->>G: enrollment challenge + PoP ECDSA P-256
-    G->>P: consuma activation code e registra credential
-    D->>G: BGW1 firmata (connector/operation, nonce, body hash)
-    G->>P: deriva Installation/Tenant, registra replay, verifica grant
-    G->>V: risolve API key e PFX da riferimenti server-side
-    G->>X: HTTPS + API key + certificato client
-    X-->>G: risposta sintetica
-    G-->>D: envelope sanitizzato
-    Note over D,X: N01-N14 ripetono il percorso con il failpoint mirato
-    Note over G,X: N15 scansiona i log prima del bundle redatto
+    G->>P: consume activation code and register credential
+    D->>G: signed BGW1 (connector/operation, nonce, body hash)
+    G->>P: derive Installation/Tenant, register replay, verify grant
+    G->>V: resolve API key and PFX from server-side references
+    G->>X: HTTPS + API key + client certificate
+    X-->>G: synthetic response
+    G-->>D: sanitized envelope
+    Note over D,X: N01-N14 repeat the path with the targeted failpoint
+    Note over G,X: N15 scans logs before the redacted bundle
 ```
 
-La sequenza Gateway è provata dalla CI e dalla run split-host. Il tratto Legacy Simulator
-→ Named Pipe → vero Broker Windows Service → Gateway è PASS-LIVE nella run
-`m3a-live-20260805-094131` e non è simulato.
+The Gateway sequence is proven by CI and the split-host run. The Legacy Simulator
+→ Named Pipe → real Broker Windows Service → Gateway segment is PASS-LIVE in run
+`m3a-live-20260805-094131` and is not simulated.
 
-## Review sicurezza mirata
+## Targeted security review
 
-- Tenant/Application/Installation derivano dalla credential autenticata; proprietà
-  `tenantId`, URL, address e secret reference inattese falliscono la deserializzazione.
-- Grant deny-by-default e revoca sono verificati prima di Vault/DNS/dispatch; replay usa
-  nonce persistente PostgreSQL e firma BGW1 su method, target, timestamp, nonce e body hash.
-- Endpoint, header auth e riferimenti Vault provengono soltanto dal catalogo server-side.
-  Non esiste un endpoint Broker/Gateway che restituisca secret; `GetSecretAsync` è
-  un'astrazione interna al Gateway e non attraversa il boundary API.
-- Il Broker non contiene vendor API key/PFX: possiede soltanto la propria chiave CNG
-  Installation non esportabile e il certificato pubblico associato.
-- Restricted egress vieta proxy, cookie, redirect, loopback, link-local, metadata e
-  indirizzi privati; l'unica eccezione privata è host+CIDR esatta e registrata soltanto in
-  `M3Testing` per il vendor sintetico.
-- Il certificato App Service inoltrato via `X-ARR-ClientCert` è accettato soltanto in
-  `Production` quando `WEBSITE_INSTANCE_ID` prova il boundary App Service. Il comportamento
-  deve ancora essere validato live in M3B.
-- Errori e audit contengono codici/correlation ID, non payload o credenziali. Il canary
-  scan CI e il Windows Event Log M3A sono PASS. Il solo scan aggregato dei log container
-  della run live non è stato raggiunto dal finalizzatore ed è dichiarato come limite di
-  evidence non bloccante.
+- Tenant/Application/Installation derive from the authenticated credential; unexpected
+  `tenantId`, URL, address and secret-reference properties fail deserialization.
+- Deny-by-default grants and revocation are verified before Vault/DNS/dispatch; replay uses
+  a persistent PostgreSQL nonce and BGW1 signature over method, target, timestamp, nonce and body hash.
+- Endpoints, auth headers and Vault references come only from the server-side catalog.
+  No Broker/Gateway endpoint returns secrets; `GetSecretAsync` is
+  an internal Gateway abstraction and does not cross the API boundary.
+- The Broker contains no vendor API key/PFX: it owns only its non-exportable
+  Installation CNG key and associated public certificate.
+- Restricted egress prohibits proxies, cookies, redirects, loopback, link-local, metadata and
+  private addresses; the only private exception is an exact host+CIDR registered only in
+  `M3Testing` for the synthetic vendor.
+- The App Service certificate forwarded through `X-ARR-ClientCert` is accepted only in
+  `Production` when `WEBSITE_INSTANCE_ID` proves the App Service boundary. The behavior
+  still requires live validation in M3B.
+- Errors and audit contain codes/correlation IDs, not payloads or credentials. CI canary
+  scan and M3A Windows Event Log are PASS. Only the aggregate container-log scan
+  for the live run was not reached by the finalizer and is declared as a non-blocking
+  evidence limitation.
 
-## Build, test e scanning
+## Build, tests and scanning
 
-| Controllo sul commit `91963ce` | Risultato |
+| Check on commit `91963ce` | Result |
 |---|---|
-| build Release | PASS, 0 warning/error locale e CI |
-| suite ordinarie | PASS, 87/87 sul branch corrente, incluso handshake mTLS Schannel reale |
-| Gateway PostgreSQL 18 | PASS, migration apply/no-op, checksum, ruoli, FORCE RLS, tenant isolation, cleanup |
+| Release build | PASS, 0 warnings/errors locally and in CI |
+| Ordinary suites | PASS, 87/87 on the current branch, including real Schannel mTLS handshake |
+| Gateway PostgreSQL 18 | PASS, migration apply/no-op, checksum, roles, FORCE RLS, tenant isolation, cleanup |
 | `m3-deterministic-container-slice` | PASS, run `30903757495` |
-| container hardening/SBOM | PASS, non-root, read-only, health/readiness, fail-closed, shutdown e digest |
-| docs, secret e vulnerability scan | PASS |
+| Container hardening/SBOM | PASS, non-root, read-only, health/readiness, fail-closed, shutdown and digest |
+| Docs, secret and vulnerability scans | PASS |
 | Gitleaks | PASS |
-| Bicep e workflow lint | PASS |
+| Bicep and workflow lint | PASS |
 | PowerShell 5.1 parse | PASS |
-| `ValidateHarness`/esecuzione elevata HOST | PENDING: Docker non è installato sull'HOST corrente |
+| `ValidateHarness`/elevated HOST execution | PENDING: Docker is not installed on the current HOST |
 
-## Blocker per la baseline M3
+## M3 baseline blockers
 
-- environment GitHub `azure-dev`, OIDC federato e variabili elencate nel runbook;
-- smoke Azure PASS con Managed Identity/Key Vault reali e bundle redatto verificato.
+- GitHub environment `azure-dev`, federated OIDC and variables listed in the runbook;
+- Azure smoke PASS with real Managed Identity/Key Vault and verified redacted bundle.
 
-### Ultima run split-host
+### Latest split-host run
 
-La run `m3a-live-20260805-094131` chiude **M3A PRODUCT GATE PASS** sul commit `86b4e0f`.
-P02, Windows Service/virtual account, Legacy standard user, negazioni VM e cleanup sono
-PASS nell'archive VM originale; P01/P03–P07 e N01–N14 HOST sono PASS nel report originale.
-Il finalizzatore del laboratorio resta dichiarato BLOCKED per il probe Schannel opzionale,
-senza mascherarlo come PASS. Evidence, hash, limite di log aggregation e criterio di
-composizione sono in `M3A-PRODUCT-GATE-20260805.md`.
+Run `m3a-live-20260805-094131` closes **M3A PRODUCT GATE PASS** on commit `86b4e0f`.
+P02, Windows Service/virtual account, standard-user Legacy, VM denials and cleanup are
+PASS in the original VM archive; HOST P01/P03–P07 and N01–N14 are PASS in the original report.
+The laboratory finalizer remains declared BLOCKED for the optional Schannel probe,
+without masking it as PASS. Evidence, hashes, log-aggregation limitation and composition
+criterion are in `M3A-PRODUCT-GATE-20260805.md`.
 
-## Non-blocker e debito rinviato
+## Non-blockers and deferred debt
 
-- warning Node 20 delle action v4 sul runner GitHub: aggiornare quando le action pubblicano
-  una major compatibile;
-- warning opzionale `libgssapi_krb5` nei container migration/provisioner: nessun uso
-  Kerberos nel test, ma va rimosso prima della baseline per log operativi puliti;
-- M3 Azure dev usa accesso PostgreSQL “Azure services” e firewall temporaneo del runner;
-  private endpoint/VNet appartengono all'hardening M9;
-- challenge store in-memory e cache Key Vault in-process restano i limiti single-node già
-  accettati in M2;
-- Gateway HTTP v1 e IPC v1 restano **provvisori** finché il gate M3 non è concluso.
+- Node 20 warning from v4 actions on the GitHub runner: update when the actions publish
+  a compatible major version;
+- optional `libgssapi_krb5` warning in migration/provisioner containers: no Kerberos
+  use in the test, but it must be removed before the baseline for clean operational logs;
+- M3 Azure dev uses “Azure services” PostgreSQL access and a temporary runner firewall;
+  private endpoint/VNet belong to M9 hardening;
+- in-memory challenge store and in-process Key Vault cache remain the single-node limitations
+  already accepted in M2;
+- Gateway HTTP v1 and IPC v1 remain **provisional** until the M3 gate is complete.
 
-## Decisione
+## Decision
 
-Synthetic Vault e allowlist privata sono confinati all'ambiente di test; Azure usa OIDC,
-Managed Identity e Key Vault come previsto. **M3A è PASS e costituisce la baseline Core;
-M3B resta PENDING come qualificazione del Deployment Pack Azure e non blocca M4.**
+Synthetic Vault and the private allowlist are confined to the test environment; Azure uses OIDC,
+Managed Identity and Key Vault as planned. **M3A is PASS and constitutes the Core baseline;
+M3B remains PENDING as Azure Deployment Pack qualification and does not block M4.**

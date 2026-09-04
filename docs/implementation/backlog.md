@@ -1,89 +1,95 @@
-# Backlog attivo ordinato per dipendenze
+# Backlog ordered by dependencies — planning snapshot
 
-Aggiornato: 2026-08-24
-Baseline CURRENT: `97daa565f582d575da5d61665126c50ea52be3ed`
+Updated: 2026-08-24
+Recorded planning baseline: `97daa565f582d575da5d61665126c50ea52be3ed`
 
-Questo backlog contiene soltanto le due track attive. `Todo` non autorizza lavoro fuori
-scope; `BLOCKED_EXTERNAL` non autorizza workaround insicuri. Gate e claim sono definiti
+This file preserves recorded slice and gate states; it is not a second current
+capability dashboard. Later integrated FSE2 work supersedes the earlier validate-only
+targets: see [current status](../../IMPLEMENTATION_STATUS.md) and the
+[current pilot](../user/fse2-validation-status.md). Do not infer publication approval
+or new exact-head qualification from a historical `Closed` or `PASS` entry.
+
+This backlog records the two planned tracks. `Todo` does not authorize out-of-scope
+work; `BLOCKED_EXTERNAL` does not authorize unsafe workarounds. Gates and claims are defined
 in [`0.1.0-alpha-scope.md`](0.1.0-alpha-scope.md).
 
 ## P0 — Core `0.1.0-alpha`
 
-| ID | Outcome | Stato | Dipendenza | Gate | Non prova |
+| ID | Outcome | Status | Dependency | Gate | Does not prove |
 |---|---|---|---|---|---|
-| ALPHA-DOC-01 | Riconciliare governance, scope, backlog e DoD con PR #33 sull'exact main. | In progress | Exact main e dirty truth source preservato | ALPHA-05 | Architettura/security complete, API parity o FSE2 runbook. |
-| ALPHA-DOC-02 | Allineare architecture, security e deployment boundaries, inclusi claim PostgreSQL/audit e traceability pertinenti. | Todo | ALPHA-DOC-01 | ALPHA-04/05 | Modifiche di codice, threat remediation o qualifica production. |
-| ALPHA-DOC-03 | Rendere coerenti OpenAPI, API docs e generated types con le route effettive e i parity test. | Surface sufficient (authorized baseline) | ALPHA-DOC-01 | ALPHA-05 | API stabile o backward compatibility futura. |
-| ALPHA-DOC-04 | Allineare la documentazione FSE2 all'exact main e separare synthetic, OfficialTest e production. | Candidate truth-aligned | ALPHA-DOC-01 e stato PR #33 integrato | ALPHA-05; nessun gate FSE2 | Custody reale, import, call OfficialTest o FSE2-T01..T06 PASS. |
-| ALPHA-VER | Derivare una sola versione `0.1.0-alpha.1` per assembly, package, Admin, OpenAPI, immagini e manifest; nessun default prodotto `1.0.0`. | Closed (candidate) | ALPHA-DOC-01 | ALPHA-06/08 | Pubblicazione o stabilità API. |
-| ALPHA-REST | Consolidare un solo `sample-secure-service` Published con Synthetic Provider, API key+mTLS, mock e tutorial coerente. | Closed (authorized baseline) | ALPHA-DOC-01 | ALPHA-02/03 | Supporto ad altri Connector o provider reali. |
-| ALPHA-CLEAN | Provare clean clone e quickstart unico con cleanup/canary su macchina non preparata. | Closed (authorized baseline) | ALPHA-DOC-01 | ALPHA-01/02 | Installer, Azure live o production operations. |
-| ALPHA-DIRECT | Documentare e provare Direct .NET come evaluation integration, con limite del key storage esplicito. | Closed (authorized baseline) | ALPHA-DOC-01 | ALPHA-03/08 | SDK production-grade o supporto native/COM. |
-| ALPHA-ADOPT | Far completare enrollment→publish→grant→invoke a un secondo utilizzatore usando soltanto documentazione pubblica. | PASS — independent adopter simulation | ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN, ALPHA-DOC-02, ALPHA-DOC-03 | ALPHA-03 | Market fit, support SLA o production adoption. |
-| ALPHA-ART | Produrre archive/checksum/SBOM/vulnerability inventory e aggiungere un normalized Core export inventory digest separato dal raw manifest run-specific. | Closed (candidate) | ALPHA-VER | ALPHA-06 | Riproducibilità binaria assoluta, firma release o production provenance. |
-| ALPHA-LIC | Applicare decisione path-based MPL-2.0/Apache-2.0, testi, metadata, artifact binding e validatore. | Candidate implemented, pending independent review/integration | ALPHA-DOC-01; decisione legal/business ricevuta | ALPHA-07 | Publication GO, trademark grant o licenza per repository esterni. |
-| ALPHA-SEC | Applicare security contact, Contributor Covenant 3.0 e DCO 1.1 senza CLA. | Candidate implemented, pending independent review/integration | ALPHA-DOC-01; decisione maintainer/legal ricevuta | ALPHA-07 | Certificazione, SLA o security support enterprise. |
-| ALPHA-REL | Preparare release notes/known limits e rieseguire ALPHA-01..08 sull'exact candidate; tag e pubblicazione richiedono una slice/autorizzazione successiva. | NOT CLOSED | ALPHA-DOC-01, ALPHA-DOC-02, ALPHA-DOC-03, ALPHA-DOC-04 (solo truth alignment), ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN, ALPHA-ADOPT, ALPHA-VER, ALPHA-ART, ALPHA-LIC, ALPHA-SEC | ALPHA-01..08 | Production readiness, FSE2 qualification, tag, publication o merge automatico. |
+| ALPHA-DOC-01 | Reconcile governance, scope, backlog and DoD with PR #33 on exact main. | In progress | Exact main and preserved dirty truth source | ALPHA-05 | Complete architecture/security, API parity or FSE2 runbook. |
+| ALPHA-DOC-02 | Align architecture, security and deployment boundaries, including relevant PostgreSQL/audit claims and traceability. | Todo | ALPHA-DOC-01 | ALPHA-04/05 | Code changes, threat remediation or production qualification. |
+| ALPHA-DOC-03 | Make OpenAPI, API docs and generated types consistent with actual routes and parity tests. | Surface sufficient (authorized baseline) | ALPHA-DOC-01 | ALPHA-05 | Stable APIs or future backward compatibility. |
+| ALPHA-DOC-04 | Align FSE2 documentation with exact main and separate synthetic, OfficialTest and production. | Candidate truth-aligned | ALPHA-DOC-01 and integrated PR #33 status | ALPHA-05; no FSE2 gate | Real custody, import, OfficialTest calls or FSE2-T01..T06 PASS. |
+| ALPHA-VER | Derive one `0.1.0-alpha.1` version for assemblies, packages, Admin, OpenAPI, images and manifests; no `1.0.0` product default. | Closed (candidate) | ALPHA-DOC-01 | ALPHA-06/08 | Publication or API stability. |
+| ALPHA-REST | Consolidate one Published `sample-secure-service` with Synthetic Provider, API key+mTLS, mock and consistent tutorial. | Closed (authorized baseline) | ALPHA-DOC-01 | ALPHA-02/03 | Support for other Connectors or real providers. |
+| ALPHA-CLEAN | Prove clean clone and one quickstart with cleanup/canary on an unprepared machine. | Closed (authorized baseline) | ALPHA-DOC-01 | ALPHA-01/02 | Installer, Azure live or production operations. |
+| ALPHA-DIRECT | Document and test Direct .NET as an evaluation integration, with explicit key-storage limitation. | Closed (authorized baseline) | ALPHA-DOC-01 | ALPHA-03/08 | Production-grade SDK or native/COM support. |
+| ALPHA-ADOPT | Have a second user complete enrollment→publish→grant→invoke using only public documentation. | PASS — independent adopter simulation | ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN, ALPHA-DOC-02, ALPHA-DOC-03 | ALPHA-03 | Market fit, support SLA or production adoption. |
+| ALPHA-ART | Produce archive/checksum/SBOM/vulnerability inventory and add a normalized Core export inventory digest separate from the raw run-specific manifest. | Closed (candidate) | ALPHA-VER | ALPHA-06 | Absolute binary reproducibility, release signing or production provenance. |
+| ALPHA-LIC | Apply the path-based MPL-2.0/Apache-2.0 decision, texts, metadata, artifact binding and validator. | Candidate implemented, pending independent review/integration | ALPHA-DOC-01; legal/business decision received | ALPHA-07 | Publication GO, trademark grant or license for external repositories. |
+| ALPHA-SEC | Apply security contact, Contributor Covenant 3.0 and DCO 1.1 without CLA. | Candidate implemented, pending independent review/integration | ALPHA-DOC-01; maintainer/legal decision received | ALPHA-07 | Certification, SLA or enterprise security support. |
+| ALPHA-REL | Prepare release notes/known limits and rerun ALPHA-01..08 on the exact candidate; tagging and publication require a subsequent slice/authorization. | NOT CLOSED | ALPHA-DOC-01, ALPHA-DOC-02, ALPHA-DOC-03, ALPHA-DOC-04 (truth alignment only), ALPHA-REST, ALPHA-DIRECT, ALPHA-CLEAN, ALPHA-ADOPT, ALPHA-VER, ALPHA-ART, ALPHA-LIC, ALPHA-SEC | ALPHA-01..08 | Production readiness, FSE2 qualification, tagging, publication or automatic merge. |
 
-`P3-CORE-EXPORT-DIGEST` è **Closed (candidate)**. Il raw SHA del manifest resta evidence
-della singola run perché include `generatedAtUtc`; `normalizedInventorySha256` copre
-separatamente source commit, file count e inventario path/byte/SHA-256 in ordine ordinal,
-con payload canonico UTF-8 senza BOM. Il finding non reinterpreta i raw SHA storici.
+`P3-CORE-EXPORT-DIGEST` is **Closed (candidate)**. The raw manifest SHA remains evidence
+for a single run because it includes `generatedAtUtc`; `normalizedInventorySha256` separately
+covers source commit, file count and path/byte/SHA-256 inventory in ordinal order,
+with a canonical UTF-8 payload without BOM. The finding does not reinterpret historical raw SHAs.
 
-`NONDETERMINISTIC_UI_MOCK_20_AXE_SNAPSHOT` è registrato come follow-up noto non
-bloccante. Questa slice non modifica comportamento UI, CSS o soglie Axe; il solo fixture hostname pubblico è riallineato al dominio riservato `.test`.
+`NONDETERMINISTIC_UI_MOCK_20_AXE_SNAPSHOT` is recorded as a known non-blocking
+follow-up. This slice does not change UI behavior, CSS or Axe thresholds; only the public fixture hostname is aligned to the reserved `.test` domain.
 
-DOC-02/03, ALPHA-REST/DIRECT/CLEAN, ALPHA-VER, DOC-04 e i blocker umani possono
-procedere in parallelo dopo DOC-01. DOC-04 è richiesto da ALPHA-REL soltanto per
-descrivere veritieramente il pack opzionale: non richiede `validate-cda` live o
-FSE2-T01..T06. I gate FSE2 non sono dipendenze di ALPHA-REL e un blocker Track B non
-blocca la Core alpha, salvo che riveli un difetto generale di sicurezza del Core.
+DOC-02/03, ALPHA-REST/DIRECT/CLEAN, ALPHA-VER, DOC-04 and human blockers can
+proceed in parallel after DOC-01. ALPHA-REL requires DOC-04 only to
+describe the optional pack truthfully: it does not require live `validate-cda` or
+FSE2-T01..T06. FSE2 gates are not ALPHA-REL dependencies, and a Track B blocker does not
+block Core alpha unless it reveals a general Core security defect.
 
-## P0 parallelo — FSE2 Organization OfficialTest
+## Parallel P0 — FSE2 Organization OfficialTest
 
-FSE2-PROV e FSE2-PACK non sono più candidate fuori main: PR #33 ha integrato provider
-Local PKCS12, importer, overlay e vertical image e li ha qualificati sinteticamente. Le
-slice sotto coprono solo il percorso ancora aperto verso OfficialTest. Il pack resta
-`SecretValues=false`; generic secret retrieval resta deny-only.
+FSE2-PROV and FSE2-PACK are no longer candidates outside main: PR #33 integrated the
+Local PKCS12 provider, importer, overlay and vertical image and qualified them synthetically. The
+slices below cover only the remaining path to OfficialTest. The pack remains
+`SecretValues=false`; generic secret retrieval remains deny-only.
 
-| ID | Outcome | Stato | Dipendenza | Gate | Non prova |
+| ID | Outcome | Status | Dependency | Gate | Does not prove |
 |---|---|---|---|---|---|
-| FSE2-INTAKE | Distinguere e verificare fuori Git accesso test, software accreditation applicabile, piano autorizzato e inventory pubblica/redatta. | BLOCKED_EXTERNAL | Input dell'organizzazione | FSE2-T01 | Accreditamento production o validità/custody del materiale. |
-| FSE2-CUSTODY | Eseguire preflight e import operativo fuori Git con path, ACL, principal, chain, fingerprint e separazione A1/S1 verificati. | BLOCKED_EXTERNAL | FSE2-INTAKE, materiale autorizzato | FSE2-T02 | HSM/KMS equivalence, rotation/revocation production o call FSE2. |
-| FSE2-ACTIVATION-COMPOSITION | Comporre A1 certificate-use mTLS e la stessa S1 sui due slot authorization/integrity, senza generic secret. Un eventuale activation HMAC futuro resta una capability server-owned separata soltanto se richiesto dall'exact environment. | Candidate implemented for validate-cda; pending exact-head CI/review | Exact provider revisions e configuration authority | FSE2-T02 | Generic secret retrieval, `GetSecret`, materiale reale o call FSE2. |
-| FSE2-WARN | Mappare i warning necessari a `validate-cda` in codici tecnici bounded/allowlisted e scartare testo raw. | Todo | Fonte/piano ufficiale congelato | FSE2-T03/06 | Completezza di tutte le risposte o status workflow. |
-| FSE2-DRIVER | Fissare Connector/binding/config exact OfficialTest per il solo `validate-cda` e provisioner verticale con piano protetto, output redatto e superfici Admin esistenti. | Candidate implemented; pending exact-head CI/review e deployment della vertical image | FSE2-CUSTODY, FSE2-ACTIVATION-COMPOSITION | FSE2-T03 | Connettività, materiale operativo o qualifica OfficialTest. |
-| FSE2-OFFLINE | Eseguire E2E sintetico dalla stessa immagine/configurazione destinata a OfficialTest, inclusi negativi zero-network. | Todo | FSE2-WARN, FSE2-DRIVER | FSE2-T03 | Chiamata live, accreditamento o risposta ufficiale. |
-| FSE2-LIVE-VAL | Eseguire `validate-cda` OfficialTest con dataset sintetico autorizzato ed evidence redatta. | BLOCKED_EXTERNAL | FSE2-T01/T02/T03 e autorizzazione operativa | FSE2-T04/06 | Create/status, 11/11 live o production. |
-| FSE2-HASH | Calcolare `attachment_hash` sugli exact input-file bytes per create/replace e coprire file ≠ multipart con regression. | Candidate implemented, pending exact-head CI/review | Hash truth ministeriale congelata e addendum operativo | FSE2-T05 | `validate-cda`, create/replace live o qualifica OfficialTest. |
-| FSE2-STATUS | Mappare soltanto outcome status tecnici bounded/redatti e dichiarare i limiti di persistenza. | Product path offline candidate; pending exact-head CI/review | Correlazione durevole e piano workflow congelato | FSE2-T05/06 | Status live. |
-| FSE2-LIVE-WF | Eseguire create/replace e status soltanto se autorizzati, con hash e outcome verificati. | Todo | FSE2-HASH, FSE2-STATUS | FSE2-T05/06 | Tutte le 11 operation live-qualified o production. |
-| FSE2-DUR | Persistenza workflow cross-process/cross-node per `create + get-status-by-workflow`. | Integrated on exact main; product vertical E2E candidate PASS | Migration 0018 e bridge autorizzato | `FSE2_DUR_*` PostgreSQL 18 + final exact-head gate | Nessun dato clinico, Admin read-back, retention o qualifica OfficialTest/production. |
-| FSE2-HUMAN | Implementare Human Actor solo con requisito e piano ufficiale autorizzati. | Deferred | Specifica e autorizzazione future | Gate futuro | Organization profile o Human Actor production. |
+| FSE2-INTAKE | Distinguish and verify test access, applicable software accreditation, authorized plan and public/redacted inventory outside Git. | BLOCKED_EXTERNAL | Organization input | FSE2-T01 | Production accreditation or material validity/custody. |
+| FSE2-CUSTODY | Perform preflight and operational import outside Git with verified paths, ACLs, principal, chain, fingerprints and A1/S1 separation. | BLOCKED_EXTERNAL | FSE2-INTAKE, authorized material | FSE2-T02 | HSM/KMS equivalence, production rotation/revocation or FSE2 calls. |
+| FSE2-ACTIVATION-COMPOSITION | Compose A1 certificate-use mTLS and the same S1 on both authorization/integrity slots, without generic secrets. Any future activation HMAC remains a separate server-owned capability only if required by the exact environment. | Candidate implemented for validate-cda; pending exact-head CI/review | Exact provider revisions and configuration authority | FSE2-T02 | Generic secret retrieval, `GetSecret`, real material or FSE2 calls. |
+| FSE2-WARN | Map warnings required for `validate-cda` to bounded/allowlisted technical codes and discard raw text. | Todo | Frozen official source/plan | FSE2-T03/06 | Completeness of all responses or status workflows. |
+| FSE2-DRIVER | Fix the exact OfficialTest Connector/binding/configuration for `validate-cda` only and a vertical provisioner with protected plan, redacted output and existing Admin surfaces. | Candidate implemented; pending exact-head CI/review and vertical image deployment | FSE2-CUSTODY, FSE2-ACTIVATION-COMPOSITION | FSE2-T03 | Connectivity, operational material or OfficialTest qualification. |
+| FSE2-OFFLINE | Run synthetic E2E from the same image/configuration intended for OfficialTest, including zero-network negatives. | Todo | FSE2-WARN, FSE2-DRIVER | FSE2-T03 | Live call, accreditation or official response. |
+| FSE2-LIVE-VAL | Run `validate-cda` OfficialTest with an authorized synthetic dataset and redacted evidence. | BLOCKED_EXTERNAL | FSE2-T01/T02/T03 and operational authorization | FSE2-T04/06 | Create/status, 11/11 live or production. |
+| FSE2-HASH | Compute `attachment_hash` over exact input-file bytes for create/replace and cover file ≠ multipart with regression tests. | Candidate implemented, pending exact-head CI/review | Frozen ministerial hash definition and operational addendum | FSE2-T05 | `validate-cda`, live create/replace or OfficialTest qualification. |
+| FSE2-STATUS | Map only bounded/redacted technical status outcomes and declare persistence limitations. | Product path offline candidate; pending exact-head CI/review | Durable correlation and frozen workflow plan | FSE2-T05/06 | Live status. |
+| FSE2-LIVE-WF | Execute create/replace and status only if authorized, with verified hash and outcomes. | Todo | FSE2-HASH, FSE2-STATUS | FSE2-T05/06 | All 11 operations live-qualified or production. |
+| FSE2-DUR | Cross-process/cross-node workflow persistence for `create + get-status-by-workflow`. | Integrated on exact main; product vertical E2E candidate PASS | Migration 0018 and authorized bridge | `FSE2_DUR_*` PostgreSQL 18 + final exact-head gate | No clinical data, Admin read-back, retention or OfficialTest/production qualification. |
+| FSE2-HUMAN | Implement Human Actor only with an authorized official requirement and plan. | Deferred | Future specification and authorization | Future gate | Organization profile or production Human Actor. |
 
-`FSE2-HASH` e `FSE2-STATUS` non sono prerequisiti di `validate-cda`. Diventano necessari
-per le sole claim create/status autorizzate.
+`FSE2-HASH` and `FSE2-STATUS` are not prerequisites for `validate-cda`. They become necessary
+only for authorized create/status claims.
 
-## Stop list della fase
+## Phase stop list
 
-Fino alla chiusura dell'alpha e del primo `validate-cda` non si avviano o autorizzano:
+Until the alpha and first `validate-cda` are closed, do not start or authorize:
 
-- nuove capability Core generiche senza un blocker riproducibile;
-- nuovi Connector verticali;
-- altri provider cloud;
+- new generic Core capabilities without a reproducible blocker;
+- new vertical Connectors;
+- other cloud providers;
 - MSI;
 - COM/C ABI;
-- refactor generici non richiesti da un difetto osservabile;
-- fuzzing o performance come claim della fase;
+- generic refactors not required by an observable defect;
+- fuzzing or performance as a phase claim;
 - HA/DR;
 - marketplace;
-- claim production;
-- merge automatici.
+- production claims;
+- automatic merges.
 
-I claim esplicitamente non autorizzati sono elencati nello
-[`scope`](0.1.0-alpha-scope.md#claim-non-autorizzati).
+Explicitly unauthorized claims are listed in the
+[`scope`](0.1.0-alpha-scope.md#unauthorized-claims).
 
-## Deferred fuori dalle track attive
+## Deferred outside the active tracks
 
-Legacy distribution, altri provider/verticali, supply-chain production, operabilità
-enterprise e pilot restano deferred. Non diventano P0 per effetto di questa truth pass.
+Legacy distribution, other providers/verticals, production supply chain, enterprise
+operability and pilots remain deferred. They do not become P0 as a result of this truth pass.

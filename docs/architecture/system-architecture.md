@@ -1,16 +1,16 @@
-# System architecture e confini di fiducia
+# System architecture and trust boundaries
 
-Questo documento descrive la baseline integrata in `main`. Le etichette hanno significato
-preciso:
+This document describes the baseline integrated in `main`. Labels have a precise
+meaning:
 
-- **CURRENT**: codice, configurazione o test presenti;
-- **TARGET**: direzione approvata, senza claim di disponibilità o qualifica;
-- **HISTORICAL**: descrizione valida soltanto per la baseline esplicitamente indicata.
+- **CURRENT**: existing code, configuration or tests;
+- **TARGET**: approved direction, without availability or qualification claims;
+- **HISTORICAL**: description valid only for the explicitly named baseline.
 
-Nel repository completo la dashboard corrente resta `IMPLEMENTATION_STATUS.md`, che non
-fa parte dell'export Core.
-Un test sintetico, un laboratorio live controllato, un ambiente OfficialTest e una
-qualifica production non sono evidenze intercambiabili.
+The current [capability summary](../../IMPLEMENTATION_STATUS.md) is included in the Core
+export; its optional-pack links point to the full repository.
+A synthetic test, controlled live laboratory, OfficialTest environment and
+production qualification are not interchangeable evidence.
 
 ## CURRENT — system context
 
@@ -32,112 +32,117 @@ flowchart LR
   Runtime --> External[Configured External Services]
 ```
 
-Il Gateway è un modular monolith. Admin API, runtime API e composizione dei moduli
-condividono l'host; le migrazioni sono eseguite da un processo/immagine distinto. Il
-Local Broker è il confine Windows locale. Una `DirectInstallation` salta soltanto quel
-confine e converge sullo stesso `GatewayClientPrincipal` e sullo stesso runtime.
+The Gateway is a modular monolith. Admin APIs, runtime APIs and module composition
+share the host; migrations are executed by a separate process/image. The
+Local Broker is the local Windows boundary. A `DirectInstallation` bypasses only that
+boundary and converges on the same `GatewayClientPrincipal` and runtime.
 
-Il percorso ripetibile predefinito usa il Synthetic Provider. Il pack Azure e il pack
-local PKCS#12 sono opzionali e dipendono dalle astrazioni Core, mai il contrario. Il
-Gateway image predefinito non contiene pack healthcare; un modulo verticale richiede una
-composizione downstream esplicita.
+The default repeatable path uses the Synthetic Provider. Azure and local
+PKCS#12 packs are optional and depend on Core abstractions, never the reverse. The
+default Gateway image contains no healthcare packs; a vertical module requires
+explicit downstream composition.
 
 ## CURRENT — trust boundaries
 
-| ID | Confine | Controlli principali | Stato e limite |
+| ID | Boundary | Main controls | Status and limit |
 |---|---|---|---|
-| TB-01 | Legacy → Local Broker | Named Pipe ACL, Windows identity, PID/process handle, path, publisher/hash, Application policy, nonce e limiti. | Implementato; il client distribuito nel repository è .NET. |
-| TB-02 | Broker → storage locale | Service SID, ACL `ProgramData`, DPAPI `CurrentUser`, CNG e AES-GCM. | Implementato; Administrator/SYSTEM restano privilegiati. |
-| TB-03 | Broker/Direct → Gateway | TLS ClientAuth, credential per Installation, BGW1, timestamp e nonce anti-replay. | Tenant/Application/Environment derivano dal registry; la chiave del sample Direct è solo process-local. |
-| TB-04 | Gateway → PostgreSQL | Ruoli distinti, composite foreign key, FORCE RLS, nessun secret value e migration 0017 append-only per i record evento rispetto ai ruoli applicativi. | TLS dipende dal deployment. Owner/migration e amministratori host/DB restano nella TCB; nessuna firma/notarizzazione o protezione assoluta dal DBA. |
-| TB-05 | Gateway → provider | Capability separate per secret value, certificato client, materiale pubblico, firma/key-use, MAC, health e discovery. | Synthetic Provider corrente; pack esterni opzionali. Capability assenti non sono inferite o emulate. |
-| TB-06 | Gateway → servizio esterno | Endpoint Published, DNS/IP validation, TLS, redirect deny, method/path/header/content-type e response bounds. | Qualificato sui percorsi sintetici; non implica servizio esterno o cloud qualificato. |
-| TB-07 | Browser Admin → Admin Plane | OIDC code flow, PKCE/nonce, cookie sicuro, CSRF, RBAC, tenant scope, ETag e four-eyes. | DevelopmentAuth è locale/test-only e Production la rifiuta. |
-| TB-08 | Pipeline → artefatti | Build/test, boundary tests, secret scan, container checks, SBOM e Core export. | Gate di repository correnti; signing/provenance e pubblicazione release sono target. |
+| TB-01 | Legacy → Local Broker | Named Pipe ACL, Windows identity, PID/process handle, path, publisher/hash, Application policy, nonce and limits. | Implemented; the client distributed in the repository is .NET. |
+| TB-02 | Broker → local storage | Service SID, `ProgramData` ACL, DPAPI `CurrentUser`, CNG and AES-GCM. | Implemented; Administrator/SYSTEM remain privileged. |
+| TB-03 | Broker/Direct → Gateway | TLS ClientAuth, per-Installation credentials, BGW1, timestamp and anti-replay nonce. | Tenant/Application/Environment derive from the registry; the Direct sample key is process-local only. |
+| TB-04 | Gateway → PostgreSQL | Separate roles, composite foreign keys, FORCE RLS, no secret values and migration 0017 making event records append-only for application roles. | TLS depends on deployment. Owner/migration and host/DB administrators remain in the TCB; no signing/notarization or absolute protection from the DBA. |
+| TB-05 | Gateway → provider | Separate capabilities for secret values, client certificates, public material, signing/key use, MAC, health and discovery. | Current Synthetic Provider; optional external packs. Missing capabilities are not inferred or emulated. |
+| TB-06 | Gateway → external service | Published endpoints, DNS/IP validation, TLS, redirect denial, method/path/header/content-type and response bounds. | Qualified on synthetic paths; does not imply qualified external services or cloud. |
+| TB-07 | Admin browser → Admin Plane | OIDC code flow, PKCE/nonce, secure cookie, CSRF, RBAC, tenant scope, ETag and four-eyes. | DevelopmentAuth is local/test-only and is rejected in Production. |
+| TB-08 | Pipeline → artifacts | Build/tests, boundary tests, secret scan, container checks, SBOM and Core export. | Current repository gates; signing/provenance and release publication are targets. |
 
-## CURRENT — flusso di autorizzazione runtime
+## CURRENT — runtime authorization flow
 
-1. Sul percorso Broker, il servizio identifica l'Application senza affidarsi al solo
-   nome del processo e verifica la policy locale per operation e Connector.
-2. Broker e Direct client presentano una credential ClientAuth e firmano la richiesta
-   BGW1. Il Gateway autentica la credential, verifica stato/scadenza e consuma il nonce.
-3. Installation, Application, Tenant, Environment e caller kind provengono dallo stato
-   server-side autenticato; il payload non può sostituirli.
-4. Il Gateway applica il grant Connector/operation deny-by-default.
-5. Il runtime legge lo stamp della versione Published e dei binding correnti a ogni
-   invocazione. Una cache TTL è riusata solo se lo stamp coincide; store indisponibile,
-   stamp diverso o snapshot incoerente falliscono chiusi.
-6. La configurazione Published seleziona strategia, endpoint logico, metodo, limiti e
-   profilo di autenticazione. Il caller non fornisce destinazione, provider o locator.
-7. I riferimenti logici sono risolti nel catalogo server-side. Chiavi, certificati,
-   secret value e locator fisici restano nel Gateway/provider boundary.
-8. Restricted egress valida destinazione e TLS, invoca il servizio, limita e sanitizza
-   la risposta e registra audit metadata-only.
+1. On the Broker path, the service identifies the Application without relying only on
+   process name and checks local policy for operation and Connector.
+2. Broker and Direct clients present a ClientAuth credential and sign the
+   BGW1 request. The Gateway authenticates the credential, checks state/expiry and consumes the nonce.
+3. Installation, Application, Tenant, Environment and caller kind come from authenticated
+   server-side state; the payload cannot replace them.
+4. The Gateway applies the deny-by-default Connector/operation grant.
+5. The runtime reads the Published-version and current-binding stamp on every
+   invocation. A TTL cache is reused only if the stamp matches; unavailable store,
+   different stamp or inconsistent snapshot fail closed.
+6. Published configuration selects strategy, logical endpoint, method, limits and
+   authentication profile. The caller supplies no destination, provider or locator.
+7. Logical references are resolved in the server-side catalog. Keys, certificates,
+   secret values and physical locators remain within the Gateway/provider boundary.
+8. Restricted egress validates destination and TLS, invokes the service, bounds and sanitizes
+   the response and records metadata-only audit.
 
-Pubblicazione e rollback verificano checksum, binding digest e approvazione distinta in
-transazione, aggiornano `active_version_id`/`publication_revision` e non modificano in
-place una versione già Published. L'invalidazione locale è immediata; ogni processo
-ricontrolla comunque lo stamp PostgreSQL alla successiva invocazione.
+Publication and rollback verify checksum, binding digest and distinct approval in a
+transaction, update `active_version_id`/`publication_revision` and do not modify an already
+Published version in place. Local invalidation is immediate; every process
+nevertheless rechecks the PostgreSQL stamp on its next invocation.
 
-## CURRENT — materiale sensibile e provider
+## CURRENT — sensitive material and providers
 
-| Materiale | Proprietario/collocazione | Regola |
+| Material | Owner/location | Rule |
 |---|---|---|
-| Vendor secret | Provider server-side del Gateway | Mai restituito a Broker, Direct client, browser o database come valore. |
-| Secret/data key locale | Local Broker | DPAPI sotto service identity; data envelope AES-256-GCM; nessuna operation IPC `GetSecret`. |
-| Chiave Installation Broker | Windows CNG sotto l'identità del servizio | Non esportabile; usata per enrollment PoP e BGW1. |
-| Chiave Installation Direct | Client Direct | Custodia production responsabilità del client; non qualificata dal sample. |
-| Certificato/chiave outbound | Provider server-side | Il runtime usa capability purpose-bound; private key/PFX non attraversano i contratti client-facing. |
-| Token/sessione outbound | Cache bounded process-local del modulo Gateway | Al chiamante passa solo una reference opaca; non esiste durability distribuita implicita. |
+| Vendor secret | Gateway server-side provider | Never returned as a value to Broker, Direct clients, browser or database. |
+| Local secret/data key | Local Broker | DPAPI under service identity; AES-256-GCM data envelope; no `GetSecret` IPC operation. |
+| Broker Installation key | Windows CNG under service identity | Non-exportable; used for enrollment PoP and BGW1. |
+| Direct Installation key | Direct client | Production custody is the client's responsibility; not qualified by the sample. |
+| Outbound certificate/key | Server-side provider | Runtime uses purpose-bound capabilities; private keys/PFX do not cross client-facing contracts. |
+| Outbound token/session | Bounded process-local cache in the Gateway module | Only an opaque reference reaches the caller; there is no implicit distributed durability. |
 
-Il pack local PKCS#12 dichiara `SecretValues=false`. Il relativo slot
-`ISecretValueProvider` è deny-only e non accede al filesystem; il pack offre soltanto le
-capability certificate/signing dichiarate. La qualifica integrata usa materiale
-sintetico per-run. Non prova import operativo, custody HSM/KMS, certificati ufficiali o
-chiamate FSE2 live.
+The local PKCS#12 pack declares `SecretValues=false`. Its
+`ISecretValueProvider` slot is deny-only and does not access the filesystem; the pack offers only its
+declared certificate/signing capabilities. Integrated qualification uses
+per-run synthetic material. It does not prove operational import, HSM/KMS custody, official certificates or
+live FSE2 calls.
 
-## CURRENT — collocazione dell'esecuzione
+## CURRENT — execution location
 
-- Il **Local Broker** implementa storage/delete di secret locali autorizzati,
-  protect/unprotect dati, HMAC, status e invocazione vincolata del Gateway.
-- Il **Gateway** implementa autenticazione/grant, catalogo Published, provider
-  resolution, moduli di autenticazione e restricted egress.
-- Il percorso **Direct** usa la stessa pipeline Gateway dopo il principal.
-- I moduli di execution sono allowlisted dal deployment e full-trust in-process; la
-  superficie ristretta limita l'autorità supportata, non crea una sandbox.
-- Le foundation OAuth, SOAP/session, JWT/X.509 e signing non costituiscono da sole una
-  qualifica di un Connector o servizio esterno.
+- The **Local Broker** implements storage/deletion of authorized local secrets,
+  data protect/unprotect, HMAC, status and constrained Gateway invocation.
+- The **Gateway** implements authentication/grants, Published catalog, provider
+  resolution, authentication modules and restricted egress.
+- The **Direct** path uses the same Gateway pipeline after the principal.
+- Execution modules are deployment-allowlisted and full-trust in-process; the
+  narrow surface limits supported authority, not creates a sandbox.
+- OAuth, SOAP/session, JWT/X.509 and signing foundations do not by themselves
+  qualify a Connector or external service.
 
-## TARGET — senza claim corrente
+## TARGET — without current claims
 
-- packaging e pubblicazione della developer alpha, licenza e canale security operativo;
-- qualifica Azure/cloud e provider reali;
-- MSI e adapter legacy aggiuntivi;
-- smart card e flussi ibridi operator-assisted;
-- HA/DR, backup/restore, load/soak, artifact signing/provenance, pentest e pilot.
+- developer-alpha publication and completion of the adoption gate; licensing and the
+  reporting channel are already documented in [LICENSING.md](../../LICENSING.md) and
+  [SECURITY.md](../../SECURITY.md), without implying publication approval;
+- Azure/cloud and real-provider qualification;
+- MSI and additional legacy adapters;
+- smart cards and operator-assisted hybrid flows;
+- HA/DR, backup/restore, load/soak, artifact signing/provenance, pentest and pilots.
 
-L'adozione early-adopter resta target finché `ALPHA-ADOPT` non è chiuso. La track FSE2
-OfficialTest è separata dal Core: `validate-cda` è il primo outcome futuro, e nessuna
-chiamata live è attestata da questo documento.
+Historical adopter-simulation evidence applies to its recorded baseline, not an
+automatic qualification of every subsequent release candidate. The FSE2
+OfficialTest track is separate from Core. Its current offline/live qualification and
+limits are maintained in the [capability summary](../../IMPLEMENTATION_STATUS.md);
+the [current pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
+owns the procedure and observed live evidence.
 
-## CURRENT — struttura del monorepo
+## CURRENT — monorepo structure
 
 ```text
-/src/Broker             host, core e infrastruttura Windows
-/src/Gateway            API, application, domain e infrastructure
-/src/Providers          astrazioni provider e Synthetic Provider
-/src/ConnectorPacks     pack verticali opzionali, non dipendenze del Core
+/src/Broker             Windows host, core and infrastructure
+/src/Gateway            API, application, domain and infrastructure
+/src/Providers          provider abstractions and Synthetic Provider
+/src/ConnectorPacks     optional vertical packs, not Core dependencies
 /src/Admin              Admin Web
-/src/Shared             contratti e primitive condivise
-/sdk/dotnet             SDK sottile del Local Broker
-/samples                client Direct di evaluation
-/packs/deployment       provider pack opzionali, fuori dal Core solution/export
-/tests                  unit, integration, e2e, security e architecture
-/deploy                 Compose, script Windows e Bicep di laboratorio
-/eng e /tools           gate, migrazioni, diagnostica e harness
-/docs                   contratti, decisioni, stato, piani ed evidence redatta
+/src/Shared             shared contracts and primitives
+/sdk/dotnet             thin Local Broker SDK
+/samples                Direct evaluation client
+/packs/deployment       optional provider packs, outside Core solution/export
+/tests                  unit, integration, e2e, security and architecture
+/deploy                 Compose, Windows scripts and laboratory Bicep
+/eng and /tools         gates, migrations, diagnostics and harnesses
+/docs                   contracts, decisions, status, plans and redacted evidence
 ```
 
-La struttura esprime confini di dipendenza, non microservizi. Documenti milestone e
-report con una baseline esplicita restano evidence storica e non ampliano lo stato
-**CURRENT**.
+The structure expresses dependency boundaries, not microservices. Milestone documents and
+reports with an explicit baseline remain historical evidence and do not broaden
+**CURRENT** status.

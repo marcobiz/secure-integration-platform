@@ -1,18 +1,17 @@
-# ADR-0008: Identità e mTLS per Installation
+# ADR-0008: Installation identity and mTLS
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Decisione
+## Decision
 
-Il Broker genera una chiave ECDSA P-256 CNG non esportabile e un certificato ClientAuth per Installation. Enrollment mediante activation code monouso e proof-of-possession. Gateway registra hash SPKI/certificato, usa mTLS e richiede inoltre firma del request envelope.
+The Broker generates a non-exportable ECDSA P-256 CNG key and a ClientAuth certificate per Installation. Enrollment uses a single-use activation code and proof-of-possession. The Gateway registers the SPKI/certificate hash, uses mTLS and additionally requires a signed request envelope.
 
-Durata certificato 90 giorni, rinnovo da 30 giorni prima e overlap massimo 7 giorni.
+Certificate lifetime is 90 days, renewal starts 30 days before expiry and overlap is at most 7 days.
 
-## Conseguenze
+## Consequences
 
-Non serve una CA complessa nell'MVP; la fiducia è registry-backed. La validazione applicativa è obbligatoria dietro App Service. Reinstallazione genera nuova chiave e richiede enrollment.
+The MVP does not require a complex CA; trust is registry-backed. Application-level validation is mandatory behind App Service. Reinstallation generates a new key and requires enrollment.
 
-## Alternative escluse
+## Rejected alternatives
 
-API key comune è vietata; certificato vendor condiviso non identifica Installation; CA enterprise completa è rinviata finché non necessaria.
-
+A shared API key is prohibited; a shared vendor certificate does not identify an Installation; a full enterprise CA is deferred until needed.

@@ -1,16 +1,15 @@
-# ADR-0006: JSON canonico
+# ADR-0006: Canonical JSON
 
-**Stato:** Accepted
+**Status:** Accepted
 
-## Decisione
+## Decision
 
-JSON Schema Draft 2020-12 per validation e RFC 8785 per canonicalizzazione/checksum. YAML solo import/export, convertito e validato; custom tag e costrutti eseguibili vietati.
+JSON Schema Draft 2020-12 for validation and RFC 8785 for canonicalization/checksum. YAML is only for import/export, converted and validated; custom tags and executable constructs are prohibited.
 
-## Conseguenze
+## Consequences
 
-Diff, checksum, firma e promozione sono deterministici. Numeri e Unicode devono seguire rigorosamente RFC 8785. Le versioni pubblicate conservano JSON canonico immutabile.
+Diffs, checksums, signatures and promotion are deterministic. Numbers and Unicode must strictly follow RFC 8785. Published versions retain immutable canonical JSON.
 
-## Alternative escluse
+## Rejected alternatives
 
-YAML come source of truth introduce parsing ambiguo; schema relazionale puro rende rigida l'evoluzione dei Connector.
-
+YAML as the source of truth introduces ambiguous parsing; a purely relational schema constrains Connector evolution.

@@ -1,9 +1,9 @@
 # M5 Admin UI MVP — Gate Review
 
-**Baseline M4:** `m4-connector-configuration-baseline-20260805` (`49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b`)  
-**Branch:** `m5/admin-ui-mvp`  
+**Baseline M4:** `m4-connector-configuration-baseline-20260805` (`49f81cb37dcd5bf8956638fe4af53c3c5cf39b2b`)
+**Branch:** `m5/admin-ui-mvp`
 **Implementation candidate:** `9f523e9c7efb07d81ca96032869e76c1e6ab07f1`
-**Stato:** **ABSOLUTE FINAL B/C/D REMEDIATION LOCAL PASS — exact-head CI and one final read-only acceptance review pending. M5 is not declared Done; PR #5 remains open and unmerged.**
+**Status:** **ABSOLUTE FINAL B/C/D REMEDIATION LOCAL PASS — exact-head CI and one final read-only acceptance review pending. M5 is not declared Done; PR #5 remains open and unmerged.**
 
 > Historical evidence and counts below remain provenance only. The authoritative current delta is `M5-FINAL-ACCEPTANCE-FIXES.md`; the external evidence bundle binds the final documentation HEAD and is verified before the one read-only acceptance review.
 
@@ -44,7 +44,7 @@ sequenceDiagram
 | Area | Evidence | Result |
 |---|---|---|
 | Auth/session/web security | Admin API integration; CSP/header/cookie/CSRF/logout and Production fail-closed tests | PASS local |
-| RBAC/four-eyes | `AdminSecurityTests`, principal disabilitato, HTTP Viewer negative, E2E-04–07/21/24 | PASS local + CI |
+| RBAC/four-eyes | `AdminSecurityTests`, disabled principal, HTTP Viewer negative, E2E-04–07/21/24 | PASS local + CI |
 | Resources and activation | integration create/list, E2E-12/13 | PASS local |
 | Connector lifecycle | M4 regression plus E2E import/validate/publish/rollback/retire/concurrency | PASS local |
 | Binding/grant/test/audit/health | E2E-08/09/15/16/17 and no-arbitrary-URL unit | PASS local |

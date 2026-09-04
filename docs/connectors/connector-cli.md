@@ -1,6 +1,6 @@
 # Connector CLI
 
-Il progetto `tools/connector-cli` usa esclusivamente l'Admin API; non apre connessioni PostgreSQL.
+The `tools/connector-cli` project uses only the Admin API; it opens no PostgreSQL connections.
 
 ```text
 connector validate <definition.json>
@@ -15,57 +15,57 @@ connector retire <connector-id> <version> <row-version>
 connector test <connector-id> <operation-id> <environment-id>
 ```
 
-Configurazione:
+Configuration:
 
-- `CONNECTOR_GATEWAY_URL`: base HTTPS Admin API;
-- `GATEWAY_ADMIN_API_KEY`: solo modalità di sviluppo; mai argomento CLI;
-- `CONNECTOR_ADMIN_ACTOR`: identificatore audit redatto;
-- `CONNECTOR_GATEWAY_CA_FILE`: CA sintetica opzionale per il quick start.
+- `CONNECTOR_GATEWAY_URL`: Admin API HTTPS base;
+- `GATEWAY_ADMIN_API_KEY`: development mode only; never a CLI argument;
+- `CONNECTOR_ADMIN_ACTOR`: redacted audit identifier;
+- `CONNECTOR_GATEWAY_CA_FILE`: optional synthetic CA for the quick start.
 
-La CLI richiede HTTPS salvo loopback, disabilita proxy/cookie/redirect e non implementa trust-all. Il file CA aggiunge soltanto una trust root esplicita e mantiene la verifica hostname.
+The CLI requires HTTPS except on loopback, disables proxies/cookies/redirects and implements no trust-all mode. The CA file adds only an explicit trust root and preserves hostname verification.
 
-## Provisioning resumable condiviso
+## Shared resumable provisioning
 
-I provisioner verticali possono usare `tools/connector-provisioning`, una state machine soltanto
-operativa e connector-neutral. Prima di ogni mutazione il verticale deve ricostruire lo stato dalle
-Admin API supportate e confrontare in modo ordinale l'identità completa: Connector/version/checksum,
-Environment e Application server-owned, binding e operation-profile digest, provider reference e
-revisioni, grant e approval correnti. Le sole fasi ammesse sono un prefisso monotono da import a
-Published/Active; una combinazione incompleta o un drift produce un arresto prima della mutazione.
+Vertical provisioners can use `tools/connector-provisioning`, an operational-only,
+connector-neutral state machine. Before every mutation, the vertical must reconstruct state from
+supported Admin APIs and compare the complete identity ordinally: Connector/version/checksum,
+server-owned Environment and Application, binding and operation-profile digests, provider references and
+revisions, and current grants and approvals. Allowed phases are only a monotonic prefix from import to
+Published/Active; an incomplete combination or drift stops execution before mutation.
 
-Un HTTP 429 non viene ritentato automaticamente. Il risultato `BGW-PROVISIONING-RATE-LIMITED`
-contiene soltanto stato corrente, fasi completate, prossima fase, `retrySafe`, un `Retry-After`
-opzionale e bounded, e il comando supportato da ripetere. Non contiene response body/header,
-endpoint, credenziali o exception text. Dopo l'attesa operativa l'operatore ripete esattamente lo
-stesso comando e piano: le fasi persistite vengono verificate e saltate. Uno stato già Published e
-identico è verify-only/no-op. Non esistono flag force/recovery né bypass del rate limiter, di RBAC o
-del four-eyes.
+An HTTP 429 is not retried automatically. The `BGW-PROVISIONING-RATE-LIMITED` result
+contains only current state, completed phases, next phase, `retrySafe`, an optional bounded
+`Retry-After`, and the supported command to repeat. It contains no response body/headers,
+endpoints, credentials or exception text. After the operational wait, the operator repeats exactly the
+same command and plan: persisted phases are verified and skipped. An already Published,
+identical state is verify-only/no-op. There are no force/recovery flags or bypasses of rate limiting, RBAC or
+four-eyes controls.
 
-## Confine rate-limit Admin
+## Admin rate-limit boundary
 
-Il Gateway mantiene due classi di partizione non sovrapponibili. `AUTH` usa il remote IP elaborato
-soltanto dal middleware forwarded-header e solo per proxy configurati esplicitamente; `API` usa
-esclusivamente il `sub` validato dall'autenticazione server-side. Classe, tipo e identità fanno parte
-della chiave tipizzata: una prima richiesta non può avvelenare la policy dell'altra classe. Header
-non trusted, parametri, body, tenant, Installation e cookie non validati non scelgono la partizione.
+The Gateway maintains two non-overlapping partition classes. `AUTH` uses the remote IP processed
+only by forwarded-header middleware and only for explicitly configured proxies; `API` uses
+only the `sub` validated by server-side authentication. Class, type and identity are part
+of the typed key: a first request cannot poison the other class's policy. Untrusted
+headers, parameters, bodies, tenants, Installations and unvalidated cookies cannot choose the partition.
 
-Usano AUTH: `GET /admin/auth/login`, `POST /admin/auth/development/login`, la callback OIDC
-configurata, `GET /admin/auth/csrf` prima del login e gli endpoint `/admin/auth/*` sconosciuti.
-Usano API dopo autenticazione server-side: CSRF post-login, `me`, logout e le Admin API ordinarie.
-DevelopmentAuth usa un cookie jar distinto per ruolo e per workflow indipendente; due workflow
-concorrenti non condividono le tre sessioni tecniche. DevelopmentApiKey viene validata prima del
-limiter e usa un subject costante server-owned senza consumare AUTH; OIDC mantiene login e callback
-in AUTH e sposta le richieste di sessione successive in API. Non si fanno affermazioni sui rate limit
-dell'IdP esterno.
+AUTH covers: `GET /admin/auth/login`, `POST /admin/auth/development/login`, the configured OIDC
+callback, `GET /admin/auth/csrf` before login and unknown `/admin/auth/*` endpoints.
+API covers, after server-side authentication: post-login CSRF, `me`, logout and ordinary Admin APIs.
+DevelopmentAuth uses a separate cookie jar per role and independent workflow; two concurrent
+workflows do not share the three technical sessions. DevelopmentApiKey is validated before the
+limiter and uses a constant server-owned subject without consuming AUTH; OIDC keeps login and callback
+in AUTH and moves subsequent session requests to API. No claims are made about rate limits
+of the external IdP.
 
-I default sono AUTH 60 richieste per 60 secondi per remote IP attendibile e API 600 richieste per 60
-secondi per authenticated subject, con coda zero e replenishment automatico. Ciascun workflow riusa
-la propria sessione per ruolo e rinnova il CSRF solo quando necessario: non attende la finestra, non ripete login
-e non richiede supporto tecnico sul golden path. Un 429 Gateway contiene soltanto il codice
-`BGW-RATE-LIMITED`, un Problem redatto e, quando disponibile dal lease, `Retry-After` bounded fra 0 e
-3600 secondi. Il Gateway non attende e non ritenta. Il provisioner interpreta il rifiuto usando lo
-stato server-side e permette di ripetere lo stesso comando/piano; non sono richiesti cleanup, SQL,
-accesso store o un comando recovery.
+Defaults are AUTH 60 requests per 60 seconds per trusted remote IP and API 600 requests per 60
+seconds per authenticated subject, with no queue and automatic replenishment. Each workflow reuses
+its own session per role and renews CSRF only when necessary: it does not wait for the window, repeat login
+or require technical support on the golden path. A Gateway 429 contains only the
+`BGW-RATE-LIMITED` code, a redacted Problem and, when available from the lease, `Retry-After` bounded between 0 and
+3600 seconds. The Gateway does not wait or retry. The provisioner interprets the refusal using
+server-side state and allows the same command/plan to be repeated; no cleanup, SQL,
+store access or recovery command is required.
 
-Questo limiter riguarda esclusivamente il piano Admin. Non governa il traffico tenant/data-plane e
-le stesse soglie non devono essere applicate al data plane senza capacity test dedicati.
+This limiter concerns only the Admin plane. It does not govern tenant/data-plane traffic and
+the same thresholds must not be applied to the data plane without dedicated capacity tests.

@@ -1,188 +1,188 @@
-# Gate Review conclusiva M0/M1 e primo vertical slice
+# Final Gate Review for M0/M1 and the first vertical slice
 
-**Data:** 2026-08-03  
-**Baseline congelata:** commit `7f68442ceb9adcc47bb1b1a534ad64e23bd26bac`  
-**Tag annotato:** `baseline-m0-m1-vslice-2026-08-03`  
-**SUT baseline M0/M1:** `39ac4eae23d6a4c43729863ca345fdbf10af0ee6`
+**Date:** 2026-08-03
+**Frozen baseline:** commit `7f68442ceb9adcc47bb1b1a534ad64e23bd26bac`
+**Annotated tag:** `baseline-m0-m1-vslice-2026-08-03`
+**M0/M1 SUT baseline:** `39ac4eae23d6a4c43729863ca345fdbf10af0ee6`
 
 **Harness baseline:** `f33bf910b9f7c1f5b8a4ea47476c26f7c49c2170`
 
-**Commit live testato:** `24288dbe065ecedc21c0018e8ed37ca844bc8caf`
+**Live-tested commit:** `24288dbe065ecedc21c0018e8ed37ca844bc8caf`
 
-**Esito del gate:** **NO-GO per M2: matrice live PASS, integrazione canonica pendente**
+**Gate result:** **NO-GO for M2: live matrix PASS, canonical integration pending**
 
-**IPC:** **provvisorio**, non congelato per COM/C ABI/CLI
+**IPC:** **provisional**, not frozen for COM/C ABI/CLI
 
-Questa review usa `IMPLEMENTATION_STATUS.md` e il rapporto del vertical slice come baseline, ma registra soltanto evidenze aggiuntive, finding e decisioni di gate.
+This review uses `IMPLEMENTATION_STATUS.md` and the vertical-slice report as its baseline, but records only additional evidence, findings and gate decisions.
 
-## 1. Cosa è stato realmente eseguito
+## 1. What was actually executed
 
-### Baseline e clean checkout
+### Baseline and clean checkout
 
-- repository inizializzato e baseline committata/taggata prima delle modifiche di review;
-- clone separato del tag in `.artifacts/gate-clean-clone`, detached su `7f68442`;
-- nel clone: restore/build Release con SDK 10.0.302, zero warning/errori;
-- nel clone: 6 unit, 9 integration e 1 E2E passati;
-- validazione documenti e scansione contenutistica secret passate;
-- trovato un difetto M0: `scan-secrets.ps1` poteva lasciare exit code 1 dopo un `rg` senza match pur stampando successo. Corretto nella review insieme all'exit esplicito del validator documentale.
+- repository initialized and baseline committed/tagged before review changes;
+- separate clone of the tag in `.artifacts/gate-clean-clone`, detached at `7f68442`;
+- in the clone: Release restore/build with SDK 10.0.302, zero warnings/errors;
+- in the clone: 6 unit, 9 integration and 1 E2E passed;
+- document validation and content-based secret scan passed;
+- an M0 defect was found: `scan-secrets.ps1` could leave exit code 1 after an `rg` with no matches despite printing success. Corrected during review, along with explicit exit in the document validator.
 
-Il clean checkout è stato eseguito sullo stesso host usando un SDK installato fuori dal clone: prova l'indipendenza dal working tree, non qualifica l'OS come macchina pulita.
+The clean checkout ran on the same host using an SDK installed outside the clone: it proves independence from the working tree, not that the OS is a clean machine.
 
-### Hardening aggiunto durante la review
+### Hardening added during review
 
-La review ha aggiunto test/controlli per:
+The review added tests/controls for:
 
-- layout network del frame, magic/version/type/flags, EOF/troncamento e limiti esatti/oversize;
-- handshake sequence e nonce malformato;
-- nonce AES-GCM, AAD completa, malformed envelope e key version sconosciuta;
-- delete idempotente, cross-Application e grant HMAC;
-- ACL esplicite di pipe e storage;
-- persistenza dopo riapertura dei repository;
-- wire/error/audit redaction per normal path, autenticazione negata, payload invalido e failure crittografico;
-- process creation time, chiusura del process handle e del file handle;
-- protezione della race image/path mantenendo aperto il file eseguibile read-only per tutta la connessione;
-- classificazione deterministica tra deadline, cancel client e shutdown;
-- mapping redatto dei record storage con Base64 corrotta.
+- frame network layout, magic/version/type/flags, EOF/truncation and exact/oversize bounds;
+- handshake sequence and malformed nonce;
+- AES-GCM nonce, complete AAD, malformed envelope and unknown key version;
+- idempotent delete, cross-Application and HMAC grants;
+- explicit pipe and storage ACLs;
+- persistence after repository reopen;
+- wire/error/audit redaction for normal paths, denied authentication, invalid payload and cryptographic failure;
+- process creation time, process-handle and file-handle closure;
+- image/path race protection by retaining a read-only executable file handle for the entire connection;
+- deterministic classification between deadline, client cancellation and shutdown;
+- redacted mapping of storage records with corrupt Base64.
 
-I quattro test critici IPC/identity/cancel/redaction sono passati in **20/20 iterazioni**, 80 esecuzioni complessive senza failure.
+The four critical IPC/identity/cancel/redaction tests passed in **20/20 iterations**, 80 total executions without failure.
 
-Sullo stato live finale: build Release dell'intera solution con **0 warning/0 errori**; **26 unit + 22 integration + 1 E2E = 49/49 test passati**; parsing PowerShell 5.1, `ValidateHarness`, documentation gate e secret scan passati.
+On the final live state: Release build of the entire solution with **0 warnings/0 errors**; **26 unit + 22 integration + 1 E2E = 49/49 tests passed**; PowerShell 5.1 parsing, `ValidateHarness`, documentation gate and secret scan passed.
 
-## 2. Qualificazione dell'ambiente live
+## 2. Live environment qualification
 
-L'ambiente qualificato per la run live è:
+The qualified environment for the live run is:
 
-| Proprietà | Valore osservato |
+| Property | Observed value |
 |---|---|
 | OS | Windows 11 Pro 10.0.26200, build 26200 |
-| Tipo | Microsoft Virtual Machine, UUID `864384BD-9128-4F51-A741-001485E7DF72` |
-| Runner elevato | sì, verificato con `WindowsPrincipal.IsInRole(Administrator)` |
-| PowerShell | Windows PowerShell 5.1.26100.7920, processo `-NoProfile` |
-| Commit repository | `24288dbe065ecedc21c0018e8ed37ca844bc8caf` |
+| Type | Microsoft Virtual Machine, UUID `864384BD-9128-4F51-A741-001485E7DF72` |
+| Elevated runner | Yes, verified with `WindowsPrincipal.IsInRole(Administrator)` |
+| PowerShell | Windows PowerShell 5.1.26100.7920, `-NoProfile` process |
+| Repository commit | `24288dbe065ecedc21c0018e8ed37ca844bc8caf` |
 | RunId | `m0-m1-20260803-232955` |
-| Reboot osservato | boot UTC `2026-08-03T21:38:33.1818970Z` |
+| Observed reboot | boot UTC `2026-08-03T21:38:33.1818970Z` |
 
-Il runner elevato ha creato account locali distinti, installato il servizio con virtual account, applicato ACL reali e predisposto un task post-reboot eseguito come SYSTEM. Nessuna prova simulata è stata usata.
+The elevated runner created distinct local accounts, installed the service with a virtual account, applied real ACLs and configured a post-reboot task executed as SYSTEM. No simulated evidence was used.
 
-### Matrice live A–F
+### Live matrix A–F
 
-| Matrice | Evidenza live | Esito gate |
+| Matrix | Live evidence | Gate result |
 |---|---|---|
-| A — applicazione autorizzata | pipe, grants, HMAC, Protect/Unprotect e persistenza | PASS-LIVE |
-| B — processo non autorizzato stesso utente | processo/path distinto negato dalla policy; storage negato | PASS-LIVE |
-| C — utente Windows differente | pipe, storage e DPAPI negati | PASS-LIVE |
-| D — account gestionale | DB legacy cifrato leggibile; nessuna API per secret o key material | PASS-LIVE |
-| E — restart e reboot | tamper envelope/key rifiutato, restore riuscito, HMAC e protected data persistenti | PASS-LIVE |
-| F — Windows Service logging | Event Log reale presente e scansione di 11 canary senza leakage | PASS-LIVE |
+| A — authorized application | pipe, grants, HMAC, Protect/Unprotect and persistence | PASS-LIVE |
+| B — unauthorized process, same user | distinct process/path denied by policy; storage denied | PASS-LIVE |
+| C — different Windows user | pipe, storage and DPAPI denied | PASS-LIVE |
+| D — business application account | encrypted legacy DB readable; no API for secrets or key material | PASS-LIVE |
+| E — restart and reboot | envelope/key tamper rejected, restore successful, HMAC and protected data persistent | PASS-LIVE |
+| F — Windows Service logging | real Event Log present and scan of 11 canaries without leakage | PASS-LIVE |
 
-Il servizio è rimasto installato e `Running` come stato finale osservabile del SUT. Il task post-reboot è stato rimosso automaticamente; il bundle e le run bloccate sono conservati in `C:\ProgramData\SecureIntegration\LiveMatrix`.
+The service remained installed and `Running` as the final observable SUT state. The post-reboot task was removed automatically; the bundle and blocked runs are retained in `C:\ProgramData\SecureIntegration\LiveMatrix`.
 
-Il transcript qualificato e la checklist dell'evidence pack sono in `docs/reviews/evidence/M0-M1-LIVE-MATRIX-EVIDENCE.md`.
+The qualified transcript and evidence-pack checklist are in `docs/reviews/evidence/M0-M1-LIVE-MATRIX-EVIDENCE.md`.
 
-### Evidenze acquisite
+### Evidence acquired
 
-Il bundle `M0-M1-live-matrix-m0-m1-20260803-232955.zip` contiene 24 file dichiarati nel manifest più il manifest stesso. Tutte le dimensioni e gli SHA-256 sono stati verificati; lo SHA-256 del ZIP è `5B6E9997EF0C5C482B27B7DB63323BA54C96D5C2B083DAAEB4A47255D156C52C` e coincide con il sidecar.
+Bundle `M0-M1-live-matrix-m0-m1-20260803-232955.zip` contains 24 files declared in the manifest plus the manifest itself. All sizes and SHA-256 hashes were verified; the ZIP SHA-256 is `5B6E9997EF0C5C482B27B7DB63323BA54C96D5C2B083DAAEB4A47255D156C52C` and matches the sidecar.
 
-## 3. Riesame mirato delle superfici critiche
+## 3. Targeted re-examination of critical surfaces
 
-### Framing e limiti IPC
+### IPC framing and bounds
 
-Il frame a 36 byte, byte order, GUID, sequence, hard limit control 1 MiB e data frame 64 KiB sono testati ai bordi. Magic, major, type, flags, troncamento e unknown JSON falliscono chiusi. Handshake richiede control frame, sequence zero, correlation non vuota e nonce Base64 16–64 byte.
+The 36-byte frame, byte order, GUID, sequence, 1 MiB control hard limit and 64 KiB data frame are boundary-tested. Magic, major, type, flags, truncation and unknown JSON fail closed. Handshake requires a control frame, zero sequence, non-empty correlation and 16–64-byte Base64 nonce.
 
-Finding residuo: i limiti aggregati dichiarati 16/64 MiB non sono implementati end-to-end; gli SDK request correnti usano Base64 nel control frame e hanno quindi capienza effettiva inferiore a 1 MiB. Questo blocca il freeze IPC, non l'avvio delle componenti centrali M2 con payload piccoli.
+Residual finding: the declared 16/64 MiB aggregate limits are not implemented end-to-end; current SDK requests use Base64 in the control frame and therefore have an effective capacity below 1 MiB. This blocks IPC freeze, not the start of central M2 components with small payloads.
 
-### Multiplexing e cancellation
+### Multiplexing and cancellation
 
-Più richieste sulla stessa connessione, risposte potenzialmente fuori ordine, limite 16, deadline e Cancel frame sono implementati. La review ha separato esplicitamente cancel client, deadline e shutdown, eliminando una classificazione temporale flaky. Lo SDK apre ancora una connessione per chiamata.
+Multiple requests on the same connection, potentially out-of-order responses, a limit of 16, deadlines and Cancel frames are implemented. The review explicitly separated client cancellation, deadline and shutdown, eliminating a flaky timing classification. The SDK still opens one connection per call.
 
-### PID reuse, handle e race di autorizzazione
+### PID reuse, handles and authorization races
 
-Il PID arriva da `GetNamedPipeClientProcessId`; il SID dal primary token del processo. Sono catturati creation time, canonical path, SHA-256 e publisher trusted. Process handle e file handle dell'eseguibile restano aperti fino alla chiusura della connessione; creation time viene ricontrollata. Il test verifica che entrambi gli handle siano chiusi da `Dispose`.
+PID comes from `GetNamedPipeClientProcessId`; SID from the process primary token. Creation time, canonical path, SHA-256 and trusted publisher are captured. The process handle and executable file handle remain open until the connection closes; creation time is rechecked. The test verifies that `Dispose` closes both handles.
 
-Questo riduce PID reuse e sostituzione path/image, ma non elimina code injection in un processo autorizzato né compromissione da amministratore. Manca un test deterministico che forzi PID reuse o replacement durante la finestra capture/authorize.
+This reduces PID reuse and path/image replacement, but does not eliminate code injection into an authorized process or administrator compromise. A deterministic test forcing PID reuse or replacement during the capture/authorize window is missing.
 
-### ACL pipe/storage e DPAPI
+### Pipe/storage ACLs and DPAPI
 
-Le security descriptor sono protette dall'ereditarietà e senza World grant. La pipe include service SID più SID applicativi configurati; storage include service identity corrente, SYSTEM e Administrators. I test automatici verificano la costruzione, non l'enforcement tra identità reali.
+Security descriptors are protected from inheritance and have no World grants. The pipe includes the service SID plus configured application SIDs; storage includes the current service identity, SYSTEM and Administrators. Automated tests verify construction, not enforcement between real identities.
 
-DPAPI usa `CurrentUser`, mai `LocalMachine`. La root effettiva della virtual service identity e il comportamento del suo profilo non sono stati osservati live: AC-002/004 restano aperti.
+DPAPI uses `CurrentUser`, never `LocalMachine`. The effective root of the virtual service identity and its profile behavior have not been observed live: AC-002/004 remain open.
 
-### AES-GCM, metadata e key versioning
+### AES-GCM, metadata and key versioning
 
-- key 256 bit per Installation, nonce casuale 96 bit e tag 128 bit;
-- AAD include protocol marker, Installation, Application, purpose e content type;
-- envelope contiene key version; unknown version non prova fallback;
-- tamper di tag/ciphertext, malformed envelope, key DPAPI corrotta e record secret corrotto sono rifiutati;
-- 512 protezioni ripetute non hanno prodotto nonce duplicati.
+- 256-bit key per Installation, random 96-bit nonce and 128-bit tag;
+- AAD includes protocol marker, Installation, Application, purpose and content type;
+- envelope contains key version; unknown version does not attempt fallback;
+- tag/ciphertext tamper, malformed envelope, corrupt DPAPI key and corrupt secret record are rejected;
+- 512 repeated protection operations produced no duplicate nonces.
 
-Resta non atomica la scrittura di `active.txt` e manca il workflow operativo di rotation.
+Writing `active.txt` remains non-atomic, and the operational rotation workflow is missing.
 
-### Logging ed eccezioni
+### Logging and exceptions
 
-Le response IPC espongono solo code/category/retryable. Gli audit normal/denied/error usano operation/application/correlation e code sanitizzati; path, payload, Base64, stack ed exception type non vengono emessi. L'autenticazione negata produce ora un audit metadata-only.
+IPC responses expose only code/category/retryable. Normal/denied/error audits use operation/application/correlation and sanitized codes; paths, payloads, Base64, stacks and exception types are not emitted. Denied authentication now produces a metadata-only audit.
 
-La run live copre il provider Windows Event Log sui path normal, denied, invalid payload, authentication failure e key unwrap failure. Crash non gestiti e telemetry futura restano debito non bloccante.
+The live run covers the Windows Event Log provider on normal, denied, invalid-payload, authentication-failure and key-unwrap-failure paths. Unhandled crashes and future telemetry remain non-blocking debt.
 
-## 4. Criteri AC-002 e AC-004
+## 4. AC-002 and AC-004 criteria
 
-- **AC-002 — PASS-LIVE sul commit testato:** istanza reale `SecureIntegrationBroker` osservata con `StartName = NT SERVICE\SecureIntegrationBroker`, service SID, restart SCM e persistenza post-reboot.
-- **AC-004 — PASS-LIVE sul commit testato:** pipe/storage negati all'altro utente e DPAPI `CurrentUser` non sbloccabile dagli account autorizzato, same-user untrusted e altro utente.
+- **AC-002 — PASS-LIVE on the tested commit:** real `SecureIntegrationBroker` instance observed with `StartName = NT SERVICE\SecureIntegrationBroker`, service SID, SCM restart and post-reboot persistence.
+- **AC-004 — PASS-LIVE on the tested commit:** pipe/storage denied to the other user and DPAPI `CurrentUser` could not be unlocked by authorized, same-user untrusted or other-user accounts.
 
-Il risultato è attribuibile esclusivamente al commit `24288dbe065ecedc21c0018e8ed37ca844bc8caf` registrato nel manifest.
+The result is attributable exclusively to commit `24288dbe065ecedc21c0018e8ed37ca844bc8caf` recorded in the manifest.
 
-## 5. Decisioni aperte valutate, non implementate
+## 5. Open decisions evaluated, not implemented
 
-| Tema | Decisione consigliata | Motivazione | Milestone/ADR | Blocca M2? |
+| Topic | Recommended decision | Rationale | Milestone/ADR | Blocks M2? |
 |---|---|---|---|---|
-| Upgrade application policy | Default `SID + canonical path + trusted publisher`; hash opzionale per pinning ad alta garanzia/emergenza. Vietare publisher-only senza file handle/chain policy. | Publisher permette upgrade controllati; hash-only è fragile; path/SID limitano scope. | Chiarire ADR-0016 entro M6, validare signed positive path in M9. | No per iniziare M2. |
-| Recovery profilo virtual service identity | MVP: reinstall/re-enroll e perdita dichiarata dei soli dati locali non recuperabili; niente escrow universale della DPAPI root. Definire backup supportato solo se protegge l'intero profilo/host. | Evita una KEK globale e promesse di recovery non sostenibili. | Aggiornare ADR-0014 e ADR-0004 entro M9, prima del pilot. | No per sviluppo M2; blocca pilot/production. |
-| Provisioning Installation ID/manifest via MSI | Installation ID random univoco generato una volta; config atomica sotto ACL; manifest validato e firmato/proveniente dal control plane; repair non rigenera ID. | AC-005 e M2 identity dipendono da identità stabile e non clonata. | ADR-0017 Accepted; implementazione MSI M9. | Il blocker documentale è chiuso; la conformità resta obbligatoria per identity integration M2. |
-| API streaming adapter legacy | Mantenere frame Data/End sperimentali; definire backpressure, cancellation, ownership buffer e x86 limits solo dopo M2/M3. | Evita congelare ABI su assunzioni non validate end-to-end. | Aggiornare ADR-0003 durante M3, freeze in M6. | No. |
-| Key rotation operativa | Active version atomica, retention delle versioni leggibili, rotazione amministrativa auditata e migrazione lazy; mai fallback silenzioso su versioni ignote. | Mantiene decryptability e rende rollback/recovery verificabili. | Estendere ADR-0004 prima di M7/M9. | No per M2. |
+| Application policy upgrade | Default `SID + canonical path + trusted publisher`; optional hash for high-assurance/emergency pinning. Prohibit publisher-only without file handle/chain policy. | Publisher allows controlled upgrades; hash-only is fragile; path/SID bound scope. | Clarify ADR-0016 by M6, validate signed positive path in M9. | No for starting M2. |
+| Virtual service identity profile recovery | MVP: reinstall/re-enroll and declared loss of unrecoverable local data only; no universal DPAPI-root escrow. Define supported backup only if it protects the entire profile/host. | Avoids a global KEK and unsustainable recovery promises. | Update ADR-0014 and ADR-0004 by M9, before the pilot. | No for M2 development; blocks pilot/production. |
+| Installation ID/manifest provisioning through MSI | Unique random Installation ID generated once; atomic configuration under ACL; validated manifest signed or sourced from the control plane; repair does not regenerate ID. | AC-005 and M2 identity depend on a stable, non-cloned identity. | ADR-0017 Accepted; MSI implementation M9. | Documentation blocker closed; compliance remains mandatory for M2 identity integration. |
+| Legacy adapter streaming API | Keep Data/End frames experimental; define backpressure, cancellation, buffer ownership and x86 limits only after M2/M3. | Avoids freezing an ABI around assumptions not validated end-to-end. | Update ADR-0003 during M3, freeze in M6. | No. |
+| Operational key rotation | Atomic active version, retention of readable versions, audited administrative rotation and lazy migration; never silent fallback on unknown versions. | Maintains decryptability and makes rollback/recovery verifiable. | Extend ADR-0004 before M7/M9. | No for M2. |
 
-ADR-0017 è stato successivamente accettato e formalizza il provisioning MSI/Installation identity senza implementare M2. Le altre raccomandazioni restano pianificate nelle milestone indicate.
+ADR-0017 was subsequently accepted and formalizes MSI/Installation identity provisioning without implementing M2. Other recommendations remain planned for the indicated milestones.
 
-## 6. Stato IPC
+## 6. IPC status
 
-Il protocollo corrente è **provvisorio/stabile solo per uso interno M1**. Non è “experimental throwaway”, perché framing e semantiche base hanno test regressivi; non è però “frozen”, perché mancano:
+The current protocol is **provisional/stable only for internal M1 use**. It is not “experimental throwaway”, because framing and basic semantics have regression tests; however, it is not “frozen”, because it lacks:
 
-- aggregate streaming 16/64 MiB e backpressure;
-- validazione con Installation identity/revocation M2;
-- vertical slice M3 production-like;
-- compatibility .NET Framework, x86, COM e C ABI;
-- fuzzing stateful e long-running connection tests.
+- 16/64 MiB aggregate streaming and backpressure;
+- validation with M2 Installation identity/revocation;
+- production-like M3 vertical slice;
+- .NET Framework, x86, COM and C ABI compatibility;
+- stateful fuzzing and long-running connection tests.
 
-Nessun adapter M6 deve assumere ABI definitiva prima di questi gate.
+No M6 adapter should assume a final ABI before these gates.
 
-## 7. Blocker per M2
+## 7. M2 blocker
 
-1. **Integrazione canonica pendente:** la run PASS è sul commit locale `24288dbe065ecedc21c0018e8ed37ca844bc8caf`; `origin/main` punta ancora a `f33bf910b9f7c1f5b8a4ea47476c26f7c49c2170`.
+1. **Canonical integration pending:** the PASS run is on local commit `24288dbe065ecedc21c0018e8ed37ca844bc8caf`; `origin/main` still points to `f33bf910b9f7c1f5b8a4ea47476c26f7c49c2170`.
 
-La lineage correttiva deve essere revisionata e integrata mantenendo esattamente lo SHA testato. Se l'integrazione usa squash, rebase o qualsiasi riscrittura, la matrice completa deve essere rieseguita sul nuovo commit da stato pulito. I precedenti blocker live A-F, AC-002, AC-004 ed Event Log sono chiusi per il commit testato.
+The corrective lineage must be reviewed and integrated while preserving the exact tested SHA. If integration uses squash, rebase or any rewrite, the complete matrix must be rerun on the new commit from a clean state. Previous live A-F, AC-002, AC-004 and Event Log blockers are closed for the tested commit.
 
-## 8. Non-blocker
+## 8. Non-blockers
 
-1. SDK senza connessione persistente condivisa.
-2. Authenticode positive test con chain sintetica controllata.
-3. PID reuse/replacement fault injection dedicato.
-4. CI remote non eseguita, purché venga resa obbligatoria prima del merge/release M2.
-5. Recovery del profilo service identity, purché chiusa prima del pilot.
+1. SDK without a shared persistent connection.
+2. Authenticode positive test with a controlled synthetic chain.
+3. Dedicated PID reuse/replacement fault injection.
+4. Remote CI not executed, provided it becomes mandatory before M2 merge/release.
+5. Service identity profile recovery, provided it is closed before the pilot.
 
-## 9. Debito rinviato
+## 9. Deferred debt
 
-1. streaming aggregato e backpressure;
-2. key rotation operativa e atomicità `active.txt`;
-3. MSI install/repair/upgrade/uninstall e artifact signing;
-4. .NET Framework, COM, C ABI e CLI;
-5. fuzzing stateful, EventLog/telemetry corpus e performance soak;
-6. Gateway/Vault/Installation identity production, intenzionalmente M2+.
+1. aggregate streaming and backpressure;
+2. operational key rotation and `active.txt` atomicity;
+3. MSI install/repair/upgrade/uninstall and artifact signing;
+4. .NET Framework, COM, C ABI and CLI;
+5. stateful fuzzing, EventLog/telemetry corpus and performance soak;
+6. production Gateway/Vault/Installation identity, intentionally M2+.
 
-## 10. Rischio residuo Administrator/SYSTEM
+## 10. Administrator/SYSTEM residual risk
 
-Local Administrator e SYSTEM possono leggere memoria, impersonare il servizio, cambiare ACL/policy, sostituire binari o acquisire il profilo DPAPI. M0/M1 non li considerano minacce pienamente mitigabili. ACL, DPAPI e process authorization proteggono da utenti/processi non privilegiati e da copie offline; non costituiscono una barriera contro il controllo amministrativo dell'host. Non vengono proposti driver, TPM obbligatorio, anti-debug o altri meccanismi sproporzionati.
+Local Administrator and SYSTEM can read memory, impersonate the service, change ACLs/policy, replace binaries or acquire the DPAPI profile. M0/M1 do not consider these fully mitigable threats. ACLs, DPAPI and process authorization protect against unprivileged users/processes and offline copies; they are not a barrier against administrative control of the host. No drivers, mandatory TPM, anti-debug or other disproportionate mechanisms are proposed.
 
-## 11. Decisione finale
+## 11. Final decision
 
-La matrice tecnica M0/M1 è **PASS** e AC-002/AC-004 sono soddisfatti per il commit testato. La decisione operativa resta **NO-GO per M2** finché la medesima lineage non è revisionata e integrata nel branch canonico; se lo SHA cambia, serve una nuova run completa. Questa review non implementa né avvia alcuna funzionalità M2.
+The M0/M1 technical matrix is **PASS** and AC-002/AC-004 are satisfied for the tested commit. The operational decision remains **NO-GO for M2** until the same lineage is reviewed and integrated into the canonical branch; if the SHA changes, a new complete run is needed. This review neither implements nor starts any M2 functionality.
 
-La matrice completa requisito/test/evidenza è in `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md`.
+The complete requirement/test/evidence matrix is in `docs/reviews/M0-M1-REQUIREMENTS-TEST-EVIDENCE.md`.
