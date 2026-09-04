@@ -9,8 +9,13 @@ production and live publication qualification. Baseline:
 `fse2-organization-current-spec-v1` Published profile, within the explicit limits below.
 `LIVE_QUALIFIED = NO` for this profile. `LIVE_NOT_QUALIFIED_EXTERNAL_LIMITATION`:
 official access/certification and live publication conformance are outside this offline
-authorization. No OfficialTest request or operational FSE2 material was used.
+qualification. No OfficialTest request or operational FSE2 material was used for that gate.
 The earlier validate-only live observation does not qualify this new definition.
+
+A later, separately authorized [validation/status path](../../../user/fse2-validation-status.md)
+qualified CDA VERIFICA and workflow status with one event after an actual Gateway restart
+on 4 September 2026. FHIR VERIFICA returned upstream 500 `generic-error` and is not live
+qualified. This partial observation does not qualify all 14 routes or document publication.
 
 ## Frozen authority and resolved differences
 

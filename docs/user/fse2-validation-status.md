@@ -39,6 +39,9 @@ $provider = 'C:\SecureRuntime\fse2-officialtest-v1'
 $settings = 'C:\SecureRuntime\fse2-pilot-settings.json'
 $sdk = (Get-Command dotnet).Source
 
+# Copiare una volta il modello fuori dal repository e verificarne i valori
+# organizzativi/località rispetto al proprio accesso test prima di Configure.
+Copy-Item '.\tools\fse2\officialtest-pilot.example.json' $settings
 & $runner -Phase Start -ProviderRoot $provider -DotNetPath $sdk
 & $runner -Phase Configure -SettingsPath $settings
 & $runner -Phase Propose -SettingsPath $settings
@@ -125,9 +128,48 @@ Stop riusa ownership e cleanup M5: rimuove il solo stack posseduto, database tem
 e materiale locale temporaneo. Il root operativo A1/S1 resta invariato. La build
 ignorata del provisioner può restare come cache locale non sensibile.
 
-## Qualifica
+## Qualifica osservata il 4 settembre 2026
 
-L'entrypoint e le sue regressioni sono verificati localmente. Gli esiti OfficialTest
-vanno riportati separatamente per FHIR e workflow, con SHA live, cardinalità audit,
-numero di invocation e HTTP upstream effettivamente osservati. Nessuna conclusione
-su produzione, accreditamento o pubblicazione deriva da questo percorso.
+Codice eseguito live: `ac115fef76344dc4857204830b6badbc154a03d4`, su deployment
+temporaneo pulito, configurazione Published e identità Direct normalmente enrolled.
+Le successive modifiche di documentazione non richiedono altre richieste live.
+
+| Percorso con configurazione corretta | HTTP upstream / Gateway | Risultato | Audit per invocation |
+| --- | --- | --- | --- |
+| FHIR RAP JSON, VERIFICA | 500 / 502, in due richieste intenzionali | `generic-error`; **non qualificato live** | 0 success, 1 failure |
+| CDA PSS476, VERIFICA | 200 / 200 | `VALIDATED`, workflow e trace restituiti | 1 success, 0 failure |
+| Workflow CDA dopo riavvio reale Gateway | 200 / 200 | `FOUND`, 1 evento bounded | 1 success, 0 failure |
+
+Il secondo tentativo FHIR, dopo alcuni minuti, ha verificato la possibile
+transitorietà del 500; non era un retry automatico. La fonte congelata documenta
+questo formato JSON e non fornisce un PDF FHIR alternativo pronto all'uso. Il codice
+allowlisted `generic-error` non identifica la causa: non dimostra un problema di
+accreditamento, di formato o di autorizzazione. Non si dichiara PASS FHIR e non si
+eseguono variazioni speculative.
+
+Il workflow usato dallo status è quello realmente restituito dalla validazione CDA.
+Il client nuovo invia soltanto `resourceIdentifier` e l'autenticazione ordinaria;
+PostgreSQL conserva l'autorità della correlazione durante il riavvio del Gateway.
+`FOUND` prova la consultazione con eventi, non pubblicazione né completamento clinico.
+
+Totale della sessione di sviluppo: 7 invocation HTTP locali, 6 richieste FSE2 upstream.
+La prima invocation locale si è fermata con 401 prima dell'autenticazione e senza
+audit di operazione: il nuovo client ometteva `traceparent`, poi corretto e testato.
+Due richieste upstream iniziali (FHIR/CDA) hanno dato 403 `jwt-validation` con il
+dominio ASL errato nel modello, poi corretto dal profilo già qualificato. Un ulteriore
+comando CDA si è fermato localmente sul controllo dataset, senza invocation: è stata
+rimossa l'assunzione non pertinente che il caso CDA ufficiale avesse il prefisso FHIR
+`PROVA`. Le altre quattro richieste sono quelle della tabella. I controlli Admin,
+enrollment, salute e autenticazione locale non sono richieste FSE2 upstream.
+Retry automatici, redirect, status-by-trace e pubblicazioni documentali: **zero**.
+
+Verifica mirata: 28 test `Fse2PilotTests` / `Fse2ProvisionerResumabilityIntegrationTests`
+passati; firma BGW1/traceparent, dataset congelati, comandi di pubblicazione negati,
+riduzione senza raw, quattro grant e ripresa del provisioner. Le CI complete sono
+associate al successivo HEAD finale della PR, senza duplicazione locale. Il ledger
+di sessione conserva solo metadati e hash, non JWT, certificati operativi, documenti
+o response body. Stop rimuove stack e bootstrap temporanei; il root A1/S1 non cambia.
+
+Restano distinte la qualifica offline delle 14 route e questa qualifica live parziale
+di validazione CDA/consultazione workflow. Nessuna conclusione su produzione,
+accreditamento o pubblicazione deriva da questo percorso.
