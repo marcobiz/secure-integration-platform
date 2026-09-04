@@ -55,6 +55,7 @@ docs/testing/test-strategy.md
 docs/user/README.md
 docs/user/quickstart.md
 docs/user/local-pilot.md
+docs/user/local-broker.md
 docs/user/administration.md
 docs/user/guided-connector-onboarding.md
 docs/user/troubleshooting.md
@@ -91,6 +92,7 @@ eng/validate-tls-hardening.ps1
 eng/Export-OpenSourceCore.ps1
 sdk/
 samples/DirectGatewayClient/
+samples/LocalBroker/
 src/Admin/
 src/Authentication/
 src/Broker/

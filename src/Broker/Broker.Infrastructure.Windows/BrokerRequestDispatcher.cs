@@ -35,6 +35,7 @@ public sealed class BrokerRequestDispatcher
             case BrokerOperations.ProtectData:
                 ApplicationAuthorizer.AuthorizeOperation(policy, request.Operation);
                 ProtectDataRequest protect = Deserialize<ProtectDataRequest>(request.Body);
+                ApplicationAuthorizer.AuthorizeDataContext(policy, protect.Purpose, protect.ContentType);
                 byte[] plaintext = Decode(protect.PlaintextBase64);
                 try
                 {
@@ -45,6 +46,7 @@ public sealed class BrokerRequestDispatcher
             case BrokerOperations.UnprotectData:
                 ApplicationAuthorizer.AuthorizeOperation(policy, request.Operation);
                 UnprotectDataRequest unprotect = Deserialize<UnprotectDataRequest>(request.Body);
+                ApplicationAuthorizer.AuthorizeDataContext(policy, unprotect.Purpose, unprotect.ContentType);
                 byte[] unprotected = await service.UnprotectDataAsync(applicationId, unprotect.Purpose, unprotect.ContentType, Decode(unprotect.EnvelopeBase64), cancellationToken).ConfigureAwait(false);
                 try { return Serialize(new UnprotectedDataResult { PlaintextBase64 = Convert.ToBase64String(unprotected) }); }
                 finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(unprotected); }
@@ -66,7 +68,11 @@ public sealed class BrokerRequestDispatcher
         }
     }
 
-    private static T Deserialize<T>(JsonElement element) => element.Deserialize<T>(IpcProtocol.JsonOptions) ?? throw new BrokerException("invalid_request", "validation");
+    private static T Deserialize<T>(JsonElement element)
+    {
+        try { return element.Deserialize<T>(IpcProtocol.JsonOptions) ?? throw new BrokerException("invalid_request", "validation"); }
+        catch (JsonException) { throw new BrokerException("invalid_request", "validation"); }
+    }
     private static JsonElement Serialize<T>(T value) => JsonSerializer.SerializeToElement(value, IpcProtocol.JsonOptions);
     private static byte[] Decode(string value)
     {

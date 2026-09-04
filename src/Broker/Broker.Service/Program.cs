@@ -6,14 +6,15 @@ using SecureIntegration.Broker.Infrastructure.Windows;
 using SecureIntegration.Broker.Service;
 
 HostApplicationBuilder builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddWindowsService(options => options.ServiceName = "SecureIntegrationBroker");
+BrokerOptions brokerOptions = builder.Configuration.GetSection("Broker").Get<BrokerOptions>() ?? new BrokerOptions();
+builder.Services.AddWindowsService(options => options.ServiceName = brokerOptions.ServiceName);
 builder.Services.Configure<EventLogSettings>(settings =>
 {
     settings.LogName = "Application";
     settings.SourceName = "SecureIntegrationBroker";
+    if (brokerOptions.ServiceName != "SecureIntegrationBroker") settings.SourceName = brokerOptions.ServiceName;
 });
 
-BrokerOptions brokerOptions = builder.Configuration.GetSection("Broker").Get<BrokerOptions>() ?? new BrokerOptions();
 if (string.IsNullOrWhiteSpace(brokerOptions.InstallationId) || string.Equals(brokerOptions.InstallationId, "replace-during-installation", StringComparison.Ordinal))
 {
     throw new InvalidOperationException("Broker:InstallationId must be provisioned uniquely during installation.");
@@ -48,4 +49,21 @@ builder.Services.AddSingleton<NamedPipeBrokerServer>();
 builder.Services.AddHostedService<BrokerWorker>();
 
 using IHost host = builder.Build();
+try
+{
+    if (brokerOptions.Applications.Any(application => application.AllowedOperations.Contains("ProtectData") || application.AllowedOperations.Contains("UnprotectData")))
+    {
+        FileDataKeyRepository keys = (FileDataKeyRepository)host.Services.GetRequiredService<IDataKeyRepository>();
+        if (brokerOptions.InitializeDataKeys) await keys.InitializeAsync(CancellationToken.None).ConfigureAwait(false);
+        DataKey active = await keys.GetActiveAsync(CancellationToken.None).ConfigureAwait(false);
+        System.Security.Cryptography.CryptographicOperations.ZeroMemory(active.Value);
+    }
+}
+catch (BrokerException exception)
+{
+    // Fail startup without exposing paths, DPAPI exceptions or key material to service logs.
+    Console.Error.WriteLine(exception.Code);
+    Environment.ExitCode = 1;
+    return;
+}
 await host.RunAsync().ConfigureAwait(false);

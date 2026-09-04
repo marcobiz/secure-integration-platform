@@ -40,6 +40,14 @@ service update, DPAPI-bounded lifecycle/backup/restore, and a small executable S
 and guide. **This is implementation work, not a completed or newly qualified capability.**
 Existing M0/M1 and M3A evidence does not close this new standalone acceptance path.
 
+The local candidate now contains SCM/pipe-owner peer authentication, explicit
+non-replacing data-key initialization, exact protection-context grants, and the
+[sample/lifecycle guide](docs/user/local-broker.md). Focused Windows transport,
+DPAPI/storage and simulated-SCM lifecycle tests pass; this is **not integrated**.
+Real service installation/restart/update and ordinary-user service qualification
+remain **PENDING**: the current host denied SCM creation access (Win32 5), and no
+service was installed. The guide provides the single prepared elevated entrypoint.
+
 Next comes the existing Broker → Gateway path: Installation identity renewal, revocation,
 reconnection and interruption recovery using the synthetic service. Target-specific
 distribution and operational qualification follow, without making universal MSI,

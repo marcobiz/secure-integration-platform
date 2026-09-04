@@ -3,12 +3,16 @@ namespace SecureIntegration.Broker.Infrastructure.Windows;
 /// <summary>Windows Local Broker runtime settings.</summary>
 public sealed class BrokerOptions
 {
+    /// <summary>Administrator-installed Windows service name, also used as the Event Log source.</summary>
+    public string ServiceName { get; set; } = "SecureIntegrationBroker";
     /// <summary>Named Pipe name without the Windows prefix.</summary>
     public string PipeName { get; set; } = "SecureIntegration.Broker.v1";
     /// <summary>Stable Installation identifier.</summary>
     public string InstallationId { get; set; } = string.Empty;
     /// <summary>Broker-owned ProgramData directory.</summary>
     public string DataDirectory { get; set; } = string.Empty;
+    /// <summary>Explicit first-install provisioning only; disable after initialization. Never repairs partial or lost state.</summary>
+    public bool InitializeDataKeys { get; set; }
     /// <summary>Registered applications.</summary>
     public List<ApplicationPolicy> Applications { get; set; } = [];
     /// <summary>Production Gateway installation-authentication settings.</summary>
@@ -49,6 +53,17 @@ public sealed class ApplicationPolicy
     public List<string> AllowedPublisherThumbprints { get; set; } = [];
     /// <summary>Allowed Broker operations.</summary>
     public List<string> AllowedOperations { get; set; } = [];
+    /// <summary>Exact allowed purpose/content-type pairs for local ProtectData and UnprotectData. Empty denies both.</summary>
+    public List<DataProtectionContext> AllowedDataProtectionContexts { get; set; } = [];
     /// <summary>Allowed Gateway Connector/operation pairs formatted as connector:operation.</summary>
     public List<string> GatewayGrants { get; set; } = [];
+}
+
+/// <summary>One administrator-authorized local data context.</summary>
+public sealed class DataProtectionContext
+{
+    /// <summary>Exact, case-sensitive data purpose.</summary>
+    public string Purpose { get; set; } = string.Empty;
+    /// <summary>Exact, case-sensitive content type.</summary>
+    public string ContentType { get; set; } = string.Empty;
 }

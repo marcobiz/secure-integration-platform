@@ -8,6 +8,15 @@ namespace SecureIntegration.Broker.Core.Tests;
 public sealed class AeadHardeningTests
 {
     [Fact]
+    public async Task AEAD_context_delimiters_cannot_reinterpret_application_as_purpose()
+    {
+        AeadDataProtector protector = new(new StableKeys(), "installation-a");
+        BrokerException failure = await Assert.ThrowsAsync<BrokerException>(() => protector.ProtectAsync("app-a", "purpose\nother", "text/plain", [1], TestContext.Current.CancellationToken));
+        Assert.Equal("invalid_purpose", failure.Code);
+        Assert.Throws<BrokerException>(() => new AeadDataProtector(new StableKeys(), "installation\nother"));
+    }
+
+    [Fact]
     public async Task AES_GCM_nonce_is_unique_across_repeated_protection()
     {
         StableKeys keys = new();

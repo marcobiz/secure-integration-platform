@@ -98,7 +98,7 @@ public sealed class AeadDataProtector
 
     private static string Require(string value, string name, int maximum)
     {
-        if (string.IsNullOrWhiteSpace(value) || value.Length > maximum)
+        if (string.IsNullOrWhiteSpace(value) || value.Length > maximum || value.Contains('\n') || value.Contains('\r'))
         {
             throw new BrokerException("invalid_" + name, "validation");
         }

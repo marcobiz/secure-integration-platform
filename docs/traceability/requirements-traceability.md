@@ -20,6 +20,26 @@ Status values:
 An aggregate count does not replace named tests. A skip in a required gate is not PASS.
 Synthetic-qualified, synthetic live lab, OfficialTest and production are distinct levels.
 
+## Standalone Local Broker candidate
+
+Local candidate based on `8de271bfb3fa0f6953a0a8b6062245223713acf5`; not an
+integration/release or new Windows live attestation. See the
+[standalone guide](../user/local-broker.md) for the supported software path and limits.
+
+| Requirement | Named focused evidence | Scope |
+|---|---|---|
+| Mutual IPC server authority | `SDK_rejects_unregistered_fake_service_before_connecting_or_sending_input`, `SDK_rejects_pipe_with_wrong_owner_before_handshake_or_plaintext`, `SDK_binds_pipe_to_the_live_process_instance_and_releases_the_retained_handle` | Windows OS handles/pipe owner plus negative SCM; public SDK cannot skip verification. Positive SCM service binding is pending. |
+| Standalone SDK protection and caller policy | `IT_BRK_Authorized_application_uses_pipe_and_unauthorized_hash_is_denied`, `Named_pipe_caller_identity_is_captured_from_the_kernel`, pipe ACL tests | In-process transport fixture, no Gateway; native caller SID/process/path/hash/publisher checks. Not a service installation. |
+| Exact context grants and AEAD separation | `Ungranted_data_context_is_denied_before_decoding_or_key_use`, `AEAD_authenticates_application_purpose_and_content_type`, `AEAD_context_delimiters_cannot_reinterpret_application_as_purpose`, `AC005_Installation_key_and_ciphertext_differentiation` | Exact policy before decoding/key use; AES-GCM integrity/application/context/Installation tests. |
+| Explicit key lifecycle | `Data_keys_require_explicit_initialization_and_survive_reopen_and_same_profile_restore`, `Lost_key_or_metadata_never_regenerates_or_overwrites_remaining_state`, `Interrupted_initialization_and_concurrent_initializers_cannot_replace_a_claimed_store` | Actual CurrentUser DPAPI under the test identity; create-new, reopen and same-profile wrapped-blob restoration. |
+| Missing/unreadable/profile failure | `Unreadable_key_and_DPAPI_failure_are_bounded_and_preserve_wrapped_bytes`, `Offline_storage_contains_no_plaintext_and_corruption_is_denied` | Actual unreadable/corrupt storage; simulated unavailable DPAPI profile. No machine-loss recovery attestation. |
+| Bounded/redacted transport | `Pipe_supports_concurrent_clients_and_deadline_cancellation`, `Wire_errors_redact_invalid_payload_and_cryptographic_failure`, `Audit_logging_redacts_normal_and_authentication_denied_paths` | Focused metadata-only error/audit and timeout regressions. |
+| Owned, repeatable Stop | `Standalone_lifecycle_script_denies_foreign_resources_and_preserves_data_on_repeated_stop` | Actual shipped ownership/Stop control flow with simulated SCM, including absent service and foreign marker/resource. |
+| Real service → Protect → restart/update → old ciphertext | `deploy/windows/Invoke-LocalBroker.ps1 -Command Verify` | **PENDING, not executed**: current host SCM create access denied (Win32 5); no service installed. Ordinary-user invocation and actual service-profile restore also pending. |
+
+No Gateway/OfficialTest calls, operating material, full cloud/FSE2 laboratory,
+dependency change or remote CI run forms part of this candidate's evidence.
+
 ## Exact-main DOC-02 evidence map
 
 | Requirement/claim | Named tests or evidence | Exact-main type/status |

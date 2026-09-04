@@ -84,6 +84,13 @@ public sealed class ApplicationAuthorizer
             throw new BrokerException("gateway_operation_not_granted", "authorization");
         }
     }
+
+    /// <summary>Denies ungranted data contexts before decoding input or using a key.</summary>
+    public static void AuthorizeDataContext(ApplicationPolicy policy, string purpose, string contentType)
+    {
+        if (!policy.AllowedDataProtectionContexts.Any(context => context.Purpose == purpose && context.ContentType == contentType))
+            throw new BrokerException("data_context_not_granted", "authorization");
+    }
 }
 
 /// <summary>Captures PID, SID, path and hash from an already connected Named Pipe.</summary>

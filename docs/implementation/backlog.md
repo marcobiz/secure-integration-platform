@@ -44,6 +44,11 @@ Historical Windows PASS-LIVE results do not close the new standalone acceptance 
 No `GetSecret`, copied vendor credentials, mandatory new identity platform or
 additional abstraction is justified solely by an item being deferred.
 
+The NOW software candidate has targeted Broker/SDK/storage evidence and a prepared
+[service verification entrypoint](../user/local-broker.md#one-real-service-verification-entrypoint).
+Real service and ordinary-user qualification remain pending on an elevated host;
+the current SCM access-denied result is not a product failure or a completed gate.
+
 ## Delivery and verification
 
 One owner completes the implementation and imports the disjoint plan update once into

@@ -22,6 +22,7 @@
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/DirectGatewayClient/DirectGatewayClient.csproj" />
+    <Project Path="samples/LocalBroker/LocalBroker.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/support/Synthetic.ConnectorExecutionCrossModule/Synthetic.ConnectorExecutionCrossModule.csproj" />

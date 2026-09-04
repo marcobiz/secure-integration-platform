@@ -234,6 +234,7 @@ public sealed class WindowsBrokerIntegrationTests
         Assert.DoesNotContain("plaintext-never-at-rest", persisted, StringComparison.Ordinal);
 
         string keyPath = System.IO.Path.Combine(temporary.Path, "keys", "key-1.bin");
+        await keys.InitializeAsync(TestContext.Current.CancellationToken);
         _ = await keys.GetActiveAsync(TestContext.Current.CancellationToken);
         await File.WriteAllBytesAsync(keyPath, [1, 2, 3], TestContext.Current.CancellationToken);
         BrokerException failure = await Assert.ThrowsAsync<BrokerException>(() => keys.GetAsync(1, TestContext.Current.CancellationToken));
@@ -255,6 +256,8 @@ public sealed class WindowsBrokerIntegrationTests
         WindowsDpapiProtectionProvider protection = new();
         using FileDataKeyRepository firstKeys = new(firstDirectory.Path, protection);
         using FileDataKeyRepository secondKeys = new(secondDirectory.Path, protection);
+        await firstKeys.InitializeAsync(TestContext.Current.CancellationToken);
+        await secondKeys.InitializeAsync(TestContext.Current.CancellationToken);
         byte[] first = await new AeadDataProtector(firstKeys, "installation-a").ProtectAsync("app", "purpose", "text/plain", [1], TestContext.Current.CancellationToken);
         byte[] second = await new AeadDataProtector(secondKeys, "installation-b").ProtectAsync("app", "purpose", "text/plain", [1], TestContext.Current.CancellationToken);
         Assert.NotEqual((await firstKeys.GetActiveAsync(TestContext.Current.CancellationToken)).Value, (await secondKeys.GetActiveAsync(TestContext.Current.CancellationToken)).Value);
@@ -272,6 +275,7 @@ public sealed class WindowsBrokerIntegrationTests
         using (FileLocalSecretRepository secrets = new(temporary.Path))
         using (FileDataKeyRepository keys = new(temporary.Path, protection))
         {
+            await keys.InitializeAsync(TestContext.Current.CancellationToken);
             BrokerApplicationService beforeRestart = new(secrets, protection, new AeadDataProtector(keys, "installation-restart"), new NullAudit(), "installation-restart");
             secretReference = await beforeRestart.PutLocalSecretAsync("app-a", "restart-key", "Tenant", ["ComputeHmac"], "restart-key"u8.ToArray(), Guid.NewGuid(), TestContext.Current.CancellationToken);
             envelope = await beforeRestart.ProtectDataAsync("app-a", "restart", "application/json", "persisted-data"u8.ToArray(), TestContext.Current.CancellationToken);
@@ -291,6 +295,7 @@ public sealed class WindowsBrokerIntegrationTests
     {
         await WithBrokerAsync(async client =>
         {
+            Assert.False((await client.GetStatusAsync(TestContext.Current.CancellationToken)).GatewayConfigured);
             ProtectedDataResult protectedData = await client.ProtectDataAsync(new ProtectDataRequest { Purpose = "test", ContentType = "text/plain", PlaintextBase64 = Convert.ToBase64String("hello"u8) }, TestContext.Current.CancellationToken);
             UnprotectedDataResult plaintext = await client.UnprotectDataAsync(new UnprotectDataRequest { Purpose = "test", ContentType = "text/plain", EnvelopeBase64 = protectedData.EnvelopeBase64 }, TestContext.Current.CancellationToken);
             Assert.Equal("hello"u8.ToArray(), Convert.FromBase64String(plaintext.PlaintextBase64));
@@ -621,19 +626,26 @@ public sealed class WindowsBrokerIntegrationTests
             AllowedPublisherThumbprints = invalidPublisher ? [new string('0', 40)] : [],
             AllowedOperations = [BrokerOperations.PutLocalSecret, BrokerOperations.DeleteLocalSecret, BrokerOperations.ComputeHmac, BrokerOperations.ProtectData, BrokerOperations.UnprotectData, BrokerOperations.GetBrokerStatus, BrokerOperations.InvokeGateway],
             GatewayGrants = ["secure-layer-demo:submit"],
+            AllowedDataProtectionContexts = [new() { Purpose = "test", ContentType = "text/plain" }, new() { Purpose = "redaction", ContentType = "text/plain" },
+                .. Enumerable.Range(0, 8).Select(index => new DataProtectionContext { Purpose = "concurrent-" + index, ContentType = "application/octet-stream" })],
         };
         BrokerOptions options = new() { PipeName = pipeName, InstallationId = "test-installation", DataDirectory = temporary.Path, Applications = [policy] };
         WindowsDpapiProtectionProvider protection = new();
         using FileLocalSecretRepository secrets = new(temporary.Path);
         using FileDataKeyRepository keys = new(temporary.Path, protection);
         IBrokerAuditSink selectedAudit = audit ?? new NullAudit();
+        await keys.InitializeAsync(TestContext.Current.CancellationToken);
         BrokerApplicationService application = new(secrets, protection, new AeadDataProtector(keys, options.InstallationId), selectedAudit, options.InstallationId, gateway);
         await using NamedPipeBrokerServer server = new(options, new ApplicationAuthorizer(options.Applications), new BrokerRequestDispatcher(application), selectedAudit);
         using CancellationTokenSource stopped = new();
         Task running = server.RunAsync(stopped.Token);
         BrokerClientOptions clientOptions = new() { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId };
         if (operationTimeout is not null) clientOptions.OperationTimeout = operationTimeout.Value;
-        BrokerClient client = new(clientOptions);
+        // Transport fixture, not a service qualification. Pin the test-owned kernel process and pipe owner.
+        SecurityIdentifier owner = WindowsIdentity.GetCurrent().Owner!;
+        byte[] ownerBytes = new byte[owner.BinaryLength];
+        owner.GetBinaryForm(ownerBytes, 0);
+        BrokerClient client = new(clientOptions, () => new NamedPipeServerIdentity((uint)Environment.ProcessId, ownerBytes));
         try { await test(client, pipeName); }
         finally
         {

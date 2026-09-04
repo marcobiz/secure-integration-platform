@@ -101,6 +101,7 @@ $appSettings = [ordered]@{
         PipeName = [string]$settings.pipeName
         InstallationId = [string]$settings.installationId
         DataDirectory = $paths.BrokerData
+        InitializeDataKeys = $true # Explicit synthetic first-use provisioning; partial state is never repaired.
         Applications = @([ordered]@{
             RegistrationId = [string]$settings.applicationId
             AllowedUserSids = @($authorized.Sid)
@@ -108,6 +109,7 @@ $appSettings = [ordered]@{
             ExecutableSha256 = @($authorizedHash)
             AllowedPublisherThumbprints = @()
             AllowedOperations = @('PutLocalSecret', 'DeleteLocalSecret', 'ProtectData', 'UnprotectData', 'ComputeHmac', 'GetBrokerStatus')
+            AllowedDataProtectionContexts = @(@{ Purpose = 'live-matrix-persistence'; ContentType = 'application/octet-stream' })
             GatewayGrants = @()
         })
     }

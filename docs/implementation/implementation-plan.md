@@ -33,6 +33,10 @@ Gateway, survive service restart and a supported service update, and expose an h
 lifecycle and backup/restore procedure within DPAPI's limits.
 
 Use the existing Windows Service, local protection operations, policy and SDK.
+The [local candidate guide](../user/local-broker.md) records implemented software,
+focused tests and the pending real-service gate separately. SCM creation access
+is unavailable on the current host; this does not convert in-process tests into
+service/restart/update qualification or mark this objective complete.
 Freeze one small application example and its result before expanding the surface;
 add a primitive only if the chosen case requires it. This is not a new vault or
 workload-identity platform.

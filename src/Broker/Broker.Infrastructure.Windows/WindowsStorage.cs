@@ -147,29 +147,45 @@ public sealed class FileDataKeyRepository : IDataKeyRepository, IDisposable
         WindowsStorageSecurity.HardenDirectory(directory);
     }
 
+    /// <summary>Explicit first-use provisioning. Existing keys are verified, never replaced; partial initialization fails closed.</summary>
+    public async Task InitializeAsync(CancellationToken cancellationToken)
+    {
+        await mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (File.Exists(Path.Combine(directory, "active.txt")))
+            {
+                DataKey existing = await ReadActiveAsync(cancellationToken).ConfigureAwait(false);
+                CryptographicOperations.ZeroMemory(existing.Value);
+                return;
+            }
+
+            if (Directory.EnumerateFileSystemEntries(directory).Any()) throw new BrokerException("data_key_initialization_incomplete", "storage");
+            // CreateNew is the cross-process claim. Keep it on every failure, including interrupted writes.
+            await CreateNewAsync(Path.Combine(directory, "initialized.marker"), "broker-data-key-v1"u8.ToArray(), cancellationToken).ConfigureAwait(false);
+            byte[] key = RandomNumberGenerator.GetBytes(32);
+            try
+            {
+                byte[] wrapped = protection.Protect(key, Entropy);
+                await CreateNewAsync(KeyPath(1), wrapped, cancellationToken).ConfigureAwait(false);
+                await CreateNewAsync(Path.Combine(directory, "active.txt"), "1"u8.ToArray(), cancellationToken).ConfigureAwait(false);
+            }
+            finally { CryptographicOperations.ZeroMemory(key); }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or CryptographicException)
+        {
+            throw new BrokerException("data_key_initialization_failed", "storage");
+        }
+        finally { mutex.Release(); }
+    }
+
     /// <inheritdoc />
     public async Task<DataKey> GetActiveAsync(CancellationToken cancellationToken)
     {
         await mutex.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            string activePath = Path.Combine(directory, "active.txt");
-            uint version;
-            if (!File.Exists(activePath))
-            {
-                version = 1;
-                byte[] key = RandomNumberGenerator.GetBytes(32);
-                byte[] wrapped = protection.Protect(key, Entropy);
-                CryptographicOperations.ZeroMemory(key);
-                await File.WriteAllBytesAsync(KeyPath(version), wrapped, cancellationToken).ConfigureAwait(false);
-                await File.WriteAllTextAsync(activePath, version.ToString(System.Globalization.CultureInfo.InvariantCulture), cancellationToken).ConfigureAwait(false);
-            }
-            else if (!uint.TryParse(await File.ReadAllTextAsync(activePath, cancellationToken).ConfigureAwait(false), out version))
-            {
-                throw new BrokerException("key_metadata_corrupt", "storage");
-            }
-
-            return await LoadAsync(version, cancellationToken).ConfigureAwait(false);
+            return await ReadActiveAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -180,11 +196,49 @@ public sealed class FileDataKeyRepository : IDataKeyRepository, IDisposable
     /// <inheritdoc />
     public async Task<DataKey?> GetAsync(uint version, CancellationToken cancellationToken) => File.Exists(KeyPath(version)) ? await LoadAsync(version, cancellationToken).ConfigureAwait(false) : null;
 
+    private async Task<DataKey> ReadActiveAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            string activePath = Path.Combine(directory, "active.txt");
+            if (!File.Exists(activePath)) throw new BrokerException("data_key_store_not_initialized", "storage");
+            if (new FileInfo(activePath).Length > 16 ||
+                !uint.TryParse(await File.ReadAllTextAsync(activePath, cancellationToken).ConfigureAwait(false), out uint version) || version == 0)
+                throw new BrokerException("key_metadata_corrupt", "storage");
+            return await LoadAsync(version, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new BrokerException("data_key_storage_unavailable", "storage");
+        }
+    }
+
     private async Task<DataKey> LoadAsync(uint version, CancellationToken cancellationToken)
     {
-        byte[] wrapped = await File.ReadAllBytesAsync(KeyPath(version), cancellationToken).ConfigureAwait(false);
-        try { return new DataKey(version, protection.Unprotect(wrapped, Entropy)); }
-        catch (CryptographicException exception) { throw new BrokerException("data_key_unwrap_failed", "crypto", innerException: exception); }
+        try
+        {
+            if (new FileInfo(KeyPath(version)).Length > 16384) throw new BrokerException("data_key_unwrap_failed", "crypto");
+            byte[] wrapped = await File.ReadAllBytesAsync(KeyPath(version), cancellationToken).ConfigureAwait(false);
+            byte[] key = protection.Unprotect(wrapped, Entropy);
+            if (key.Length != 32)
+            {
+                CryptographicOperations.ZeroMemory(key);
+                throw new BrokerException("data_key_unwrap_failed", "crypto");
+            }
+            return new DataKey(version, key);
+        }
+        catch (CryptographicException) { throw new BrokerException("data_key_unwrap_failed", "crypto"); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new BrokerException("data_key_storage_unavailable", "storage");
+        }
+    }
+
+    private static async Task CreateNewAsync(string path, byte[] data, CancellationToken cancellationToken)
+    {
+        await using FileStream file = new(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough | FileOptions.Asynchronous);
+        await file.WriteAsync(data, cancellationToken).ConfigureAwait(false);
+        file.Flush(flushToDisk: true);
     }
 
     private string KeyPath(uint version) => Path.Combine(directory, $"key-{version}.bin");

@@ -10,6 +10,8 @@ public sealed class BrokerClientOptions
 {
     /// <summary>Named Pipe name.</summary>
     public string PipeName { get; set; } = "SecureIntegration.Broker.v1";
+    /// <summary>Administrator-installed, own-process Windows service using its virtual service account.</summary>
+    public string ServiceName { get; set; } = "SecureIntegrationBroker";
     /// <summary>Registered Application identifier.</summary>
     public string ApplicationRegistrationId { get; set; } = string.Empty;
     /// <summary>Connection timeout.</summary>
@@ -40,9 +42,16 @@ public sealed class BrokerClientException : Exception
 public sealed class BrokerClient
 {
     private readonly BrokerClientOptions options;
+    private readonly Func<NamedPipeServerIdentity> openServer;
 
     /// <summary>Creates a client.</summary>
-    public BrokerClient(BrokerClientOptions options) => this.options = options ?? throw new ArgumentNullException(nameof(options));
+    public BrokerClient(BrokerClientOptions options) : this(options, () => NamedPipeServerIdentity.Open(options.ServiceName)) { }
+
+    internal BrokerClient(BrokerClientOptions options, Func<NamedPipeServerIdentity> openServer)
+    {
+        this.options = options ?? throw new ArgumentNullException(nameof(options));
+        this.openServer = openServer;
+    }
 
     /// <summary>Stores a permitted local secret and returns an opaque reference.</summary>
     public Task<LocalSecretReference> PutLocalSecretAsync(PutLocalSecretRequest request, CancellationToken cancellationToken = default) => InvokeAsync<PutLocalSecretRequest, LocalSecretReference>(BrokerOperations.PutLocalSecret, request, cancellationToken);
@@ -66,17 +75,26 @@ public sealed class BrokerClient
     {
         using CancellationTokenSource connectionDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         connectionDeadline.CancelAfter(options.ConnectTimeout);
+        using NamedPipeServerIdentity server = openServer();
         using NamedPipeClientStream pipe = new(".", options.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.WriteThrough);
         await pipe.ConnectAsync(connectionDeadline.Token).ConfigureAwait(false);
+        server.Verify(pipe);
         Guid handshakeCorrelation = Guid.NewGuid();
         HandshakeRequest handshake = new()
         {
             ApplicationRegistrationId = options.ApplicationRegistrationId,
             ClientNonce = Convert.ToBase64String(RandomBytes(32)),
         };
-        await IpcFrameCodec.WriteAsync(pipe, IpcFrameCodec.JsonFrame(handshakeCorrelation, 0, handshake), cancellationToken).ConfigureAwait(false);
-        IpcFrame handshakeFrame = await IpcFrameCodec.ReadAsync(pipe, cancellationToken).ConfigureAwait(false) ?? throw new EndOfStreamException("Broker closed during handshake.");
+        await IpcFrameCodec.WriteAsync(pipe, IpcFrameCodec.JsonFrame(handshakeCorrelation, 0, handshake), connectionDeadline.Token).ConfigureAwait(false);
+        IpcFrame handshakeFrame = await IpcFrameCodec.ReadAsync(pipe, connectionDeadline.Token).ConfigureAwait(false) ?? throw new EndOfStreamException("Broker closed during handshake.");
         HandshakeResponse handshakeResponse = IpcFrameCodec.Deserialize<HandshakeResponse>(handshakeFrame);
+        if (handshakeFrame.CorrelationId != handshakeCorrelation || handshakeFrame.Sequence != 0 || handshakeFrame.Type != IpcFrameType.Control ||
+            handshakeResponse.ConnectionId == Guid.Empty || string.IsNullOrWhiteSpace(handshakeResponse.ServerChallenge))
+            throw new BrokerClientException("invalid_broker_handshake", "protocol", false);
+        server.Verify(pipe);
+
+        using CancellationTokenSource operationDeadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        operationDeadline.CancelAfter(options.OperationTimeout + TimeSpan.FromSeconds(1));
 
         Guid correlationId = Guid.NewGuid();
         BrokerRequest request = new()
@@ -88,9 +106,11 @@ public sealed class BrokerClient
             DeadlineUtc = DateTimeOffset.UtcNow.Add(options.OperationTimeout),
             Body = JsonSerializer.SerializeToElement(body, IpcProtocol.JsonOptions),
         };
-        await IpcFrameCodec.WriteAsync(pipe, IpcFrameCodec.JsonFrame(correlationId, 1, request), cancellationToken).ConfigureAwait(false);
-        IpcFrame responseFrame = await IpcFrameCodec.ReadAsync(pipe, cancellationToken).ConfigureAwait(false) ?? throw new EndOfStreamException("Broker closed before responding.");
+        await IpcFrameCodec.WriteAsync(pipe, IpcFrameCodec.JsonFrame(correlationId, 1, request), operationDeadline.Token).ConfigureAwait(false);
+        IpcFrame responseFrame = await IpcFrameCodec.ReadAsync(pipe, operationDeadline.Token).ConfigureAwait(false) ?? throw new EndOfStreamException("Broker closed before responding.");
         BrokerResponse response = IpcFrameCodec.Deserialize<BrokerResponse>(responseFrame);
+        if (responseFrame.CorrelationId != correlationId || responseFrame.Sequence != 1 || response.CorrelationId != correlationId)
+            throw new BrokerClientException("invalid_broker_response", "protocol", false);
         if (!response.Success)
         {
             BrokerError error = response.Error ?? new BrokerError { Code = "broker_error", Category = "protocol" };
