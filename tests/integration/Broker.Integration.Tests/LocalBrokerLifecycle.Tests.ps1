@@ -107,6 +107,103 @@ try {
     catch { $denied = $_.Exception.Message -ceq 'BROKER_PACKAGE_INVENTORY_MISMATCH' }
     Assert $denied
     Write-Output 'PACKAGE_TAMPER_AND_UNLISTED_SETTINGS_DENIED=PASS'
+
+    $deliveryPath = Join-Path $PSScriptRoot '..\..\..\eng\Test-LocalBrokerWindowsDelivery.ps1'
+    $deliveryAst = [Management.Automation.Language.Parser]::ParseFile($deliveryPath, [ref]$tokens, [ref]$errors)
+    foreach ($functionName in @('StateDigest', 'Get-SyntheticBootstrap', 'Assert-BaselineResume')) {
+        $definition = $deliveryAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $functionName }, $true)
+        . ([ScriptBlock]::Create($definition.Extent.Text))
+    }
+    function ExpectDeliveryDenied([scriptblock] $Action, [string] $Code) {
+        try { & $Action | Out-Null } catch { Assert ($_.Exception.Message.StartsWith($Code, [StringComparison]::Ordinal)); return }
+        throw 'DELIVERY_NEGATIVE_ACCEPTED'
+    }
+    $root = Join-Path $fixture 'resume'; $data = Join-Path $fixture 'resume-data'
+    $marker = Join-Path $root 'installation.json'; $settingsPath = Join-Path $root 'broker\appsettings.json'
+    $binaryPath = '"' + (Join-Path $root 'broker\SecureIntegration.Broker.Service.exe') + '" --contentRoot "' + (Join-Path $root 'broker') + '"'
+    $BaselineBrokerDirectory = Join-Path $fixture 'baseline\broker'; $BaselineSampleDirectory = Join-Path $fixture 'baseline\sample'
+    New-Item -ItemType Directory -Path (Join-Path $data 'keys'), (Join-Path $root 'broker'), (Join-Path $root 'sample'), $BaselineBrokerDirectory, $BaselineSampleDirectory -Force | Out-Null
+    foreach ($component in @('broker', 'sample')) {
+        $leaf = if ($component -ceq 'broker') { 'SecureIntegration.Broker.Service.exe' } else { 'SecureIntegration.Samples.LocalBroker.exe' }
+        [IO.File]::WriteAllText((Join-Path $fixture ('baseline\' + $component + '\' + $leaf)), 'synthetic-binary')
+        Copy-Item -LiteralPath (Join-Path $fixture ('baseline\' + $component + '\' + $leaf)) -Destination (Join-Path $root $component)
+    }
+    $record = @{ service = $name; root = $root; data = $data; binaryPath = $binaryPath; installationId = 'preserved-synthetic-installation' }
+    [IO.File]::WriteAllText($marker, ($record | ConvertTo-Json))
+    [IO.File]::WriteAllText((Join-Path $data 'keys\z[1].bin'), 'synthetic-wrapped-state')
+    [IO.File]::WriteAllText((Join-Path $data 'keys\active.txt'), 'synthetic-version')
+    $expectedHashes = foreach ($file in @($marker, (Join-Path $data 'keys\active.txt'), (Join-Path $data 'keys\z[1].bin'))) {
+        (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash
+    }
+    $retained = StateDigest
+    Assert ($retained -ceq ($expectedHashes -join ',') -and $retained.Split(',').Count -eq 3)
+    Assert ((StateDigest) -ceq $retained)
+    Write-Output 'PS51_STATE_DIGEST_MULTIPLE_LITERAL_PATHS=PASS'
+
+    $installedSample = Join-Path $root 'sample\SecureIntegration.Samples.LocalBroker.exe'
+    $settings = @{ Broker = @{ ServiceName = $name; PipeName = $name; InstallationId = $record.installationId; DataDirectory = $data;
+        InitializeDataKeys = $false; Gateway = @{ Enabled = $false }; Applications = @(@{
+            RegistrationId = 'local-sample'; AllowedUserSids = @($ApplicationUserSid); ExecutablePaths = @($installedSample)
+            ExecutableSha256 = @((Get-FileHash -LiteralPath $installedSample -Algorithm SHA256).Hash)
+            AllowedOperations = @('ProtectData', 'UnprotectData', 'GetBrokerStatus')
+            AllowedDataProtectionContexts = @(@{ Purpose = 'sample'; ContentType = 'text/plain' })
+        }) } }
+    Write-Settings $settings
+    $script:service = [pscustomobject]@{ PathName = $binaryPath; StartName = 'NT SERVICE\' + $name; State = 'Stopped' }
+    $stopsBefore = $script:stops
+    Assert-BaselineResume
+    Assert ((StateDigest) -ceq $retained -and $script:stops -eq $stopsBefore)
+    $script:service.PathName = 'foreign.exe'
+    ExpectDenied { Assert-BaselineResume }
+    $script:service.PathName = $binaryPath
+    [IO.File]::AppendAllText($installedSample, '-different-build')
+    ExpectDeliveryDenied { Assert-BaselineResume } 'DELIVERY_BASELINE_FILES_MISMATCH'
+    [IO.File]::WriteAllText($installedSample, 'synthetic-binary')
+    $settings.Broker.InitializeDataKeys = $true
+    Write-Settings $settings
+    ExpectDeliveryDenied { Assert-BaselineResume } 'DELIVERY_BASELINE_CONFIGURATION_MISMATCH'
+    $settings.Broker.InitializeDataKeys = $false
+    $settings.Broker.Applications[0].AllowedUserSids = @('foreign-sid')
+    Write-Settings $settings
+    ExpectDeliveryDenied { Assert-BaselineResume } 'DELIVERY_BASELINE_CONFIGURATION_MISMATCH'
+    Assert ((StateDigest) -ceq $retained -and $script:stops -eq $stopsBefore)
+    Write-Output 'BASELINE_RESUME_OWNERSHIP_BUILD_POLICY_STATE=PASS (read-only simulated SCM)'
+
+    $SyntheticBootstrapDirectory = Join-Path $fixture 'synthetic-bootstrap'
+    New-Item -ItemType Directory -Path (Join-Path $SyntheticBootstrapDirectory 'certificates') -Force | Out-Null
+    $rsa = [Security.Cryptography.RSACng]::new(2048)
+    $certificate = $null
+    $previousCulture = [Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        $request = [Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=M3 Synthetic Root fixture', $rsa,
+            [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+        $certificate = $request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddMinutes(-1), [DateTimeOffset]::UtcNow.AddHours(1))
+        [IO.File]::WriteAllBytes((Join-Path $SyntheticBootstrapDirectory 'certificates\ca.crt'), $certificate.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+        $document = @{ sampleConnector = @{ connectorId = 'sample-secure-service'; state = 'Published' }; activationCodeId = [guid]::NewGuid().ToString('D'); activationCode = 'synthetic-single-use'; expiresAtUtc = [DateTime]::UtcNow.AddMinutes(30).ToString('o', [Globalization.CultureInfo]::InvariantCulture) }
+        $documentPath = Join-Path $SyntheticBootstrapDirectory 'provisioning.json'
+        [IO.File]::WriteAllText($documentPath, ($document | ConvertTo-Json))
+        [Threading.Thread]::CurrentThread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo('it-IT')
+        $validated = Get-SyntheticBootstrap
+        Assert ($validated.Expires -gt [DateTimeOffset]::UtcNow)
+        $validated.Certificate.Dispose()
+        $goodDirectory = $SyntheticBootstrapDirectory
+        $SyntheticBootstrapDirectory += '-missing'
+        ExpectDeliveryDenied { Get-SyntheticBootstrap } 'DELIVERY_SYNTHETIC_BOOTSTRAP_INVALID_OR_EXPIRED'
+        $SyntheticBootstrapDirectory = $goodDirectory
+        $document.expiresAtUtc = '06/09/2026 08:37:08'
+        [IO.File]::WriteAllText($documentPath, ($document | ConvertTo-Json))
+        ExpectDeliveryDenied { Get-SyntheticBootstrap } 'DELIVERY_SYNTHETIC_BOOTSTRAP_INVALID_OR_EXPIRED'
+        $document.expiresAtUtc = '2000-01-01T00:00:00.0000000Z'
+        [IO.File]::WriteAllText($documentPath, ($document | ConvertTo-Json))
+        ExpectDeliveryDenied { Get-SyntheticBootstrap } 'DELIVERY_SYNTHETIC_BOOTSTRAP_INVALID_OR_EXPIRED'
+        Assert ((StateDigest) -ceq $retained -and $script:stops -eq $stopsBefore)
+        Write-Output 'PS51_BOOTSTRAP_PREFLIGHT_ISO_CULTURE_PATH_EXPIRY=PASS'
+    }
+    finally {
+        [Threading.Thread]::CurrentThread.CurrentCulture = $previousCulture
+        if ($certificate) { $certificate.Dispose() }
+        $rsa.Dispose()
+    }
 }
 finally {
     if (([IO.Path]::GetFullPath($fixture)).StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()), [StringComparison]::OrdinalIgnoreCase)) {
