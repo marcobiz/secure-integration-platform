@@ -425,11 +425,10 @@ app.MapPost("/v1/enrollments:activate", async (HttpContext context, Installation
     return Results.Ok(await service.ActivateAsync(request, cancellationToken).ConfigureAwait(false));
 });
 
-app.MapGet("/v1/broker-policy", async (HttpContext context, RuntimeIdentityService identityService, CancellationToken cancellationToken) =>
+app.MapGet("/v1/broker-policy", async (HttpContext context, RuntimeIdentityService identityService, InstallationEnrollmentService enrollmentService, CancellationToken cancellationToken) =>
 {
     GatewayClientPrincipal authenticated = await AuthenticateAsync(context, identityService, ReadOnlyMemory<byte>.Empty, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
-    if (authenticated.InstallationKind != InstallationKind.Broker) throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403);
-    return Results.Ok(new BrokerPolicy(authenticated.Identity.MinimumBrokerVersion, 1, 0, false));
+    return Results.Ok(enrollmentService.GetBrokerPolicy(authenticated.Identity));
 });
 
 app.MapPost("/v1/enrollments:renew", async (HttpContext context, RuntimeIdentityService identityService, InstallationEnrollmentService enrollmentService, CancellationToken cancellationToken) =>

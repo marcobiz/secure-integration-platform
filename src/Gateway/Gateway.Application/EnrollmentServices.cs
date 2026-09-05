@@ -79,6 +79,22 @@ public sealed class GatewayProvisioningService(IGatewayRegistry registry, IGatew
 /// <summary>Enrollment, renewal and revocation service implementing ADR-0008.</summary>
 public sealed class InstallationEnrollmentService(IGatewayRegistry registry, IEnrollmentChallengeStore challengeStore, IGatewayClock clock, EnrollmentSecurityOptions options)
 {
+    /// <summary>Returns the authoritative lifecycle of the credential that authenticated a Broker.</summary>
+    public BrokerPolicy GetBrokerPolicy(RegisteredInstallationIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        if (identity.InstallationKind != InstallationKind.Broker) throw new GatewayException("BGW-AUTHZ-OPERATION-DENIED", 403);
+        return new BrokerPolicy(
+            identity.MinimumBrokerVersion,
+            1,
+            0,
+            false,
+            identity.InstallationId,
+            identity.CredentialId,
+            identity.CredentialNotAfter,
+            identity.CredentialNotAfter.Subtract(options.RenewalWindow));
+    }
+
     /// <summary>Creates a challenge after validating activation state and the proposed P-256 key.</summary>
     public async Task<EnrollmentChallengeResponse> CreateChallengeAsync(EnrollmentChallengeRequest request, CancellationToken cancellationToken)
     {

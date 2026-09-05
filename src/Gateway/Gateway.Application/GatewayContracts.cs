@@ -106,8 +106,16 @@ public sealed record RenewalRequest(string NewClientCertificate, string ProofSig
 public sealed record EnrollmentResult(Guid InstallationId, Guid TenantId, Guid ApplicationId, DateTimeOffset CredentialExpiresAt, DateTimeOffset RenewalStartsAt);
 /// <summary>One-time provisioning result; the code is never returned again.</summary>
 public sealed record ProvisionedActivation(Guid InstallationId, Guid ActivationCodeId, string ActivationCode, DateTimeOffset ExpiresAt);
-/// <summary>Protocol and compatibility policy for an authenticated Broker.</summary>
-public sealed record BrokerPolicy(string MinimumBrokerVersion, int ProtocolMajor, int ProtocolMinor, bool Revoked);
+/// <summary>Protocol, compatibility and current credential policy for an authenticated Broker.</summary>
+public sealed record BrokerPolicy(
+    string MinimumBrokerVersion,
+    int ProtocolMajor,
+    int ProtocolMinor,
+    bool Revoked,
+    Guid InstallationId,
+    Guid CredentialId,
+    DateTimeOffset CredentialExpiresAt,
+    DateTimeOffset RenewalStartsAt);
 
 /// <summary>Bounded, explicitly encoded Gateway payload.</summary>
 public sealed record GatewayPayload(string ContentType, string Encoding, string Data);

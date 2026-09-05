@@ -69,7 +69,9 @@ paths:
         - $ref: '#/components/parameters/BgwContentSha256'
         - $ref: '#/components/parameters/BgwSignature'
       responses:
-        '200': { description: Broker compatibility policy. }
+        '200':
+          description: Broker compatibility and authoritative credential lifecycle policy.
+          content: { application/json: { schema: { $ref: '#/components/schemas/BrokerPolicy' } } }
         default: { $ref: '#/components/responses/Problem' }
   /v1/connectors/{connectorId}/operations/{operationId}:invoke:
     post:
@@ -847,6 +849,11 @@ components:
       additionalProperties: false
       required: [installationId, tenantId, applicationId, credentialExpiresAt, renewalStartsAt]
       properties: { installationId: { type: string, format: uuid }, tenantId: { type: string, format: uuid }, applicationId: { type: string, format: uuid }, credentialExpiresAt: { type: string, format: date-time }, renewalStartsAt: { type: string, format: date-time } }
+    BrokerPolicy:
+      type: object
+      additionalProperties: false
+      required: [minimumBrokerVersion, protocolMajor, protocolMinor, revoked, installationId, credentialId, credentialExpiresAt, renewalStartsAt]
+      properties: { minimumBrokerVersion: { type: string }, protocolMajor: { type: integer }, protocolMinor: { type: integer }, revoked: { type: boolean }, installationId: { type: string, format: uuid }, credentialId: { type: string, format: uuid }, credentialExpiresAt: { type: string, format: date-time }, renewalStartsAt: { type: string, format: date-time } }
     ProvisionedActivation:
       type: object
       required: [installationId, activationCodeId, activationCode, expiresAt]

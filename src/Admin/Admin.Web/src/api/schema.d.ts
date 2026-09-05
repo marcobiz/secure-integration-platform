@@ -1253,6 +1253,20 @@ export interface components {
             /** Format: date-time */
             renewalStartsAt: string;
         };
+        BrokerPolicy: {
+            minimumBrokerVersion: string;
+            protocolMajor: number;
+            protocolMinor: number;
+            revoked: boolean;
+            /** Format: uuid */
+            installationId: string;
+            /** Format: uuid */
+            credentialId: string;
+            /** Format: date-time */
+            credentialExpiresAt: string;
+            /** Format: date-time */
+            renewalStartsAt: string;
+        };
         ProvisionedActivation: {
             /** Format: uuid */
             installationId: string;
@@ -1905,12 +1919,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Broker compatibility policy. */
+            /** @description Broker compatibility and authoritative credential lifecycle policy. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["BrokerPolicy"];
+                };
             };
             default: components["responses"]["Problem"];
         };

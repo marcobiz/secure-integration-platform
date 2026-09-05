@@ -316,6 +316,27 @@ public sealed class GatewaySecurityTests
     }
 
     [Fact]
+    public async Task UT_GTW_Broker_policy_returns_only_the_authenticated_credential_lifecycle()
+    {
+        using Fixture fixture = await Fixture.CreateAsync();
+        RegisteredInstallationIdentity identity = await fixture.EnrollAsync();
+
+        BrokerPolicy policy = fixture.EnrollmentService.GetBrokerPolicy(identity);
+
+        Assert.Equal(identity.InstallationId, policy.InstallationId);
+        Assert.Equal(identity.CredentialId, policy.CredentialId);
+        Assert.Equal(identity.CredentialNotAfter, policy.CredentialExpiresAt);
+        Assert.Equal(identity.CredentialNotAfter.AddDays(-30), policy.RenewalStartsAt);
+        Assert.Equal("1.0.0", policy.MinimumBrokerVersion);
+        Assert.False(policy.Revoked);
+
+        using Fixture direct = await Fixture.CreateAsync(InstallationKind.Direct);
+        RegisteredInstallationIdentity directIdentity = await direct.EnrollAsync();
+        GatewayException denied = Assert.Throws<GatewayException>(() => direct.EnrollmentService.GetBrokerPolicy(directIdentity));
+        Assert.Equal("BGW-AUTHZ-OPERATION-DENIED", denied.Code);
+    }
+
+    [Fact]
     public async Task UT_GTW_Renewal_allows_seven_day_overlap_then_expires_old_credential()
     {
         using Fixture fixture = await Fixture.CreateAsync();
