@@ -135,7 +135,20 @@ Apply these high-level principles inspired by the minimalist engineering approac
 
 ## Canonical verification
 
-Run checks proportional to the change. For a normal product change, the expected local sequence is:
+### Tiered verification cadence
+
+- Run verification in proportion to the changed surface. During implementation, run focused build and named tests only; do not repeat the full repository, laboratory, evidence or release suite after every commit.
+- A micro-remediation runs the affected contract/parity tests and the smallest relevant regression set. It does not rerun unrelated end-to-end suites, Core export, SBOM or vulnerability inventory when code dependencies, images and security boundaries are unchanged.
+- Perform one complete required gate on the converged PR head before merge and one automatic complete gate on the exact main head after integration. Reuse those exact-head results during review instead of reproducing them in a second laboratory.
+- Generate full SBOMs and vulnerability inventories when dependencies, lock files, build images or release artefacts change, during scheduled security qualification, and before a release. Do not regenerate them for an unrelated documentation, OpenAPI-only or narrowly tested source correction.
+- Security-sensitive changes still require focused positive and negative security tests. Migrations, authentication, authorization, credential handling, egress and trust-boundary changes also require the applicable full convergence gate, but not a full rerun after each intermediate edit.
+- Documentation-only changes require documentation validation, a changed-content secret scan and `git diff --check`. API-contract-only changes require contract parity, canonical client generation and affected consumer tests. Broader gates run only at convergence or when the changed surface requires them.
+- Review is primarily read-only and reuses trustworthy exact-head CI artefacts. A reviewer should not rebuild an equivalent laboratory unless existing evidence is missing, inconsistent or cannot decide a concrete finding.
+- Keep one minimal evidence package for the converged decision. Do not create a new evidence bundle for every intermediate hypothesis or tiny corrective commit.
+- Never hide a failed gate. Diagnose it and rerun only the affected gate after a code change, or perform one complete rerun when a concrete runner/environment failure is established. Do not duplicate already-green exact-head checks manually.
+- If repository automation currently launches broader checks than this policy requires, let the required automation complete but do not duplicate it locally. Simplify workflow triggers separately using measured duration and risk; do not weaken branch protection ad hoc inside a feature change.
+
+Run checks proportional to the change. For a converged normal product change, the full reference sequence is:
 
 ```powershell
 ./eng/build.ps1

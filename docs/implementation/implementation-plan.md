@@ -1,16 +1,17 @@
 # Implementation plan
 
-Updated: 2026-09-04
-Planning baseline: `8de271bfb3fa0f6953a0a8b6062245223713acf5` (PR #66 integrated).
+Updated: 2026-09-05
+Planning baseline: `02b0540d78ecd0c4b9599bfb58f76ed85a291d4c` (PR #67 integrated).
 
 This is the current order of work. [IMPLEMENTATION_STATUS.md](../../IMPLEMENTATION_STATUS.md)
 owns integrated capability and qualification claims; the [backlog](backlog.md#current-work-order)
 owns the small NOW/NEXT/DEFERRED queue. The older Core alpha/FSE2 plan is retained
 [below](#historical-planning-snapshot) as history, not a competing active roadmap.
 
-The present authorization covers implementation, documentation and local Signed-off-by
-commits for one converged candidate. It does not authorize public push, a PR, merge,
-tag, release, OfficialTest calls, external contact or a production claim.
+The present authorization covers implementation, documentation, Signed-off-by commits,
+public push and a non-draft PR for the Broker → Gateway continuity candidate. It does
+not authorize merge, tag, release, OfficialTest calls, external contact or a production
+claim.
 
 ## Current order of work
 
@@ -21,12 +22,12 @@ tag, release, OfficialTest calls, external contact or a production claim.
 3. Qualify distribution and operation for an explicitly selected Windows target,
    with an installable artifact and a tested compatibility matrix.
 
-The first outcome is a converged local candidate with one exact-candidate elevated
-service qualification, pending review and integration. The later outcomes do not
-silently expand it. Historical Windows gates remain separate evidence and do not
-replace the new adopter-path result.
+The first outcome is integrated through PR #67, with one earlier exact-candidate
+elevated service qualification. The second is the active synthetic candidate. These
+results do not silently expand one another: the Windows gate remains attached to its
+exact software commit, and the continuity fixture is not a real-service qualification.
 
-## NOW — independently usable Windows Local Broker
+## Integrated — independently usable Windows Local Broker
 
 An identified, authorized .NET application must be able to use an Installation-local
 key through the Broker without receiving that key. The path must work without a
@@ -78,18 +79,29 @@ The relevant existing decisions are [Named Pipe IPC](../adr/0003-named-pipe-ipc.
 state preservation; completing all M9 installer work is not a prerequisite for this
 bounded service-update proof.
 
-## NEXT — Broker to Gateway continuity
+## NOW — Broker to Gateway continuity
 
-After the standalone result converges, complete the existing remote path rather than
-introducing a second client identity or runtime. Cover Installation identity renewal,
-revocation, reconnection and recovery after interruptions, with fewer routine manual
-steps. Reuse the existing synthetic Connector/service and the shared authentication,
-grant and Published-operation model.
+Complete the existing remote path without introducing a second client identity or
+runtime. The candidate persists only authoritative Installation/credential lifecycle
+metadata, renews a non-exportable CNG credential once inside the Gateway-owned window,
+and resumes after service/process restart. It reuses the existing synthetic
+Connector/service and the shared authentication, grant and Published-operation model.
 
-The completion gate must show the application recovering through supported interfaces,
-expired/revoked identities failing closed, and interruption handling respecting operation
-idempotency. An uncertain remote mutation is not permission to resend it blindly.
-Freeze the exact fault cases for this slice before implementation; do not build a
+A pending renewal is recorded before dispatch. After a lost response, a later explicit
+application call first authenticates the pending credential with the Gateway: accepted
+state is promoted without resending; otherwise the still-authoritative current
+credential is checked before one renewal submission. The Broker never automatically
+replays an application invocation. A response lost after dispatch, timeout/body
+interruption, or post-dispatch 5xx is a bounded non-retryable
+`gateway_outcome_ambiguous`; known pre-dispatch connection failures remain retryable
+only through a new explicit caller invocation.
+
+The focused gate shows Broker SDK → Gateway → Published Connector → Synthetic Provider,
+same-Installation restart without activation reuse, single-flight renewal, authoritative
+renewal recovery, explicit reconnection, ambiguous invoke denial, and expired/revoked/
+ungranted denial before the provider effect. It uses real Core services and local CNG/
+filesystem state behind an in-process HTTP fault fixture; it does not prove a Windows
+Service, TLS socket, PostgreSQL, external service or ordinary-user path. Do not build a
 general reconnect framework in anticipation of other consumers.
 See [Installation identity](../adr/0008-installation-identity.md) and the
 [shared Broker/Direct principal](../adr/0020-direct-gateway-client-principal.md).

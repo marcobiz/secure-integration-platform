@@ -177,3 +177,46 @@ observations, not performance thresholds or guarantees. The update reapplied the
 candidate, so it does not prove cross-version compatibility. Ordinary-account use and
 machine/profile restore remain unqualified. Focused in-process/simulated-SCM tests
 remain supporting evidence only; they are not the basis for this real-service result.
+
+## Broker to Gateway continuity candidate
+
+The existing remote operation uses the same `BrokerClient` and authenticated pipe. An
+ordinary application calls `InvokeGatewayAsync` with only its registered application,
+Connector/operation and payload; it cannot select Tenant, Installation, endpoint,
+credential or provider resource. An administrator must already have created and
+activated a Broker Installation, granted the operation, and Published the Connector
+through the supported Gateway/Admin interfaces. The activation code is supplied only
+for first enrollment and is cleared from the Broker process environment after the
+Gateway accepts the credential.
+
+The Broker persists `gateway-installation-state.json` beside the existing certificate
+thumbprint marker. It contains only Installation/credential identifiers, certificate
+thumbprints, owned CNG key names and expiry/renewal timestamps. It contains no activation
+code, private key, vendor credential, endpoint, request or response body. The current and
+replacement keys are non-exportable CurrentUser CNG P-256 keys. At the server-owned
+renewal boundary, concurrent application calls serialize into one renewal.
+
+If a renewal response is lost, the pending state remains. A restarted Broker first asks
+the Gateway to authenticate that pending certificate; an accepted credential is promoted
+without another renewal request. If it is not accepted, the still-authoritative current
+credential is checked before a single renewal submission. This is recovery on a later
+explicit application call, not an automatic retry loop. A lost application response,
+timeout/body interruption, or 5xx after dispatch is returned as non-retryable
+`gateway_outcome_ambiguous`; the Broker never resends that invocation. A known
+pre-dispatch DNS/connection/TLS-establishment failure is `gateway_transport_failed` and
+can be attempted only by a new explicit application call.
+
+| Error | Meaning and safe action |
+|---|---|
+| `gateway_credential_state_invalid` | Lifecycle metadata does not match the closed schema/owned markers. Preserve state and repair from an authoritative backup; do not re-enroll. |
+| `gateway_credential_state_unavailable` | An owned certificate/key or required marker cannot be recovered. Preserve remaining material; do not generate a replacement identity. |
+| `gateway_renewal_outcome_ambiguous` | Renewal may have committed. Do not resend manually; a later explicit call probes the pending credential. |
+| `gateway_renewal_state_unresolved` | Neither pending nor current authority can safely establish the next transition. Restore Gateway availability/state before another explicit call. |
+| `gateway_outcome_ambiguous` | The remote application effect may have occurred. Reconcile by the Connector's business protocol; do not replay automatically. |
+| `gateway_transport_failed` | Failure is known before dispatch. A later explicit caller invocation may reconnect. |
+
+Targeted evidence covers the public SDK/pipe and real Core authorization, enrollment,
+Published Connector and Synthetic Provider through an in-process fault-injection HTTP
+handler. It does not constitute a new actual-service, TLS, PostgreSQL, external-provider,
+ordinary-user or cross-release qualification; the real-service result above remains
+attached to its exact software commit.

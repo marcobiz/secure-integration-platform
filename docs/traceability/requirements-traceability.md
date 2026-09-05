@@ -20,10 +20,10 @@ Status values:
 An aggregate count does not replace named tests. A skip in a required gate is not PASS.
 Synthetic-qualified, synthetic live lab, OfficialTest and production are distinct levels.
 
-## Standalone Local Broker candidate
+## Standalone Local Broker and Broker → Gateway continuity
 
-Local candidate based on `8de271bfb3fa0f6953a0a8b6062245223713acf5`; not an
-integration or release. The bounded Windows service attestation below applies only
+Standalone software is integrated through `02b0540d78ecd0c4b9599bfb58f76ed85a291d4c`;
+this is not a release. The bounded Windows service attestation below applies only
 to exact software candidate `3955fd0c3a5eccf816d44b0faba9a704227baa3d`. See the
 [standalone guide](../user/local-broker.md) for the supported software path and limits.
 
@@ -38,8 +38,23 @@ to exact software candidate `3955fd0c3a5eccf816d44b0faba9a704227baa3d`. See the
 | Owned, repeatable Stop | `Standalone_lifecycle_script_denies_foreign_resources_and_preserves_data_on_repeated_stop` | Actual shipped ownership/Stop control flow with simulated SCM, including absent service and foreign marker/resource. |
 | Real service → Protect → restart/update → old ciphertext | `deploy/windows/Invoke-LocalBroker.ps1 -Command Verify` | **PASS once** on exact software candidate `3955fd0c3a5eccf816d44b0faba9a704227baa3d`: Gateway disabled, Protect, repeated Stop, restart, two old-ciphertext verifies around same-candidate update, two unauthorized denials and owned cleanup. `FIRST_PROTECT_MS=12532` is observed, not a threshold. Cleanup removed the service registration and preserved installation/state; not uninstall. Ordinary-user, cross-release and actual profile restore remain pending. |
 
-No Gateway/OfficialTest calls, operating material, full cloud/FSE2 laboratory,
-dependency change or remote CI run forms part of this candidate's evidence.
+### Broker → Gateway continuity candidate
+
+| Requirement | Named focused evidence | Scope |
+|---|---|---|
+| Ordinary application through the existing path | `Broker_Gateway_continuity_enrolls_once_invokes_Published_synthetic_operation_and_restart_reuses_Installation` | Public SDK → authenticated pipe Broker → BGW1 Gateway identity → server-authorized Published `sample-secure-service` → restricted egress/Synthetic Provider. Restart keeps the exact Installation and uses no second activation. |
+| Lifecycle authority and least disclosure | `UT_GTW_Broker_policy_returns_only_the_authenticated_credential_lifecycle`, `UT_GTW_Renewal_allows_seven_day_overlap_then_expires_old_credential` | Broker-only policy returns the authenticated Installation/credential IDs and server-owned expiry/renewal boundary, not Tenant/Application selectors, credentials or payload. Direct identity is denied. |
+| Single-flight renewal and explicit reconnection | `Concurrent_calls_start_one_renewal_and_unavailable_Gateway_recovers_only_on_a_new_explicit_call` | Eight concurrent calls produce one renewal; unavailable Gateway has zero provider effect and recovery occurs only on a later caller invocation. No scheduler, queue or automatic request retry. |
+| Interruption recovery without blind resend | `Renewal_response_loss_is_nonretryable_and_restart_recovers_authoritatively_without_reenrollment_or_resend`, `Lost_invoke_response_is_ambiguous_and_never_automatically_replays_the_upstream_effect` | Pending metadata is durable before renewal dispatch. Restart authenticates the pending credential and promotes an accepted renewal without resending. Lost/5xx post-dispatch invoke outcomes are bounded `gateway_outcome_ambiguous`, `Retryable=false`, with exactly one provider effect per call. |
+| Server-side expiry, revocation and grant authority | `Revoked_expired_and_ungranted_Installations_are_denied_before_the_synthetic_effect`, `UT_GTW_Revocation_is_immediate_for_runtime_and_grants` | Gateway-derived identity/grant is authoritative; all three negatives have zero additional Synthetic Provider effects. |
+| Missing/corrupt state and identity continuity | `Missing_state_recovers_only_the_registered_identity_while_corrupt_or_fully_lost_state_fails_closed` | Missing lifecycle JSON may be reconstructed only by authenticating the surviving exact registered certificate; corrupt state or loss of both markers with a surviving key fails closed and never enrolls a replacement identity. |
+
+The continuity tests use actual Windows CNG/current-user certificate state and real Core
+enrollment, identity, Connector catalog, Published authorization and restricted-egress
+services behind a deterministic in-process HTTP handler. They do not exercise an actual
+Windows Service, TCP/TLS, PostgreSQL, external provider or ordinary-user session. No
+OfficialTest call, operating credential, dependency/image change or full external lab is
+part of this evidence.
 
 ## Exact-main DOC-02 evidence map
 
