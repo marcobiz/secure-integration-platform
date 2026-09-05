@@ -1,12 +1,12 @@
 # Standalone Windows Local Broker
 
-**Status: standalone and continuity software integrated through PR #68; real Windows Service qualification passed on the exact
-software candidate `3955fd0c3a5eccf816d44b0faba9a704227baa3d`.**
-`REAL_WINDOWS_SERVICE_QUALIFICATION=PASS` for the bounded scope recorded below.
-The SDK, local crypto/storage and transport tests were run on Windows with .NET SDK
-10.0.302. A subsequent authorized elevated run exercised the actual Windows Service,
-but does not attest a standard-user service invocation, upgrade compatibility across
-different releases, a Windows compatibility matrix or disaster recovery.
+**Status: standalone and continuity software integrated through PR #68; Windows delivery
+candidate `5ad048f169b5ba19d8d058d240a2c5029cce9703` passed the bounded real-service
+checks [recorded below](#windows-delivery-observed-on-september-5-2026).**
+The candidate is not yet integrated. Its non-elevated account is a member of
+Administrators, not a qualified standard non-admin account. The earlier elevated-only
+service result remains attached to `3955fd0c3a5eccf816d44b0faba9a704227baa3d`.
+Neither result establishes a Windows compatibility matrix or disaster recovery.
 
 This path uses local `ProtectData`/`UnprotectData`, not the Direct Gateway pilot.
 It needs no Gateway, PostgreSQL, cloud account, external certificate or enrollment.
@@ -22,7 +22,7 @@ The Windows delivery candidate adds a self-contained archive built by
 manifests and the [short package guide](../../deploy/windows/README.md). Extract outside
 the repository; the adopter does not need Git, an SDK, Node or Docker. SHA-256 is an
 integrity checksum, not publisher authentication. Target-specific non-elevated and
-two-build operational evidence remains pending until explicitly recorded below.
+two-build operational evidence is recorded below with the actual account/build limits.
 
 An administrator installs published binaries on a Windows x64 machine. The source
 developer needs the pinned .NET SDK; a self-contained runtime installation does not.
@@ -169,8 +169,9 @@ SDK sample: fresh install → Protect → repeated Stop → Start → verify old
 → unregistered/unstaged process denial → Update → verify again. It checks wrapped
 key hashes, Installation metadata and data ACL preservation, and reports time to
 first Protect. Update here reapplies the supplied candidate; it is not evidence of
-cross-version compatibility. Invocations run under the invoking elevated account;
-the ordinary-account walkthrough above must also be exercised before that claim.
+cross-version compatibility. Invocations in this historical entrypoint run under the
+invoking elevated account; the separate delivery observation below is the evidence
+for the non-elevated walkthrough.
 
 Finally it removes only the exact owned service registration; binaries, DPAPI state,
 profile, Event Log source and synthetic envelope remain intentionally preserved.
@@ -184,8 +185,8 @@ Observed once: install/start/status with Gateway disabled; Protect in 139 ms;
 verify; two unauthorized-client denials; Stop/update/start; second old-ciphertext
 verify; owned cleanup with persistent state preserved. The elapsed values are
 observations, not performance thresholds or guarantees. The update reapplied the same
-candidate, so it does not prove cross-version compatibility. Ordinary-account use and
-machine/profile restore remain unqualified. Focused in-process/simulated-SCM tests
+candidate, so it does not prove cross-version compatibility or ordinary-account use.
+Machine/profile restore remains unqualified. Focused in-process/simulated-SCM tests
 remain supporting evidence only; they are not the basis for this real-service result.
 
 ## Broker to Gateway continuity candidate
@@ -229,6 +230,55 @@ transport-failure result.
 
 Targeted evidence covers the public SDK/pipe and real Core authorization, enrollment,
 Published Connector and Synthetic Provider through an in-process fault-injection HTTP
-handler. It does not constitute a new actual-service, TLS, PostgreSQL, external-provider,
-ordinary-user or cross-release qualification; the real-service result above remains
-attached to its exact software commit.
+handler. It does not itself constitute actual-service, TLS, PostgreSQL, external-provider,
+ordinary-user or cross-release qualification. The separate observations below add only
+their stated real-service scope, not live renewal qualification.
+
+## Windows delivery observed on September 5, 2026
+
+Software/package commit: `5ad048f169b5ba19d8d058d240a2c5029cce9703` (PR #69).
+Host: Windows 10 Pro 22H2 x64, build 19045.6466. The application used the installed
+self-contained sample/public SDK outside the repository with a **non-elevated token**;
+its account is a direct member of Administrators. Administrative lifecycle actions
+were performed separately by the operator through the existing delivered script.
+
+| Observed path | Result and boundary |
+|---|---|
+| Package | 433 inventory entries verified after independent extraction; sample boots without dotnet on PATH or DOTNET_ROOT, with no IPC in that boot check. Included runtime: Microsoft.NETCore.App 10.0.10. |
+| Non-elevated local use | Status, Protect, Unprotect, wrong-purpose/content-type/tamper denial and unregistered-application denial passed on the actual service. New Protect: 137 ms; verify: 112 ms. |
+| Distinct-build update | Integrated build `56b6d9a7dd07bdfbcff3ea74e7b9f95b18a59929` prepared one synthetic envelope under an elevated application token solely for compatibility. Update to `5ad048f...` retained the same Installation/keys; the non-elevated candidate decrypted that envelope. This proves this exact build pair, not arbitrary release compatibility. |
+| Restart and rejected update | Repeated Stop/Start and a missing-source Update failure preserved the two envelopes, Installation/keys/data ACLs and disabled initialization. Non-elevated status and both envelope verifies passed after each checkpoint. |
+| Actual remote path | Sample → authenticated pipe → Windows Service → TLS/mTLS/BGW1 → Gateway/PostgreSQL → Published `sample-secure-service` → Synthetic Provider/vendor passed. After Broker restart, the activation environment was absent and the same Installation retained one active credential, with no replacement. |
+| Gateway outage/recovery | Only the owned Gateway container was stopped. One call failed in 4201 ms with `gateway_outcome_ambiguous`, `Retryable=false`; it did not reach the Gateway. After restoring the same container to healthy, a new explicit call succeeded in 2656 ms. No automatic replay occurred. |
+
+The remote ledger contains **four application attempts: three successes and one bounded
+failure**, three vendor accepts, zero vendor denials, and three distinct success audits
+with `callerKind=Broker`. The unavailable-Gateway attempt added no invocation audit;
+absence is not an invented failure or success record. Audit inspection retained only
+bounded metadata, not identities, credentials, payloads or raw response/log bodies.
+
+The original baseline non-elevated status attempt **failed** before pipe connection:
+SCM lookup passed, but limited OpenProcess access returned ACCESS_DENIED (5). The
+candidate fixes the earliest cause by adding only limited-query/synchronize rights
+for configured account SIDs on its own process before IPC. SDK peer authentication
+remains unchanged. The baseline failure is not reclassified by the elevated envelope
+preparation or by the candidate's success.
+
+The operator's final gate verified unchanged local/remote state, stopped the owned
+service, restored standalone configuration and removed the temporary CA/environment.
+Installation, protected local/remote identity and both synthetic envelopes are retained;
+this is not uninstall or backup/restore qualification. The six task containers, network,
+synthetic PostgreSQL volume and five task images were removed. Host policy denied
+deletion of 12 synthetic bootstrap files under ignored `.artifacts/windows-delivery/raw`:
+filesystem cleanup is therefore incomplete. Their initially broad inherited ACL was
+replaced by protected owner/SYSTEM/Administrators-only access, with no parent ACL change.
+They are not in Git, the package or retained evidence; their recipient database is gone
+and their synthetic CA is not trusted by the host/current user. No claim is made about
+unobserved access before that ACL correction. No production, external vendor,
+FSE2/OfficialTest, live renewal, account outside Administrators, other Windows target,
+machine/profile recovery, signed installer or public-release readiness is claimed.
+
+Archive SHA-256: `CA10E0E5A430DE8640F2D6AD39654A2A6D6D47AB48190B5C52D7AFFD9EA11073`.
+The checksum is not a signature. Exact software-head CI passed
+[General 7/7](https://github.com/marcobiz/secure-integration-platform/actions/runs/33959817220)
+and [M5/Admin 15/15](https://github.com/marcobiz/secure-integration-platform/actions/runs/33959817820).

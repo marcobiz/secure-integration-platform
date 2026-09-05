@@ -119,6 +119,12 @@ No new runtime, worker or renewal matrix is required. Artifacts and focused chec
 can complete without elevation; actual service qualification cannot. Keep the
 application invocation result distinct from SCM readiness and the historical gate.
 
+This bounded gate passed on software `5ad048f169b5ba19d8d058d240a2c5029cce9703`;
+[the observed results and limits](../user/local-broker.md#windows-delivery-observed-on-september-5-2026)
+now replace preparation status. The baseline's non-elevated access failure remains
+recorded; elevated baseline envelope preparation proves compatibility only. The next
+step is independent review, not another equivalent runtime qualification.
+
 After the application paths work, select the actual Windows versions, architectures
 and deployment context to qualify. Deliver an installable artifact, tested lifecycle
 and a compatibility matrix describing what was actually exercised, with explicit
