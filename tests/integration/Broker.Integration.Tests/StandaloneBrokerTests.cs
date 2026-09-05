@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using SecureIntegration.Broker.Core;
@@ -11,6 +12,51 @@ namespace SecureIntegration.Broker.Integration.Tests;
 
 public sealed class StandaloneBrokerTests
 {
+    [Fact]
+    public void Broker_process_verification_preparation_executes_the_native_current_process_boundary()
+    {
+        // This account already owns the test process; no new principal receives access.
+        string sid = WindowsIdentity.GetCurrent().User!.Value;
+        WindowsProcessSecurity.AllowClientVerification([new ApplicationPolicy { AllowedUserSids = [sid] }]);
+    }
+
+    [Fact]
+    public void Broker_process_verification_ACL_adds_only_configured_account_query_and_synchronize_and_preserves_denials()
+    {
+        const string account = "S-1-5-21-10001-10002-10003-1001";
+        RawSecurityDescriptor original = new("O:SYG:SYD:(D;;0x1;;;WD)(A;;GA;;;SY)(A;;GA;;;BA)");
+        RawAcl originalAcl = original.DiscretionaryAcl!;
+        DiscretionaryAcl updated = WindowsProcessSecurity.BuildVerificationAcl(originalAcl, [account, account]);
+        CommonAce added = Assert.Single(updated.Cast<GenericAce>().OfType<CommonAce>(), ace => ace.SecurityIdentifier.Value == account);
+        Assert.Equal(AceQualifier.AccessAllowed, added.AceQualifier);
+        Assert.Equal(0x101000, added.AccessMask);
+        Assert.Equal(AceFlags.None, added.AceFlags);
+        // No terminate/thread/duplicate-handle/VM/token/control/owner-write grant.
+        Assert.Equal(0, added.AccessMask & 0x000F0FFF);
+        foreach (GenericAce expected in originalAcl)
+            Assert.Contains(updated.Cast<GenericAce>(), actual => expected.Equals(actual));
+        Assert.Equal(3, originalAcl.Count);
+        Assert.DoesNotContain(updated.Cast<GenericAce>().OfType<CommonAce>(), ace =>
+            ace.AceQualifier == AceQualifier.AccessAllowed && ace.SecurityIdentifier.IsWellKnown(WellKnownSidType.WorldSid));
+        byte[] once = new byte[updated.BinaryLength];
+        updated.GetBinaryForm(once, 0);
+        DiscretionaryAcl repeated = WindowsProcessSecurity.BuildVerificationAcl(new RawAcl(once, 0), [account]);
+        byte[] twice = new byte[repeated.BinaryLength];
+        repeated.GetBinaryForm(twice, 0);
+        Assert.Equal(once, twice);
+    }
+
+    [Theory]
+    [InlineData("S-1-1-0")]
+    [InlineData("S-1-5-32-545")]
+    public void Broker_process_verification_never_adds_broad_group_grants(string sid)
+    {
+        RawSecurityDescriptor original = new("O:SYG:SYD:(A;;GA;;;SY)");
+        BrokerException failure = Assert.Throws<BrokerException>(() => WindowsProcessSecurity.BuildVerificationAcl(original.DiscretionaryAcl!, [sid]));
+        Assert.Equal("broker_process_security_unavailable", failure.Code);
+        Assert.Single(original.DiscretionaryAcl!.Cast<GenericAce>());
+    }
+
     [Theory]
     [InlineData("ProtectData", "other-purpose", "text/plain")]
     [InlineData("UnprotectData", "sample", "application/json")]

@@ -150,9 +150,16 @@ try {
         }) } }
     Write-Settings $settings
     $script:service = [pscustomobject]@{ PathName = $binaryPath; StartName = 'NT SERVICE\' + $name; State = 'Stopped' }
+    $BaselineEnvelopeForUpgrade = $false
     $stopsBefore = $script:stops
     Assert-BaselineResume
     Assert ((StateDigest) -ceq $retained -and $script:stops -eq $stopsBefore)
+    $script:service.State = 'Running'
+    ExpectDeliveryDenied { Assert-BaselineResume } 'DELIVERY_RESUME_REQUIRES_OWNED_STOPPED_BASELINE'
+    $BaselineEnvelopeForUpgrade = $true
+    Assert-BaselineResume
+    $script:service.State = 'Stopped'
+    $BaselineEnvelopeForUpgrade = $false
     $script:service.PathName = 'foreign.exe'
     ExpectDenied { Assert-BaselineResume }
     $script:service.PathName = $binaryPath

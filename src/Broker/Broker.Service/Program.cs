@@ -51,6 +51,7 @@ builder.Services.AddHostedService<BrokerWorker>();
 using IHost host = builder.Build();
 try
 {
+    WindowsProcessSecurity.AllowClientVerification(brokerOptions.Applications);
     if (brokerOptions.Applications.Any(application => application.AllowedOperations.Contains("ProtectData") || application.AllowedOperations.Contains("UnprotectData")))
     {
         FileDataKeyRepository keys = (FileDataKeyRepository)host.Services.GetRequiredService<IDataKeyRepository>();

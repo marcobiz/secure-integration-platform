@@ -9,10 +9,12 @@ param(
     [Parameter(Mandatory = $true)][string] $EvidenceDirectory,
     [ValidatePattern('^delivery-[a-z0-9-]{1,25}$')][string] $Instance = 'delivery-20260905',
     [string] $SyntheticBootstrapDirectory,
-    [switch] $ResumeBaseline
+    [switch] $ResumeBaseline,
+    [switch] $BaselineEnvelopeForUpgrade
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ($BaselineEnvelopeForUpgrade -and -not $ResumeBaseline) { throw 'DELIVERY_BASELINE_ENVELOPE_REQUIRES_RETAINED_INSTALLATION' }
 if (-not ([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'DELIVERY_ELEVATED_SETUP_REQUIRED' }
 $package = (Resolve-Path -LiteralPath $PackageDirectory).Path
@@ -87,7 +89,9 @@ function Get-SyntheticBootstrap {
 }
 function Assert-BaselineResume {
     $owned = Get-OwnedService
-    if (-not $owned -or $owned.State -cne 'Stopped') { throw 'DELIVERY_RESUME_REQUIRES_OWNED_STOPPED_BASELINE' }
+    if (-not $owned -or ($owned.State -cne 'Stopped' -and (-not $BaselineEnvelopeForUpgrade -or $owned.State -cne 'Running'))) {
+        throw 'DELIVERY_RESUME_REQUIRES_OWNED_STOPPED_BASELINE'
+    }
     Assert-NoReparse $settingsPath
     $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
     $record = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
@@ -137,6 +141,13 @@ elseif ((Test-Path -LiteralPath $root) -or (Test-Path -LiteralPath $data) -or (G
 }
 New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 try {
+    if ($BaselineEnvelopeForUpgrade) {
+        # A canceled Read-Host is not evidence of Stop. Use the owned lifecycle and
+        # verify its result before reusing the retained baseline installation.
+        & $lifecycle -Command Stop -Instance $Instance
+        if ((Get-OwnedService).State -cne 'Stopped') { throw 'DELIVERY_BASELINE_STOP_NOT_CONFIRMED' }
+        Write-Output 'BASELINE_STOP=VERIFIED'
+    }
     if ($ResumeBaseline) { $retainedState = StateDigest }
     else { & $lifecycle -Command Install -Instance $Instance -ApplicationUserSid $ApplicationUserSid -BrokerPublishDirectory $BaselineBrokerDirectory -SamplePublishDirectory $BaselineSampleDirectory }
     $claimed = $true
@@ -144,13 +155,24 @@ try {
     $initialState = StateDigest
     if ($ResumeBaseline -and $initialState -cne $retainedState) { throw 'DELIVERY_RESUME_STATE_CHANGED' }
     $initialAcl = (Get-Acl -LiteralPath $data).Sddl
-    Checkpoint 'BASELINE_READY'
+    if ($BaselineEnvelopeForUpgrade) {
+        # The old build's ordinary-token failure remains FAIL. This single elevated
+        # synthetic preparation proves old-format compatibility, not ordinary use.
+        $baselineEnvelope = Join-Path $evidence 'baseline.envelope'
+        if (Test-Path -LiteralPath $baselineEnvelope) { throw 'DELIVERY_BASELINE_ENVELOPE_EXISTS_PRESERVED' }
+        & (Join-Path $root 'sample\SecureIntegration.Samples.LocalBroker.exe') protect $name $name local-sample $baselineEnvelope
+        if ($LASTEXITCODE -ne 0) { throw 'DELIVERY_BASELINE_ENVELOPE_PREPARATION_FAILED' }
+        Write-Output 'BASELINE_ENVELOPE=PREPARED_ELEVATED BASELINE_ORDINARY_TOKEN=FAIL'
+        & $lifecycle -Command Update -Instance $Instance
+        if ((StateDigest) -cne $initialState -or (Get-Acl -LiteralPath $data).Sddl -cne $initialAcl) { throw 'DELIVERY_UPDATE_STATE_CHANGED' }
+        Checkpoint 'CANDIDATE_READY'
+    } else { Checkpoint 'BASELINE_READY' }
     & $lifecycle -Command Stop -Instance $Instance
     & $lifecycle -Command Stop -Instance $Instance
     & $lifecycle -Command Start -Instance $Instance
     if ((StateDigest) -cne $initialState) { throw 'DELIVERY_RESTART_STATE_CHANGED' }
     Checkpoint 'RESTART_READY'
-    & $lifecycle -Command Update -Instance $Instance
+    if (-not $BaselineEnvelopeForUpgrade) { & $lifecycle -Command Update -Instance $Instance }
     # Failure before the first copy: no upstream invocation and no key reinitialization.
     $missing = Join-Path $package 'intentionally-absent-update-source'
     if (Test-Path -LiteralPath $missing) { throw 'DELIVERY_NEGATIVE_SOURCE_COLLISION' }
@@ -160,7 +182,7 @@ try {
     if ($settings.Broker.InitializeDataKeys) { throw 'DELIVERY_UPDATE_REINITIALIZATION_ENABLED' }
     & $lifecycle -Command Start -Instance $Instance
     if ((StateDigest) -cne $initialState -or (Get-Acl -LiteralPath $data).Sddl -cne $initialAcl) { throw 'DELIVERY_UPDATE_STATE_CHANGED' }
-    Checkpoint 'UPDATE_READY'
+    if ($BaselineEnvelopeForUpgrade) { Checkpoint 'UPDATE_FAILURE_RECOVERY_READY' } else { Checkpoint 'UPDATE_READY' }
 
     if ($SyntheticBootstrapDirectory) {
         # Existing M3 fixture only. This file is not distributed in the package.
