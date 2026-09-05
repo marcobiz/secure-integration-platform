@@ -5,7 +5,7 @@ $source = Join-Path $PSScriptRoot '..\..\..\deploy\windows\Invoke-LocalBroker.ps
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($source, [ref]$tokens, [ref]$errors)
 if ($errors.Count -ne 0) { throw 'SCRIPT_PARSE_FAILED' }
-foreach ($scriptFile in @('Build-LocalBrokerPackage.ps1', 'Test-LocalBrokerPackage.ps1', 'Test-LocalBrokerWindowsDelivery.ps1')) {
+foreach ($scriptFile in @('Build-LocalBrokerPackage.ps1', 'Test-LocalBrokerPackage.ps1', 'Test-LocalBrokerWindowsDelivery.ps1', 'Test-LocalBrokerCredentialAdoption.ps1')) {
     $path = Join-Path $PSScriptRoot ('..\..\..\eng\' + $scriptFile)
     [void][Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
     if ($errors.Count -ne 0) { throw 'DELIVERY_SCRIPT_PARSE_FAILED' }
@@ -56,6 +56,38 @@ try {
     $ApplicationUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     Assert ((Get-ApplicationUserSid) -ceq $ApplicationUserSid)
     Write-Output 'EXPLICIT_APPLICATION_ACCOUNT_SID=PASS'
+
+    # Reuse AST extraction to execute the gate's actual account parameter binding.
+    # Only its explicit -WhatIf command is allowed; no account/service/files are created.
+    $adoptionPath = Join-Path $PSScriptRoot '..\..\..\eng\Test-LocalBrokerCredentialAdoption.ps1'
+    $adoptionAst = [Management.Automation.Language.Parser]::ParseFile($adoptionPath, [ref]$tokens, [ref]$errors)
+    $binding = $adoptionAst.Find({ param($node) $node -is [Management.Automation.Language.CommandAst] -and
+        $node.GetCommandName() -ceq 'New-LocalUser' -and @($node.CommandElements | Where-Object {
+            $_ -is [Management.Automation.Language.CommandParameterAst] -and $_.ParameterName -ceq 'WhatIf' }).Count -eq 1 }, $true)
+    Assert ($null -ne $binding)
+    $ephemeral = $adoptionAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'New-EphemeralValue' }, $true)
+    . ([ScriptBlock]::Create($ephemeral.Extent.Text))
+    $AccountName = 'BrokerCred0905'
+    $secret = ConvertTo-SecureString ((New-EphemeralValue) + '-aA1!') -AsPlainText -Force
+    try {
+        foreach ($Instance in @('credential-20260905', ('credential-' + ('x' * 25)))) {
+            $AccountName = if ($Instance.Length -eq 36) { 'BrokerCred12345678' } else { 'BrokerCred0905' }
+            foreach ($assignment in $adoptionAst.EndBlock.Statements | Where-Object {
+                $_ -is [Management.Automation.Language.AssignmentStatementAst] -and
+                $_.Left.Extent.Text -cin @('$accountDescription', '$accountParameters') }) {
+                . ([ScriptBlock]::Create($assignment.Extent.Text))
+            }
+            Assert ($accountDescription.Length -le 48)
+            & ([ScriptBlock]::Create($binding.Extent.Text)) | Out-Null
+        }
+        $accountParameters.Description = 'Task-owned Local Broker credential adoption credential-20260905'
+        $denied = $false
+        try { & ([ScriptBlock]::Create($binding.Extent.Text)) | Out-Null }
+        catch { $denied = $_.Exception.GetType().Name -ceq 'ParameterBindingValidationException' }
+        Assert $denied
+        Write-Output 'CREDENTIAL_GATE_REAL_CMDLET_BINDING_DEFAULT_MAX_AND_PRIOR_FAILURE=PASS (WhatIf only)'
+    }
+    finally { $secret.Dispose() }
 
     # Execute the shipped update branch with simulated process/SCM/copy failure.
     # The real settings write must disable initialization before the first copy.

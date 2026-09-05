@@ -15,6 +15,8 @@ $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 $name = 'SecureIntegrationBroker.Local.' + $Instance
 $installRoot = Join-Path $env:ProgramFiles ('SecureIntegration\LocalBroker\' + $Instance)
 $sample = Join-Path $installRoot 'sample\SecureIntegration.Samples.LocalBroker.exe'
+$accountDescription = 'SIP proof ' + $Instance # At most 46 characters; New-LocalUser allows 48.
+$accountParameters = @{ Name = $AccountName; Description = $accountDescription }
 
 function New-EphemeralValue {
     $bytes = New-Object byte[] 48
@@ -63,24 +65,30 @@ if ($StandardUserSid) {
     $appData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
     $envelope = Join-Path $appData ('SecureIntegrationCredentialSample-' + $Instance + '\credential.envelope')
     if (Test-Path -LiteralPath (Split-Path -Parent $envelope)) { throw 'CREDENTIAL_GATE_APPDATA_COLLISION' }
+    $childPhase = 'initial-save'
     try {
         Invoke-Sample 'set-credential' $envelope (New-EphemeralValue)
+        $childPhase = 'initial-new-process-use'
         Invoke-Sample 'use-credential' $envelope ''
         $first = [IO.File]::ReadAllBytes($envelope)
+        $childPhase = 'replacement-save'
         Invoke-Sample 'set-credential' $envelope (New-EphemeralValue)
+        $childPhase = 'replacement-new-process-use'
         Invoke-Sample 'use-credential' $envelope ''
         $beforeFailure = [IO.File]::ReadAllBytes($envelope)
         if ([Convert]::ToBase64String($first) -ceq [Convert]::ToBase64String($beforeFailure)) { throw 'CREDENTIAL_GATE_REPLACEMENT_MISSING' }
+        $childPhase = 'failed-save-preservation'
         $locked = [IO.File]::Open($envelope, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
         try { Invoke-Sample 'set-credential' $envelope (New-EphemeralValue) $false }
         finally { $locked.Dispose() }
         if ([Convert]::ToBase64String($beforeFailure) -cne [Convert]::ToBase64String([IO.File]::ReadAllBytes($envelope))) {
             throw 'CREDENTIAL_GATE_PREVIOUS_CONFIGURATION_CHANGED'
         }
+        $childPhase = 'preserved-new-process-use'
         Invoke-Sample 'use-credential' $envelope ''
         Write-Output 'STANDARD_ACCOUNT_CREDENTIAL_ADOPTION=PASS'
     }
-    catch { [Console]::Error.WriteLine('STANDARD_ACCOUNT_CREDENTIAL_ADOPTION=FAILED'); exit 1 }
+    catch { [Console]::Error.WriteLine('STANDARD_ACCOUNT_CREDENTIAL_ADOPTION=FAILED PHASE=' + $childPhase); exit 1 }
     # Only ciphertext is left in this task user's private profile. No raw values/evidence.
     exit 0
 }
@@ -99,19 +107,29 @@ $user = $null
 $secret = $null
 $installed = $false
 $passed = $false
+$phase = 'account-parameter-validation'
+$failureType = 'none'
+$failureCategory = 'none'
+$failedChildPhase = 'none'
 $started = [DateTimeOffset]::UtcNow
 $lifecycle = Join-Path $package 'Invoke-LocalBroker.ps1'
 try {
     $secret = ConvertTo-SecureString ((New-EphemeralValue) + '-aA1!') -AsPlainText -Force
-    $user = New-LocalUser -Name $AccountName -Password $secret -Description ('Task-owned Local Broker credential adoption ' + $Instance)
+    New-LocalUser @accountParameters -Password $secret -WhatIf | Out-Null
+    $phase = 'account-create'
+    $user = New-LocalUser @accountParameters -Password $secret
+    $phase = 'account-membership'
     $users = Get-LocalGroup -SID 'S-1-5-32-545'
     Add-LocalGroupMember -Group $users -Member $user
     if (@(Get-LocalGroupMember -SID 'S-1-5-32-544' | Where-Object { $_.SID.Value -ceq $user.SID.Value }).Count -ne 0) {
         throw 'CREDENTIAL_GATE_ACCOUNT_IS_ADMINISTRATOR'
     }
     $installed = $true
+    $phase = 'service-install'
     & $lifecycle -Command Install -Instance $Instance -ApplicationUserSid $user.SID.Value
+    $phase = 'service-start'
     & $lifecycle -Command Start -Instance $Instance
+    $phase = 'standard-user-process'
     # The task proof is separate from the product-only archive; child source is admin-owned.
     $childScript = Join-Path $installRoot 'credential-adoption-proof.ps1'
     Copy-Item -LiteralPath $PSCommandPath -Destination $childScript
@@ -136,13 +154,23 @@ try {
         $errorOutput = $child.StandardError.ReadToEndAsync()
         if (-not $child.WaitForExit(300000)) { $child.Kill(); throw 'CREDENTIAL_GATE_CHILD_TIMEOUT' }
         if ($child.ExitCode -ne 0 -or $output.Result.Trim() -cne 'STANDARD_ACCOUNT_CREDENTIAL_ADOPTION=PASS' -or $errorOutput.Result.Length -ne 0) {
+            if ($errorOutput.Result.Trim() -cmatch '^STANDARD_ACCOUNT_CREDENTIAL_ADOPTION=FAILED PHASE=(initial-save|initial-new-process-use|replacement-save|replacement-new-process-use|failed-save-preservation|preserved-new-process-use)$') {
+                $failedChildPhase = $Matches[1]
+            }
             throw 'CREDENTIAL_GATE_STANDARD_USER_FAILED'
         }
         $passed = $true
+        $phase = 'completed'
     }
     finally { $child.Dispose() }
 }
-catch { throw 'CREDENTIAL_GATE_FAILED: bounded standard-account setup or invocation failure; no credential output retained.' }
+catch {
+    $type = $_.Exception.GetType().Name
+    $failureType = if ($type -cin @('ParameterBindingValidationException', 'InvalidOperationException', 'Win32Exception',
+        'UnauthorizedAccessException', 'RuntimeException', 'PSInvalidOperationException')) { $type } else { 'Other' }
+    $failureCategory = [string]$_.CategoryInfo.Category
+    throw ('CREDENTIAL_GATE_FAILED PHASE=' + $phase + ' CATEGORY=' + $failureCategory + ' TYPE=' + $failureType + ' CHILD_PHASE=' + $failedChildPhase)
+}
 finally {
     try {
         if ($installed) { & $lifecycle -Command Stop -Instance $Instance }
@@ -151,7 +179,7 @@ finally {
         try {
             if ($user) {
                 $owned = Get-LocalUser -SID $user.SID
-                if ($owned.Name -cne $AccountName -or $owned.Description -cne ('Task-owned Local Broker credential adoption ' + $Instance)) {
+                if ($owned.Name -cne $AccountName -or $owned.Description -cne $accountDescription) {
                     throw 'CREDENTIAL_GATE_ACCOUNT_OWNERSHIP_UNCERTAIN'
                 }
                 Disable-LocalUser -SID $user.SID
@@ -164,10 +192,12 @@ finally {
     New-Item -ItemType Directory -Path $evidence | Out-Null
     $result = [ordered]@{
         schemaVersion = 1; sourceCommit = $ExpectedSourceCommit; passed = $passed
+        gateScriptSha256 = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
+        phase = $phase; failureType = $failureType; failureCategory = $failureCategory; failedChildPhase = $failedChildPhase
         standardAccountNotInAdministrators = $passed; configureNewExecutionReplace = $passed
         failedSavePreservesPreviousCiphertext = $passed; externalCalls = 0; rawDataRetained = $false
         accountDisabled = [bool]$user; ownedServiceStopped = $installed
-        retained = 'task-owned disabled account/profile, stopped service and protected installation/ciphertext; not an uninstall'
+        retained = $(if ($user) { 'task-owned disabled account/profile and any protected installation/ciphertext; not an uninstall' } else { 'no task account was created' })
         elapsedSeconds = [int]([DateTimeOffset]::UtcNow - $started).TotalSeconds
     }
     $resultPath = Join-Path $evidence 'result.json'
