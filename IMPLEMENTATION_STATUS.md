@@ -1,8 +1,8 @@
 # Implementation dashboard
 
 Updated: 2026-09-05
-Baseline integrated through PR #67:
-`02b0540d78ecd0c4b9599bfb58f76ed85a291d4c`.
+Baseline integrated through PR #68:
+`56b6d9a7dd07bdfbcff3ea74e7b9f95b18a59929`.
 PR #67 integrated the standalone Local Broker protection and SDK peer-authentication
 candidate. Its exact-main General and M5/Admin gates passed; the real Windows Service
 qualification remains attached to software commit
@@ -21,7 +21,8 @@ distinct levels. The integrated baseline does not replace the exact commit of a 
 | Core M0–M5.5 | Integrated | Local Broker, Gateway, PostgreSQL, Connector lifecycle/runtime, Admin and Direct Gateway; not equivalent to an installer or enterprise production readiness. |
 | A. Local Core pilot | **Available — Docker-first synthetic live lab** | Primary path: Direct .NET → Gateway → Published REST Connector → HTTPS/mTLS mock. Host needs Git, PowerShell and Linux Docker/Compose; no host .NET SDK, Node, npm, curl or PostgreSQL. No external service, cloud or healthcare pack. |
 | B. Windows / Local Broker | **Integrated — standalone protection and authenticated SDK path** | Exact-main software includes mutual SCM/PID/pipe-owner authentication, explicit local-key lifecycle, application/operation/context policy and the bounded sample. The real-service result remains exact to `3955fd0c...`; ordinary-user, cross-release and machine/profile restore are not qualified. |
-| Broker → Gateway continuity | **ACTIVE CANDIDATE — targeted synthetic E2E PASS** | Existing Broker identity now records authoritative renewal lifecycle, renews single-flight, resumes after restart or a lost renewal response and reports uncertain remote outcomes as non-retryable. Evidence is an in-process Windows transport fixture over the real enrollment, authorization, Published Connector and Synthetic Provider services; it is not a new Windows Service or PostgreSQL/live qualification. |
+| Broker → Gateway continuity | **Integrated through PR #68 — targeted synthetic E2E PASS** | Existing Broker identity records authoritative renewal lifecycle, renews single-flight, resumes after restart or a lost renewal response and reports uncertain remote outcomes as non-retryable. Evidence is an in-process Windows transport fixture over the real enrollment, authorization, Published Connector and Synthetic Provider services; it is not a Windows Service or PostgreSQL/live qualification. |
+| Windows x64 delivery | **ACTIVE CANDIDATE — package and focused checks** | Self-contained Broker/sample archive, explicit application-user SID independent of setup admin, state-preserving lifecycle and SHA-256 inventory. Windows 10 Pro 22H2 x64 build 19045.6466 is the selected test host. Ordinary-token, two-build and real-service → Gateway checks are pending elevated setup; no expanded Windows/production claim. |
 | Admin UI/API | **Integrated — guided Connector onboarding** | Five actions across three roles for Installation/enrollment, definition, binding/grant, four-eyes and first invocation. `FULLSTACK-02` proves reload/resume and first invocation on PostgreSQL 18. The pilot uses synthetic identities, not production authentication. |
 | Authentication foundation | **Integrated** | Provider-neutral SOAP/session, JWT/X.509, signing and mTLS primitives; they do not automatically qualify an external service. |
 | C. FSE2 Organization current-spec | **PRODUCT_PATH_OFFLINE_COMPLETE — 14 routes** | Opt-in profile `fse2-organization-current-spec@1.0.0`: contracts, provisioning and bounded responses complete within the [frozen specification](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/connectors/healthcare/fse2/current-spec.md). This does not mean 14 live-qualified routes. |
@@ -33,7 +34,7 @@ distinct levels. The integrated baseline does not replace the exact commit of a 
 | Private preview | **Limited** | Core and optional pilot can be evaluated with their respective prerequisites; no public release or guaranteed API stability. |
 | Production/accreditation | **NOT QUALIFIED** | Live cloud use, MSI, C ABI/COM adapters, HA/DR, restore/load/soak, penetration testing, artifact signing and production custody are not qualified. |
 
-## Local Broker path — standalone integrated, continuity candidate active
+## Local Broker path — standalone and continuity integrated, Windows delivery active
 
 PR #67 integrated the independently usable Windows Local Broker software: an identified,
 authorized .NET application uses an Installation-local key without receiving it or
@@ -55,7 +56,7 @@ registration but intentionally preserved installation/state; it was not an unins
 Ordinary-user service use, cross-release update and machine/profile restore remain
 unqualified.
 
-The active candidate completes the existing Broker → Gateway path without another
+PR #68 completed the existing Broker → Gateway path without another
 identity or runtime. The Broker persists only Installation/credential lifecycle metadata,
 creates a non-exportable replacement key inside the server-owned renewal window, and
 serializes renewal per process. A pending renewal is recorded before dispatch; a later
@@ -66,7 +67,7 @@ are `gateway_outcome_ambiguous` with `Retryable=false`; there is no automatic in
 retry. Revocation, expiry and removed grants remain Gateway-side denials before the
 synthetic upstream.
 
-The candidate fixture proves enrollment, Published Connector invocation, restart with
+The integrated fixture proves enrollment, Published Connector invocation, restart with
 the same Installation and no activation reuse, single-flight renewal, interruption
 recovery, explicit reconnection and negative authority cases. It uses the real Core
 services and filesystem/CNG state behind an in-process HTTP handler; it does not claim an

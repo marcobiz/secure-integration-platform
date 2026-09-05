@@ -5,7 +5,12 @@ $source = Join-Path $PSScriptRoot '..\..\..\deploy\windows\Invoke-LocalBroker.ps
 $tokens = $null; $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($source, [ref]$tokens, [ref]$errors)
 if ($errors.Count -ne 0) { throw 'SCRIPT_PARSE_FAILED' }
-foreach ($functionName in @('Assert-NoReparse', 'Get-OwnedService')) {
+foreach ($scriptFile in @('Build-LocalBrokerPackage.ps1', 'Test-LocalBrokerPackage.ps1', 'Test-LocalBrokerWindowsDelivery.ps1')) {
+    $path = Join-Path $PSScriptRoot ('..\..\..\eng\' + $scriptFile)
+    [void][Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+    if ($errors.Count -ne 0) { throw 'DELIVERY_SCRIPT_PARSE_FAILED' }
+}
+foreach ($functionName in @('Assert-NoReparse', 'Get-OwnedService', 'Get-ApplicationUserSid', 'Write-Settings')) {
     $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName }, $true)
     . ([ScriptBlock]::Create($definition.Extent.Text))
 }
@@ -44,6 +49,64 @@ try {
     ExpectDenied { Get-OwnedService }
     Assert (Test-Path -LiteralPath (Join-Path $data 'preserve.bin'))
     Write-Output 'STOP_ABSENT_NORMAL_REPEAT_OWNERSHIP=PASS (simulated SCM)'
+    $ApplicationUserSid = ''
+    ExpectDenied { Get-ApplicationUserSid }
+    $ApplicationUserSid = 'S-1-5-32-544'
+    ExpectDenied { Get-ApplicationUserSid }
+    $ApplicationUserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    Assert ((Get-ApplicationUserSid) -ceq $ApplicationUserSid)
+    Write-Output 'EXPLICIT_APPLICATION_ACCOUNT_SID=PASS'
+
+    # Execute the shipped update branch with simulated process/SCM/copy failure.
+    # The real settings write must disable initialization before the first copy.
+    $settingsPath = Join-Path $root 'appsettings.json'
+    Write-Settings @{ Broker = @{ InitializeDataKeys = $true; InstallationId = 'preserve-id'; Applications = @(@{ AllowedUserSids = @($ApplicationUserSid) }) } }
+    $updateBranch = $ast.Find({ param($node) $node -is [Management.Automation.Language.IfStatementAst] -and $node.Clauses[0].Item1.Extent.Text -eq '$Command -eq ''Update''' }, $false)
+    Assert ($null -ne $updateBranch)
+    function Copy-Published {
+        param($Source, $Destination)
+        $persisted = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+        Assert (-not $persisted.Broker.InitializeDataKeys)
+        throw 'LOCAL_BROKER_COPY_FIXTURE_FAILURE'
+    }
+    $BrokerPublishDirectory = $root; $brokerDirectory = $root
+    # Stop was exercised above; skip only the subprocess invocation of that same
+    # branch. Every subsequent settings/copy statement is the shipped code.
+    $updateAfterStop = ($updateBranch.Clauses[0].Item2.Statements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text }) -join "`n"
+    ExpectDenied { & ([ScriptBlock]::Create($updateAfterStop)) }
+    $persisted = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+    Assert (-not $persisted.Broker.InitializeDataKeys -and $persisted.Broker.InstallationId -ceq 'preserve-id')
+    Assert ($persisted.Broker.Applications[0].AllowedUserSids[0] -ceq $ApplicationUserSid)
+    Assert (Test-Path -LiteralPath (Join-Path $data 'preserve.bin'))
+    Write-Output 'FAILED_UPDATE_DISALLOWS_INITIALIZATION_PRESERVES_STATE=PASS'
+
+    $packageFixture = Join-Path $fixture 'package'
+    foreach ($component in @('broker', 'sample')) {
+        $componentPath = Join-Path $packageFixture $component
+        New-Item -ItemType Directory -Path $componentPath -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $componentPath 'coreclr.dll'), 'synthetic-not-a-runtime')
+        [IO.File]::WriteAllText((Join-Path $componentPath 'synthetic.runtimeconfig.json'), '{"runtimeOptions":{"includedFrameworks":[{"name":"Microsoft.NETCore.App","version":"10.0.6"}]}}')
+    }
+    $packageFiles = @(Get-ChildItem -LiteralPath $packageFixture -Recurse -File | ForEach-Object {
+        @{ path = $_.FullName.Substring($packageFixture.Length + 1).Replace('\', '/'); bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
+    })
+    $packageManifest = @{ schemaVersion = 1; product = 'SecureIntegration.LocalBroker'; sourceCommit = ('a' * 40); runtimeIdentifier = 'win-x64'; selfContained = $true; files = $packageFiles }
+    [IO.File]::WriteAllText((Join-Path $packageFixture 'package-manifest.json'), ($packageManifest | ConvertTo-Json -Depth 5))
+    $validator = Join-Path $PSScriptRoot '..\..\..\eng\Test-LocalBrokerPackage.ps1'
+    & $validator -PackageDirectory $packageFixture -ExpectedSourceCommit ('a' * 40) | Out-Null
+    $tamper = Join-Path $packageFixture 'broker\coreclr.dll'
+    [IO.File]::AppendAllText($tamper, '-tampered')
+    $denied = $false
+    try { & $validator -PackageDirectory $packageFixture -ExpectedSourceCommit ('a' * 40) | Out-Null }
+    catch { $denied = $_.Exception.Message -ceq 'BROKER_PACKAGE_HASH_MISMATCH' }
+    Assert $denied
+    [IO.File]::WriteAllText($tamper, 'synthetic-not-a-runtime')
+    [IO.File]::WriteAllText((Join-Path $packageFixture 'broker\appsettings.json'), '{}')
+    $denied = $false
+    try { & $validator -PackageDirectory $packageFixture -ExpectedSourceCommit ('a' * 40) | Out-Null }
+    catch { $denied = $_.Exception.Message -ceq 'BROKER_PACKAGE_INVENTORY_MISMATCH' }
+    Assert $denied
+    Write-Output 'PACKAGE_TAMPER_AND_UNLISTED_SETTINGS_DENIED=PASS'
 }
 finally {
     if (([IO.Path]::GetFullPath($fixture)).StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()), [StringComparison]::OrdinalIgnoreCase)) {

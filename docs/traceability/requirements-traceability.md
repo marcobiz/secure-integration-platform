@@ -38,7 +38,7 @@ to exact software candidate `3955fd0c3a5eccf816d44b0faba9a704227baa3d`. See the
 | Owned, repeatable Stop | `Standalone_lifecycle_script_denies_foreign_resources_and_preserves_data_on_repeated_stop` | Actual shipped ownership/Stop control flow with simulated SCM, including absent service and foreign marker/resource. |
 | Real service → Protect → restart/update → old ciphertext | `deploy/windows/Invoke-LocalBroker.ps1 -Command Verify` | **PASS once** on exact software candidate `3955fd0c3a5eccf816d44b0faba9a704227baa3d`: Gateway disabled, Protect, repeated Stop, restart, two old-ciphertext verifies around same-candidate update, two unauthorized denials and owned cleanup. `FIRST_PROTECT_MS=12532` is observed, not a threshold. Cleanup removed the service registration and preserved installation/state; not uninstall. Ordinary-user, cross-release and actual profile restore remain pending. |
 
-### Broker → Gateway continuity candidate
+### Broker → Gateway continuity integrated through PR #68
 
 | Requirement | Named focused evidence | Scope |
 |---|---|---|
@@ -55,6 +55,15 @@ services behind a deterministic in-process HTTP handler. They do not exercise an
 Windows Service, TCP/TLS, PostgreSQL, external provider or ordinary-user session. No
 OfficialTest call, operating credential, dependency/image change or full external lab is
 part of this evidence.
+
+### Windows delivery candidate
+
+| Requirement | Focused evidence | Scope |
+|---|---|---|
+| Self-contained product-only package | `Build-LocalBrokerPackage.ps1`, `Test-LocalBrokerPackage.ps1` | Closed file/hash inventory, source commit, included runtime and managed dependency manifests. No source/fixture/private settings in the archive; checksums do not authenticate the publisher. |
+| Setup identity separate from application user | `LocalBrokerLifecycle.Tests.ps1` — `EXPLICIT_APPLICATION_ACCOUNT_SID` | Explicit existing account SID; missing/group SID denied. Start is SCM readiness, not an invocation under the setup administrator. |
+| Failed update preserves state | `LocalBrokerLifecycle.Tests.ps1` — `FAILED_UPDATE_DISALLOWS_INITIALIZATION_PRESERVES_STATE` | Real settings write precedes simulated failing copy; key initialization remains disabled and identity/policy/data remain intact. Existing Stop/ownership tests retained. |
+| Ordinary-token use, distinct-build update and actual Windows Service → Gateway | `Test-LocalBrokerWindowsDelivery.ps1` | Prepared operator-assisted gate; pending elevated setup on Windows 10 Pro 22H2 x64 19045.6466. Non-elevated application checks run separately through the public sample/SDK, not an impersonated or administrative token. No live PASS is implied by the script. |
 
 ## Exact-main DOC-02 evidence map
 

@@ -1,7 +1,7 @@
 # Implementation plan
 
 Updated: 2026-09-05
-Planning baseline: `02b0540d78ecd0c4b9599bfb58f76ed85a291d4c` (PR #67 integrated).
+Planning baseline: `56b6d9a7dd07bdfbcff3ea74e7b9f95b18a59929` (PR #68 integrated).
 
 This is the current order of work. [IMPLEMENTATION_STATUS.md](../../IMPLEMENTATION_STATUS.md)
 owns integrated capability and qualification claims; the [backlog](backlog.md#current-work-order)
@@ -9,7 +9,7 @@ owns the small NOW/NEXT/DEFERRED queue. The older Core alpha/FSE2 plan is retain
 [below](#historical-planning-snapshot) as history, not a competing active roadmap.
 
 The present authorization covers implementation, documentation, Signed-off-by commits,
-public push and a non-draft PR for the Broker → Gateway continuity candidate. It does
+public push and a non-draft PR for the Windows delivery candidate. It does
 not authorize merge, tag, release, OfficialTest calls, external contact or a production
 claim.
 
@@ -23,7 +23,7 @@ claim.
    with an installable artifact and a tested compatibility matrix.
 
 The first outcome is integrated through PR #67, with one earlier exact-candidate
-elevated service qualification. The second is the active synthetic candidate. These
+elevated service qualification. The second is integrated through PR #68. These
 results do not silently expand one another: the Windows gate remains attached to its
 exact software commit, and the continuity fixture is not a real-service qualification.
 
@@ -79,7 +79,7 @@ The relevant existing decisions are [Named Pipe IPC](../adr/0003-named-pipe-ipc.
 state preservation; completing all M9 installer work is not a prerequisite for this
 bounded service-update proof.
 
-## NOW — Broker to Gateway continuity
+## Integrated — Broker to Gateway continuity
 
 Complete the existing remote path without introducing a second client identity or
 runtime. The candidate persists only authoritative Installation/credential lifecycle
@@ -108,7 +108,16 @@ general reconnect framework in anticipation of other consumers.
 See [Installation identity](../adr/0008-installation-identity.md) and the
 [shared Broker/Direct principal](../adr/0020-direct-gateway-client-principal.md).
 
-## NEXT — target-specific distribution and operation
+## NOW — target-specific distribution and operation
+
+Selected host: Windows 10 Pro 22H2 x64 build 19045.6466. Deliver a self-contained
+archive using the existing lifecycle/sample, with an explicit application-user SID,
+runtime/dependency inventory and checksums (not signatures). One administrator-assisted
+script coordinates ordinary-token checks, restart, update from integrated build
+`56b6d9a...` and one real service → Gateway/PostgreSQL/Synthetic Provider path.
+No new runtime, worker or renewal matrix is required. Artifacts and focused checks
+can complete without elevation; actual service qualification cannot. Keep the
+application invocation result distinct from SCM readiness and the historical gate.
 
 After the application paths work, select the actual Windows versions, architectures
 and deployment context to qualify. Deliver an installable artifact, tested lifecycle

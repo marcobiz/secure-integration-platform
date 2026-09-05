@@ -1,7 +1,7 @@
 # Backlog ordered by outcome
 
 Updated: 2026-09-05
-Planning baseline: `02b0540d78ecd0c4b9599bfb58f76ed85a291d4c` (PR #67 integrated).
+Planning baseline: `56b6d9a7dd07bdfbcff3ea74e7b9f95b18a59929` (PR #68 integrated).
 
 This is the work queue, not another capability dashboard.
 [IMPLEMENTATION_STATUS.md](../../IMPLEMENTATION_STATUS.md) owns integrated status;
@@ -13,8 +13,8 @@ outcomes and boundaries. Historical slice tables are preserved [below](#historic
 | Priority | Outcome | Start condition | Completion criterion |
 |---|---|---|---|
 | Integrated through PR #67 | Independently usable Windows Local Broker | Local software and focused tests converged; one exact-candidate elevated service gate passed. | Identified .NET app uses an Installation-local key without receiving it or requiring a Gateway; mutually authenticated IPC and application/operation/context policy; restart and same-candidate update preserve state; tested DPAPI-bounded backup/restore and a small executable sample/guide. |
-| NOW — candidate targeted tests pass | Broker → Gateway continuity | Standalone local result integrated; remote fault cases frozen. | Existing synthetic service proves ordinary enrollment, Published invocation, same-Installation restart, single-flight renewal, revocation/expiry/grant denial, explicit reconnection and authoritative recovery after interruption, with no automatic replay of uncertain application mutations. |
-| NEXT, after continuity | Target-specific distribution and operation | Select the actual Windows/deployment target and authorize its qualification scope. | Installable artifact and lifecycle exercised on a stated compatibility matrix, with explicit recovery limits; no inferred universal Windows support or publication approval. |
+| Integrated through PR #68 | Broker → Gateway continuity | Standalone local result integrated; remote fault cases frozen. | In-process evidence: enrollment, Published invocation, same-Installation restart, single-flight renewal, revocation/expiry/grant denial, explicit reconnection and authoritative recovery after interruption, with no automatic replay of uncertain application mutations. |
+| NOW — Windows delivery candidate | Target-specific distribution and operation | Windows 10 Pro 22H2 x64 19045.6466 selected; bounded qualification authorized. | Self-contained artifact, explicit application-user SID, real non-elevated invocation, update between two declared builds and one real-service → Gateway/PG synthetic path. Administrative setup pending; no universal Windows support or production claim. |
 | DEFERRED | Broader surfaces and additional integrations | A concrete requirement or observed defect, explicit scope and an owner; not hypothetical future reuse. | Define a bounded outcome and relevant negatives before promoting work. Use the triggers below; no new framework or laboratory by default. |
 
 A prerequisite is not evidence of completion. Candidate evidence remains distinct from
@@ -40,7 +40,8 @@ not replace that real-service result.
   target, workload and recovery objective. DPAPI context loss is not solved by
   promising recovery without recovery material.
 - **Merge, tag or release:** separate publication authority and the applicable converged
-  review/gates. The active continuity authorization stops at a public non-draft PR.
+  review/gates. The Windows writer hands off a public non-draft PR; integration is
+  coordinated separately and no tag or release is authorized by this queue.
 
 No `GetSecret`, copied vendor credentials, mandatory new identity platform or
 additional abstraction is justified solely by an item being deferred.

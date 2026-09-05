@@ -3,8 +3,9 @@
 param(
     [ValidateSet('Install', 'Start', 'Stop', 'Update', 'Verify')] [string] $Command = 'Start',
     [ValidatePattern('^[a-zA-Z0-9-]{1,40}$')] [string] $Instance = 'sample',
-    [string] $BrokerPublishDirectory,
-    [string] $SamplePublishDirectory
+    [string] $BrokerPublishDirectory = (Join-Path $PSScriptRoot 'broker'),
+    [string] $SamplePublishDirectory = (Join-Path $PSScriptRoot 'sample'),
+    [string] $ApplicationUserSid
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -99,6 +100,18 @@ function Write-Settings($Value) {
     Assert-NoReparse $settingsPath
     [IO.File]::WriteAllText($settingsPath, ($Value | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
 }
+function Get-ApplicationUserSid {
+    if ([string]::IsNullOrWhiteSpace($ApplicationUserSid)) {
+        throw 'LOCAL_BROKER_APPLICATION_SID_REQUIRED: pass the SID of the application user, not implicitly the setup administrator.'
+    }
+    try {
+        $sid = [Security.Principal.SecurityIdentifier]::new($ApplicationUserSid)
+        if (-not $sid.IsAccountSid()) { throw 'Not an account SID.' }
+        $null = $sid.Translate([Security.Principal.NTAccount])
+        return $sid.Value
+    }
+    catch { throw 'LOCAL_BROKER_APPLICATION_SID_INVALID: use an existing Windows account SID.' }
+}
 function Invoke-Sample([string] $Action, [string] $Envelope, [string] $Application = 'local-sample') {
     & $sample $Action $name $name $Application $Envelope
     if ($LASTEXITCODE -ne 0) { throw 'LOCAL_BROKER_SAMPLE_FAILED: inspect the bounded error code.' }
@@ -113,7 +126,7 @@ if ($Command -eq 'Verify') {
     $envelope = Join-Path $env:TEMP ($name + '.envelope')
     if (Test-Path -LiteralPath $envelope) { throw 'LOCAL_BROKER_VERIFY_ENVELOPE_COLLISION' }
     try {
-        & $PSCommandPath -Command Install -Instance $Instance -BrokerPublishDirectory $BrokerPublishDirectory -SamplePublishDirectory $SamplePublishDirectory
+        & $PSCommandPath -Command Install -Instance $Instance -BrokerPublishDirectory $BrokerPublishDirectory -SamplePublishDirectory $SamplePublishDirectory -ApplicationUserSid $identity.User.Value
         & $PSCommandPath -Command Start -Instance $Instance
         Invoke-Sample 'protect' $envelope
         Write-Output ('FIRST_PROTECT_MS=' + $started.ElapsedMilliseconds)
@@ -171,12 +184,14 @@ if ($Command -eq 'Install') {
         }
     }
     else {
+        $ApplicationUserSid = Get-ApplicationUserSid
         if ([Diagnostics.EventLog]::SourceExists($name)) { throw 'LOCAL_BROKER_FOREIGN_EVENT_SOURCE: choose a fresh Instance.' }
         # Claim fresh directories before SCM creation, so partial installation is recognizable.
         Set-DirectoryRights $root 'S-1-5-18' $true
         $record = [ordered]@{ service = $name; root = $root; data = $data; binaryPath = $binaryPath; installationId = [guid]::NewGuid().ToString('D') }
         [IO.File]::WriteAllText($marker, ($record | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     }
+    $ApplicationUserSid = Get-ApplicationUserSid
     if (-not $owned) { Invoke-ServiceAction 'Create' }
     $serviceSid = ([Security.Principal.NTAccount]::new('NT SERVICE', $name)).Translate([Security.Principal.SecurityIdentifier]).Value
     Set-DirectoryRights $root $serviceSid $true
@@ -185,7 +200,7 @@ if ($Command -eq 'Install') {
     Copy-Published $BrokerPublishDirectory $brokerDirectory
     Copy-Published $SamplePublishDirectory $sampleDirectory
     $settings = @{ Broker = @{ ServiceName = $name; PipeName = $name; InstallationId = $record.installationId; DataDirectory = $data; InitializeDataKeys = $true; Gateway = @{ Enabled = $false }; Applications = @(@{
-        RegistrationId = 'local-sample'; AllowedUserSids = @($identity.User.Value); ExecutablePaths = @($sample); ExecutableSha256 = @((Get-FileHash -LiteralPath $sample -Algorithm SHA256).Hash); AllowedOperations = @('ProtectData', 'UnprotectData', 'GetBrokerStatus')
+        RegistrationId = 'local-sample'; AllowedUserSids = @($ApplicationUserSid); ExecutablePaths = @($sample); ExecutableSha256 = @((Get-FileHash -LiteralPath $sample -Algorithm SHA256).Hash); AllowedOperations = @('ProtectData', 'UnprotectData', 'GetBrokerStatus')
         AllowedDataProtectionContexts = @(@{ Purpose = 'sample'; ContentType = 'text/plain' })
     }) } }
     Write-Settings $settings
@@ -196,6 +211,10 @@ if ($Command -eq 'Install') {
 if (-not $owned) { throw 'LOCAL_BROKER_SERVICE_ABSENT: install a fresh instance or restore the existing installation; do not reinitialize data.' }
 if ($Command -eq 'Update') {
     & $PSCommandPath -Command Stop -Instance $Instance
+    # A failed copy must never leave first-install initialization enabled.
+    $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+    $settings.Broker.InitializeDataKeys = $false
+    Write-Settings $settings
     Copy-Published $BrokerPublishDirectory $brokerDirectory
     Copy-Published $SamplePublishDirectory $sampleDirectory
     $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
@@ -205,10 +224,11 @@ if ($Command -eq 'Update') {
 }
 if ($owned.State -ne 'Running' -or $Command -eq 'Update') { Invoke-ServiceAction 'Start' }
 (Get-Service -Name $name).WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
-Invoke-Sample 'status' '-'
 $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
 if ($settings.Broker.InitializeDataKeys) {
     $settings.Broker.InitializeDataKeys = $false
     Write-Settings $settings
 }
-Write-Output 'START=READY GATEWAY=DISABLED'
+# SCM readiness is not an application authorization probe. The setup administrator
+# need not be authorized to invoke; run the shipped sample under the registered user.
+Write-Output 'START=RUNNING NEXT=APPLICATION_STATUS'

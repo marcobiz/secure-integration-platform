@@ -1,12 +1,13 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text.Json;
 using SecureIntegration.Broker.Sdk;
 using SecureIntegration.Contracts;
 
 // Only synthetic data. Neither plaintext, ciphertext nor keys are printed.
-if (args.Length != 5 || args[0] is not ("status" or "protect" or "verify" or "denied"))
+if (args.Length != 5 || args[0] is not ("status" or "protect" or "verify" or "denied" or "invoke"))
 {
-    Console.Error.WriteLine("Usage: LocalBroker <status|protect|verify|denied> <service> <pipe> <application> <envelope-file>");
+    Console.Error.WriteLine("Usage: LocalBroker <status|protect|verify|denied|invoke> <service> <pipe> <application> <envelope-file-or-dash>");
     return 2;
 }
 try
@@ -21,7 +22,17 @@ try
         throw new InvalidOperationException("Unauthorized application was accepted.");
     }
     BrokerStatus status = await client.GetStatusAsync(deadline.Token);
-    if (status.GatewayConfigured) throw new InvalidOperationException("Standalone requires Gateway disabled.");
+    if (args[0] == "invoke")
+    {
+        if (!status.GatewayConfigured) throw new InvalidOperationException("Gateway is not configured.");
+        InvokeGatewayResult result = await client.InvokeGatewayAsync(new InvokeGatewayRequest
+        {
+            ConnectorId = "sample-secure-service", OperationId = "submit", ContentType = "application/json",
+            PayloadBase64 = Convert.ToBase64String("{\"synthetic\":true,\"message\":\"local-broker-sample\"}"u8)
+        }, deadline.Token);
+        using JsonDocument response = JsonDocument.Parse(Convert.FromBase64String(result.PayloadBase64));
+        if (!response.RootElement.GetProperty("accepted").GetBoolean()) throw new InvalidOperationException("Synthetic service did not accept.");
+    }
     if (args[0] == "protect")
     {
         byte[] synthetic = "local-broker-synthetic-sample-v1"u8.ToArray();
@@ -61,11 +72,11 @@ try
             throw new InvalidOperationException("Invalid context or tampering was accepted.");
         }
     }
-    Console.WriteLine($"{args[0].ToUpperInvariant()}=PASS GATEWAY=DISABLED ELAPSED_MS={elapsed.ElapsedMilliseconds}");
+    Console.WriteLine($"{args[0].ToUpperInvariant()}=PASS GATEWAY={(status.GatewayConfigured ? "ENABLED" : "DISABLED")} ELAPSED_MS={elapsed.ElapsedMilliseconds}");
     return 0;
 }
-catch (BrokerClientException exception) { Console.Error.WriteLine(exception.Code); return 1; }
-catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or OperationCanceledException or InvalidOperationException or FormatException)
+catch (BrokerClientException exception) { Console.Error.WriteLine($"{exception.Code} RETRYABLE={exception.Retryable}"); return 1; }
+catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or OperationCanceledException or InvalidOperationException or FormatException or JsonException or KeyNotFoundException)
 {
     Console.Error.WriteLine("LOCAL_BROKER_SAMPLE_FAILED");
     return 1;

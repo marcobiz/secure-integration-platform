@@ -1,6 +1,6 @@
 # Standalone Windows Local Broker
 
-**Status: local candidate; real Windows Service qualification passed on the exact
+**Status: standalone and continuity software integrated through PR #68; real Windows Service qualification passed on the exact
 software candidate `3955fd0c3a5eccf816d44b0faba9a704227baa3d`.**
 `REAL_WINDOWS_SERVICE_QUALIFICATION=PASS` for the bounded scope recorded below.
 The SDK, local crypto/storage and transport tests were run on Windows with .NET SDK
@@ -16,6 +16,13 @@ not hardware non-exportability, EDR or protection against Administrator/SYSTEM o
 code injected into an authorized application.
 
 ## Prepare once
+
+The Windows delivery candidate adds a self-contained archive built by
+`eng/Build-LocalBrokerPackage.ps1`, with a closed file/hash inventory, runtime dependency
+manifests and the [short package guide](../../deploy/windows/README.md). Extract outside
+the repository; the adopter does not need Git, an SDK, Node or Docker. SHA-256 is an
+integrity checksum, not publisher authentication. Target-specific non-elevated and
+two-build operational evidence remains pending until explicitly recorded below.
 
 An administrator installs published binaries on a Windows x64 machine. The source
 developer needs the pinned .NET SDK; a self-contained runtime installation does not.
@@ -36,21 +43,24 @@ versions are centrally pinned. Keep the published directories and the shipped
 [`Invoke-LocalBroker.ps1`](../../deploy/windows/Invoke-LocalBroker.ps1) together when
 copying them to the runtime host. No repository/test knowledge is required there.
 
-In an elevated Windows PowerShell under the account which will run the sample:
+Obtain the application user's SID in that user's ordinary console with
+`[Security.Principal.WindowsIdentity]::GetCurrent().User.Value`. Pass that observed
+value as `$applicationSid` in the administrator's elevated Windows PowerShell:
 
 ```powershell
-.\Invoke-LocalBroker.ps1 -Command Install -Instance sample -BrokerPublishDirectory .\broker -SamplePublishDirectory .\sample
+.\Invoke-LocalBroker.ps1 -Command Install -Instance sample -BrokerPublishDirectory .\broker -SamplePublishDirectory .\sample -ApplicationUserSid $applicationSid
 .\Invoke-LocalBroker.ps1 -Command Start -Instance sample
 ```
 
 Install claims a fresh, named directory under Program Files and ProgramData,
 registers an own-process service `SecureIntegrationBroker.Local.sample` as
 `NT SERVICE\SecureIntegrationBroker.Local.sample`, writes a unique Installation ID,
-grants the current user's SID and the installed sample's exact path/hash, and
+grants the explicitly selected application user's SID and the installed sample's exact path/hash, and
 allows only status and protection for `sample` / `text/plain`.
 Start creates the local data key once under that service identity, then disables
-initialization in the persistent configuration. It reports `START=READY` only after
-an authenticated SDK status confirms `GatewayConfigured=false`.
+initialization in the persistent configuration. It reports `START=RUNNING` for SCM
+readiness; run the sample's `status` under the registered user to verify application
+readiness. The setup administrator is not implicitly authorized to use the application.
 
 Install repeated on a complete instance preserves configuration. A partial install
 without protected data can be resumed with the same command. Partial state with
@@ -108,7 +118,7 @@ uncertain ownership and reparse paths are denied without touching the resource.
 
 Update stops the owned service, copies authorized published binaries, preserves the
 Installation/configuration/data/ACLs, updates the sample hash and starts normally
-with initialization disabled. On copy/start failure it reports failure, not a
+with initialization disabled before the first copy. On copy/start failure it reports failure, not a
 successful upgrade; correct the cause and rerun Update. It is not a transactional
 MSI updater or compatibility guarantee. Re-run `verify` against the **same** envelope.
 
