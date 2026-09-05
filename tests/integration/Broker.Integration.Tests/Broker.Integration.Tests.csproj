@@ -5,6 +5,7 @@
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../../../samples/LocalBroker/LocalBroker.csproj" />
     <ProjectReference Include="../../../src/Broker/Broker.Infrastructure.Windows/Broker.Infrastructure.Windows.csproj" />
     <ProjectReference Include="../../../sdk/dotnet/Broker.Sdk/Broker.Sdk.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

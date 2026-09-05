@@ -5,6 +5,7 @@
     <AssemblyName>SecureIntegration.Samples.LocalBroker</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Broker.Integration.Tests" />
     <ProjectReference Include="../../sdk/dotnet/Broker.Sdk/Broker.Sdk.csproj" />
   </ItemGroup>
 </Project>

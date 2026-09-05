@@ -1,19 +1,51 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text;
+using System.Net;
 using SecureIntegration.Broker.Sdk;
 using SecureIntegration.Contracts;
+using SecureIntegration.Samples.LocalBroker;
 
-// Only synthetic data. Neither plaintext, ciphertext nor keys are printed.
-if (args.Length != 5 || args[0] is not ("status" or "protect" or "verify" or "denied" or "invoke"))
+// Credential values are runtime input only. Neither plaintext, ciphertext nor keys are printed.
+if (args.Length != 5 || args[0] is not ("status" or "protect" or "verify" or "denied" or "invoke" or "set-credential" or "use-credential"))
 {
-    Console.Error.WriteLine("Usage: LocalBroker <status|protect|verify|denied|invoke> <service> <pipe> <application> <envelope-file-or-dash>");
+    Console.Error.WriteLine("Usage: LocalBroker <status|protect|verify|denied|invoke|set-credential|use-credential> <service> <pipe> <application> <envelope-file-or-dash>");
     return 2;
 }
 try
 {
     Stopwatch elapsed = Stopwatch.StartNew();
     BrokerClient client = new(new BrokerClientOptions { ServiceName = args[1], PipeName = args[2], ApplicationRegistrationId = args[3] });
+    if (args[0] is "set-credential" or "use-credential")
+    {
+        if (args[0] == "set-credential")
+        {
+            using TextReader? redirectedInput = Console.IsInputRedirected
+                ? new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: false)
+                : null;
+            byte[] input = CredentialExample.ReadInput(redirectedInput);
+            try { await CredentialExample.ConfigureAsync(client, args[4], input, CancellationToken.None); }
+            finally { CryptographicOperations.ZeroMemory(input); }
+            Console.WriteLine("CREDENTIAL_SAVED");
+        }
+        else
+        {
+            byte[] plaintext = await CredentialExample.ReadAsync(client, args[4], CancellationToken.None);
+            try
+            {
+                // Integration seam: replace the old password constant/configuration read here.
+                // Give these options to YOUR existing client; this sample sends no HTTP request.
+                using HttpClientHandler applicationClientOptions = new()
+                {
+                    Credentials = new NetworkCredential(Environment.UserName, new UTF8Encoding(false, true).GetString(plaintext))
+                };
+                Console.WriteLine("CREDENTIAL_LOADED_FOR_APPLICATION (no external authentication performed)");
+            }
+            finally { CryptographicOperations.ZeroMemory(plaintext); }
+        }
+        return 0;
+    }
     using CancellationTokenSource deadline = new(TimeSpan.FromSeconds(30));
     if (args[0] == "denied")
     {
@@ -76,7 +108,13 @@ try
     return 0;
 }
 catch (BrokerClientException exception) { Console.Error.WriteLine($"{exception.Code} RETRYABLE={exception.Retryable}"); return 1; }
-catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or OperationCanceledException or InvalidOperationException or FormatException or JsonException or KeyNotFoundException)
+catch (InvalidOperationException exception) when (exception.Message is "CREDENTIAL_INPUT_INVALID" or "CREDENTIAL_PATH_DENIED" or
+    "CREDENTIAL_OWNER_UNAVAILABLE" or "CREDENTIAL_OWNERSHIP_DENIED" or "CREDENTIAL_PARENT_REQUIRED" or "CREDENTIAL_ENVELOPE_INVALID")
+{
+    Console.Error.WriteLine(exception.Message);
+    return 1;
+}
+catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or OperationCanceledException or InvalidOperationException or FormatException or JsonException or KeyNotFoundException or ArgumentException or System.Security.SecurityException)
 {
     Console.Error.WriteLine("LOCAL_BROKER_SAMPLE_FAILED");
     return 1;

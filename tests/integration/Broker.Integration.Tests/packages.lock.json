@@ -166,25 +166,31 @@
       "SecureIntegration.Broker.Core": {
         "type": "Project",
         "dependencies": {
-          "SecureIntegration.Contracts": "[1.0.0, )"
+          "SecureIntegration.Contracts": "[0.1.0-alpha.1, )"
         }
       },
       "SecureIntegration.Broker.Infrastructure.Windows": {
         "type": "Project",
         "dependencies": {
-          "SecureIntegration.Broker.Core": "[1.0.0, )",
-          "SecureIntegration.Contracts": "[1.0.0, )",
+          "SecureIntegration.Broker.Core": "[0.1.0-alpha.1, )",
+          "SecureIntegration.Contracts": "[0.1.0-alpha.1, )",
           "System.Security.Cryptography.ProtectedData": "[10.0.10, )"
         }
       },
       "SecureIntegration.Broker.Sdk": {
         "type": "Project",
         "dependencies": {
-          "SecureIntegration.Contracts": "[1.0.0, )"
+          "SecureIntegration.Contracts": "[0.1.0-alpha.1, )"
         }
       },
       "secureintegration.contracts": {
         "type": "Project"
+      },
+      "SecureIntegration.Samples.LocalBroker": {
+        "type": "Project",
+        "dependencies": {
+          "SecureIntegration.Broker.Sdk": "[0.1.0-alpha.1, )"
+        }
       },
       "System.Security.Cryptography.ProtectedData": {
         "type": "CentralTransitive",

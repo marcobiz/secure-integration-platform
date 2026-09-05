@@ -1,7 +1,7 @@
 # Backlog ordered by outcome
 
 Updated: 2026-09-05
-Planning baseline: `56b6d9a7dd07bdfbcff3ea74e7b9f95b18a59929` (PR #68 integrated).
+Planning baseline: `f2bdb2901dfa9ea3c32795b356603a1ecf615575` (PR #69 integrated).
 
 This is the work queue, not another capability dashboard.
 [IMPLEMENTATION_STATUS.md](../../IMPLEMENTATION_STATUS.md) owns integrated status;
@@ -14,7 +14,8 @@ outcomes and boundaries. Historical slice tables are preserved [below](#historic
 |---|---|---|---|
 | Integrated through PR #67 | Independently usable Windows Local Broker | Local software and focused tests converged; one exact-candidate elevated service gate passed. | Identified .NET app uses an Installation-local key without receiving it or requiring a Gateway; mutually authenticated IPC and application/operation/context policy; restart and same-candidate update preserve state; tested DPAPI-bounded backup/restore and a small executable sample/guide. |
 | Integrated through PR #68 | Broker → Gateway continuity | Standalone local result integrated; remote fault cases frozen. | In-process evidence: enrollment, Published invocation, same-Installation restart, single-flight renewal, revocation/expiry/grant denial, explicit reconnection and authoritative recovery after interruption, with no automatic replay of uncertain application mutations. |
-| NOW — independent review of Windows delivery candidate | Target-specific distribution and operation | Bounded real-service qualification passed on software `5ad048f...`, Windows 10 Pro 22H2 x64 19045.6466. | Package, non-elevated use on an Administrators-member account, exact two-build envelope compatibility, restart/rejected-update and real-service → Gateway/PG outage recovery observed. Review reuses this evidence and exact-head CI; no broader Windows, live renewal/DR or production claim. |
+| Integrated through PR #69 | Target-specific distribution and operation | Bounded real-service qualification passed on software `5ad048f...`, Windows 10 Pro 22H2 x64 19045.6466. | Package, non-elevated use on an Administrators-member account, exact two-build envelope compatibility, restart/rejected-update and real-service → Gateway/PG outage recovery observed. No broader Windows, live renewal/DR or production claim. |
+| NOW — application credential adoption | Remove per-Installation hardcoding/plaintext storage | User approved extending the existing small sample; no new primitive or proxy. | Runtime input, ciphertext-only save, transient authorized use, new execution and safe replacement; short English guide and a real standard-account proof, not an Administrators-member token. Candidate focused tests pass; account gate/review/CI pending. |
 | DEFERRED | Broader surfaces and additional integrations | A concrete requirement or observed defect, explicit scope and an owner; not hypothetical future reuse. | Define a bounded outcome and relevant negatives before promoting work. Use the triggers below; no new framework or laboratory by default. |
 
 A prerequisite is not evidence of completion. Candidate evidence remains distinct from

@@ -1,7 +1,7 @@
 # Implementation plan
 
 Updated: 2026-09-05
-Planning baseline: `56b6d9a7dd07bdfbcff3ea74e7b9f95b18a59929` (PR #68 integrated).
+Planning baseline: `f2bdb2901dfa9ea3c32795b356603a1ecf615575` (PR #69 integrated).
 
 This is the current order of work. [IMPLEMENTATION_STATUS.md](../../IMPLEMENTATION_STATUS.md)
 owns integrated capability and qualification claims; the [backlog](backlog.md#current-work-order)
@@ -9,7 +9,7 @@ owns the small NOW/NEXT/DEFERRED queue. The older Core alpha/FSE2 plan is retain
 [below](#historical-planning-snapshot) as history, not a competing active roadmap.
 
 The present authorization covers implementation, documentation, Signed-off-by commits,
-public push and a non-draft PR for the Windows delivery candidate. It does
+public push and a non-draft PR for the application credential-adoption candidate. It does
 not authorize merge, tag, release, OfficialTest calls, external contact or a production
 claim.
 
@@ -21,9 +21,12 @@ claim.
    reusing the synthetic service.
 3. Qualify distribution and operation for an explicitly selected Windows target,
    with an installable artifact and a tested compatibility matrix.
+4. Make a per-Installation application credential usable without hardcoding or
+   plaintext persistence, using the small sample and existing protection SDK.
 
 The first outcome is integrated through PR #67, with one earlier exact-candidate
-elevated service qualification. The second is integrated through PR #68. These
+elevated service qualification. The second is integrated through PR #68 and the
+bounded third through PR #69. The fourth is the current authorized slice. These
 results do not silently expand one another: the Windows gate remains attached to its
 exact software commit, and the continuity fixture is not a real-service qualification.
 
@@ -108,7 +111,7 @@ general reconnect framework in anticipation of other consumers.
 See [Installation identity](../adr/0008-installation-identity.md) and the
 [shared Broker/Direct principal](../adr/0020-direct-gateway-client-principal.md).
 
-## NOW — target-specific distribution and operation
+## Integrated — target-specific distribution and operation
 
 Selected host: Windows 10 Pro 22H2 x64 build 19045.6466. Deliver a self-contained
 archive using the existing lifecycle/sample, with an explicit application-user SID,
@@ -122,8 +125,8 @@ application invocation result distinct from SCM readiness and the historical gat
 This bounded gate passed on software `5ad048f169b5ba19d8d058d240a2c5029cce9703`;
 [the observed results and limits](../user/local-broker.md#windows-delivery-observed-on-september-5-2026)
 now replace preparation status. The baseline's non-elevated access failure remains
-recorded; elevated baseline envelope preparation proves compatibility only. The next
-step is independent review, not another equivalent runtime qualification.
+recorded; elevated baseline envelope preparation proves compatibility only. Independent
+review and integration completed through PR #69; this gate is not repeated for adoption.
 
 After the application paths work, select the actual Windows versions, architectures
 and deployment context to qualify. Deliver an installable artifact, tested lifecycle
@@ -136,6 +139,19 @@ need can bring one of these forward only through an explicit scope decision, not
 assumed “production-ready” requirement.
 
 ## Scope and evidence boundaries
+
+The current application-adoption result reuses `ProtectData`/`UnprotectData`: hidden
+runtime credential input, private application-owned ciphertext, transient plaintext
+use by the authorized app and replacement without recompilation. A pre-commit save
+failure preserves the previous configuration. No key rotation or password change at
+an external issuer is implied. The guide identifies the old constant/configuration
+read to replace, issuer revocation and machine-loss recovery responsibilities.
+Focused tests cover the sequence, input bound, tamper/context/ownership denial and
+failed save. One separate task-owned real Windows standard account (not a member of
+Administrators) closes that precise qualification gap; no repetition of the delivery
+or Gateway laboratory. That real-account result remains pending until observed.
+There is no new vault, primitive, proxy, connector or claim that the application
+never receives plaintext, and no CVD closure without integrating the actual adopter.
 
 Maintain three distinct verification paths:
 

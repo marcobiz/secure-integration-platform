@@ -56,7 +56,8 @@ Install claims a fresh, named directory under Program Files and ProgramData,
 registers an own-process service `SecureIntegrationBroker.Local.sample` as
 `NT SERVICE\SecureIntegrationBroker.Local.sample`, writes a unique Installation ID,
 grants the explicitly selected application user's SID and the installed sample's exact path/hash, and
-allows only status and protection for `sample` / `text/plain`.
+allows only status and protection for `sample` / `text/plain` and
+`installation-credential` / `text/plain`.
 Start creates the local data key once under that service identity, then disables
 initialization in the persistent configuration. It reports `START=RUNNING` for SCM
 readiness; run the sample's `status` under the registered user to verify application
@@ -67,6 +68,12 @@ without protected data can be resumed with the same command. Partial state with
 existing data fails closed; it is not silently treated as a new installation.
 
 ## Protect and recover
+
+For application-owned per-Installation credentials, follow the short
+[credential adoption guide shipped in the package](../../deploy/windows/README.md#replace-a-hardcoded-application-credential).
+It covers hidden runtime input, ciphertext-only persistence, use by the authorized
+app, replacement without recompilation and issuer/recovery responsibilities.
+The commands below remain the fixed synthetic lifecycle example, not credential provisioning.
 
 Close the elevated console. In an ordinary console under the registered account:
 

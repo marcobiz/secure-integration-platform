@@ -56,7 +56,7 @@ Windows Service, TCP/TLS, PostgreSQL, external provider or ordinary-user session
 OfficialTest call, operating credential, dependency/image change or full external lab is
 part of this evidence.
 
-### Windows delivery candidate
+### Windows delivery integrated through PR #69
 
 | Requirement | Focused evidence | Scope |
 |---|---|---|
@@ -65,6 +65,15 @@ part of this evidence.
 | Failed update preserves state | `LocalBrokerLifecycle.Tests.ps1` — `FAILED_UPDATE_DISALLOWS_INITIALIZATION_PRESERVES_STATE` | Real settings write precedes simulated failing copy; key initialization remains disabled and identity/policy/data remain intact. Existing Stop/ownership tests retained. |
 | Process authentication without application elevation | `Broker_process_verification_preparation_executes_the_native_current_process_boundary`, `Broker_process_verification_ACL_adds_only_configured_account_query_and_synchronize_and_preserves_denials`, `Broker_process_verification_never_adds_broad_group_grants` | Native current-process boundary and minimal ACL/idempotence/denial tests pass. Real candidate service passed ordinary-token SDK authentication; baseline OpenProcess access denial remains recorded, not bypassed. |
 | Ordinary-token use, distinct-build update and actual Windows Service → Gateway | `Test-LocalBrokerWindowsDelivery.ps1` plus separately executed public sample/SDK | **PASS observed on software `5ad048f...`**, Windows 10 Pro 22H2 x64 19045.6466; account is a member of Administrators with a non-elevated token. Exact baseline envelope was prepared elevated for compatibility only. Both envelopes survived update/restart/rejected-update; remote restart retained identity without activation reuse. Four remote attempts yielded three successes and one bounded outage failure that never reached Gateway; three success audits/vendor accepts, no replay. [Exact limits and evidence](../user/local-broker.md#windows-delivery-observed-on-september-5-2026). |
+
+### Application credential adoption candidate
+
+| Requirement | Named focused evidence | Scope |
+|---|---|---|
+| Runtime input, ciphertext-only configuration and replacement | `Credential_sample_runtime_input_is_bounded_and_roundtrips`, `Credential_sample_configures_reloads_and_replaces_only_ciphertext` | Sample implementation with the existing in-process authenticated pipe/DPAPI fixture; random ephemeral input, no fixed credential or raw evidence. |
+| Failed local save and foreign state preservation | `Credential_sample_failed_replacement_preserves_previous_configuration`, `Credential_sample_refuses_foreign_context_tamper_and_broad_file_ownership` | Real filesystem sharing failure before replacement, old ciphertext intact, context/tamper/ACL denial; no production fault hook. |
+| Unchanged application/context authority | `IT_BRK_Authorized_application_uses_pipe_and_unauthorized_hash_is_denied`, `Ungranted_data_context_is_denied_before_decoding_or_key_use` | Existing focused regressions; no new Core/SDK operation or authorization bypass. |
+| Actual non-Administrators-account new-process adoption | `eng/Test-LocalBrokerCredentialAdoption.ps1` | Prepared bounded setup using existing lifecycle and separate task-owned account/service. **Pending actual elevated execution**; the fixture above does not prove this property. |
 
 ## Exact-main DOC-02 evidence map
 

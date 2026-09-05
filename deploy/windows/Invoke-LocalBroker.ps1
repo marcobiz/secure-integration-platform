@@ -201,7 +201,8 @@ if ($Command -eq 'Install') {
     Copy-Published $SamplePublishDirectory $sampleDirectory
     $settings = @{ Broker = @{ ServiceName = $name; PipeName = $name; InstallationId = $record.installationId; DataDirectory = $data; InitializeDataKeys = $true; Gateway = @{ Enabled = $false }; Applications = @(@{
         RegistrationId = 'local-sample'; AllowedUserSids = @($ApplicationUserSid); ExecutablePaths = @($sample); ExecutableSha256 = @((Get-FileHash -LiteralPath $sample -Algorithm SHA256).Hash); AllowedOperations = @('ProtectData', 'UnprotectData', 'GetBrokerStatus')
-        AllowedDataProtectionContexts = @(@{ Purpose = 'sample'; ContentType = 'text/plain' })
+        AllowedDataProtectionContexts = @(@{ Purpose = 'sample'; ContentType = 'text/plain' },
+            @{ Purpose = 'installation-credential'; ContentType = 'text/plain' })
     }) } }
     Write-Settings $settings
     if (-not [Diagnostics.EventLog]::SourceExists($name)) { New-EventLog -LogName Application -Source $name }

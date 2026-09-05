@@ -14,12 +14,126 @@ using SecureIntegration.Broker.Core;
 using SecureIntegration.Broker.Infrastructure.Windows;
 using SecureIntegration.Broker.Sdk;
 using SecureIntegration.Contracts;
+using SecureIntegration.Samples.LocalBroker;
 using Xunit;
 
 namespace SecureIntegration.Broker.Integration.Tests;
 
 public sealed class WindowsBrokerIntegrationTests
 {
+    [Fact]
+    public async Task Credential_sample_configures_reloads_and_replaces_only_ciphertext()
+    {
+        using TestDirectory temporary = new();
+        string path = Path.Combine(temporary.Path, "application", "credential.envelope");
+        byte[] first = Encoding.UTF8.GetBytes(RandomNumberGenerator.GetHexString(64));
+        byte[] second = Encoding.UTF8.GetBytes(RandomNumberGenerator.GetHexString(64));
+        try
+        {
+            await WithBrokerAsync(async client =>
+            {
+                await CredentialExample.ConfigureAsync(client, path, first, TestContext.Current.CancellationToken);
+                byte[] envelope = await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken);
+                Assert.False(envelope.AsSpan().IndexOf(first) >= 0);
+                byte[] recovered = await CredentialExample.ReadAsync(client, path, TestContext.Current.CancellationToken);
+                try { Assert.True(recovered.AsSpan().SequenceEqual(first)); }
+                finally { CryptographicOperations.ZeroMemory(recovered); }
+                await CredentialExample.ConfigureAsync(client, path, second, TestContext.Current.CancellationToken);
+                recovered = await CredentialExample.ReadAsync(client, path, TestContext.Current.CancellationToken);
+                try { Assert.True(recovered.AsSpan().SequenceEqual(second)); }
+                finally { CryptographicOperations.ZeroMemory(recovered); }
+                Assert.Single(Directory.GetFiles(Path.GetDirectoryName(path)!));
+            });
+        }
+        finally { CryptographicOperations.ZeroMemory(first); CryptographicOperations.ZeroMemory(second); }
+    }
+
+    [Fact]
+    public async Task Credential_sample_failed_replacement_preserves_previous_configuration()
+    {
+        using TestDirectory temporary = new();
+        string path = Path.Combine(temporary.Path, "application", "credential.envelope");
+        byte[] first = Encoding.UTF8.GetBytes(RandomNumberGenerator.GetHexString(64));
+        byte[] second = Encoding.UTF8.GetBytes(RandomNumberGenerator.GetHexString(64));
+        try
+        {
+            await WithBrokerAsync(async client =>
+            {
+                await CredentialExample.ConfigureAsync(client, path, first, TestContext.Current.CancellationToken);
+                byte[] before = await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken);
+                // A real pre-commit filesystem failure, not a production fault-injection hook.
+                using (FileStream locked = new(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    await Assert.ThrowsAsync<IOException>(() => CredentialExample.ConfigureAsync(client, path, second, TestContext.Current.CancellationToken));
+                byte[] after = await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken);
+                Assert.True(before.AsSpan().SequenceEqual(after));
+                byte[] recovered = await CredentialExample.ReadAsync(client, path, TestContext.Current.CancellationToken);
+                try { Assert.True(recovered.AsSpan().SequenceEqual(first)); }
+                finally { CryptographicOperations.ZeroMemory(recovered); }
+                Assert.Single(Directory.GetFiles(Path.GetDirectoryName(path)!));
+            });
+        }
+        finally { CryptographicOperations.ZeroMemory(first); CryptographicOperations.ZeroMemory(second); }
+    }
+
+    [Fact]
+    public async Task Credential_sample_refuses_foreign_context_tamper_and_broad_file_ownership()
+    {
+        using TestDirectory temporary = new();
+        string path = Path.Combine(temporary.Path, "application", "credential.envelope");
+        byte[] input = Encoding.UTF8.GetBytes(RandomNumberGenerator.GetHexString(64));
+        try
+        {
+            await WithBrokerAsync(async client =>
+            {
+                await CredentialExample.ConfigureAsync(client, path, input, TestContext.Current.CancellationToken);
+                byte[] original = await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken);
+                ProtectedDataResult other = await client.ProtectDataAsync(new ProtectDataRequest
+                {
+                    Purpose = "test", ContentType = "text/plain", PlaintextBase64 = Convert.ToBase64String(input)
+                }, TestContext.Current.CancellationToken);
+                byte[] foreign = Convert.FromBase64String(other.EnvelopeBase64);
+                await File.WriteAllBytesAsync(path, foreign, TestContext.Current.CancellationToken);
+                BrokerClientException denied = await Assert.ThrowsAsync<BrokerClientException>(() =>
+                    CredentialExample.ConfigureAsync(client, path, input, TestContext.Current.CancellationToken));
+                Assert.Equal("authentication_failed", denied.Code);
+                byte[] after = await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken);
+                Assert.True(foreign.AsSpan().SequenceEqual(after));
+                foreign = original;
+                foreign[^1] ^= 1;
+                await File.WriteAllBytesAsync(path, foreign, TestContext.Current.CancellationToken);
+                denied = await Assert.ThrowsAsync<BrokerClientException>(() => CredentialExample.ReadAsync(client, path, TestContext.Current.CancellationToken));
+                Assert.Equal("authentication_failed", denied.Code);
+                FileSecurity security = new FileInfo(path).GetAccessControl();
+                security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                    FileSystemRights.Read, AccessControlType.Allow));
+                new FileInfo(path).SetAccessControl(security);
+                InvalidOperationException ownership = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    CredentialExample.ConfigureAsync(client, path, input, TestContext.Current.CancellationToken));
+                Assert.Equal("CREDENTIAL_OWNERSHIP_DENIED", ownership.Message);
+                after = await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken);
+                Assert.True(foreign.AsSpan().SequenceEqual(after));
+                Assert.Single(Directory.GetFiles(Path.GetDirectoryName(path)!));
+            });
+        }
+        finally { CryptographicOperations.ZeroMemory(input); }
+    }
+
+    [Fact]
+    public void Credential_sample_runtime_input_is_bounded_and_roundtrips()
+    {
+        string value = RandomNumberGenerator.GetHexString(64);
+        using StringReader reader = new(value + "\r\n");
+        byte[] input = CredentialExample.ReadInput(reader);
+        try { Assert.True(Encoding.UTF8.GetString(input).AsSpan().SequenceEqual(value)); }
+        finally { CryptographicOperations.ZeroMemory(input); }
+        foreach (string invalid in new[] { "", "\n", "\0", new string('a', CredentialExample.MaximumCharacters + 1) })
+        {
+            using StringReader invalidReader = new(invalid);
+            InvalidOperationException failure = Assert.Throws<InvalidOperationException>(() => CredentialExample.ReadInput(invalidReader));
+            Assert.Equal("CREDENTIAL_INPUT_INVALID", failure.Message);
+        }
+    }
+
     [Fact]
     public async Task M3_security_driver_UserKeySet_client_certificate_is_Schannel_compatible()
     {
@@ -626,7 +740,8 @@ public sealed class WindowsBrokerIntegrationTests
             AllowedPublisherThumbprints = invalidPublisher ? [new string('0', 40)] : [],
             AllowedOperations = [BrokerOperations.PutLocalSecret, BrokerOperations.DeleteLocalSecret, BrokerOperations.ComputeHmac, BrokerOperations.ProtectData, BrokerOperations.UnprotectData, BrokerOperations.GetBrokerStatus, BrokerOperations.InvokeGateway],
             GatewayGrants = ["secure-layer-demo:submit"],
-            AllowedDataProtectionContexts = [new() { Purpose = "test", ContentType = "text/plain" }, new() { Purpose = "redaction", ContentType = "text/plain" },
+            AllowedDataProtectionContexts = [new() { Purpose = CredentialExample.Purpose, ContentType = CredentialExample.ContentType },
+                new() { Purpose = "test", ContentType = "text/plain" }, new() { Purpose = "redaction", ContentType = "text/plain" },
                 .. Enumerable.Range(0, 8).Select(index => new DataProtectionContext { Purpose = "concurrent-" + index, ContentType = "application/octet-stream" })],
         };
         BrokerOptions options = new() { PipeName = pipeName, InstallationId = "test-installation", DataDirectory = temporary.Path, Applications = [policy] };
