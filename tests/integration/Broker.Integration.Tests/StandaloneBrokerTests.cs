@@ -92,6 +92,8 @@ public sealed class StandaloneBrokerTests
             }
         };
         foreach (string argument in new[] { "-NoProfile", "-NonInteractive", "-File", System.IO.Path.Combine(directory, "tests", "integration", "Broker.Integration.Tests", "LocalBrokerLifecycle.Tests.ps1") }) process.StartInfo.ArgumentList.Add(argument);
+        // A pwsh runner's module path is not Windows PowerShell 5.1's module path.
+        process.StartInfo.Environment.Remove("PSModulePath");
         Assert.True(process.Start());
         Task<string> output = process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
         Task<string> error = process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
