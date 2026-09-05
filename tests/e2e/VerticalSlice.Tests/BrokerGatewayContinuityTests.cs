@@ -53,8 +53,10 @@ public sealed class BrokerGatewayContinuityTests
             state.RootElement.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
     }
 
-    [Fact]
-    public async Task Renewal_response_loss_is_nonretryable_and_restart_recovers_authoritatively_without_reenrollment_or_resend()
+    [Theory]
+    [InlineData(HttpRequestError.ResponseEnded)]
+    [InlineData(HttpRequestError.ConnectionError)]
+    public async Task Renewal_response_loss_is_nonretryable_and_restart_recovers_authoritatively_without_reenrollment_or_resend(HttpRequestError responseError)
     {
         await using ContinuityGateway fixture = await ContinuityGateway.CreateAsync(grantEnabled: true);
         using (ProductionGatewayInvoker enrolled = fixture.CreateInvoker())
@@ -62,7 +64,7 @@ public sealed class BrokerGatewayContinuityTests
             _ = await InvokeDirectAsync(enrolled, TestContext.Current.CancellationToken);
         }
         fixture.Clock.Advance(TimeSpan.FromDays(61));
-        fixture.LoseNextRenewalResponse = true;
+        fixture.NextRenewalResponseError = responseError;
 
         using (ProductionGatewayInvoker interrupted = fixture.CreateInvoker())
         {
@@ -74,6 +76,10 @@ public sealed class BrokerGatewayContinuityTests
         Assert.Equal(1, fixture.RenewalCount);
         Assert.Equal(1, fixture.ExternalDispatchCount);
         Assert.True(fixture.PendingCredentialAccepted);
+        string statePath = Path.Combine(fixture.DataDirectory, "gateway-installation-state.json");
+        using JsonDocument pendingState = JsonDocument.Parse(await File.ReadAllBytesAsync(statePath, TestContext.Current.CancellationToken));
+        string pendingThumbprint = pendingState.RootElement.GetProperty("pending").GetProperty("certificateThumbprint").GetString()!;
+        Assert.NotEqual(pendingThumbprint, pendingState.RootElement.GetProperty("currentCertificateThumbprint").GetString());
 
         using (ProductionGatewayInvoker recovered = fixture.CreateInvoker())
         {
@@ -85,8 +91,9 @@ public sealed class BrokerGatewayContinuityTests
         Assert.Equal(1, fixture.RenewalCount);
         Assert.Equal(2, fixture.ExternalDispatchCount);
         Assert.Equal(fixture.InstallationId, fixture.LastInvokedInstallationId);
-        using JsonDocument state = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(fixture.DataDirectory, "gateway-installation-state.json"), TestContext.Current.CancellationToken));
+        using JsonDocument state = JsonDocument.Parse(await File.ReadAllBytesAsync(statePath, TestContext.Current.CancellationToken));
         Assert.False(state.RootElement.TryGetProperty("pending", out _));
+        Assert.Equal(pendingThumbprint, state.RootElement.GetProperty("currentCertificateThumbprint").GetString());
     }
 
     [Fact]
@@ -106,26 +113,45 @@ public sealed class BrokerGatewayContinuityTests
         Assert.Equal(9, fixture.ExternalDispatchCount);
         Assert.All(concurrent, task => Assert.Equal("1.0.0", task.Result.ConnectorVersion));
 
-        fixture.Unavailable = true;
+        fixture.UnavailableError = HttpRequestError.ConnectionError;
         BrokerException unavailable = await Assert.ThrowsAsync<BrokerException>(() => InvokeDirectAsync(invoker, TestContext.Current.CancellationToken));
-        Assert.Equal("gateway_transport_failed", unavailable.Code);
-        Assert.True(unavailable.Retryable);
+        Assert.Equal("gateway_outcome_ambiguous", unavailable.Code);
+        Assert.False(unavailable.Retryable);
         Assert.Equal(9, fixture.ExternalDispatchCount);
 
-        fixture.Unavailable = false;
+        using (ProductionGatewayInvoker restarted = fixture.CreateInvoker())
+        {
+            BrokerException policyUnavailable = await Assert.ThrowsAsync<BrokerException>(() => InvokeDirectAsync(restarted, TestContext.Current.CancellationToken));
+            Assert.Equal("gateway_transport_failed", policyUnavailable.Code);
+            Assert.True(policyUnavailable.Retryable);
+            Assert.Equal(9, fixture.ExternalDispatchCount);
+        }
+
+        foreach (HttpRequestError preDispatchError in new[] { HttpRequestError.NameResolutionError, HttpRequestError.SecureConnectionError })
+        {
+            fixture.UnavailableError = preDispatchError;
+            BrokerException preDispatch = await Assert.ThrowsAsync<BrokerException>(() => InvokeDirectAsync(invoker, TestContext.Current.CancellationToken));
+            Assert.Equal("gateway_transport_failed", preDispatch.Code);
+            Assert.True(preDispatch.Retryable);
+            Assert.Equal(9, fixture.ExternalDispatchCount);
+        }
+
+        fixture.UnavailableError = null;
         _ = await InvokeDirectAsync(invoker, TestContext.Current.CancellationToken);
         Assert.Equal(10, fixture.ExternalDispatchCount);
         Assert.Equal(1, fixture.ActivationCount);
         Assert.Equal(1, fixture.RenewalCount);
     }
 
-    [Fact]
-    public async Task Lost_invoke_response_is_ambiguous_and_never_automatically_replays_the_upstream_effect()
+    [Theory]
+    [InlineData(HttpRequestError.ResponseEnded)]
+    [InlineData(HttpRequestError.ConnectionError)]
+    public async Task Lost_invoke_response_is_ambiguous_and_never_automatically_replays_the_upstream_effect(HttpRequestError responseError)
     {
         await using ContinuityGateway fixture = await ContinuityGateway.CreateAsync(grantEnabled: true);
         using ProductionGatewayInvoker invoker = fixture.CreateInvoker();
         _ = await InvokeDirectAsync(invoker, TestContext.Current.CancellationToken);
-        fixture.LoseNextInvokeResponse = true;
+        fixture.NextInvokeResponseError = responseError;
 
         BrokerException ambiguous = await Assert.ThrowsAsync<BrokerException>(() => InvokeDirectAsync(invoker, TestContext.Current.CancellationToken));
         Assert.Equal("gateway_outcome_ambiguous", ambiguous.Code);
@@ -290,9 +316,9 @@ public sealed class BrokerGatewayContinuityTests
         public Guid InstallationId { get; private set; }
         public string DataDirectory => data.Path;
         public bool GrantEnabled { get; }
-        public bool Unavailable { get; set; }
-        public bool LoseNextRenewalResponse { get; set; }
-        public bool LoseNextInvokeResponse { get; set; }
+        public HttpRequestError? UnavailableError { get; set; }
+        public HttpRequestError? NextRenewalResponseError { get; set; }
+        public HttpRequestError? NextInvokeResponseError { get; set; }
         public bool ReturnUnavailableAfterNextInvokeEffect { get; set; }
         public bool PendingCredentialAccepted { get; private set; }
         public int ActivationCount { get; private set; }
@@ -414,7 +440,7 @@ public sealed class BrokerGatewayContinuityTests
         {
             protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             {
-                if (fixture.Unavailable) throw new HttpRequestException(HttpRequestError.ConnectionError, "Synthetic Gateway is unavailable.");
+                if (fixture.UnavailableError is { } unavailableError) throw new HttpRequestException(unavailableError, "Synthetic Gateway is unavailable.");
                 byte[] body = request.Content is null ? [] : await request.Content.ReadAsByteArrayAsync(cancellationToken);
                 string path = request.RequestUri!.AbsolutePath;
                 try
@@ -445,10 +471,10 @@ public sealed class BrokerGatewayContinuityTests
                         EnrollmentResult result = await fixture.enrollment.RenewAsync(principal.Identity, Deserialize<RenewalRequest>(body), cancellationToken);
                         fixture.RenewalCount++;
                         fixture.PendingCredentialAccepted = true;
-                        if (fixture.LoseNextRenewalResponse)
+                        if (fixture.NextRenewalResponseError is { } renewalError)
                         {
-                            fixture.LoseNextRenewalResponse = false;
-                            throw new HttpRequestException(HttpRequestError.ResponseEnded, "Synthetic response was lost after commit.");
+                            fixture.NextRenewalResponseError = null;
+                            throw new HttpRequestException(renewalError, "Synthetic response was lost after commit.");
                         }
                         return Json(result);
                     }
@@ -459,10 +485,10 @@ public sealed class BrokerGatewayContinuityTests
                         string operationId = segments[4][..^":invoke".Length];
                         GatewayInvokeResponse result = await fixture.runtime.InvokeAsync(principal, connectorId, operationId, invoke, cancellationToken);
                         fixture.LastInvokedInstallationId = principal.InstallationId;
-                        if (fixture.LoseNextInvokeResponse)
+                        if (fixture.NextInvokeResponseError is { } invokeError)
                         {
-                            fixture.LoseNextInvokeResponse = false;
-                            throw new HttpRequestException(HttpRequestError.ResponseEnded, "Synthetic response was lost after dispatch.");
+                            fixture.NextInvokeResponseError = null;
+                            throw new HttpRequestException(invokeError, "Synthetic response was lost after dispatch.");
                         }
                         if (fixture.ReturnUnavailableAfterNextInvokeEffect)
                         {

@@ -93,8 +93,10 @@ state is promoted without resending; otherwise the still-authoritative current
 credential is checked before one renewal submission. The Broker never automatically
 replays an application invocation. A response lost after dispatch, timeout/body
 interruption, or post-dispatch 5xx is a bounded non-retryable
-`gateway_outcome_ambiguous`; known pre-dispatch connection failures remain retryable
-only through a new explicit caller invocation.
+`gateway_outcome_ambiguous`. `ConnectionError` also remains ambiguous because it does
+not establish the dispatch phase. DNS resolution and TLS-handshake failures remain
+retryable only through a new explicit caller invocation; read-only policy probes retain
+their retryable transport-failure result.
 
 The focused gate shows Broker SDK → Gateway → Published Connector → Synthetic Provider,
 same-Installation restart without activation reuse, single-flight renewal, authoritative

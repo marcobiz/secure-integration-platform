@@ -597,7 +597,8 @@ public sealed class ProductionGatewayInvoker : IGatewayInvoker, IDisposable
         try { return await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false); }
         catch (HttpRequestException exception)
         {
-            bool knownPreDispatch = exception.HttpRequestError is HttpRequestError.NameResolutionError or HttpRequestError.ConnectionError or HttpRequestError.SecureConnectionError;
+            // ConnectionError can occur after the remote effect; it does not identify the dispatch phase.
+            bool knownPreDispatch = exception.HttpRequestError is HttpRequestError.NameResolutionError or HttpRequestError.SecureConnectionError;
             if (ambiguityCode is not null && !knownPreDispatch) throw new BrokerException(ambiguityCode, "gateway", false, exception);
             throw new BrokerException("gateway_transport_failed", "gateway", true, exception);
         }

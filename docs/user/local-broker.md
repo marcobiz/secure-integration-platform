@@ -202,9 +202,11 @@ without another renewal request. If it is not accepted, the still-authoritative 
 credential is checked before a single renewal submission. This is recovery on a later
 explicit application call, not an automatic retry loop. A lost application response,
 timeout/body interruption, or 5xx after dispatch is returned as non-retryable
-`gateway_outcome_ambiguous`; the Broker never resends that invocation. A known
-pre-dispatch DNS/connection/TLS-establishment failure is `gateway_transport_failed` and
-can be attempted only by a new explicit application call.
+`gateway_outcome_ambiguous`; the Broker never resends that invocation. `ConnectionError`
+also remains ambiguous because it does not establish whether dispatch occurred. DNS
+resolution and TLS-handshake failures are `gateway_transport_failed` and can be attempted
+only by a new explicit application call. Read-only policy probes retain their retryable
+transport-failure result.
 
 | Error | Meaning and safe action |
 |---|---|
@@ -213,7 +215,7 @@ can be attempted only by a new explicit application call.
 | `gateway_renewal_outcome_ambiguous` | Renewal may have committed. Do not resend manually; a later explicit call probes the pending credential. |
 | `gateway_renewal_state_unresolved` | Neither pending nor current authority can safely establish the next transition. Restore Gateway availability/state before another explicit call. |
 | `gateway_outcome_ambiguous` | The remote application effect may have occurred. Reconcile by the Connector's business protocol; do not replay automatically. |
-| `gateway_transport_failed` | Failure is known before dispatch. A later explicit caller invocation may reconnect. |
+| `gateway_transport_failed` | DNS resolution/TLS-handshake failure, or failure of a read-only policy probe. A later explicit caller invocation may reconnect. |
 
 Targeted evidence covers the public SDK/pipe and real Core authorization, enrollment,
 Published Connector and Synthetic Provider through an in-process fault-injection HTTP
