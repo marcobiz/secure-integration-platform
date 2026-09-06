@@ -45,8 +45,8 @@ beforeEach(async () => {
 afterEach(cleanup);
 
 describe('guided selection and targeted refresh', () => {
-  it('resolves a resumed page-2 selection independently of list pagination and URL environment metadata', async () => {
-    const first = mount();
+  it('keeps authoritative selections visible while changing list pages', async () => {
+    mount();
     expect(await screen.findByRole('button', { name: i18n.t('requestApproval') })).toBeEnabled();
     expect(screen.getByRole('combobox', { name: i18n.t('version') })).toHaveTextContent('1.0.51');
     expect(screen.getByRole('combobox', { name: i18n.t('installation') })).toHaveTextContent('Direct');
@@ -59,11 +59,21 @@ describe('guided selection and targeted refresh', () => {
     fireEvent.click(within(screen.getByTestId('guided-installation-pagination')).getByRole('button', { name: i18n.t('nextPage') }));
     await waitFor(() => expect(adminApi.installations).toHaveBeenCalledWith('tenant', 50));
     expect(screen.getByRole('combobox', { name: i18n.t('version') })).toHaveTextContent('1.0.51');
+    expect(screen.getByRole('combobox', { name: i18n.t('installation') })).toHaveTextContent('Direct');
+  });
+
+  it('resolves deep-link selections again after reload with a new query cache', async () => {
+    const first = mount();
+    expect(await screen.findByRole('button', { name: i18n.t('requestApproval') })).toBeEnabled();
     const resume = first.history.location.pathname + first.history.location.search;
     first.unmount(); first.cache.clear();
     mount(resume);
     expect(await screen.findByRole('button', { name: i18n.t('requestApproval') })).toBeEnabled();
     expect(screen.getByRole('combobox', { name: i18n.t('installation') })).toHaveTextContent('Direct');
+    expect(screen.getByRole('combobox', { name: i18n.t('version') })).toHaveTextContent('1.0.51');
+    expect(adminApi.installation).toHaveBeenCalledTimes(2);
+    expect(adminApi.connectorVersion).toHaveBeenCalledTimes(2);
+    expect(adminApi.bindings).not.toHaveBeenCalledWith('sample', version.version, 'untrusted-url-environment');
   });
 
   it('selects a version from page 2 and loads its definition through the point lookup', async () => {
