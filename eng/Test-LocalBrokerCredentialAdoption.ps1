@@ -253,7 +253,8 @@ try {
     $info.CreateNoWindow = $true
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
-    $info.EnvironmentVariables.Remove('PSModulePath')
+    # Do not access Environment/EnvironmentVariables: the lazy getter copies the setup user's
+    # environment. Leave the native block null so CreateProcessWithLogonW builds the target profile's.
     $child = [Diagnostics.Process]::new()
     $child.StartInfo = $info
     try {

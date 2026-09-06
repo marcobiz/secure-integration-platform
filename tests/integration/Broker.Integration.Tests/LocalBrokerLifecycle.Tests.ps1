@@ -115,6 +115,25 @@ try {
     }
     Write-Output 'CREDENTIAL_CONTINUATION_FOREIGN_OR_MISSING_ACCOUNT_DENIED=PASS (no state access)'
 
+    # Read-only Framework reproduction: even Remove on the lazy getter copies the parent block.
+    # Inspect only null state and a comparison boolean; never print environment contents or log on.
+    $environmentAccess = @($adoptionAst.FindAll({ param($node) $node -is [Management.Automation.Language.MemberExpressionAst] -and
+        $node.Member.Extent.Text -cin @('Environment', 'EnvironmentVariables') }, $true))
+    Assert ($environmentAccess.Count -eq 0)
+    $environmentField = [Diagnostics.ProcessStartInfo].GetField('environmentVariables', [Reflection.BindingFlags]'Instance,NonPublic')
+    Assert ($null -ne $environmentField)
+    $profileProbe = [Diagnostics.ProcessStartInfo]::new()
+    $profileProbe.UserName = $AccountName
+    $profileProbe.LoadUserProfile = $true
+    $profileProbe.UseShellExecute = $false
+    $profileProbe.RedirectStandardOutput = $true
+    $profileProbe.RedirectStandardError = $true
+    Assert ($null -eq $environmentField.GetValue($profileProbe))
+    $profileProbe.EnvironmentVariables.Remove('PSModulePath')
+    $copiedEnvironment = $environmentField.GetValue($profileProbe)
+    Assert ($null -ne $copiedEnvironment -and $copiedEnvironment['USERPROFILE'] -ceq $env:USERPROFILE)
+    Write-Output 'CREDENTIAL_FRAMEWORK_LAZY_PARENT_ENVIRONMENT_REGRESSION=PASS (no process or logon)'
+
     # Execute the shipped update branch with simulated process/SCM/copy failure.
     # The real settings write must disable initialization before the first copy.
     $settingsPath = Join-Path $root 'appsettings.json'
