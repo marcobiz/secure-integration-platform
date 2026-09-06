@@ -755,6 +755,14 @@ adminApi.MapGet("/installations", async (Guid tenantId, int? offset, int? limit,
     return Results.Ok(await directory.ListInstallationsAsync(tenantId, offset ?? 0, limit ?? 50, cancellationToken).ConfigureAwait(false));
 });
 
+adminApi.MapGet("/installations/{installationId}", async (Guid installationId, Guid tenantId, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, tenantId, AdminRole.Viewer, AdminRole.Operator, AdminRole.SecurityAdministrator);
+    return Results.Ok(await directory.GetInstallationAsync(tenantId, installationId, cancellationToken).ConfigureAwait(false)
+        ?? throw new GatewayException("BGW-INSTALLATION-NOT-FOUND", 404));
+});
+
 adminApi.MapPost("/installations", async (CreateInstallationRequest request, HttpContext context, AdminAccessService access, IAdminGatewayRegistry registry, IGatewayClock clock, EnrollmentSecurityOptions enrollmentOptions, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);

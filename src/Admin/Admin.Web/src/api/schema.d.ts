@@ -550,6 +550,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/api/v1/installations/{installationId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getInstallation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/api/v1/installations/{installationId}:revoke": {
         parameters: {
             query?: never;
@@ -2789,6 +2805,31 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProvisionedActivation"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    getInstallation: {
+        parameters: {
+            query: {
+                tenantId: components["parameters"]["TenantId"];
+            };
+            header?: never;
+            path: {
+                installationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tenant-scoped installation metadata */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Installation"];
                 };
             };
             default: components["responses"]["Problem"];

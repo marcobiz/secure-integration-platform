@@ -2,11 +2,12 @@ import { Button, FormControl, InputLabel, MenuItem, Select, Stack, Typography } 
 import { useTranslation } from 'react-i18next';
 import type { Page } from '../api/client';
 
-export function PagedSelector<T>({ id, label, value, page, onChange, onOffset, itemLabel, itemValue }: {
+export function PagedSelector<T>({ id, label, value, page, selectedItem, onChange, onOffset, itemLabel, itemValue }: {
   id: string;
   label: string;
   value: string;
   page: Page<T>;
+  selectedItem?: T;
   onChange: (value: string) => void;
   onOffset: (offset: number) => void;
   itemLabel: (item: T) => string;
@@ -14,8 +15,10 @@ export function PagedSelector<T>({ id, label, value, page, onChange, onOffset, i
 }) {
   const { t } = useTranslation();
   const optionValue = (item: T) => itemValue ? itemValue(item) : (item as { id: string }).id;
+  const selectedOnPage = page.items.some(item => optionValue(item) === value);
   return <Stack spacing={0.5} sx={{ minWidth: 240 }}>
-    <FormControl><InputLabel id={`${id}-label`}>{label}</InputLabel><Select labelId={`${id}-label`} label={label} value={page.items.some(item => optionValue(item) === value) ? value : ''} onChange={event => onChange(event.target.value)}>
+    <FormControl><InputLabel id={`${id}-label`}>{label}</InputLabel><Select labelId={`${id}-label`} label={label} value={value} onChange={event => onChange(event.target.value)}>
+      {value && !selectedOnPage && <MenuItem value={value}>{selectedItem && optionValue(selectedItem) === value ? itemLabel(selectedItem) : value}</MenuItem>}
       {page.items.map(item => { const itemId = optionValue(item); return <MenuItem key={itemId} value={itemId}>{itemLabel(item)}</MenuItem>; })}
     </Select></FormControl>
     <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }} role="group" aria-label={t('selectorPageControls')} data-testid={`${id}-pagination`}>

@@ -71,9 +71,7 @@ export function GuidedOnboardingPage() {
   const selectEnvironment = (value: string) => { setEnvironmentId(value); replaceTarget({ environment: value }); };
   const selectInstallation = (value: string) => {
     setInstallationId(value);
-    const selected = installations.data?.items.find(item => item.id === value);
-    if (selected) { setEnvironmentId(selected.environmentId); replaceTarget({ installation: value, environment: selected.environmentId }); }
-    else replaceTarget({ installation: value });
+    replaceTarget({ installation: value });
   };
   const selectConnector = (value: string) => { setConnectorId(value); setVersion(''); setEndpointSelections({}); setResourceSelections({}); replaceTarget({ connector: value, version: '' }); };
   const selectVersion = (value: string) => { setVersion(value); setEndpointSelections({}); setResourceSelections({}); replaceTarget({ version: value }); };
@@ -81,12 +79,21 @@ export function GuidedOnboardingPage() {
   const tenants = useQuery({ queryKey: ['tenants', 'guided', tenantOffset], queryFn: () => adminApi.tenants(tenantOffset) });
   const applications = useQuery({ queryKey: ['applications', 'guided', applicationOffset], queryFn: () => adminApi.applications(applicationOffset) });
   const environments = useQuery({ queryKey: ['environments', 'guided', environmentOffset], queryFn: () => adminApi.environments(environmentOffset) });
-  const installations = useQuery({ queryKey: ['installations', tenantId, 'guided', installationOffset], queryFn: () => adminApi.installations(tenantId, installationOffset), enabled: Boolean(tenantId) });
+  const installations = useQuery({ queryKey: ['installations', tenantId, 'guided', installationOffset], queryFn: () => adminApi.installations(tenantId, installationOffset), enabled: Boolean(tenantId), placeholderData: (previous, query) => query?.queryKey[1] === tenantId ? previous : undefined });
   const connectors = useQuery({ queryKey: ['connectors', 'guided', connectorOffset], queryFn: () => adminApi.connectors(connectorOffset) });
-  const versions = useQuery({ queryKey: ['connector-versions', connectorId, 'guided', versionOffset], queryFn: () => adminApi.connectorVersions(connectorId, versionOffset), enabled: Boolean(connectorId) });
-  const currentVersion = versions.data?.items.find(item => item.version === version);
-  const selectedInstallation = installations.data?.items.find(item => item.id === installationId);
-  const effectiveEnvironmentId = selectedInstallation?.environmentId ?? environmentId;
+  const versions = useQuery({ queryKey: ['connector-versions', connectorId, 'guided', versionOffset], queryFn: () => adminApi.connectorVersions(connectorId, versionOffset), enabled: Boolean(connectorId), placeholderData: (previous, query) => query?.queryKey[1] === connectorId ? previous : undefined });
+  const uploadedInfo = definitionInfo(fileDefinition);
+  const selectedVersionQuery = useQuery({ queryKey: ['connector-version', connectorId, version], queryFn: async () => {
+    try { return await adminApi.connectorVersion(connectorId, version); }
+    catch (error) {
+      if (error instanceof ApiProblem && error.status === 404 && uploadedInfo?.connectorId === connectorId && uploadedInfo.version === version) return null;
+      throw error;
+    }
+  }, enabled: Boolean(connectorId && version) });
+  const selectedInstallationQuery = useQuery({ queryKey: ['installation', tenantId, installationId], queryFn: () => adminApi.installation(tenantId, installationId), enabled: Boolean(tenantId && installationId) });
+  const currentVersion = selectedVersionQuery.data;
+  const selectedInstallation = selectedInstallationQuery.data;
+  const effectiveEnvironmentId = selectedInstallation?.environmentId ?? (installationId ? '' : environmentId);
   const storedDefinition = useQuery({ queryKey: ['connector-definition', connectorId, version, 'guided'], queryFn: () => adminApi.connectorDefinition(connectorId, version), enabled: Boolean(connectorId && version && currentVersion) });
   const info = definitionInfo(storedDefinition.data ?? fileDefinition);
   const bindings = useQuery({ queryKey: ['bindings', connectorId, version, effectiveEnvironmentId, 'guided'], queryFn: () => adminApi.bindings(connectorId, version, effectiveEnvironmentId), enabled: Boolean(connectorId && version && effectiveEnvironmentId && currentVersion) });
@@ -104,22 +111,11 @@ export function GuidedOnboardingPage() {
   const providerCandidates = (kind: string): ProviderResourceCatalog[] => providerResources.data?.items.filter(item => item.resourceType === (kind === 'clientCertificate' ? 'ClientCertificate' : 'Secret') && (item.connectorScope === '*' || item.connectorScope === connectorId) && item.status === 'Active') ?? [];
   const selectionsComplete = Boolean(info && info.endpointBindings.every(logical => selectedId(endpointSelections, logical, endpointCandidates(logical).map(item => item.endpointId)) !== '') && info.secretBindings.every(binding => selectedId(resourceSelections, binding.name, providerCandidates(binding.kind).map(item => item.id)) !== ''));
 
-  const refresh = async () => {
-    await Promise.all([
-      cache.invalidateQueries({ queryKey: ['installations', tenantId] }),
-      cache.invalidateQueries({ queryKey: ['connectors'] }),
-      cache.invalidateQueries({ queryKey: ['connector-versions', connectorId] }),
-      cache.invalidateQueries({ queryKey: ['connector-definition', connectorId, version] }),
-      cache.invalidateQueries({ queryKey: ['bindings', connectorId, version] }),
-      cache.invalidateQueries({ queryKey: ['grants', tenantId] }),
-      cache.invalidateQueries({ queryKey: ['approvals', connectorId, version] }),
-      cache.invalidateQueries({ queryKey: ['approval-review', connectorId, version] })
-    ]);
-  };
+  const refresh = (...keys: string[][]) => Promise.all(keys.map(queryKey => cache.invalidateQueries({ queryKey })));
 
   const createInstallation = useMutation({
     mutationFn: () => adminApi.createInstallation({ tenantId, applicationId, environmentId, installationKind: 'Direct' }),
-    onSuccess: async value => { setActivation(value); setInstallationId(value.installationId); replaceTarget({ installation: value.installationId, environment: environmentId }); await refresh(); }
+    onSuccess: async value => { setActivation(value); setInstallationId(value.installationId); replaceTarget({ installation: value.installationId, environment: environmentId }); await refresh(['installations', tenantId]); }
   });
   const importDefinition = useMutation({
     mutationFn: async () => {
@@ -136,15 +132,19 @@ export function GuidedOnboardingPage() {
       if (authoritative.state !== 'Validated' && authoritative.state !== 'Published') throw new Error('guided-definition-state-invalid');
       return authoritative;
     },
-    onSuccess: refresh
+    onSuccess: () => refresh(['connectors'], ['connector-versions', connectorId], ['connector-version', connectorId, version], ['connector-definition', connectorId, version])
   });
   const configure = useMutation({
     mutationFn: async () => {
       if (!info || !selectedInstallation || selectedInstallation.status !== 'Active') throw new Error('guided-active-installation-required');
-      const authoritativeVersion = await adminApi.connectorVersion(connectorId, version);
+      const [authoritativeVersion, authoritativeInstallation] = await Promise.all([
+        adminApi.connectorVersion(connectorId, version), adminApi.installation(tenantId, installationId)
+      ]);
+      if (authoritativeInstallation.status !== 'Active') throw new Error('guided-active-installation-required');
       if (authoritativeVersion.state !== 'Validated') throw new Error('guided-validated-version-required');
-      const authoritativeBindings = await adminApi.bindings(connectorId, version, selectedInstallation.environmentId, 0, 100);
-      if (!authoritativeBindings.items.some(item => item.environmentId === selectedInstallation.environmentId)) {
+      if (authoritativeInstallation.environmentId !== selectedInstallation.environmentId) throw new Error('guided-installation-environment-changed');
+      const authoritativeBindings = await adminApi.bindings(connectorId, version, authoritativeInstallation.environmentId, 0, 100);
+      if (!authoritativeBindings.items.some(item => item.environmentId === authoritativeInstallation.environmentId)) {
         if (!selectionsComplete) throw new Error('guided-binding-selection-required');
         const endpointSelectionsRequest = Object.fromEntries(info.endpointBindings.map(logical => {
           const selected = endpointCandidates(logical).find(item => item.endpointId === selectedId(endpointSelections, logical, endpointCandidates(logical).map(candidate => candidate.endpointId)))!;
@@ -155,7 +155,7 @@ export function GuidedOnboardingPage() {
           return [binding.name, { providerId: selected.providerId, resourceId: selected.resourceId, resourceType: selected.resourceType, version: selected.version, publicMetadataRevision: selected.publicMetadataRevision, catalogRevision: selected.revision, catalogChecksumSha256: selected.checksumSha256 }];
         }));
         await adminApi.putBindings(connectorId, {
-          environmentId: selectedInstallation.environmentId,
+          environmentId: authoritativeInstallation.environmentId,
           connectorVersion: version,
           endpoints: {},
           endpointResources: endpointSelectionsRequest,
@@ -167,14 +167,14 @@ export function GuidedOnboardingPage() {
         await adminApi.createGrant({ tenantId, installationId, connectorId, connectorVersion: authoritativeVersion.version, operationId });
       }
     },
-    onSuccess: refresh
+    onSuccess: () => refresh(['bindings', connectorId, version], ['grants', tenantId], ['approvals', connectorId, version], ['approval-review', connectorId, version])
   });
   const requestApproval = useMutation({
     mutationFn: async () => {
       const authoritative = await adminApi.approvals(connectorId, version, 0, 100);
       if (!authoritative.items.some(item => item.status === 'Requested' || item.status === 'Approved')) await adminApi.requestApproval(connectorId, version);
     },
-    onSuccess: refresh
+    onSuccess: () => refresh(['approvals', connectorId, version], ['approval-review', connectorId, version])
   });
   const approveAndPublish = useMutation({
     mutationFn: async () => {
@@ -193,7 +193,7 @@ export function GuidedOnboardingPage() {
       if (!summary) throw new Error('guided-connector-summary-required');
       await adminApi.publish(connectorId, authoritativeVersion, summary.publicationRevision);
     },
-    onSuccess: refresh
+    onSuccess: () => refresh(['connectors'], ['connector-versions', connectorId], ['connector-version', connectorId, version], ['bindings', connectorId], ['approvals', connectorId], ['approval-review', connectorId])
   });
 
   const mutationError = fileError ?? createInstallation.error ?? importDefinition.error ?? configure.error ?? requestApproval.error ?? approveAndPublish.error;
@@ -207,7 +207,7 @@ export function GuidedOnboardingPage() {
   else if (isPublished) { stateKey = 'guidedStateComplete'; roleKey = 'guidedRoleNone'; actionKey = 'guidedActionComplete'; prerequisiteKey = 'guidedPrerequisiteNone'; }
 
   if (tenants.isPending || applications.isPending || environments.isPending || connectors.isPending) return <LoadingState />;
-  const loadError = tenants.error ?? applications.error ?? environments.error ?? connectors.error ?? installations.error ?? versions.error ?? storedDefinition.error ?? bindings.error ?? grants.error ?? approvals.error ?? endpointResources.error ?? providerResources.error ?? review.error;
+  const loadError = tenants.error ?? applications.error ?? environments.error ?? connectors.error ?? installations.error ?? versions.error ?? selectedVersionQuery.error ?? selectedInstallationQuery.error ?? storedDefinition.error ?? bindings.error ?? grants.error ?? approvals.error ?? endpointResources.error ?? providerResources.error ?? review.error;
   if (loadError && !mutationError) return <ErrorState error={loadError} />;
 
   return <>
@@ -231,9 +231,9 @@ export function GuidedOnboardingPage() {
           <PagedSelector id="guided-application" label={t('application')} value={applicationId} page={applications.data!} onChange={value => { setApplicationId(value); replaceTarget({ application: value }); }} onOffset={setApplicationOffset} itemLabel={item => item.displayName} />
           <PagedSelector id="guided-environment" label={t('environment')} value={environmentId} page={environments.data!} onChange={selectEnvironment} onOffset={setEnvironmentOffset} itemLabel={item => item.displayName} />
         </Stack>
-        {tenantId && installations.data && <PagedSelector id="guided-installation" label={t('installation')} value={installationId} page={installations.data} onChange={selectInstallation} onOffset={setInstallationOffset} itemLabel={item => `${item.installationKind} · ${item.status} · ${item.createdAt.slice(0, 10)}`} />}
+        {tenantId && installations.data && <PagedSelector id="guided-installation" label={t('installation')} value={installationId} page={installations.data} selectedItem={selectedInstallation} onChange={selectInstallation} onOffset={setInstallationOffset} itemLabel={item => `${item.installationKind} · ${item.status} · ${item.createdAt.slice(0, 10)}`} />}
         <PagedSelector id="guided-connector" label={t('connector')} value={connectorId} page={connectors.data!} onChange={selectConnector} onOffset={setConnectorOffset} itemLabel={item => item.displayName} itemValue={item => item.connectorId} />
-        {connectorId && versions.data && <PagedSelector id="guided-version" label={t('version')} value={version} page={versions.data} onChange={selectVersion} onOffset={setVersionOffset} itemLabel={item => `${item.version} · ${item.state}`} itemValue={item => item.version} />}
+        {connectorId && versions.data && <PagedSelector id="guided-version" label={t('version')} value={version} page={versions.data} selectedItem={currentVersion ?? undefined} onChange={selectVersion} onOffset={setVersionOffset} itemLabel={item => `${item.version} · ${item.state}`} itemValue={item => item.version} />}
       </Stack>
     </CardContent></Card>
 

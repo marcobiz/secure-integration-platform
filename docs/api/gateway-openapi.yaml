@@ -419,6 +419,13 @@ paths:
       parameters: [{ $ref: '#/components/parameters/Csrf' }]
       requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/CreateInstallation' } } } }
       responses: { '201': { description: One-time activation response, content: { application/json: { schema: { $ref: '#/components/schemas/ProvisionedActivation' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/installations/{installationId}:
+    get:
+      tags: [Administration]
+      operationId: getInstallation
+      security: [{ AdminSession: [] }]
+      parameters: [{ name: installationId, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/TenantId' }]
+      responses: { '200': { description: Tenant-scoped installation metadata, content: { application/json: { schema: { $ref: '#/components/schemas/Installation' } } } }, default: { $ref: '#/components/responses/Problem' } }
   /admin/api/v1/installations/{installationId}:revoke:
     post:
       tags: [Administration]

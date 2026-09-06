@@ -475,6 +475,63 @@ public sealed class AdminApiSecurityTests
     }
 
     [Fact]
+    public async Task Installation_point_lookup_is_authenticated_role_scoped_non_enumerating_and_metadata_only()
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient anonymous = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
+        Guid tenantId = Guid.NewGuid(), otherTenant = Guid.NewGuid(), applicationId = Guid.NewGuid(), environmentId = Guid.NewGuid(), installationId = Guid.NewGuid();
+        InMemoryGatewayRegistry registry = factory.Services.GetRequiredService<InMemoryGatewayRegistry>();
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        await registry.AddTenantAsync(new(tenantId, "lookup-tenant", "Lookup tenant", TenantStatus.Active, now), TestContext.Current.CancellationToken);
+        await registry.AddTenantAsync(new(otherTenant, "other-lookup-tenant", "Other tenant", TenantStatus.Active, now), TestContext.Current.CancellationToken);
+        await registry.AddApplicationAsync(new(applicationId, "lookup-app", "Lookup app", ApplicationStatus.Active, "1.0.0", null, now), TestContext.Current.CancellationToken);
+        await registry.AddEnvironmentAsync(new(environmentId, "lookup-env", "Lookup environment", false), TestContext.Current.CancellationToken);
+        await registry.AddInstallationAsync(new(installationId, tenantId, applicationId, environmentId, InstallationStatus.Active, "1.0.0", now), TestContext.Current.CancellationToken);
+        Guid foreignInstallationId = Guid.NewGuid();
+        await registry.AddInstallationAsync(new(foreignInstallationId, otherTenant, applicationId, environmentId, InstallationStatus.Active, "1.0.0", now), TestContext.Current.CancellationToken);
+        string route = $"/admin/api/v1/installations/{installationId:D}?tenantId={tenantId:D}";
+        using HttpResponseMessage unauthenticated = await anonymous.GetAsync(route, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthenticated.StatusCode);
+
+        IAdminSecurityStore security = factory.Services.GetRequiredService<IAdminSecurityStore>();
+        IAdminSessionStore sessions = factory.Services.GetRequiredService<IAdminSessionStore>();
+        foreach (AdminRole role in Enum.GetValues<AdminRole>())
+        {
+            AdminExternalIdentity identity = new("https://lookup.invalid", role.ToString(), "Lookup principal", null);
+            AdminPrincipalRecord principal = await security.EnsurePrincipalAsync(identity, TestContext.Current.CancellationToken);
+            _ = await security.AssignRoleAsync(principal.Id, role, tenantId, principal.Id, Guid.NewGuid(), now, TestContext.Current.CancellationToken);
+            (string handle, _) = await sessions.CreateAsync(identity, now, TimeSpan.FromHours(1), TimeSpan.FromMinutes(20), TestContext.Current.CancellationToken);
+            const string scheme = Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme;
+            var cookie = factory.Services.GetRequiredService<Microsoft.Extensions.Options.IOptionsMonitor<Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationOptions>>().Get(scheme);
+            var ticket = new Microsoft.AspNetCore.Authentication.AuthenticationTicket(new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity([new System.Security.Claims.Claim("sid", handle)], scheme)), scheme);
+            using HttpClient scoped = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost"), HandleCookies = false });
+            scoped.DefaultRequestHeaders.Add("Cookie", "__Host-SecureIntegration.Admin=" + cookie.TicketDataFormat.Protect(ticket));
+            using HttpResponseMessage found = await scoped.GetAsync(route, TestContext.Current.CancellationToken);
+            bool allowed = role is AdminRole.Viewer or AdminRole.Operator or AdminRole.SecurityAdministrator;
+            Assert.Equal(allowed ? HttpStatusCode.OK : HttpStatusCode.Forbidden, found.StatusCode);
+            if (!allowed) continue;
+            string body = await found.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+            using JsonDocument metadata = JsonDocument.Parse(body);
+            Assert.Equal(installationId, metadata.RootElement.GetProperty("id").GetGuid());
+            Assert.Equal(environmentId, metadata.RootElement.GetProperty("environmentId").GetGuid());
+            Assert.DoesNotContain("activationCode", body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("certificateDer", body, StringComparison.OrdinalIgnoreCase);
+            foreach (Guid requested in new[] { installationId, Guid.NewGuid() })
+            {
+                using HttpResponseMessage wrongScope = await scoped.GetAsync($"/admin/api/v1/installations/{requested:D}?tenantId={otherTenant:D}", TestContext.Current.CancellationToken);
+                Assert.Equal(HttpStatusCode.Forbidden, wrongScope.StatusCode);
+            }
+            using HttpResponseMessage absent = await scoped.GetAsync($"/admin/api/v1/installations/{Guid.NewGuid():D}?tenantId={tenantId:D}", TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.NotFound, absent.StatusCode);
+            using HttpResponseMessage foreign = await scoped.GetAsync($"/admin/api/v1/installations/{foreignInstallationId:D}?tenantId={tenantId:D}", TestContext.Current.CancellationToken);
+            Assert.Equal(absent.StatusCode, foreign.StatusCode);
+            using HttpResponseMessage noTenant = await scoped.GetAsync($"/admin/api/v1/installations/{installationId:D}", TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.BadRequest, noTenant.StatusCode);
+        }
+    }
+
+    [Fact]
     public async Task M5_IT_Tenant_and_application_require_current_IfMatch_without_lost_updates()
     {
         await using AdminDevelopmentFactory factory = new();

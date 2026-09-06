@@ -104,6 +104,7 @@ export const adminApi = {
   application: (id: string) => openApi<Application, '/admin/api/v1/applications/{applicationId}'>('/admin/api/v1/applications/{applicationId}', 'get', { path: { applicationId: id } }),
   environments: (offset = 0, limit = 50) => openApi<EnvironmentPage, '/admin/api/v1/environments'>('/admin/api/v1/environments', 'get', { query: { offset, limit } }),
   installations: (tenantId: string, offset = 0, limit = 50) => openApi<InstallationPage, '/admin/api/v1/installations'>('/admin/api/v1/installations', 'get', { query: { tenantId, offset, limit } }),
+  installation: (tenantId: string, installationId: string) => openApi<Installation, '/admin/api/v1/installations/{installationId}'>('/admin/api/v1/installations/{installationId}', 'get', { path: { installationId }, query: { tenantId } }),
   grants: (tenantId: string, offset = 0, limit = 50) => openApi<GrantPage, '/admin/api/v1/grants'>('/admin/api/v1/grants', 'get', { query: { tenantId, offset, limit } }),
   audit: (tenantId: string, offset = 0, limit = 50) => openApi<AuditPage, '/admin/api/v1/audit'>('/admin/api/v1/audit', 'get', { query: { tenantId, offset, limit } }),
   connectors: (offset = 0, limit = 50, filter = '') => openApi<Page<ConnectorSummary>, '/admin/api/v1/connectors'>('/admin/api/v1/connectors', 'get', { query: { offset, limit, filter } }),
