@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using SecureIntegration.Gateway.Domain;
@@ -12,7 +11,12 @@ public sealed class PublishedConnectorCatalog(
     IGatewayClock clock,
     TimeSpan ttl) : IGatewayOperationCatalog, IAuthorizedPublishedOperationCatalog
 {
-    private readonly ConcurrentDictionary<string, CacheEntry> cache = new(StringComparer.Ordinal);
+    // Keys include Installation and operation: retain a useful working set, not every visited scope.
+    // Capacity eviction causes a reload, never an admission denial. Expiry cleanup is activity-driven.
+    private const int MaximumEntries = 4096;
+    private readonly Dictionary<string, CacheEntry> cache = new(StringComparer.Ordinal);
+    private readonly object cacheLock = new();
+    private long invalidationGeneration;
 
     /// <inheritdoc />
     public Task<GatewayOperationDefinition> GetRequiredAsync(string connectorId, string operationId, Guid environmentId, CancellationToken cancellationToken) =>
@@ -47,32 +51,48 @@ public sealed class PublishedConnectorCatalog(
         try { stamp = await store.GetPublishedStampAsync(connectorId, environmentId, accessContext, cancellationToken).ConfigureAwait(false); }
         catch (GatewayException) { throw; }
         catch (Exception) { throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-UNAVAILABLE", 503, true); }
-        if (stamp is null) { cache.TryRemove(key, out _); throw new GatewayException("BGW-CONNECTOR-NOT-PUBLISHED", 404); }
-        if (!cache.TryGetValue(key, out CacheEntry? entry) || entry.ExpiresAt <= clock.UtcNow || entry.Stamp != stamp)
+        CacheEntry? entry;
+        long generation;
+        lock (cacheLock)
         {
-            PublishedConnectorSnapshot snapshot;
-            try { snapshot = await store.GetPublishedSnapshotAsync(connectorId, environmentId, accessContext, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-BINDING-MISSING", 503); }
-            catch (GatewayException) { throw; }
-            catch (Exception) { throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-UNAVAILABLE", 503, true); }
-            if (snapshot.Stamp != stamp || snapshot.Version.State != ConnectorVersionState.Published) throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-STALE", 503, true);
-            entry = Build(snapshot, operationId);
-            cache[key] = entry;
+            if (stamp is null) { cache.Remove(key); throw new GatewayException("BGW-CONNECTOR-NOT-PUBLISHED", 404); }
+            if (cache.TryGetValue(key, out entry) && entry.ExpiresAt > clock.UtcNow && entry.Stamp == stamp) return entry.Operation;
+            foreach (string expired in cache.Where(item => item.Value.ExpiresAt <= clock.UtcNow).Select(item => item.Key).ToArray()) cache.Remove(expired);
+            generation = invalidationGeneration;
         }
-        if (!entry.Operations.TryGetValue(operationId, out AuthorizedPublishedOperation? operation)) throw new GatewayException("BGW-OPERATION-NOT-FOUND", 404);
-        return operation;
+        PublishedConnectorSnapshot snapshot;
+        try { snapshot = await store.GetPublishedSnapshotAsync(connectorId, environmentId, accessContext, cancellationToken).ConfigureAwait(false) ?? throw new GatewayException("BGW-CONNECTOR-BINDING-MISSING", 503); }
+        catch (GatewayException) { throw; }
+        catch (Exception) { throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-UNAVAILABLE", 503, true); }
+        if (snapshot.Stamp != stamp || snapshot.Version.State != ConnectorVersionState.Published) throw new GatewayException("BGW-CONNECTOR-CONFIGURATION-STALE", 503, true);
+        entry = Build(snapshot, operationId);
+        lock (cacheLock)
+        {
+            // An explicit invalidation must not be undone by a build already in flight.
+            if (generation == invalidationGeneration)
+            {
+                if (!cache.ContainsKey(key) && cache.Count >= MaximumEntries)
+                    cache.Remove(cache.MinBy(item => item.Value.ExpiresAt).Key);
+                cache[key] = entry;
+            }
+        }
+        return entry.Operation;
     }
 
     /// <inheritdoc />
     public void Invalidate(string connectorId)
     {
-        foreach (string key in cache.Keys.Where(value => value.StartsWith(connectorId + "\n", StringComparison.Ordinal)).ToArray()) cache.TryRemove(key, out _);
+        lock (cacheLock)
+        {
+            invalidationGeneration++;
+            foreach (string key in cache.Keys.Where(value => value.StartsWith(connectorId + "\n", StringComparison.Ordinal)).ToArray()) cache.Remove(key);
+        }
     }
 
     private CacheEntry Build(PublishedConnectorSnapshot snapshot, string requiredOperationId)
     {
         ValidatedConnectorDefinition parsed = validator.ParseStored(snapshot.Version.CanonicalJson, snapshot.Version.ChecksumSha256);
         using JsonDocument document = JsonDocument.Parse(parsed.CanonicalJson);
-        Dictionary<string, AuthorizedPublishedOperation> operations = new(StringComparer.Ordinal);
         foreach (JsonElement operation in document.RootElement.GetProperty("operations").EnumerateArray())
         {
             string operationId = operation.GetProperty("operationId").GetString()!;
@@ -103,12 +123,12 @@ public sealed class PublishedConnectorCatalog(
             byte[] extensionConfiguration = operation.TryGetProperty("extensionConfiguration", out JsonElement extension)
                 ? Encoding.UTF8.GetBytes(extension.GetRawText())
                 : "{}"u8.ToArray();
-            operations.Add(operationId, new(
+            return new(snapshot.Stamp, clock.UtcNow.Add(ttl), new(
                 definition,
                 AuthorizedPublishedExecutionStamp.Capture(snapshot, snapshot.Bindings.EnvironmentId, definition, strategyKey),
                 new AuthorizedPublishedExtensionConfiguration(extensionConfiguration)));
         }
-        return new(snapshot.Stamp, clock.UtcNow.Add(ttl), operations);
+        throw new GatewayException("BGW-OPERATION-NOT-FOUND", 404);
     }
 
     private static GatewayAuthenticationKind ParseAuthentication(string kind) => kind switch
@@ -134,5 +154,5 @@ public sealed class PublishedConnectorCatalog(
         return baseUri;
     }
 
-    private sealed record CacheEntry(PublishedConnectorStamp Stamp, DateTimeOffset ExpiresAt, IReadOnlyDictionary<string, AuthorizedPublishedOperation> Operations);
+    private sealed record CacheEntry(PublishedConnectorStamp Stamp, DateTimeOffset ExpiresAt, AuthorizedPublishedOperation Operation);
 }

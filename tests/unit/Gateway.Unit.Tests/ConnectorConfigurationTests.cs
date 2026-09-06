@@ -1105,6 +1105,79 @@ public sealed class ConnectorConfigurationTests
     private static Dictionary<string, ProviderResourceReference> SecretReferences() => new() { ["sample-vendor-api-key"] = SecretReference() };
     private static Dictionary<string, ProviderResourceReference> CertificateReferences() => new() { ["sample-vendor-client-certificate"] = CertificateReference() };
 
+    [Fact]
+    public async Task Published_cache_bounds_installation_scopes_expires_and_invalidates_without_denying_new_scopes()
+    {
+        Fixture fixture = new();
+        using JsonDocument sample = Sample();
+        ConnectorVersionResource version = await fixture.ImportAsync(sample);
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PutBindingsAsync(version.ConnectorId, BindingRequest(fixture.EnvironmentId, "https://vendor.example.test/"), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        PublishedConnectorAccessContext firstScope = new(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "submit");
+        Task<GatewayOperationDefinition> Read(PublishedConnectorAccessContext scope) => fixture.Catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, scope, TestContext.Current.CancellationToken);
+        GatewayOperationDefinition first = await Read(firstScope);
+        Assert.Same(first, await Read(firstScope));
+        for (int index = 0; index < 4096; index++)
+        {
+            fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddMilliseconds(1);
+            _ = await Read(firstScope with { InstallationId = Guid.NewGuid() });
+        }
+        System.Collections.IDictionary entries = Assert.IsAssignableFrom<System.Collections.IDictionary>(typeof(PublishedConnectorCatalog)
+            .GetField("cache", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(fixture.Catalog));
+        Assert.Equal(4096, entries.Count);
+        GatewayOperationDefinition reloaded = await Read(firstScope);
+        Assert.NotSame(first, reloaded);
+        fixture.Clock.UtcNow = fixture.Clock.UtcNow.AddMinutes(6);
+        Assert.NotSame(reloaded, await Read(firstScope));
+        Assert.Single(entries);
+        fixture.Catalog.Invalidate(version.ConnectorId);
+        Assert.Empty(entries);
+        GatewayOperationDefinition[] concurrent = await Task.WhenAll(Enumerable.Range(0, 16).Select(_ => Task.Run(() => Read(firstScope), TestContext.Current.CancellationToken)));
+        Assert.All(concurrent, operation => Assert.Equal("submit", operation.OperationId));
+        Assert.Single(entries);
+        ConnectorVersionRecord stored = (await fixture.Store.ListVersionsAsync(version.ConnectorId, TestContext.Current.CancellationToken))[0];
+        _ = await fixture.Store.RetireAsync(stored.Id, stored.RowVersion, "other-node", Guid.NewGuid(), fixture.Clock.UtcNow, TestContext.Current.CancellationToken);
+        GatewayException denied = await Assert.ThrowsAsync<GatewayException>(() => Read(firstScope));
+        Assert.Equal("BGW-CONNECTOR-NOT-PUBLISHED", denied.Code);
+        Assert.Empty(entries);
+    }
+
+    [Fact]
+    public async Task Published_cache_invalidation_during_snapshot_build_cannot_reinsert_the_old_entry()
+    {
+        Fixture fixture = new();
+        using JsonDocument sample = Sample();
+        ConnectorVersionResource version = await fixture.ImportAsync(sample);
+        version = await fixture.Admin.ValidateStoredAsync(version.ConnectorId, version.Version, version.RowVersion, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PutBindingsAsync(version.ConnectorId, BindingRequest(fixture.EnvironmentId, "https://vendor.example.test/"), "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        _ = await fixture.Admin.PublishAsync(version.ConnectorId, version.Version, version.RowVersion, 0, "tester", Guid.NewGuid(), TestContext.Current.CancellationToken);
+        TaskCompletionSource building = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        using ManualResetEventSlim resume = new();
+        BuildClock clock = new(fixture.Clock.UtcNow, () => { building.SetResult(); resume.Wait(TestContext.Current.CancellationToken); });
+        PublishedConnectorCatalog catalog = new(fixture.Store, fixture.Validator, clock, TimeSpan.FromMinutes(5));
+        Task<GatewayOperationDefinition> pending = Task.Run(() => catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken), TestContext.Current.CancellationToken);
+        try
+        {
+            await building.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            catalog.Invalidate(version.ConnectorId);
+        }
+        finally { resume.Set(); }
+        GatewayOperationDefinition beforeInvalidation = await pending;
+        GatewayOperationDefinition afterInvalidation = await catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken);
+        Assert.NotSame(beforeInvalidation, afterInvalidation);
+        Assert.Same(afterInvalidation, await catalog.GetRequiredAsync(version.ConnectorId, "submit", fixture.EnvironmentId, TestContext.Current.CancellationToken));
+    }
+
+    private sealed class BuildClock(DateTimeOffset now, Action firstRead) : IGatewayClock
+    {
+        private int reads;
+        public DateTimeOffset UtcNow
+        {
+            get { if (Interlocked.Increment(ref reads) == 1) firstRead(); return now; }
+        }
+    }
+
     private sealed class Fixture
     {
         public Fixture(int certificateExpiryDays = 90)
