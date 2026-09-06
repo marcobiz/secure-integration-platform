@@ -1,10 +1,10 @@
 using System.Net.Http.Headers;
 using SecureIntegration.Broker.Core;
 
-namespace SecureIntegration.Broker.Infrastructure.Windows;
+namespace SecureIntegration.Broker.VerticalSlice.Tests;
 
-/// <summary>Calls only a configured Gateway base address and never accepts a client-controlled URL.</summary>
-public sealed class FixedGatewayHttpInvoker : IGatewayInvoker
+/// <summary>Fixture-only transport for the synthetic runtime route, not the production Gateway protocol.</summary>
+internal sealed class FixedGatewayHttpInvoker : IGatewayInvoker
 {
     private readonly HttpClient client;
 

@@ -11,19 +11,17 @@ public sealed class BrokerApplicationService
     private readonly ILocalProtectionProvider localProtection;
     private readonly AeadDataProtector aead;
     private readonly IGatewayInvoker? gateway;
-    private readonly IBrokerAuditSink audit;
     private readonly byte[] entropy;
 
     /// <summary>Whether a fixed central Gateway invoker is configured.</summary>
     public bool GatewayConfigured => gateway is not null;
 
     /// <summary>Creates the application service.</summary>
-    public BrokerApplicationService(ILocalSecretRepository secrets, ILocalProtectionProvider localProtection, AeadDataProtector aead, IBrokerAuditSink audit, string installationId, IGatewayInvoker? gateway = null)
+    public BrokerApplicationService(ILocalSecretRepository secrets, ILocalProtectionProvider localProtection, AeadDataProtector aead, string installationId, IGatewayInvoker? gateway = null)
     {
         this.secrets = secrets ?? throw new ArgumentNullException(nameof(secrets));
         this.localProtection = localProtection ?? throw new ArgumentNullException(nameof(localProtection));
         this.aead = aead ?? throw new ArgumentNullException(nameof(aead));
-        this.audit = audit ?? throw new ArgumentNullException(nameof(audit));
         this.gateway = gateway;
         entropy = SHA256.HashData(Encoding.UTF8.GetBytes("broker-local-secret-v1\n" + installationId));
     }
@@ -55,7 +53,6 @@ public sealed class BrokerApplicationService
         try
         {
             await secrets.SaveAsync(new LocalSecretRecord(secretRef, applicationId, logicalName, parsedClass, operations, protectedValue), cancellationToken).ConfigureAwait(false);
-            await audit.WriteAsync("PutLocalSecret", applicationId, correlationId, true, null, cancellationToken).ConfigureAwait(false);
             return secretRef;
         }
         finally
@@ -72,14 +69,12 @@ public sealed class BrokerApplicationService
         LocalSecretRecord? record = await secrets.FindAsync(secretRef, cancellationToken).ConfigureAwait(false);
         if (record is null)
         {
-            await audit.WriteAsync("DeleteLocalSecret", applicationId, correlationId, true, null, cancellationToken).ConfigureAwait(false);
             return;
         }
 
         if (!string.Equals(record.OwnerApplicationId, applicationId, StringComparison.Ordinal)) throw new BrokerException("secret_not_found", "not_found");
         _ = await secrets.DeleteAsync(secretRef, cancellationToken).ConfigureAwait(false);
 
-        await audit.WriteAsync("DeleteLocalSecret", applicationId, correlationId, true, null, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Protects application data using the active Installation key.</summary>
@@ -103,7 +98,6 @@ public sealed class BrokerApplicationService
         try
         {
             byte[] digest = HMACSHA256.HashData(key, message);
-            await audit.WriteAsync("ComputeHmac", applicationId, correlationId, true, null, cancellationToken).ConfigureAwait(false);
             return digest;
         }
         finally

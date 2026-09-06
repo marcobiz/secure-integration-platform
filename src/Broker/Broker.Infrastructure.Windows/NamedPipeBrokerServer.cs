@@ -14,18 +14,18 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
     private readonly BrokerOptions options;
     private readonly ApplicationAuthorizer authorizer;
     private readonly BrokerRequestDispatcher dispatcher;
-    private readonly IBrokerAuditSink? audit;
+    private readonly IBrokerAuditSink audit;
     private readonly ConcurrentDictionary<int, Task> clients = new();
     private int clientNumber;
     private bool disposed;
 
     /// <summary>Creates the server.</summary>
-    public NamedPipeBrokerServer(BrokerOptions options, ApplicationAuthorizer authorizer, BrokerRequestDispatcher dispatcher, IBrokerAuditSink? audit = null)
+    public NamedPipeBrokerServer(BrokerOptions options, ApplicationAuthorizer authorizer, BrokerRequestDispatcher dispatcher, IBrokerAuditSink audit)
     {
         this.options = options;
         this.authorizer = authorizer;
         this.dispatcher = dispatcher;
-        this.audit = audit;
+        this.audit = audit ?? throw new ArgumentNullException(nameof(audit));
     }
 
     /// <summary>Accepts connections until cancellation.</summary>
@@ -134,11 +134,8 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
             catch (Exception exception) when (exception is IOException or EndOfStreamException or BrokerException or UnauthorizedAccessException)
             {
                 // Connection-level failures deliberately close the pipe without echoing sensitive context.
-                if (audit is not null)
-                {
-                    string errorCode = exception is BrokerException brokerException ? brokerException.Code : "connection_rejected";
-                    await audit.WriteAsync("Connection", auditApplicationId, auditCorrelationId, false, errorCode, CancellationToken.None).ConfigureAwait(false);
-                }
+                string errorCode = exception is BrokerException brokerException ? brokerException.Code : "connection_rejected";
+                await audit.WriteAsync("Connection", auditApplicationId, auditCorrelationId, false, errorCode, CancellationToken.None).ConfigureAwait(false);
             }
         }
     }
@@ -194,10 +191,7 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
             requestCancellation.Dispose();
         }
 
-        if (audit is not null)
-        {
-            await audit.WriteAsync(SafeAuditIdentifier(request.Operation), SafeAuditIdentifier(applicationId), request.CorrelationId, response.Success, response.Error?.Code, CancellationToken.None).ConfigureAwait(false);
-        }
+        await audit.WriteAsync(SafeAuditIdentifier(request.Operation), SafeAuditIdentifier(applicationId), request.CorrelationId, response.Success, response.Error?.Code, CancellationToken.None).ConfigureAwait(false);
 
         await WriteResponseAsync(pipe, frame, response, writeLock, connectionCancellation).ConfigureAwait(false);
     }

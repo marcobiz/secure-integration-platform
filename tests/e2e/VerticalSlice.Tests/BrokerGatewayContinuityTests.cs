@@ -258,8 +258,8 @@ public sealed class BrokerGatewayContinuityTests
         WindowsDpapiProtectionProvider protection = new();
         using FileLocalSecretRepository secrets = new(brokerData.Path);
         using FileDataKeyRepository keys = new(brokerData.Path, protection);
-        BrokerApplicationService service = new(secrets, protection, new AeadDataProtector(keys, options.InstallationId), new NullAudit(), options.InstallationId, invoker);
-        await using NamedPipeBrokerServer server = new(options, new ApplicationAuthorizer(options.Applications), new BrokerRequestDispatcher(service));
+        BrokerApplicationService service = new(secrets, protection, new AeadDataProtector(keys, options.InstallationId), options.InstallationId, invoker);
+        await using NamedPipeBrokerServer server = new(options, new ApplicationAuthorizer(options.Applications), new BrokerRequestDispatcher(service), new NullAudit());
         using CancellationTokenSource stopped = new();
         Task running = server.RunAsync(stopped.Token);
         SecurityIdentifier owner = WindowsIdentity.GetCurrent().Owner!;

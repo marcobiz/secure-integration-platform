@@ -41,7 +41,6 @@ builder.Services.AddSingleton<BrokerApplicationService>(provider => new BrokerAp
     provider.GetRequiredService<ILocalSecretRepository>(),
     provider.GetRequiredService<ILocalProtectionProvider>(),
     provider.GetRequiredService<AeadDataProtector>(),
-    provider.GetRequiredService<IBrokerAuditSink>(),
     brokerOptions.InstallationId,
     provider.GetService<IGatewayInvoker>()));
 builder.Services.AddSingleton<BrokerRequestDispatcher>();

@@ -230,8 +230,8 @@ public sealed class SecureLayerVerticalSliceTests
             FileLocalSecretRepository secrets = new(temporary.Path);
             FileDataKeyRepository keys = new(temporary.Path, protection);
             CapturingAudit audit = new();
-            BrokerApplicationService service = new(secrets, protection, new AeadDataProtector(keys, brokerOptions.InstallationId), audit, brokerOptions.InstallationId, gatewayInvoker);
-            NamedPipeBrokerServer broker = new(brokerOptions, new ApplicationAuthorizer(brokerOptions.Applications), new BrokerRequestDispatcher(service));
+            BrokerApplicationService service = new(secrets, protection, new AeadDataProtector(keys, brokerOptions.InstallationId), brokerOptions.InstallationId, gatewayInvoker);
+            NamedPipeBrokerServer broker = new(brokerOptions, new ApplicationAuthorizer(brokerOptions.Applications), new BrokerRequestDispatcher(service), audit);
             CancellationTokenSource stopped = new();
             Task brokerTask = broker.RunAsync(stopped.Token);
             // The positive test path includes two in-process HTTPS handshakes and has a bounded

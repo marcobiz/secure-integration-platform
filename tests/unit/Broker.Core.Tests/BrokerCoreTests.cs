@@ -91,7 +91,7 @@ public sealed class BrokerCoreTests
     }
 
     private static BrokerApplicationService CreateService(MemorySecrets secrets, string installation) =>
-        new(secrets, new TestProtection(), new AeadDataProtector(new MemoryKeys(), installation), new NullAudit(), installation);
+        new(secrets, new TestProtection(), new AeadDataProtector(new MemoryKeys(), installation), installation);
 
     private sealed class MemorySecrets : ILocalSecretRepository
     {
@@ -126,8 +126,4 @@ public sealed class BrokerCoreTests
         public byte[] Unprotect(byte[] protectedData, byte[] entropy) => Protect(protectedData, entropy);
     }
 
-    private sealed class NullAudit : IBrokerAuditSink
-    {
-        public Task WriteAsync(string operation, string applicationId, Guid correlationId, bool succeeded, string? errorCode, CancellationToken cancellationToken) => Task.CompletedTask;
-    }
 }

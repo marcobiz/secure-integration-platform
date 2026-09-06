@@ -67,7 +67,7 @@ public sealed class StandaloneBrokerTests
         WindowsDpapiProtectionProvider protection = new();
         using FileDataKeyRepository keys = new(directory.Path, protection);
         using FileLocalSecretRepository secrets = new(directory.Path);
-        BrokerRequestDispatcher dispatcher = new(new BrokerApplicationService(secrets, protection, new AeadDataProtector(keys, "install"), new NoAudit(), "install"));
+        BrokerRequestDispatcher dispatcher = new(new BrokerApplicationService(secrets, protection, new AeadDataProtector(keys, "install"), "install"));
         ApplicationPolicy policy = new()
         {
             AllowedOperations = ["ProtectData", "UnprotectData"],
@@ -271,10 +271,6 @@ public sealed class StandaloneBrokerTests
         public byte[] Unprotect(byte[] protectedData, byte[] entropy) => throw new CryptographicException("Synthetic DPAPI profile unavailable");
     }
 
-    private sealed class NoAudit : IBrokerAuditSink
-    {
-        public Task WriteAsync(string operation, string applicationId, Guid correlationId, bool succeeded, string? errorCode, CancellationToken cancellationToken) => Task.CompletedTask;
-    }
 
     private sealed class KeyDirectory : IDisposable
     {
