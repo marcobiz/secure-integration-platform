@@ -89,6 +89,32 @@ try {
     }
     finally { $secret.Dispose() }
 
+    $stderrDefinition = $adoptionAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -ceq 'Get-ChildStderrKind' }, $true)
+    . ([ScriptBlock]::Create($stderrDefinition.Extent.Text))
+    $progressXml = '#< CLIXML' + "`n" + '<Objs xmlns="http://schemas.microsoft.com/powershell/2004/04"><Obj S="progress"><S>synthetic progress</S></Obj></Objs>'
+    Assert ((Get-ChildStderrKind '') -ceq 'empty')
+    Assert ((Get-ChildStderrKind $progressXml) -ceq 'progress-only-clixml')
+    Assert ((Get-ChildStderrKind ($progressXml.Replace('S="progress"', 'S="Error"'))) -ceq 'other')
+    Assert ((Get-ChildStderrKind ($progressXml.Replace('</Objs>', '<S S="Error">synthetic error</S></Objs>'))) -ceq 'other')
+    Assert ((Get-ChildStderrKind '#< CLIXML malformed') -ceq 'other')
+    Assert ((Get-ChildStderrKind ('#< CLIXML' + "`n" + '<!DOCTYPE x [<!ENTITY e SYSTEM "file:///forbidden">]><x>&e;</x>')) -ceq 'other')
+    Assert ((Get-ChildStderrKind ('x' * 32769)) -ceq 'oversized')
+    Write-Output 'CREDENTIAL_CHILD_PROGRESS_ERRORS_MALFORMED_DTD_AND_BOUND=PASS'
+
+    $continuation = $adoptionAst.EndBlock.Statements | Where-Object {
+        $_ -is [Management.Automation.Language.IfStatementAst] -and $_.Clauses[0].Item1.Extent.Text -ceq '$ContinueAccountSid' }
+    Assert ($null -ne $continuation)
+    $ContinueAccountSid = 'S-1-5-21-1-2-3-1001'
+    $existingService = [pscustomobject]@{ State = 'Stopped' }
+    foreach ($existingUser in @($null, [pscustomobject]@{ SID = [pscustomobject]@{ Value = 'foreign' }; Enabled = $false })) {
+        $denied = $false
+        try { & ([ScriptBlock]::Create($continuation.Extent.Text)) | Out-Null }
+        catch { $denied = $_.Exception.Message -ceq 'CREDENTIAL_GATE_CONTINUATION_OWNERSHIP_DENIED' }
+        Assert $denied
+    }
+    Write-Output 'CREDENTIAL_CONTINUATION_FOREIGN_OR_MISSING_ACCOUNT_DENIED=PASS (no state access)'
+
     # Execute the shipped update branch with simulated process/SCM/copy failure.
     # The real settings write must disable initialization before the first copy.
     $settingsPath = Join-Path $root 'appsettings.json'
