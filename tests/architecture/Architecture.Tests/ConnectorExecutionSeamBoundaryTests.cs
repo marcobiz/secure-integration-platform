@@ -328,6 +328,7 @@ public sealed class ConnectorExecutionSeamBoundaryTests
             Path.Combine(Root, "src", "Gateway", "Gateway.Application", "AuthorizedPublishedOperationExpectationContracts.cs"),
             Path.Combine(Root, "src", "Gateway", "Gateway.Application", "PublishedPathTemplate.cs"),
             Path.Combine(Root, "src", "Gateway", "Gateway.Application", "ConnectorConfiguration.cs"),
+            Path.Combine(Root, "src", "Gateway", "Gateway.Application", "PublishedConnectorCatalog.cs"),
             Path.Combine(Root, "tests", "support", "Synthetic.ConnectorExecutionModule", "SyntheticExecutionModule.cs")
         ];
         string[] forbidden =
