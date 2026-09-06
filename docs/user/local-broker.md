@@ -1,12 +1,14 @@
 # Standalone Windows Local Broker
 
-**Status: standalone and continuity software integrated through PR #68; Windows delivery
-candidate `5ad048f169b5ba19d8d058d240a2c5029cce9703` passed the bounded real-service
-checks [recorded below](#windows-delivery-observed-on-september-5-2026).**
-The candidate is not yet integrated. Its non-elevated account is a member of
-Administrators, not a qualified standard non-admin account. The earlier elevated-only
-service result remains attached to `3955fd0c3a5eccf816d44b0faba9a704227baa3d`.
-Neither result establishes a Windows compatibility matrix or disaster recovery.
+**Status: standalone, continuity and Windows delivery software integrated through PR #69.**
+The delivery checks remain attached to software
+`5ad048f169b5ba19d8d058d240a2c5029cce9703` and its non-elevated Administrators-member
+account [recorded below](#windows-delivery-observed-on-september-5-2026).
+The separate application-adoption candidate passed a bounded
+[real standard-account check](#application-credential-adoption-observed-on-september-6-2026).
+The earlier elevated-only service result remains attached to
+`3955fd0c3a5eccf816d44b0faba9a704227baa3d`. These results do not establish a Windows
+compatibility matrix or disaster recovery.
 
 This path uses local `ProtectData`/`UnprotectData`, not the Direct Gateway pilot.
 It needs no Gateway, PostgreSQL, cloud account, external certificate or enrollment.
@@ -289,3 +291,42 @@ Archive SHA-256: `CA10E0E5A430DE8640F2D6AD39654A2A6D6D47AB48190B5C52D7AFFD9EA110
 The checksum is not a signature. Exact software-head CI passed
 [General 7/7](https://github.com/marcobiz/secure-integration-platform/actions/runs/33959817220)
 and [M5/Admin 15/15](https://github.com/marcobiz/secure-integration-platform/actions/runs/33959817820).
+
+## Application credential adoption observed on September 6, 2026
+
+Software `8909ab946a4a0ba446e45a163ff629e7674cec07`, qualified by
+`eng/Test-LocalBrokerCredentialAdoption.ps1` at
+`9ab03c10ceea6b2b5d7b3cd639da5b4689c95c50`, passed on Windows 10 Pro 22H2 x64
+19045.6466 with Windows PowerShell 5.1. The installed self-contained package passed
+its 433-file inventory/hash/runtime check. This is a candidate result, not an
+integrated capability or signed public release.
+
+A real account outside Administrators used the installed sample through the actual
+Windows Service. Six separate sample processes performed: configure a runtime value,
+load it, replace it, load the replacement, reject a save while replacement was locked,
+and load the preserved value. Only ciphertext was saved in the account's private
+profile directory. The existing Installation, configuration and protected keys were
+unchanged. Synthetic input existed only in memory/stdin; no external request was sent
+and no raw credential, envelope or child output was retained as evidence.
+
+The bounded decision ledger preserves the preceding failures:
+
+| Attempt | Observed outcome and next correction |
+|---|---|
+| 1 | Account setup failed before creation because its description exceeded the Windows cmdlet's limit. The gate now validates that bound before setup. |
+| 2 | Setup reached the standard-user process, but its outcome failed the gate. The original evidence cannot establish the child cause; it is not retrospectively classified as success. Bounded child outcome metadata was added. |
+| 3 | The child failed at profile-path resolution before sample/SDK invocation. Accessing `ProcessStartInfo.EnvironmentVariables` had supplied the administrator's environment; leaving it unset lets Windows build the target user's environment. |
+| 4 | PASS with child exit 0, exact pass marker and empty stderr; configure/new execution/replacement, failed-save preservation and unchanged Broker state confirmed. |
+
+The successful attempt continued the existing task-owned installation/account after
+the setup corrections. Its four-second elapsed time is not a clean-install
+time-to-first-call measurement. The account is disabled, its profile unloaded and
+the exact service stopped; binaries, protected state and any task ciphertext remain
+intentionally preserved. This is not uninstall.
+
+Archive SHA-256: `8B46D32FAFD3F1C34911C825B4F4676BDB38A9D5F04A4E587F5FE8C28773D1B5`.
+Metadata-only attempt-4 result SHA-256:
+`9F380495F56CC81483FA7F98E3A188A904D773571DA843518DD3593D36DC0F2E`.
+This proves the sample's local adoption path, not an actual management-app migration,
+CVD closure, external credential change/authentication, machine/profile recovery,
+another Windows target or protection against injected code or Administrator/SYSTEM.

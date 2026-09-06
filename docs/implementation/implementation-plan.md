@@ -1,6 +1,6 @@
 # Implementation plan
 
-Updated: 2026-09-05
+Updated: 2026-09-06
 Planning baseline: `f2bdb2901dfa9ea3c32795b356603a1ecf615575` (PR #69 integrated).
 
 This is the current order of work. [IMPLEMENTATION_STATUS.md](../../IMPLEMENTATION_STATUS.md)
@@ -149,7 +149,8 @@ read to replace, issuer revocation and machine-loss recovery responsibilities.
 Focused tests cover the sequence, input bound, tamper/context/ownership denial and
 failed save. One separate task-owned real Windows standard account (not a member of
 Administrators) closes that precise qualification gap; no repetition of the delivery
-or Gateway laboratory. That real-account result remains pending until observed.
+or Gateway laboratory. That [real-account result passed](../user/local-broker.md#application-credential-adoption-observed-on-september-6-2026)
+on software `8909ab9...` with gate `9ab03c1...`; candidate CI/review remain pending.
 There is no new vault, primitive, proxy, connector or claim that the application
 never receives plaintext, and no CVD closure without integrating the actual adopter.
 

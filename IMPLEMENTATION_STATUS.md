@@ -1,6 +1,6 @@
 # Implementation dashboard
 
-Updated: 2026-09-05
+Updated: 2026-09-06
 Baseline integrated through PR #69:
 `f2bdb2901dfa9ea3c32795b356603a1ecf615575`.
 PR #67 integrated the standalone Local Broker protection and SDK peer-authentication
@@ -23,7 +23,7 @@ distinct levels. The integrated baseline does not replace the exact commit of a 
 | B. Windows / Local Broker | **Integrated — standalone protection and authenticated SDK path** | Exact-main software includes mutual SCM/PID/pipe-owner authentication, explicit local-key lifecycle, application/operation/context policy and the bounded sample. The real-service result remains exact to `3955fd0c...`; ordinary-user, cross-release and machine/profile restore are not qualified. |
 | Broker → Gateway continuity | **Integrated through PR #68 — targeted synthetic E2E PASS** | Existing Broker identity records authoritative renewal lifecycle, renews single-flight, resumes after restart or a lost renewal response and reports uncertain remote outcomes as non-retryable. Evidence is an in-process Windows transport fixture over the real enrollment, authorization, Published Connector and Synthetic Provider services; it is not a Windows Service or PostgreSQL/live qualification. |
 | Windows x64 delivery | **Integrated through PR #69 — bounded real-service path** | Software `5ad048f...`: self-contained package, non-elevated local use, exact two-build envelope compatibility, restart/rejected-update preservation and real Broker → Gateway/PG/Synthetic Provider with outage recovery passed on Windows 10 Pro 22H2 x64 19045.6466. The account is a member of Administrators; baseline ordinary-token failure remains recorded. See the [observed scope](docs/user/local-broker.md#windows-delivery-observed-on-september-5-2026); no universal Windows, live renewal/DR or production claim. |
-| Application credential adoption | **Active candidate — focused tests PASS; standard-account gate pending** | Existing sample uses runtime input, ProtectData/UnprotectData and private ciphertext-only storage; replacement preserves the previous configuration on pre-commit failure. Application-owned per-Installation credential, not vendor secret retrieval or a secretless client. No actual management-app integration/CVD closure is claimed. |
+| Application credential adoption | **Candidate — focused tests and real standard-account gate PASS; CI/review pending** | Software `8909ab9...`, gate `9ab03c1...`: runtime input, private ciphertext-only storage, new-process use, replacement and failed-save preservation passed under a non-Administrators account. [Observed scope](docs/user/local-broker.md#application-credential-adoption-observed-on-september-6-2026). Application-owned per-Installation credential, not vendor secret retrieval, external authentication, a secretless client or actual management-app/CVD closure. |
 | Admin UI/API | **Integrated — guided Connector onboarding** | Five actions across three roles for Installation/enrollment, definition, binding/grant, four-eyes and first invocation. `FULLSTACK-02` proves reload/resume and first invocation on PostgreSQL 18. The pilot uses synthetic identities, not production authentication. |
 | Authentication foundation | **Integrated** | Provider-neutral SOAP/session, JWT/X.509, signing and mTLS primitives; they do not automatically qualify an external service. |
 | C. FSE2 Organization current-spec | **PRODUCT_PATH_OFFLINE_COMPLETE — 14 routes** | Opt-in profile `fse2-organization-current-spec@1.0.0`: contracts, provisioning and bounded responses complete within the [frozen specification](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/connectors/healthcare/fse2/current-spec.md). This does not mean 14 live-qualified routes. |
@@ -79,7 +79,8 @@ Additional target qualification remains separate, without making universal MSI,
 COM/native, all Windows versions, full M9 or enterprise HA/DR prerequisites for the
 first local result. The active credential-adoption slice reuses these results and
 adds only the [small application integration path](deploy/windows/README.md#replace-a-hardcoded-application-credential)
-and its pending real non-Administrators-account proof. The full repository's implementation plan and backlog own this
+and its observed real non-Administrators-account proof on software `8909ab9...` with
+gate `9ab03c1...`. The full repository's implementation plan and backlog own this
 sequence; they do not authorize a new Connector, customer pilot or FSE2 live call.
 
 Local keys belong to the Installation; vendor credentials remain on the Gateway side.
