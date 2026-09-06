@@ -128,10 +128,6 @@ public sealed class ConnectorExecutionSeamHostedIntegrationTests
         RunExternalBridgeLifecycleAsync(runtimeConnection: null, adminConnection: null, requirePostgres: false);
 
     [Fact]
-    public Task Wave1_SEC_external_no_IVT_binding_input_cannot_redirect_Core_writer_and_retained_view_is_denied() =>
-        RunExternalBridgeLifecycleAsync(runtimeConnection: null, adminConnection: null, requirePostgres: false);
-
-    [Fact]
     public async Task Wave1_IT_PRODUCTION_HOST_PostgreSQL_full_external_no_IVT_bridge_lifecycle_uses_real_Published_authority_and_HTTPS()
     {
         string? adminConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");

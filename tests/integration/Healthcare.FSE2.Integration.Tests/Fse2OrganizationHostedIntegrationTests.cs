@@ -149,14 +149,6 @@ public sealed class Fse2OrganizationHostedIntegrationTests
         RunOfficialTestRuntimeContractAsync();
 
     [Fact]
-    public Task FSE2_OFFICIALTEST_authorization_and_integrity_x5c_contain_exactly_the_S1_leaf() =>
-        RunOfficialTestRuntimeContractAsync();
-
-    [Fact]
-    public Task FSE2_OFFICIALTEST_validate_cda_VERIFICA_omits_mode_and_attachment_hash() =>
-        RunOfficialTestRuntimeContractAsync();
-
-    [Fact]
     public async Task FSE2_OFFICIALTEST_versions_1_0_0_and_1_0_1_preserve_distinct_published_contracts()
     {
         VersionPolicyResult historical = await RunVersionPolicyContractAsync(
