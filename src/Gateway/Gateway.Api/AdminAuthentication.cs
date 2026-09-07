@@ -16,6 +16,14 @@ public static class AdminAuthentication
     /// <summary>Configures secure cookies and optional server-side OIDC.</summary>
     public static void AddGatewayAdminAuthentication(this WebApplicationBuilder builder, GatewayAdminOptions options)
     {
+        if (options.DevelopmentPeerAddress is not null &&
+            (!builder.Environment.IsEnvironment("M5Testing") ||
+             !string.Equals(options.Mode, "DevelopmentAuth", StringComparison.Ordinal) ||
+             options.TrustedProxies.Count != 0 ||
+             !IPAddress.TryParse(options.DevelopmentPeerAddress, out IPAddress? peer) ||
+             peer.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork ||
+             !IsPrivateDevelopmentAddress(peer)))
+            throw new InvalidOperationException("Development peer requires M5Testing, DevelopmentAuth, one private IPv4 address and no forwarded proxies.");
         bool production = builder.Environment.IsProduction();
         if (production && !string.Equals(options.Mode, "Oidc", StringComparison.Ordinal))
             throw new InvalidOperationException("Production Admin authentication must use OIDC.");
@@ -138,6 +146,12 @@ public static class AdminAuthentication
         });
     }
 
+    private static bool IsPrivateDevelopmentAddress(IPAddress address)
+    {
+        byte[] octets = address.GetAddressBytes();
+        return octets[0] == 10 || (octets[0] == 172 && octets[1] is >= 16 and <= 31) || (octets[0] == 192 && octets[1] == 168);
+    }
+
     private static Task ApiAwareRedirect(RedirectContext<CookieAuthenticationOptions> context, int apiStatus)
     {
         if (context.Request.Path.StartsWithSegments("/admin/api") || context.Request.Headers.Accept.Any(value => value?.Contains("application/json", StringComparison.OrdinalIgnoreCase) == true))
@@ -166,6 +180,10 @@ public static class AdminAuthentication
 /// <summary>Socket-level boundary for synthetic development authentication.</summary>
 public static class DevelopmentAuthenticationBoundary
 {
+    internal static bool IsAllowedPeer(IPAddress? remoteAddress, IPAddress? configuredPeer) =>
+        IsLoopbackPeer(remoteAddress) || (remoteAddress is not null && configuredPeer is not null &&
+            (remoteAddress.IsIPv4MappedToIPv6 ? remoteAddress.MapToIPv4() : remoteAddress).Equals(configuredPeer));
+
     /// <summary>Returns true only for an actual loopback peer; HTTP headers are deliberately irrelevant.</summary>
     public static bool IsLoopbackPeer(IPAddress? remoteAddress) => remoteAddress is not null && IPAddress.IsLoopback(remoteAddress);
 }

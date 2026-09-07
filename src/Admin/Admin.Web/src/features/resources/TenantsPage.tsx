@@ -1,3 +1,4 @@
+import { formatDate } from '../../i18n/dateTime';
 import { useState } from 'react';
 import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack, TextField, Typography } from '@mui/material';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -15,7 +16,7 @@ import { runtimeLabel } from '../../i18n/runtimeValues';
 type TenantForm = { code: string; displayName: string };
 
 export function TenantsPage() {
-  const { t, i18n } = useTranslation(); const session = useSession(); const client = useQueryClient();
+  const { t } = useTranslation(); const session = useSession(); const client = useQueryClient();
   const [mode, setMode] = useState<'closed' | 'create' | 'edit'>('closed'); const [selected, setSelected] = useState<Tenant>(); const [current, setCurrent] = useState<Tenant>(); const [offset, setOffset] = useState(0);
   const form = useForm<TenantForm>(); useFormDirty(mode !== 'closed' && form.formState.isDirty);
   const query = useQuery({ queryKey: ['tenants', offset], queryFn: () => adminApi.tenants(offset) });
@@ -29,7 +30,7 @@ export function TenantsPage() {
   const beginEdit = (row: Tenant) => { setSelected(row); setCurrent(undefined); form.reset({ code: row.code, displayName: row.displayName }); setMode('edit'); };
   const columns = [
     { key: 'code', label: t('code'), render: (row: Tenant) => row.code }, { key: 'name', label: t('name'), render: (row: Tenant) => row.displayName },
-    { key: 'status', label: t('status'), render: (row: Tenant) => runtimeLabel(t, 'status', row.status) }, { key: 'created', label: t('created'), render: (row: Tenant) => new Intl.DateTimeFormat(i18n.language).format(new Date(row.createdAt)) },
+    { key: 'status', label: t('status'), render: (row: Tenant) => runtimeLabel(t, 'status', row.status) }, { key: 'created', label: t('created'), render: (row: Tenant) => formatDate(row.createdAt) },
     ...(hasRole(session, 'SecurityAdministrator') ? [{ key: 'actions', label: t('action'), render: (row: Tenant) => <Stack direction="row"><Button onClick={() => beginEdit(row)}>{t('edit')}</Button><Button color="error" disabled={row.status !== 'Active'} onClick={() => disable.mutate(row)}>{t('disable')}</Button></Stack> }] : [])
   ];
   return <><PageTitle title={t('tenants')} action={hasRole(session, 'SecurityAdministrator') ? <Button variant="contained" onClick={beginCreate}>{t('addTenant')}</Button> : undefined} />

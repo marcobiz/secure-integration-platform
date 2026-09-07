@@ -139,7 +139,7 @@ export function ConnectorsPage() {
         <PaginationControls page={versions.data} onOffset={setVersionOffset} />
         <VersionComparison connectorId={selected} versions={versions.data?.items ?? []} />
       </>}
-      {canTest && <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mt: 3 }}>
+      {canTest && <Stack direction={{ xs: 'column', md: 'row' }} useFlexGap spacing={2} sx={{ mt: 3, flexWrap: 'wrap', '& > *': { flex: { xs: '0 1 auto', md: '1 1 200px' }, minWidth: 0 } }}>
         {environments.data && <PagedSelector id="connector-test-environment" label={t('environment')} value={environmentId} page={environments.data} onChange={setEnvironment} onOffset={setEnvironmentOffset} itemLabel={value => value.displayName} />}
         <TextField label={t('operation')} value={operationId} onChange={event => setOperation(event.target.value)} />
         <Button variant="outlined" disabled={!environmentId || !operationId} onClick={() => controlledTest.mutate()}>{t('testConnector')}</Button>

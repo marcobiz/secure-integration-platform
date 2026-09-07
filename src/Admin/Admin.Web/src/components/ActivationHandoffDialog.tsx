@@ -2,9 +2,10 @@ import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ProvisionedActivation } from '../api/client';
+import { formatDateTime } from '../i18n/dateTime';
 
 export function ActivationHandoffDialog({ activation, onClose }: { activation?: ProvisionedActivation; onClose: () => void }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const [copied, setCopied] = useState<'id' | 'code'>();
   const copy = async (kind: 'id' | 'code', value: string) => {
     await navigator.clipboard.writeText(value);
@@ -25,7 +26,7 @@ export function ActivationHandoffDialog({ activation, onClose }: { activation?: 
           <Button variant="outlined" onClick={() => activation && copy('code', activation.activationCode)}>{t('copyActivationCode')}</Button>
         </Stack>
         {copied && <Typography role="status" color="success.main">{t(copied === 'id' ? 'activationCodeIdCopied' : 'activationCodeCopied')}</Typography>}
-        <TextField fullWidth label={t('expires')} value={activation ? new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'long' }).format(new Date(activation.expiresAt)) : ''} slotProps={{ htmlInput: { readOnly: true } }} />
+        <TextField fullWidth label={t('expires')} value={activation ? formatDateTime(activation.expiresAt) : ''} slotProps={{ htmlInput: { readOnly: true } }} />
       </Stack>
     </DialogContent>
     <DialogActions><Button onClick={onClose}>{t('close')}</Button></DialogActions>

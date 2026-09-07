@@ -9,7 +9,9 @@ export function SessionProvider({ children, fallback }: { children: ReactNode; f
   useEffect(() => {
     setUnauthorizedHandler(() => {
       clearCsrf();
-      cache.clear();
+      // Keep the session query alive so its 401 can render the login fallback.
+      cache.removeQueries({ predicate: query => query.queryKey[0] !== 'session' });
+      cache.getMutationCache().clear();
       if (!window.location.pathname.startsWith('/admin/login')) window.location.assign('/admin/login');
     });
     return () => setUnauthorizedHandler(undefined);

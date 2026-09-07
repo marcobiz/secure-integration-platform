@@ -1,7 +1,7 @@
 # Backlog ordered by outcome
 
-Updated: 2026-09-06
-Planning baseline: `f2bdb2901dfa9ea3c32795b356603a1ecf615575` (PR #69 integrated).
+Updated: 2026-09-07
+Planning baseline: `de743638a03dcb5b0166a6a7f82285e01f6377e6` (PR #71 integrated).
 
 This is the work queue, not another capability dashboard.
 [IMPLEMENTATION_STATUS.md](../../IMPLEMENTATION_STATUS.md) owns integrated status;
@@ -15,7 +15,8 @@ outcomes and boundaries. Historical slice tables are preserved [below](#historic
 | Integrated through PR #67 | Independently usable Windows Local Broker | Local software and focused tests converged; one exact-candidate elevated service gate passed. | Identified .NET app uses an Installation-local key without receiving it or requiring a Gateway; mutually authenticated IPC and application/operation/context policy; restart and same-candidate update preserve state; tested DPAPI-bounded backup/restore and a small executable sample/guide. |
 | Integrated through PR #68 | Broker → Gateway continuity | Standalone local result integrated; remote fault cases frozen. | In-process evidence: enrollment, Published invocation, same-Installation restart, single-flight renewal, revocation/expiry/grant denial, explicit reconnection and authoritative recovery after interruption, with no automatic replay of uncertain application mutations. |
 | Integrated through PR #69 | Target-specific distribution and operation | Bounded real-service qualification passed on software `5ad048f...`, Windows 10 Pro 22H2 x64 19045.6466. | Package, non-elevated use on an Administrators-member account, exact two-build envelope compatibility, restart/rejected-update and real-service → Gateway/PG outage recovery observed. No broader Windows, live renewal/DR or production claim. |
-| NOW — application credential adoption | Remove per-Installation hardcoding/plaintext storage | User approved extending the existing small sample; no new primitive or proxy. | Runtime input, ciphertext-only save, transient authorized use, new execution and safe replacement; short English guide and real non-Administrators-account proof. Focused tests and account gate PASS on software `8909ab9...` / gate `9ab03c1...`; candidate CI/review pending. |
+| Integrated through PR #70 | Remove per-Installation hardcoding/plaintext storage | User approved extending the existing small sample; no new primitive or proxy. | Runtime input, ciphertext-only save, transient authorized use, new execution and safe replacement; short English guide and real non-Administrators-account proof. Focused tests and account gate PASS on software `8909ab9...` / gate `9ab03c1...`; candidate subsequently reviewed and integrated. |
+| NOW — Admin consolidation | Usable first access, responsive pages, clear dates and bundled operator guide | Fixes and guide available in the local preview. | One converged review/PR, relevant tests and canonical checkout aligned with integrated main; keep the running preview and its data intact. |
 | DEFERRED | Broader surfaces and additional integrations | A concrete requirement or observed defect, explicit scope and an owner; not hypothetical future reuse. | Define a bounded outcome and relevant negatives before promoting work. Use the triggers below; no new framework or laboratory by default. |
 
 A prerequisite is not evidence of completion. Candidate evidence remains distinct from
@@ -63,6 +64,40 @@ Measure adopter steps and useful startup/memory/latency observations through the
 sample, not a new laboratory or invented pass thresholds. Keep historical evidence
 unchanged, avoid unrelated local suites/SBOM duplication and do not mark a candidate
 result integrated or released before it is.
+
+### Pre-alpha usability qualification
+
+Before the first public alpha, qualify the delivered candidate through the public
+entrypoints, once at convergence. A green component suite is not a substitute for
+an adopter being able to enter and use the product. The Admin preview exposed two
+gaps: the browser suite authenticated by API before opening the page, and its
+container shared the Gateway network instead of using the host-published port.
+These tests remain useful but do not prove first access from the adopter's browser.
+
+Use the existing scripts and samples for four short checks; do not build a new lab:
+
+- **Core:** clean candidate, only the documented Docker-first prerequisites,
+  published commands, first successful call and cleanup. The developer path with
+  a preinstalled SDK and `-SkipBuild` is a separate proof.
+- **Admin:** fresh browser session through the host-published URL, UI login,
+  supported guided workflow with distinct roles, reload/resume, logout and login.
+  Inspect the dense pages at desktop and narrow widths; check keyboard access,
+  visible actions, table scrolling and unambiguous dates. Do not pre-login by API
+  or treat axe alone as a layout test.
+- **Recovery:** one representative interrupted setup, repeated supported Stop and
+  a successful new start. Preserve foreign resources; reuse existing failure
+  tests rather than reproducing their entire matrix.
+- **Windows, when distributing the Broker package:** install the actual candidate
+  package on the declared Windows target, use the credential sample from an
+  ordinary account in a new process, restart and verify reuse/replacement. A
+  resumed historical installation is not fresh-package evidence.
+
+Completion requires usable success and recovery without SQL, internal fixture
+setup or manual repairs, plus the applicable existing CI/security gates on the
+converged candidate. Record only the artifact, target, outcome and any unresolved
+blocker. This is a release check, not a full rerun after every UI edit, and it does
+not claim zero defects. Optional FSE2 qualifications remain separate; no new live
+campaign, external accreditation or production access is required by this check.
 
 ## Historical backlog snapshot
 

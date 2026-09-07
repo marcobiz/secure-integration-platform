@@ -1,3 +1,4 @@
+import { formatDateTime } from '../../i18n/dateTime';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -12,7 +13,7 @@ import { runtimeLabel } from '../../i18n/runtimeValues';
 import { PagedSelector } from '../../components/PagedSelector';
 
 export function TenantDataPage({ kind }: { kind: 'grants' | 'audit' }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const session = useSession();
   const [tenant, setTenant] = useState('');
   const [offset, setOffset] = useState(0);
@@ -30,7 +31,7 @@ export function TenantDataPage({ kind }: { kind: 'grants' | 'audit' }) {
   const rows = query.data?.items ?? [];
   const canReadFailureDiagnostics = hasTenantSecurityAdministratorRole(session, tenant);
   const columns = kind === 'grants'
-    ? [{ key: 'installation', label: t('installation'), render: (row: Record<string, unknown>) => String(row.installationId) }, { key: 'connector', label: t('connectors'), render: (row: Record<string, unknown>) => String(row.connectorId) }, { key: 'operation', label: t('operation'), render: (row: Record<string, unknown>) => String(row.operationId) }, { key: 'from', label: t('validFrom'), render: (row: Record<string, unknown>) => new Intl.DateTimeFormat(i18n.language).format(new Date(String(row.validFrom))) }]
+    ? [{ key: 'installation', label: t('installation'), render: (row: Record<string, unknown>) => String(row.installationId) }, { key: 'connector', label: t('connectors'), render: (row: Record<string, unknown>) => String(row.connectorId) }, { key: 'operation', label: t('operation'), render: (row: Record<string, unknown>) => String(row.operationId) }, { key: 'from', label: t('validFrom'), render: (row: Record<string, unknown>) => formatDateTime(String(row.validFrom)) }]
     : [{ key: 'action', label: t('action'), render: (row: Record<string, unknown>) => runtimeLabel(t, 'auditAction', row.action) }, { key: 'target', label: t('target'), render: (row: Record<string, unknown>) => `${String(row.targetType)} · ${String(row.targetId)}` }, { key: 'outcome', label: t('outcome'), render: (row: Record<string, unknown>) => runtimeLabel(t, 'auditOutcome', row.outcome) }, { key: 'reason', label: t('reason'), render: (row: Record<string, unknown>) => runtimeLabel(t, 'reason', row.reasonCode) }, ...(canReadFailureDiagnostics ? [{ key: 'failureDiagnostics', label: t('safeFailureDiagnostics'), render: (row: Record<string, unknown>) => <SafeFailureDiagnosticsCell gatewayStatus={String(row.reasonCode)} diagnostics={row.failureDiagnostics as SafeFailureDiagnostics | undefined} /> }] : [])];
   return <>
     <PageTitle title={t(kind)} />

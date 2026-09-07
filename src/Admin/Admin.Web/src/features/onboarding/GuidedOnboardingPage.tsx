@@ -1,3 +1,4 @@
+import { formatDate } from '../../i18n/dateTime';
 import { Alert, Box, Button, Card, CardContent, Chip, FormControl, InputLabel, MenuItem, Select, Stack, Typography } from '@mui/material';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
@@ -231,7 +232,7 @@ export function GuidedOnboardingPage() {
           <PagedSelector id="guided-application" label={t('application')} value={applicationId} page={applications.data!} onChange={value => { setApplicationId(value); replaceTarget({ application: value }); }} onOffset={setApplicationOffset} itemLabel={item => item.displayName} />
           <PagedSelector id="guided-environment" label={t('environment')} value={environmentId} page={environments.data!} onChange={selectEnvironment} onOffset={setEnvironmentOffset} itemLabel={item => item.displayName} />
         </Stack>
-        {tenantId && installations.data && <PagedSelector id="guided-installation" label={t('installation')} value={installationId} page={installations.data} selectedItem={selectedInstallation} onChange={selectInstallation} onOffset={setInstallationOffset} itemLabel={item => `${item.installationKind} · ${item.status} · ${item.createdAt.slice(0, 10)}`} />}
+        {tenantId && installations.data && <PagedSelector id="guided-installation" label={t('installation')} value={installationId} page={installations.data} selectedItem={selectedInstallation} onChange={selectInstallation} onOffset={setInstallationOffset} itemLabel={item => `${item.installationKind} · ${item.status} · ${formatDate(item.createdAt)}`} />}
         <PagedSelector id="guided-connector" label={t('connector')} value={connectorId} page={connectors.data!} onChange={selectConnector} onOffset={setConnectorOffset} itemLabel={item => item.displayName} itemValue={item => item.connectorId} />
         {connectorId && versions.data && <PagedSelector id="guided-version" label={t('version')} value={version} page={versions.data} selectedItem={currentVersion ?? undefined} onChange={selectVersion} onOffset={setVersionOffset} itemLabel={item => `${item.version} · ${item.state}`} itemValue={item => item.version} />}
       </Stack>

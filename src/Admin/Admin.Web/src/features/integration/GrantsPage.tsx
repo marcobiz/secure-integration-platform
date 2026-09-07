@@ -1,3 +1,4 @@
+import { formatDateTime } from '../../i18n/dateTime';
 import { Button, Card, CardContent, Stack, TextField, Typography } from '@mui/material';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -12,7 +13,7 @@ import { PagedSelector } from '../../components/PagedSelector';
 import { useFormDirty } from '../../navigation/DirtyStateContext';
 
 export function GrantsPage() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const session = useSession();
   const cache = useQueryClient();
   const [tenant, setTenant] = useState('');
@@ -36,8 +37,8 @@ export function GrantsPage() {
   return <>
     <PageTitle title={t('grants')} />
     <PagedSelector id="grants-tenant" label={t('selectTenant')} value={tenant} page={tenants.data!} onChange={value => { setTenant(value); setInstallation(''); setInstallationOffset(0); setOffset(0); }} onOffset={setTenantOffset} itemLabel={value => value.displayName} />
-    {canAdmin && tenant && installations.data && <Card sx={{ my: 3 }}><CardContent><Typography variant="h2" sx={{ mb: 2 }}>{t('addGrant')}</Typography><Stack direction={{ xs: 'column', md: 'row' }} spacing={2}><PagedSelector id="grant-installation" label={t('installation')} value={installationId} page={installations.data} onChange={setInstallation} onOffset={setInstallationOffset} itemLabel={value => value.id} /><TextField label={t('connectors')} value={connectorId} onChange={event => { setConnector(event.target.value); setConnectorVersion(''); setVersionOffset(0); }} />{versions.data && <PagedSelector id="grant-connector-version" label={t('version')} value={connectorVersion} page={versions.data} onChange={setConnectorVersion} onOffset={setVersionOffset} itemLabel={value => `${value.version} · ${value.state}`} itemValue={value => value.version} />}<TextField label={t('operation')} value={operationId} onChange={event => setOperation(event.target.value)} /><Button variant="contained" disabled={!installationId || !connectorId || !connectorVersion || !operationId} onClick={() => create.mutate()}>{t('create')}</Button></Stack></CardContent></Card>}
-    {query.isPending && tenant ? <LoadingState /> : query.error ? <ErrorState error={query.error} retry={() => void query.refetch()} /> : <><DataTable rows={query.data?.items ?? []} label={t('grants')} columns={[{ key: 'installation', label: t('installation'), render: row => row.installationId }, { key: 'connector', label: t('connectors'), render: row => row.connectorId }, { key: 'operation', label: t('operation'), render: row => row.operationId }, { key: 'from', label: t('validFrom'), render: row => new Intl.DateTimeFormat(i18n.language).format(new Date(row.validFrom)) }]} />{query.data && <PaginationControls page={query.data} onOffset={setOffset} />}</>}
+    {canAdmin && tenant && installations.data && <Card sx={{ my: 3 }}><CardContent><Typography variant="h2" sx={{ mb: 2 }}>{t('addGrant')}</Typography><Stack direction={{ xs: 'column', md: 'row' }} useFlexGap spacing={2} sx={{ flexWrap: 'wrap', '& > *': { flex: { xs: '0 1 auto', md: '1 1 200px' }, minWidth: 0 } }}><PagedSelector id="grant-installation" label={t('installation')} value={installationId} page={installations.data} onChange={setInstallation} onOffset={setInstallationOffset} itemLabel={value => value.id} /><TextField label={t('connectors')} value={connectorId} onChange={event => { setConnector(event.target.value); setConnectorVersion(''); setVersionOffset(0); }} />{versions.data && <PagedSelector id="grant-connector-version" label={t('version')} value={connectorVersion} page={versions.data} onChange={setConnectorVersion} onOffset={setVersionOffset} itemLabel={value => `${value.version} · ${value.state}`} itemValue={value => value.version} />}<TextField label={t('operation')} value={operationId} onChange={event => setOperation(event.target.value)} /><Button variant="contained" disabled={!installationId || !connectorId || !connectorVersion || !operationId} onClick={() => create.mutate()}>{t('create')}</Button></Stack></CardContent></Card>}
+    {query.isPending && tenant ? <LoadingState /> : query.error ? <ErrorState error={query.error} retry={() => void query.refetch()} /> : <><DataTable rows={query.data?.items ?? []} label={t('grants')} columns={[{ key: 'installation', label: t('installation'), render: row => row.installationId }, { key: 'connector', label: t('connectors'), render: row => row.connectorId }, { key: 'operation', label: t('operation'), render: row => row.operationId }, { key: 'from', label: t('validFrom'), render: row => formatDateTime(row.validFrom) }]} />{query.data && <PaginationControls page={query.data} onOffset={setOffset} />}</>}
     {create.error && <ErrorState error={create.error} />}
   </>;
 }

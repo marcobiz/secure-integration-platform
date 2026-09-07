@@ -1,6 +1,9 @@
 import type { enTranslation } from './en';
 
 export const itTranslation = {
+  documentation: 'Documentazione', guideLanguage: 'Lingua della guida: inglese. Navigazione disponibile in inglese e italiano.', guideContents: 'Indice', guideOpenPage: 'Apri pagina: {{page}}', guideBackToContents: 'Torna all’indice',
+  installationsDescription: 'Gestisci le identità delle installazioni e il loro accesso alle applicazioni.',
+  installationsSelectTenantHelp: 'Scegli un tenant per visualizzare le sue installazioni. Applicazione e ambiente sono richiesti solo per creare un’installazione.',
   product: 'Secure Integration Platform', dashboard: 'Panoramica', resources: 'Risorse', integration: 'Integrazione', operations: 'Operazioni',
   tenants: 'Tenant', applications: 'Applicazioni', installations: 'Installazioni', connectors: 'Connettori', connector: 'Connettore', bindings: 'Binding', grants: 'Autorizzazioni', approvals: 'Approvazioni', audit: 'Audit', health: 'Stato', access: 'Controllo accessi',
   language: 'Lingua', theme: 'Tema', logout: 'Esci', loginTitle: 'Accesso amministrativo', loginHelp: 'Usa il provider di identità configurato. Gli utenti sintetici seguenti esistono soltanto in Development locale.', oidcLogin: 'Continua con il provider di identità',

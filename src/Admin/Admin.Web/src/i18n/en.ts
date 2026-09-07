@@ -1,4 +1,7 @@
 export const enTranslation = {
+  documentation: 'Documentation', guideLanguage: 'Guide language: English. Navigation is available in English and Italian.', guideContents: 'Contents', guideOpenPage: 'Open page: {{page}}', guideBackToContents: 'Back to contents',
+  installationsDescription: 'Manage installation identities and their application access.',
+  installationsSelectTenantHelp: 'Choose a tenant to view its installations. Application and environment are required only when creating an installation.',
   product: 'Secure Integration Platform', dashboard: 'Dashboard', resources: 'Resources', integration: 'Integration', operations: 'Operations',
   tenants: 'Tenants', applications: 'Applications', installations: 'Installations', connectors: 'Connectors', connector: 'Connector', bindings: 'Bindings', grants: 'Grants', approvals: 'Approvals', audit: 'Audit', health: 'Health', access: 'Access control',
   language: 'Language', theme: 'Theme', logout: 'Sign out', loginTitle: 'Administrative access', loginHelp: 'Use your configured identity provider. The synthetic users below exist only in local Development.', oidcLogin: 'Continue with identity provider',

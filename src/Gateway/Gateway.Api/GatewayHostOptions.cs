@@ -127,6 +127,8 @@ public sealed class GatewayAdminOptions
     public bool RequireFourEyes { get; init; } = true;
     /// <summary>Explicit proxy IP addresses allowed to supply forwarded headers.</summary>
     public List<string> TrustedProxies { get; init; } = [];
+    /// <summary>Exact Docker host peer for the loopback-published M5Testing preview only; never a forwarded identity.</summary>
+    public string? DevelopmentPeerAddress { get; init; }
     /// <summary>Provider-neutral OIDC client configuration.</summary>
     public GatewayOidcOptions Oidc { get; init; } = new();
 }

@@ -11,6 +11,11 @@ cd secure-integration-platform
 
 Open `https://localhost:18443/admin/` and accept only the per-run synthetic CA in the documented local environment. DevelopmentAuth offers fixed synthetic identities: viewer, editor, approver, operator and security-admin. It is disabled by default outside this Compose overlay and Production refuses to start with it enabled.
 
+The M5 overlay publishes HTTPS on host loopback and explicitly authorizes its Docker
+bridge host peer (`172.29.44.1`) for DevelopmentAuth. This exact peer setting is accepted
+only in `M5Testing`, cannot be combined with forwarded proxies, and never trusts browser
+headers. Other container peers remain denied. Do not expose this preview on a LAN.
+
 `Workflow` starts the production-build stack and then runs the deterministic browser/runtime gate. It imports a dedicated `2.0.0` Draft, validates it, creates its complete binding revision, requests approval, proves self-approval is denied, approves as a distinct principal, publishes, grants the already enrolled synthetic installation, invokes that exact published version through authenticated mTLS/PoP runtime, verifies the sanitized vendor response and correlated audit, retires the version, and proves a subsequent invocation is denied. The pre-provisioned `1.0.0` sample therefore cannot short-circuit the documented workflow.
 
 `Start` remains available only when an operator wants to inspect the UI manually. It creates a synthetic Installation and consumes its one-time activation code through the real enrollment challenge and ECDSA proof-of-possession client. Raw activation material remains only under the ignored `.artifacts` tree and is never printed.

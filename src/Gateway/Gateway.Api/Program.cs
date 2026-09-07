@@ -75,6 +75,7 @@ if (string.Equals(hostOptions.Admin.Mode, "Oidc", StringComparison.Ordinal) && !
 if (!hostOptions.Admin.RequireFourEyes && !developmentApiKeyCompatibility && !explicitLoopbackDevelopment)
     throw new InvalidOperationException("Gateway Admin four-eyes approval can be disabled only for an explicit loopback Development mode.");
 builder.AddGatewayAdminAuthentication(hostOptions.Admin);
+IPAddress? developmentPeer = hostOptions.Admin.DevelopmentPeerAddress is null ? null : IPAddress.Parse(hostOptions.Admin.DevelopmentPeerAddress);
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -565,7 +566,7 @@ app.MapGet("/admin/auth/csrf", (HttpContext context, IAntiforgery antiforgery) =
 app.MapPost("/admin/auth/development/login", async (DevelopmentLoginRequest request, HttpContext context, IAntiforgery antiforgery, IAdminSecurityStore securityStore, CancellationToken cancellationToken) =>
 {
     await antiforgery.ValidateRequestAsync(context).ConfigureAwait(false);
-    if ((!app.Environment.IsDevelopment() && !app.Environment.IsEnvironment("Testing") && !app.Environment.IsEnvironment("M5Testing")) || !string.Equals(hostOptions.Admin.Mode, "DevelopmentAuth", StringComparison.Ordinal) || !DevelopmentAuthenticationBoundary.IsLoopbackPeer(context.Connection.RemoteIpAddress))
+    if ((!app.Environment.IsDevelopment() && !app.Environment.IsEnvironment("Testing") && !app.Environment.IsEnvironment("M5Testing")) || !string.Equals(hostOptions.Admin.Mode, "DevelopmentAuth", StringComparison.Ordinal) || !DevelopmentAuthenticationBoundary.IsAllowedPeer(context.Connection.RemoteIpAddress, developmentPeer))
         throw new GatewayException("BGW-ADMIN-DEVELOPMENT-AUTH-DISABLED", 404);
     (string Subject, AdminRole[] Roles) user = request.UserName switch
     {

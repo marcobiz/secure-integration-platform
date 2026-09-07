@@ -1,3 +1,4 @@
+import { formatDateTime } from '../../i18n/dateTime';
 import { Alert, Button, Card, CardContent, Chip, Divider, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
@@ -45,7 +46,7 @@ export function ApprovalsPage() {
   return <>
     <PageTitle title={t('approvals')} />
     <Card><CardContent>
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} useFlexGap spacing={2} sx={{ flexWrap: 'wrap', alignItems: { sm: 'flex-start' }, '& > .MuiFormControl-root': { flex: { xs: '0 1 auto', sm: '1 1 200px' }, minWidth: 0 } }}>
         <TextField label={t('connectors')} value={connectorId} onChange={event => { setConnector(event.target.value); setOffset(0); }} />
         <TextField label={t('version')} value={version} onChange={event => { setVersion(event.target.value); setOffset(0); }} />
         {canDecide && <TextField label={t('decisionComment')} value={comment} slotProps={{ htmlInput: { maxLength: 500 } }} onChange={event => setComment(event.target.value)} />}
@@ -103,7 +104,7 @@ export function ApprovalsPage() {
                 <Typography><strong>{t('catalogRevision')}:</strong> {certificate.catalogRevision}; <strong>{t('publicMetadataRevision')}:</strong> {certificate.publicMetadataRevision}; <strong>{t('bindingRevision')}:</strong> {certificate.bindingRevision}</Typography>
                 <Typography><strong>{t('fingerprint')}:</strong> <code>{certificate.publicFingerprintSha256}</code></Typography>
                 <Typography><strong>{t('certificateSubject')}:</strong> {certificate.publicSubject}; <strong>{t('certificateIssuer')}:</strong> {certificate.publicIssuer}</Typography>
-                <Typography><strong>{t('certificateValidity')}:</strong> {certificate.notBefore} – {certificate.expiresAt}; <strong>{t('publicKey')}:</strong> {certificate.keyAlgorithm} {certificate.publicKeySize}</Typography>
+                <Typography><strong>{t('certificateValidity')}:</strong> {formatDateTime(certificate.notBefore)} – {formatDateTime(certificate.expiresAt)}; <strong>{t('publicKey')}:</strong> {certificate.keyAlgorithm} {certificate.publicKeySize}</Typography>
                 <Typography><strong>{t('catalogChecksum')}:</strong> <code>{certificate.catalogChecksumSha256}</code></Typography>
                 <Typography><strong>{t('resourceBindingChecksum')}:</strong> <code>{certificate.resourceBindingChecksumSha256}</code></Typography>
                 <Typography><strong>{t('bindingChecksum')}:</strong> <code>{certificate.bindingChecksumSha256}</code></Typography>

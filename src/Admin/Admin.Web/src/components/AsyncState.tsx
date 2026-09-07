@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react';
 import { ApiProblem } from '../api/client';
 
 export function LoadingState() { const { t } = useTranslation(); return <Box role="status" sx={{ p: 4, textAlign: 'center' }}><CircularProgress aria-label={t('loading')} /><Typography sx={{ mt: 2 }}>{t('loading')}</Typography></Box>; }
-export function EmptyState() { const { t } = useTranslation(); return <Box sx={{ p: 4, textAlign: 'center' }}><Typography color="text.secondary">{t('empty')}</Typography></Box>; }
+export function EmptyState() { const { t } = useTranslation(); return <Box sx={{ px: 3, py: 6, textAlign: 'center', border: 1, borderColor: 'divider', borderRadius: 2, bgcolor: 'background.paper' }}><Typography color="text.secondary">{t('empty')}</Typography></Box>; }
 export function ErrorState({ error, retry }: { error: unknown; retry?: () => void }) {
   const { t } = useTranslation(); const problem = error instanceof ApiProblem ? error : undefined;
   const summary = useRef<HTMLDivElement>(null);

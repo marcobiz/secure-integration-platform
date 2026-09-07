@@ -33,7 +33,7 @@ The stable principal is `(issuer, subject)`; email and display name are not keys
 
 ## Consequences
 
-M5 four-eyes approval is bound both to the canonical ConnectorVersion checksum and to the digest of endpoint/secret/certificate revisions. PostgreSQL publication verifies and locks both in the same transaction; the actor who created a binding revision cannot approve that bundle. `DevelopmentAuth` checks the socket peer using loopback `RemoteIpAddress`, and local Compose exposes the Gateway only on `127.0.0.1`; Host and client-controlled forwarded headers are not authority.
+M5 four-eyes approval is bound both to the canonical ConnectorVersion checksum and to the digest of endpoint/secret/certificate revisions. PostgreSQL publication verifies and locks both in the same transaction; the actor who created a binding revision cannot approve that bundle. `DevelopmentAuth` checks the actual socket peer: loopback by default, with an optional exact private IPv4 Docker bridge host address only in `M5Testing`. The exception requires `DevelopmentAuth` and no configured forwarded proxies. Local Compose exposes the Gateway only on `127.0.0.1`; Host and client-controlled forwarded headers are not authority. The exception is not a production or LAN authentication mode.
 
 - The local quick start requires neither Azure nor cloud credentials.
 - Deployment Packs can integrate Entra or another OIDC provider without changing Connector contracts.

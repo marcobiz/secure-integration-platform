@@ -8,6 +8,8 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: M5Testing
       Gateway__Admin__Mode: DevelopmentAuth
+      # Host connections to this loopback-published port arrive from the M3 bridge gateway.
+      Gateway__Admin__DevelopmentPeerAddress: 172.29.44.1
       Gateway__Admin__RequireFourEyes: "true"
       Gateway__EndpointResources__0__EndpointId: m3-sample-vendor
       Gateway__EndpointResources__0__DisplayName: M3 synthetic vendor

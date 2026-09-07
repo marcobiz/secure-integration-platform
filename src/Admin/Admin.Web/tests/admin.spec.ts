@@ -67,7 +67,15 @@ test('UI-MOCK-26 dirty binding form can stay or explicitly discard through route
 test('UI-MOCK-27 binding editor selects server catalog resources and atomically sends structured maps with If-Match', async ({ page }) => { let observed: { body?: string; ifMatch?: string | null } = {}; await page.route('**/admin/api/v1/connectors/sample-secure-service/bindings', async route => { if (route.request().method() === 'PUT') { observed = { body: route.request().postData() ?? undefined, ifMatch: route.request().headers()['if-match'] }; await route.fulfill({ json: { revision: 5 } }); } else await route.fallback(); }); await page.getByRole('link', { name: 'Bindings' }).click(); await page.getByLabel('Connectors').fill('sample-secure-service'); await page.getByLabel('Version').fill('1.0.0'); await page.getByLabel('Environment').fill('50000000-0000-0000-0000-000000000001'); await expect(page.getByRole('table', { name: 'Available catalog resources' })).toContainText('vendor-api-key'); await expect(page.getByText('CCCCCCCCCCCC')).toBeVisible(); await page.getByLabel('Endpoint bindings (JSON object)').fill('{"primary":"https://vendor.example","backup":"https://backup.example"}'); await page.getByLabel('Secret catalog resources (JSON object)').fill('{"apiKey":{"providerId":"synthetic","resourceId":"vendor-api-key","resourceType":"Secret"}}'); await page.getByLabel('Certificate catalog resources (JSON object)').fill('{"mtls":{"providerId":"synthetic","resourceId":"vendor-client-certificate","resourceType":"ClientCertificate","publicMetadataRevision":1}}'); await page.getByRole('button', { name: 'Save' }).click(); await expect(page.getByRole('status')).toHaveText('Saved.'); expect(observed.ifMatch).toBe('"4"'); const body = JSON.parse(observed.body ?? '{}'); expect(body.endpoints).toEqual({ backup: 'https://backup.example', primary: 'https://vendor.example' }); expect(body.secretResources.apiKey).toMatchObject({ providerId: 'synthetic', resourceId: 'vendor-api-key', resourceType: 'Secret' }); });
 test('UI-MOCK-28 operational dialogs diffs filters and pagination have no serious accessibility violations', async ({ page }) => {
   test.setTimeout(90_000);
-  const verify = async (surface: string) => { const results = await new AxeBuilder({ page }).analyze(); expect(results.violations.filter(value => ['critical', 'serious'].includes(value.impact ?? '')), surface).toEqual([]); };
+  const verify = async (surface: string) => {
+    const dialog = page.getByRole('dialog');
+    if (await dialog.count()) await dialog.evaluate(async element => {
+      // Contrast is meaningful on the settled surface, not its entry fade.
+      await Promise.allSettled(element.parentElement!.getAnimations().map(animation => animation.finished));
+    });
+    const results = await new AxeBuilder({ page }).analyze();
+    expect(results.violations.filter(value => ['critical', 'serious'].includes(value.impact ?? '')), surface).toEqual([]);
+  };
   await page.getByRole('link', { name: 'Approvals' }).click(); await expect(page.getByRole('heading', { name: 'Approvals' })).toBeVisible(); await verify('approval workflow');
   await page.getByRole('link', { name: 'Installations' }).click(); await page.getByLabel('Select a tenant').click(); await page.getByRole('option', { name: 'Sample tenant' }).click(); await page.getByLabel('Application').click(); await page.getByRole('option', { name: 'Sample application' }).click(); await page.getByLabel('Environment').click(); await page.getByRole('option', { name: 'Local' }).click(); await page.getByRole('button', { name: 'Create installation' }).click(); await expect(page.getByRole('dialog')).toBeVisible(); await verify('activation code dialog'); await page.getByRole('button', { name: 'Close' }).click();
   await page.getByRole('link', { name: 'Audit' }).click(); await page.getByLabel('Select a tenant').click(); await page.getByRole('option', { name: 'Sample tenant' }).click(); await expect(page.getByRole('heading', { name: 'Audit' })).toBeVisible(); await verify('audit filters');
@@ -115,4 +123,75 @@ test('UI-MOCK-38 guided onboarding starts from readable selectors and exposes on
   await expect(page.getByRole('heading', { name: /^5\./ })).toHaveCount(0);
   const axe = await new AxeBuilder({ page }).analyze();
   expect(axe.violations.filter(value => ['critical', 'serious'].includes(value.impact ?? ''))).toEqual([]);
+});
+
+test('UI-MOCK-40 anonymous first access reaches login and completes the browser login flow', async ({ page }) => {
+  let authenticated = false;
+  await page.unroute('**/admin/auth/me');
+  await page.route('**/admin/auth/me', route => authenticated
+    ? route.fulfill({ json: { id: '20000000-0000-0000-0000-000000000001', displayName: 'Security administrator', roles: [{ role: 'SecurityAdministrator', tenantId: null }] } })
+    : route.fulfill({ status: 401, json: { code: 'BGW-ADMIN-AUTHENTICATION-REQUIRED' } }));
+  await page.route('**/admin/auth/development/login', route => {
+    expect(route.request().postDataJSON()).toEqual({ userName: 'security-admin' });
+    authenticated = true;
+    return route.fulfill({ json: {} });
+  });
+  await page.goto('./login');
+  await expect(page.getByRole('heading', { name: 'Administrative access' })).toBeVisible();
+  await expect(page.getByRole('status')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Security administrator', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
+});
+
+for (const viewport of [{ width: 1440, height: 1000 }, { width: 1024, height: 900 }, { width: 390, height: 844 }]) {
+  test(`UI-MOCK-41 installation controls and table stay within the ${viewport.width}px viewport`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await page.goto('./installations');
+    await expect(page.getByRole('heading', { name: 'Installations', exact: true })).toBeVisible();
+    await expect(page.getByText('Choose a tenant to view its installations.', { exact: false })).toBeVisible();
+    await expect(page.getByTestId('tenant-installations-pagination')).toHaveCount(0);
+    await expect(page.getByText('No records found.')).toHaveCount(0);
+    const main = await page.locator('main').boundingBox();
+    expect(main?.x).toBe(viewport.width >= 900 ? 248 : 0);
+    for (const control of [...await page.locator('main').getByRole('combobox').all(), page.getByRole('button', { name: 'Create installation' })]) {
+      const box = await control.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(main!.x);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+    await page.screenshot({ path: testInfo.outputPath(`installations-${viewport.width}.png`), fullPage: true });
+
+    await page.getByRole('combobox', { name: 'Select a tenant' }).click();
+    await page.getByRole('option', { name: 'Sample tenant' }).click();
+    await expect(page.locator('[role="listbox"]')).toHaveCount(0);
+    const table = page.getByRole('table', { name: 'Installations' });
+    await expect(table).toContainText('05 Aug 2026, 00:00:00 UTC');
+    await expect(table).toContainText('Sample application');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+    await page.screenshot({ path: testInfo.outputPath(`installations-table-${viewport.width}.png`), fullPage: true });
+
+    if (viewport.width < 900) {
+      await page.getByRole('button', { name: 'Open navigation' }).click();
+      await page.getByRole('link', { name: 'Dashboard', exact: true }).click();
+      await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+      await expect(page.getByRole('link', { name: 'Installations', exact: true })).not.toBeVisible();
+    }
+  });
+}
+
+test('UI-MOCK-42 shared pages fit a compact desktop and dark theme remains accessible', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1024, height: 900 });
+  for (const route of ['applications', 'tenants', 'onboarding', 'connectors', 'bindings', 'grants', 'approvals', 'access', 'audit', 'health']) {
+    await page.goto(`./${route}`);
+    await expect(page.locator('main h1')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth), route).toBeLessThanOrEqual(1024);
+  }
+  await page.goto('./installations');
+  await page.getByLabel('Theme').click();
+  await page.getByRole('option', { name: 'Dark', exact: true }).click();
+  const axe = await new AxeBuilder({ page }).analyze();
+  expect(axe.violations.filter(value => ['critical', 'serious'].includes(value.impact ?? ''))).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath('installations-dark.png'), fullPage: true });
 });

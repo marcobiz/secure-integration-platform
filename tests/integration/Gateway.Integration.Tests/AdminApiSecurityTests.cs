@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -965,6 +966,38 @@ public sealed class AdminApiSecurityTests
     [InlineData("203.0.113.10", false)]
     public void M5_UT_DevelopmentAuth_uses_actual_socket_peer_only(string address, bool expected) =>
         Assert.Equal(expected, DevelopmentAuthenticationBoundary.IsLoopbackPeer(System.Net.IPAddress.Parse(address)));
+
+    [Theory]
+    [InlineData("172.29.44.1", true)]
+    [InlineData("::ffff:172.29.44.1", true)]
+    [InlineData("127.0.0.1", true)]
+    [InlineData("::1", true)]
+    [InlineData("172.29.44.5", false)]
+    [InlineData("192.0.2.25", false)]
+    public void M5_UT_DevelopmentAuth_compose_peer_is_exact_and_server_owned(string address, bool expected)
+    {
+        DefaultHttpContext context = new();
+        context.Connection.RemoteIpAddress = System.Net.IPAddress.Parse(address);
+        context.Request.Headers["X-Forwarded-For"] = "172.29.44.1";
+        Assert.Equal(expected, DevelopmentAuthenticationBoundary.IsAllowedPeer(context.Connection.RemoteIpAddress, System.Net.IPAddress.Parse("172.29.44.1")));
+    }
+
+    [Theory]
+    [InlineData("Production", "172.29.44.1", false, false)]
+    [InlineData("Development", "172.29.44.1", false, false)]
+    [InlineData("Testing", "172.29.44.1", false, false)]
+    [InlineData("M5Testing", "172.29.44.1", true, false)]
+    [InlineData("M5Testing", "172.29.44.0/28", false, false)]
+    [InlineData("M5Testing", "0.0.0.0", false, false)]
+    [InlineData("M5Testing", "203.0.113.10", false, false)]
+    [InlineData("M5Testing", "172.29.44.1", false, true)]
+    public void M5_UT_DevelopmentAuth_compose_peer_is_test_only_without_forwarding(string environment, string peer, bool forwarded, bool allowed)
+    {
+        WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = environment });
+        GatewayAdminOptions options = new() { Mode = "DevelopmentAuth", DevelopmentPeerAddress = peer, TrustedProxies = forwarded ? ["172.29.44.1"] : [] };
+        if (allowed) builder.AddGatewayAdminAuthentication(options);
+        else Assert.Throws<InvalidOperationException>(() => builder.AddGatewayAdminAuthentication(options));
+    }
 
     [Fact]
     public void M5_UT_Remote_peer_cannot_forge_loopback_with_Host_or_forwarded_headers()

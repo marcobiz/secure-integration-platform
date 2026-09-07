@@ -186,6 +186,8 @@ Documentation-only changes require at minimum documentation validation, secret s
 - A failed gate remains visible. Fix the cause, add a regression test when appropriate and rerun the entire affected gate on the new commit.
 - Keep implementation, synthetic test configuration and redacted evidence conceptually separate. Raw artefacts stay outside Git.
 - Update ADRs only for a real architectural deviation or durable decision. Update status, roadmap and traceability when a milestone or requirement state actually changes.
+- Close an authorized integration by aligning the clean canonical checkout with the merged remote main, not merely deploying a preview. Report preview, branch, remote main and local main as separate states until they converge.
+- Preserve unique local commits on a named branch before reconciling a divergent canonical checkout. Compare their content with current main; do not keep an already-integrated governance change blocking synchronization indefinitely, and never discard unrelated work.
 
 ## Definition of done
 
