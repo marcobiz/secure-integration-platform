@@ -4,12 +4,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useHistory, useLocation } from 'react-router-dom';
-import { adminApi, ApiProblem, type EndpointResourceCatalog, type ProviderResourceCatalog, type ProvisionedActivation } from '../../api/client';
+import { adminApi, ApiProblem, type EndpointResourceCatalog, type Installation, type ProviderResourceCatalog, type ProvisionedActivation } from '../../api/client';
 import { hasRole, useSession } from '../../auth/SessionContext';
 import { ActivationHandoffDialog } from '../../components/ActivationHandoffDialog';
 import { ErrorState, LoadingState } from '../../components/AsyncState';
 import { PageTitle } from '../../components/PageTitle';
 import { PagedSelector } from '../../components/PagedSelector';
+import { InstallationKindSelector } from '../../components/InstallationKindSelector';
 
 interface DefinitionInfo {
   connectorId: string;
@@ -46,6 +47,7 @@ export function GuidedOnboardingPage() {
   const [applicationId, setApplicationId] = useState(initial.get('application') ?? '');
   const [environmentId, setEnvironmentId] = useState(initial.get('environment') ?? '');
   const [installationId, setInstallationId] = useState(initial.get('installation') ?? '');
+  const [installationKind, setInstallationKind] = useState<Installation['installationKind']>('Direct');
   const [connectorId, setConnectorId] = useState(initial.get('connector') ?? '');
   const [version, setVersion] = useState(initial.get('version') ?? '');
   const [tenantOffset, setTenantOffset] = useState(0);
@@ -115,7 +117,7 @@ export function GuidedOnboardingPage() {
   const refresh = (...keys: string[][]) => Promise.all(keys.map(queryKey => cache.invalidateQueries({ queryKey })));
 
   const createInstallation = useMutation({
-    mutationFn: () => adminApi.createInstallation({ tenantId, applicationId, environmentId, installationKind: 'Direct' }),
+    mutationFn: () => adminApi.createInstallation({ tenantId, applicationId, environmentId, installationKind }),
     onSuccess: async value => { setActivation(value); setInstallationId(value.installationId); replaceTarget({ installation: value.installationId, environment: environmentId }); await refresh(['installations', tenantId]); }
   });
   const importDefinition = useMutation({
@@ -241,6 +243,9 @@ export function GuidedOnboardingPage() {
     {hasRole(session, 'SecurityAdministrator') && <Card sx={{ mt: 3 }}><CardContent>
       <Typography variant="h2">1. {t('guidedActionCreateInstallation')}</Typography>
       <Typography color="text.secondary" sx={{ my: 1 }}>{t('guidedCreateInstallationHelp')}</Typography>
+      {(!installationId || selectedInstallation) && <Box sx={{ maxWidth: 480, my: 2 }}>
+        <InstallationKindSelector value={selectedInstallation?.installationKind ?? installationKind} onChange={setInstallationKind} disabled={Boolean(installationId) || createInstallation.isPending} />
+      </Box>}
       <Button variant="contained" disabled={!tenantId || !applicationId || !environmentId || Boolean(installationId) || createInstallation.isPending} onClick={() => createInstallation.mutate()}>{t('createInstallation')}</Button>
     </CardContent></Card>}
 

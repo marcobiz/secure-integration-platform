@@ -125,6 +125,68 @@ test('UI-MOCK-38 guided onboarding starts from readable selectors and exposes on
   expect(axe.violations.filter(value => ['critical', 'serious'].includes(value.impact ?? ''))).toEqual([]);
 });
 
+for (const screen of ['Installations', 'Guided onboarding']) {
+  for (const kind of ['Direct', 'Broker']) {
+    test(`UI-MOCK-43 ${screen} defaults to Direct and creates the selected ${kind} identity`, async ({ page }) => {
+      await page.getByRole('link', { name: screen, exact: true }).click();
+      const selector = page.getByRole('combobox', { name: 'Installation type', exact: true });
+      await expect(selector).toHaveText('Direct');
+      await expect(selector).toHaveAccessibleDescription('Application → Gateway. Default for the Core pilot; no Local Broker required.');
+      await page.getByLabel('Select a tenant').click(); await page.getByRole('option', { name: 'Sample tenant' }).click();
+      await page.getByLabel('Application', { exact: true }).click(); await page.getByRole('option', { name: 'Sample application' }).click();
+      await page.getByLabel('Environment', { exact: true }).click(); await page.getByRole('option', { name: 'Local', exact: true }).click();
+      if (kind === 'Broker') {
+        await selector.click(); await page.getByRole('option', { name: 'Broker', exact: true }).click();
+        await expect(selector).toHaveAccessibleDescription('Application → Windows Local Broker → Gateway. Install and enroll the Broker outside this page.');
+      }
+      // Read-back reflects the server record; the type is not a resume URL parameter.
+      const installationId = '40000000-0000-0000-0000-000000000002';
+      await page.route(`**/admin/api/v1/installations/${installationId}?*`, route => route.fulfill({ json: {
+        id: installationId, tenantId: tenant.id, applicationId: '30000000-0000-0000-0000-000000000001',
+        environmentId: '50000000-0000-0000-0000-000000000001', installationKind: kind, status: 'Pending', createdAt: '2026-08-05T00:00:00Z'
+      } }));
+      const requestPromise = page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === '/admin/api/v1/installations');
+      await page.getByRole('button', { name: 'Create installation', exact: true }).click();
+      expect((await requestPromise).postDataJSON()).toEqual({ tenantId: tenant.id,
+        applicationId: '30000000-0000-0000-0000-000000000001', environmentId: '50000000-0000-0000-0000-000000000001', installationKind: kind });
+      await expect(page.getByRole('textbox', { name: 'Activation code ID', exact: true })).toBeVisible();
+      await page.getByRole('button', { name: 'Close', exact: true }).click();
+      if (screen === 'Guided onboarding') {
+        await expect(selector).toHaveText(kind);
+        await expect(selector).toBeDisabled();
+        await expect(page.getByRole('button', { name: 'Create installation', exact: true })).toBeDisabled();
+      }
+    });
+  }
+  test(`UI-MOCK-44 ${screen} does not expose installation creation to a viewer`, async ({ page }) => {
+    await fixtures(page, 'Viewer');
+    await page.reload();
+    await page.getByRole('link', { name: screen, exact: true }).click();
+    await expect(page.getByRole('heading', { name: screen, exact: true })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Installation type', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Create installation', exact: true })).toHaveCount(0);
+  });
+}
+
+test('UI-MOCK-45 guided resume keeps the existing server-owned Broker kind after reload', async ({ page }) => {
+  const installationId = '40000000-0000-0000-0000-000000000001';
+  await page.route(`**/admin/api/v1/installations/${installationId}?*`, route => route.fulfill({ json: {
+    id: installationId, tenantId: tenant.id, applicationId: '30000000-0000-0000-0000-000000000001',
+    environmentId: '50000000-0000-0000-0000-000000000001', installationKind: 'Broker', status: 'Active', createdAt: '2026-08-05T00:00:00Z'
+  } }));
+  let mutations = 0;
+  page.on('request', request => { if (request.method() === 'POST') mutations++; });
+  await page.goto(`./onboarding?tenant=${tenant.id}&installation=${installationId}&installationKind=Direct`);
+  const selector = page.getByRole('combobox', { name: 'Installation type', exact: true });
+  await expect(selector).toHaveText('Broker');
+  await expect(selector).toBeDisabled();
+  await page.reload();
+  await expect(selector).toHaveText('Broker');
+  await expect(selector).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Create installation', exact: true })).toBeDisabled();
+  expect(mutations).toBe(0);
+});
+
 test('UI-MOCK-40 anonymous first access reaches login and completes the browser login flow', async ({ page }) => {
   let authenticated = false;
   await page.unroute('**/admin/auth/me');

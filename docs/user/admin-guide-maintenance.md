@@ -26,7 +26,7 @@ Admin layout, date formatting and first-session fixes in this change.
 | TenantsPage | tenants | Paged list, add/edit dialogs, immutable code, validation, disable, conflict read-back |
 | ApplicationsPage | applications | Version range, add/edit/cancel, direct disable, full conflict comparison |
 | InstallationsPage, ActivationHandoffDialog | installations, activation-handoff | Tenant/application/Environment selectors, Broker/Direct, create, public metadata, one-time ID/code copies, expiry, close, direct revoke; hidden reason is not documented as an editable field |
-| GuidedOnboardingPage | onboarding | Paged target selections, URL resume, selected Installation authority, file import, stored validation, catalog choices, complete binding/grants, request, approve/publish, bounded history and completion limit |
+| GuidedOnboardingPage | onboarding | Paged target selections, shared Broker/Direct selector (Direct default), URL resume, selected Installation authority and immutable kind, file import, stored validation, catalog choices, complete binding/grants, request, approve/publish, bounded history and completion limit |
 | ConnectorsPage | connectors | Filter, timeline pagination, canonical version diff, sample editor, validate/import Draft, stored validate, publish/rollback/retire, configuration-only test |
 | BindingsPage | bindings | Advanced complete JSON form, resource catalog, version/Environment, save/history, validation/conflict/drift |
 | GrantsPage | grants | Tenant/Installation/version selectors, operation entry, create/list; no expiry/revoke editor |

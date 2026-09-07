@@ -18,7 +18,7 @@ The page always reads authoritative state and shows:
 
 | # | Role | Primary action | Outcome |
 |---|---|---|---|
-| 1 | Security Administrator | Select Tenant, Application and Environment by name and create the Installation. | The one-time enrollment handoff appears. |
+| 1 | Security Administrator | Select Tenant, Application and Environment by name, choose Installation type and create the Installation. | The one-time enrollment handoff appears. |
 | 2 | Connector Editor | Choose a normal `.json` file and press **Validate and import**. | The Gateway computes and verifies ID, version and checksum, then stores a `Validated` version. |
 | 3 | Security Administrator | If needed, select endpoints and credentials from the catalog and press **Configure binding and grants**. | Complete bindings and exact grants are created from server-owned selections for the version reread by the server. |
 | 4 | Connector Editor | Press **Request approval**. | The request is frozen for the exact version and binding digest. |
@@ -26,6 +26,20 @@ The page always reads authoritative state and shows:
 
 The **Connectors** page retains the full JSON editor as an advanced path; it is
 not required for the guided flow.
+
+## Installation type
+
+Guided onboarding and **Installations** use the same choice and descriptions:
+
+- **Direct** (default for the Core pilot): application → Gateway, without a Local Broker.
+- **Broker**: application → Windows Local Broker → Gateway.
+
+Selecting an existing Installation reads its type from the server and disables the
+type selector. It does not convert the Installation or change its Environment.
+Choosing Broker does not install the Windows service. Complete enrollment outside
+the browser with the supported Broker or Direct client tooling before continuing.
+The five administrative actions and role separation are the same for both types;
+the Core pilot's Direct qualification is not a new Broker end-to-end qualification.
 
 ## One-time enrollment handoff
 
