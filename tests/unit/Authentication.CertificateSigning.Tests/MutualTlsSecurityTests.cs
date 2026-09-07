@@ -309,7 +309,10 @@ public sealed class MutualTlsSecurityTests
     [Fact]
     public async Task M6_MTLS_real_local_server_accepts_expected_certificate_over_pinned_egress()
     {
-        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
+        // Real TLS validates against the OS clock, not the fixed protocol-test clock.
+        DateTimeOffset handshakeTime = DateTimeOffset.UtcNow;
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(handshakeTime);
+        Assert.InRange(DateTime.UtcNow, material.ServerCertificate.NotBefore.ToUniversalTime(), material.ServerCertificate.NotAfter.ToUniversalTime());
         await using SyntheticMutualTlsServer server = await SyntheticMutualTlsServer.StartAsync(material.ServerCertificate, material.ClientCertificateRevision1, TestContext.Current.CancellationToken);
         Uri endpoint = new($"https://localhost:{server.Port}/synthetic");
         AuthenticationExecutionContext context = AuthenticationTestData.Context(AuthenticationTestData.MutualTlsProfileId, endpoint);
@@ -320,7 +323,7 @@ public sealed class MutualTlsSecurityTests
         X509Certificate2Collection trust = new(material.RootCertificate);
         PurposeBoundMutualTlsSender sender = new(policies,
             new MutableBindingResolver(AuthenticationTestData.MutualTlsBinding(context, material.ClientCertificateRevision1, "mtls-r1", policy)),
-            provider, provider, new StaticHostResolver(IPAddress.Loopback), RestrictedTransport(trust), new FixedClock(Now), new LoopbackAllowance());
+            provider, provider, new StaticHostResolver(IPAddress.Loopback), RestrictedTransport(trust), new FixedClock(handshakeTime), new LoopbackAllowance());
         using HttpRequestMessage request = new(HttpMethod.Get, endpoint);
 
         MutualTlsAuthenticatedResponse response = await sender.SendAsync(context, AuthenticationTestData.MutualTlsProfileId, request, TestContext.Current.CancellationToken);
@@ -333,7 +336,10 @@ public sealed class MutualTlsSecurityTests
     [Fact]
     public async Task M6_MTLS_hostname_validation_and_rejected_certificate_fail_handshake()
     {
-        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(Now);
+        // Real TLS validates against the OS clock, not the fixed protocol-test clock.
+        DateTimeOffset handshakeTime = DateTimeOffset.UtcNow;
+        using SyntheticAuthenticationMaterial material = SyntheticAuthenticationMaterial.Create(handshakeTime);
+        Assert.InRange(DateTime.UtcNow, material.ServerCertificate.NotBefore.ToUniversalTime(), material.ServerCertificate.NotAfter.ToUniversalTime());
         X509Certificate2Collection trust = new(material.RootCertificate);
 
         await using (SyntheticMutualTlsServer hostnameServer = await SyntheticMutualTlsServer.StartAsync(material.ServerCertificate, material.ClientCertificateRevision1, TestContext.Current.CancellationToken))
@@ -346,7 +352,7 @@ public sealed class MutualTlsSecurityTests
             InMemoryProvider provider = AuthenticationTestData.Provider(material);
             PurposeBoundMutualTlsSender sender = new(policies,
                 new MutableBindingResolver(AuthenticationTestData.MutualTlsBinding(context, material.ClientCertificateRevision1, "mtls-r1", policy)),
-                provider, provider, new StaticHostResolver(IPAddress.Loopback), RestrictedTransport(trust), new FixedClock(Now));
+                provider, provider, new StaticHostResolver(IPAddress.Loopback), RestrictedTransport(trust), new FixedClock(handshakeTime));
             using HttpRequestMessage request = new(HttpMethod.Get, endpoint);
             await Assert.ThrowsAnyAsync<Exception>(() => sender.SendAsync(context, AuthenticationTestData.MutualTlsProfileId, request, TestContext.Current.CancellationToken));
         }
@@ -361,7 +367,7 @@ public sealed class MutualTlsSecurityTests
             InMemoryProvider provider = AuthenticationTestData.Provider(material);
             PurposeBoundMutualTlsSender sender = new(policies,
                 new MutableBindingResolver(AuthenticationTestData.MutualTlsBinding(context, material.ClientCertificateRevision2, "mtls-r2", policy)),
-                provider, provider, new StaticHostResolver(IPAddress.Loopback), RestrictedTransport(trust), new FixedClock(Now), new LoopbackAllowance());
+                provider, provider, new StaticHostResolver(IPAddress.Loopback), RestrictedTransport(trust), new FixedClock(handshakeTime), new LoopbackAllowance());
             using HttpRequestMessage request = new(HttpMethod.Get, endpoint);
             await Assert.ThrowsAnyAsync<Exception>(() => sender.SendAsync(context, AuthenticationTestData.MutualTlsProfileId, request, TestContext.Current.CancellationToken));
             Assert.False(certificateServer.ExpectedCertificateObserved);
