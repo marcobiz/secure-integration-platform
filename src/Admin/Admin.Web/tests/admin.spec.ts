@@ -26,6 +26,7 @@ async function fixtures(page: Page, role = 'SecurityAdministrator') {
   } }));
 }
 
+test.describe('Authenticated admin', () => {
 test.beforeEach(async ({ page }) => { await fixtures(page); await page.goto('./'); });
 test('UI-MOCK-01 viewer navigates read-only dashboard', async ({ page }) => { await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible(); });
 test('UI-MOCK-02 editor opens connector draft editor', async ({ page }) => { await page.getByRole('link', { name: 'Connectors' }).click(); await expect(page.getByLabel('Connector JSON')).toBeVisible(); });
@@ -187,25 +188,6 @@ test('UI-MOCK-45 guided resume keeps the existing server-owned Broker kind after
   expect(mutations).toBe(0);
 });
 
-test('UI-MOCK-40 anonymous first access reaches login and completes the browser login flow', async ({ page }) => {
-  let authenticated = false;
-  await page.unroute('**/admin/auth/me');
-  await page.route('**/admin/auth/me', route => authenticated
-    ? route.fulfill({ json: { id: '20000000-0000-0000-0000-000000000001', displayName: 'Security administrator', roles: [{ role: 'SecurityAdministrator', tenantId: null }] } })
-    : route.fulfill({ status: 401, json: { code: 'BGW-ADMIN-AUTHENTICATION-REQUIRED' } }));
-  await page.route('**/admin/auth/development/login', route => {
-    expect(route.request().postDataJSON()).toEqual({ userName: 'security-admin' });
-    authenticated = true;
-    return route.fulfill({ json: {} });
-  });
-  await page.goto('./login');
-  await expect(page.getByRole('heading', { name: 'Administrative access' })).toBeVisible();
-  await expect(page.getByRole('status')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Security administrator', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
-});
-
 for (const viewport of [{ width: 1440, height: 1000 }, { width: 1024, height: 900 }, { width: 390, height: 844 }]) {
   test(`UI-MOCK-41 installation controls and table stay within the ${viewport.width}px viewport`, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport);
@@ -256,4 +238,28 @@ test('UI-MOCK-42 shared pages fit a compact desktop and dark theme remains acces
   const axe = await new AxeBuilder({ page }).analyze();
   expect(axe.violations.filter(value => ['critical', 'serious'].includes(value.impact ?? ''))).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath('installations-dark.png'), fullPage: true });
+});
+});
+
+test('UI-MOCK-40 anonymous first access reaches login and completes the browser login flow', async ({ page }) => {
+  // Configure anonymous responses before any app navigation; an in-flight session
+  // from the authenticated setup can otherwise redirect while page.goto is loading.
+  expect(page.url()).toBe('about:blank');
+  await fixtures(page);
+  let authenticated = false;
+  await page.unroute('**/admin/auth/me');
+  await page.route('**/admin/auth/me', route => authenticated
+    ? route.fulfill({ json: { id: '20000000-0000-0000-0000-000000000001', displayName: 'Security administrator', roles: [{ role: 'SecurityAdministrator', tenantId: null }] } })
+    : route.fulfill({ status: 401, json: { code: 'BGW-ADMIN-AUTHENTICATION-REQUIRED' } }));
+  await page.route('**/admin/auth/development/login', route => {
+    expect(route.request().postDataJSON()).toEqual({ userName: 'security-admin' });
+    authenticated = true;
+    return route.fulfill({ json: {} });
+  });
+  await page.goto('./login');
+  await expect(page.getByRole('heading', { name: 'Administrative access' })).toBeVisible();
+  await expect(page.getByRole('status')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Security administrator', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
 });
