@@ -22,7 +22,7 @@
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <DebugType>embedded</DebugType>
-    <RepositoryUrl>https://github.com/marcobiz/secure-integration-platform</RepositoryUrl>
+    <RepositoryUrl>https://github.com/msala9/secure-integration-platform</RepositoryUrl>
     <PackageLicenseExpression>MPL-2.0</PackageLicenseExpression>
     <Authors>Secure Integration Platform Contributors</Authors>
     <Company>ApoCert S.r.l.</Company>

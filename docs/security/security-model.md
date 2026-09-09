@@ -169,7 +169,7 @@ or signed provenance; see [CoreExportInventory.psm1](../../eng/CoreExportInvento
 - Received and correlated certificates do not mean operational import.
 - The [capability summary](../../IMPLEMENTATION_STATUS.md) distinguishes FSE2 offline
   completeness from the observed CDA/workflow live qualification and remaining limits.
-  The [current pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
+  The [current pilot](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
   owns the procedure and live evidence; neither implies overall live qualification.
 
 ## Declared risks

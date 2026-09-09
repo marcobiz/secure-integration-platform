@@ -265,14 +265,14 @@ not interchangeable:
   Connector → HTTPS/mTLS mock, response, audit and cleanup. They use neither cloud
   nor healthcare and do not exercise the Windows Local Broker. Synthetic evidence
   does not qualify a real vendor's API or behavior.
-- **Windows / Local Broker.** The [historical M0/M1 and M3A evidence and runbooks](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/history/README.md#windows--local-broker-evidence)
+- **Windows / Local Broker.** The [historical M0/M1 and M3A evidence and runbooks](https://github.com/msala9/secure-integration-platform/blob/main/docs/history/README.md#windows--local-broker-evidence)
   cover a real Windows Service, identity/process controls, ACLs, persistence after
   restart and, for M3A, legacy simulator → Broker → Gateway → synthetic upstream.
   They apply to their attested baselines. They require a dedicated Windows laboratory
   and are not a new demo or an exact-head qualification of the current README.
 - **Optional FSE2.** The pack for Italy's electronic health record system
   (Fascicolo Sanitario Elettronico 2.0) depends on Core contracts, never the reverse.
-  The [current validation/status pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
+  The [current validation/status pilot](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
   has its own prerequisites, including a host .NET SDK, OfficialTest access and
   previously provisioned, authorized A1/S1 material. Its 14 routes are complete
   offline within the frozen specification's limits. CDA `VERIFICA` and workflow
@@ -329,6 +329,6 @@ use `MPL-2.0 OR Apache-2.0`. The texts are in [LICENSE](LICENSE) and
 or dependency licenses.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) and [DCO.md](DCO.md) describe contributions.
-The [documentation index](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/README.md)
+The [documentation index](https://github.com/msala9/secure-integration-platform/blob/main/docs/README.md)
 separates current procedures, technical references and history; milestone documents
 do not override the integrated status.

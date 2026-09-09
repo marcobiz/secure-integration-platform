@@ -34,7 +34,7 @@ no SQL, direct store access or publication of sensitive data.
 
 ## FSE2 invocation
 
-Use the [current validation/status runner](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
+Use the [current validation/status runner](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
 only with authorized prerequisites and OfficialTest calls. Its `Audit`, `Restart`
 and status commands have documented outcomes and limits; do not build payloads or
 calls from integration tests, fixtures, raw evidence or copied endpoints.

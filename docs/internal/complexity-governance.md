@@ -2,7 +2,7 @@
 
 **Audience:** product owners, maintainers, reviewers and agents.
 **Status:** CURRENT; summarizes the binding operational rules in
-[AGENTS.md](https://github.com/marcobiz/secure-integration-platform/blob/main/AGENTS.md).
+[AGENTS.md](https://github.com/msala9/secure-integration-platform/blob/main/AGENTS.md).
 
 ## Outcome before machinery
 

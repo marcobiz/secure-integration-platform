@@ -54,7 +54,7 @@ They are therefore not a qualified external OAuth Connector.
 | Admin full-stack | Gateway/Admin, PostgreSQL 18, Synthetic Provider and vendor mock without intercepting Admin API/auth; rollback proofs remain separate named tests. |
 | Local PKCS#12 lab | Opt-in pack, per-run synthetic material outside Git, non-root/read-only and tamper/readiness; no official import or live external call. |
 | M3B Azure | Separate authorized workflow; not live-qualified on the current baseline. |
-| FSE2 OfficialTest | Official environment with authorized access/material and its own runner prerequisites. The [current pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md) records CDA and workflow live observations; the [capability summary](../../IMPLEMENTATION_STATUS.md) owns offline/live limits. This is not overall live or production qualification. |
+| FSE2 OfficialTest | Official environment with authorized access/material and its own runner prerequisites. The [current pilot](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md) records CDA and workflow live observations; the [capability summary](../../IMPLEMENTATION_STATUS.md) owns offline/live limits. This is not overall live or production qualification. |
 
 ## UI trust boundary
 

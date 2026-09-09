@@ -368,7 +368,7 @@ Synthetic tests, including the local PKCS#12 laboratory, qualify only the pipeli
 controlled per-run material. They do not attest operational import, production custody
 or a live FSE2 call. A synthetic live lab is not OfficialTest; OfficialTest is not production.
 The [capability summary](../../IMPLEMENTATION_STATUS.md) owns current FSE2 qualification
-and limits; the [current pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
+and limits; the [current pilot](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
 records the distinct live CDA/workflow observations without claiming overall live qualification.
 
 ## Review criteria

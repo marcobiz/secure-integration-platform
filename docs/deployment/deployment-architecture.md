@@ -148,7 +148,7 @@ the supported golden path.
 ## Optional FSE2 OfficialTest path
 
 The vertical track uses its own FSE2 image/composition, Published configuration and
-authorized A1/S1 material. The shipped [validation/status pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
+authorized A1/S1 material. The shipped [validation/status pilot](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
 documents bootstrap, roles, prerequisites and observed CDA/workflow results. It does
 not import operational material or qualify production custody. The
 [capability summary](../../IMPLEMENTATION_STATUS.md) owns current offline/live limits;

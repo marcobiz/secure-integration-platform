@@ -139,8 +139,8 @@ function New-SyntheticReleaseSet {
         licensePolicy = [ordered]@{ default = 'MPL-2.0'; sdk = 'Apache-2.0'; contractsProtocol = 'Apache-2.0'; syntheticExamples = 'Apache-2.0'; genericReference = 'MPL-2.0 OR Apache-2.0'; coreSourceArchive = 'MPL-2.0 AND Apache-2.0' }
         coreExport = [ordered]@{ fileCount = 0; rawManifestSha256RunSpecific = 'D' * 64; normalizedInventorySha256 = 'E' * 64 }
         images = @(
-            [ordered]@{ role = 'gateway'; reference = $gatewayReference; imageId = $gatewayImageId; versionLabel = $productVersion; revisionLabel = $sourceCommit; sourceLabel = 'https://github.com/marcobiz/secure-integration-platform'; vendorLabel = 'ApoCert S.r.l.'; titleLabel = 'Secure Integration Platform Gateway'; licenseLabel = 'MPL-2.0' },
-            [ordered]@{ role = 'migrations'; reference = $migrationsReference; imageId = $migrationsImageId; versionLabel = $productVersion; revisionLabel = $sourceCommit; sourceLabel = 'https://github.com/marcobiz/secure-integration-platform'; vendorLabel = 'ApoCert S.r.l.'; titleLabel = 'Secure Integration Platform Migrations'; licenseLabel = 'MPL-2.0' })
+            [ordered]@{ role = 'gateway'; reference = $gatewayReference; imageId = $gatewayImageId; versionLabel = $productVersion; revisionLabel = $sourceCommit; sourceLabel = 'https://github.com/msala9/secure-integration-platform'; vendorLabel = 'ApoCert S.r.l.'; titleLabel = 'Secure Integration Platform Gateway'; licenseLabel = 'MPL-2.0' },
+            [ordered]@{ role = 'migrations'; reference = $migrationsReference; imageId = $migrationsImageId; versionLabel = $productVersion; revisionLabel = $sourceCommit; sourceLabel = 'https://github.com/msala9/secure-integration-platform'; vendorLabel = 'ApoCert S.r.l.'; titleLabel = 'Secure Integration Platform Migrations'; licenseLabel = 'MPL-2.0' })
         artifacts = $artifactEntries
         sbom = $sbomEntries
         sbomSubjects = @(

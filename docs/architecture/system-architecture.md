@@ -122,7 +122,7 @@ Historical adopter-simulation evidence applies to its recorded baseline, not an
 automatic qualification of every subsequent release candidate. The FSE2
 OfficialTest track is separate from Core. Its current offline/live qualification and
 limits are maintained in the [capability summary](../../IMPLEMENTATION_STATUS.md);
-the [current pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
+the [current pilot](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
 owns the procedure and observed live evidence.
 
 ## CURRENT — monorepo structure
