@@ -102,6 +102,11 @@ function Assert-ExpectedPackage {
     if ([string]::IsNullOrWhiteSpace($ExpectedSourceCommit) -or [string]::IsNullOrWhiteSpace($ExpectedManifestSha256)) {
         throw 'LOCAL_BROKER_EXPECTED_PACKAGE_REQUIRED: confirm ExpectedSourceCommit and ExpectedManifestSha256 through the operator trusted channel.'
     }
+    if ([string]::IsNullOrWhiteSpace($BrokerPublishDirectory) -or [string]::IsNullOrWhiteSpace($SamplePublishDirectory) -or
+        -not (Test-Path -LiteralPath $BrokerPublishDirectory -PathType Container) -or
+        -not (Test-Path -LiteralPath $SamplePublishDirectory -PathType Container)) {
+        throw 'LOCAL_BROKER_PUBLISH_DIRECTORY_REQUIRED'
+    }
     $brokerSource = (Resolve-Path -LiteralPath $BrokerPublishDirectory).Path.TrimEnd('\')
     $sampleSource = (Resolve-Path -LiteralPath $SamplePublishDirectory).Path.TrimEnd('\')
     $package = Split-Path -Parent $brokerSource
@@ -117,7 +122,7 @@ function Assert-ExpectedPackage {
         -not $manifest.selfContained -or [string]$manifest.integrity -cne 'SHA-256 inventory, not a signature or publisher authentication') {
         throw 'LOCAL_BROKER_PACKAGE_MANIFEST_INVALID'
     }
-    $actual = @(Get-ChildItem -LiteralPath $package -Recurse -File | ForEach-Object { $_.FullName.Substring($package.Length + 1).Replace('\', '/') })
+    $actual = @(Get-ChildItem -LiteralPath $package -Recurse -File -Force | ForEach-Object { $_.FullName.Substring($package.Length + 1).Replace('\', '/') })
     $expected = @($manifest.files.path) + @('package-manifest.json')
     if (@(Compare-Object $actual $expected).Count -ne 0 -or @($expected | Select-Object -Unique).Count -ne $expected.Count) {
         throw 'LOCAL_BROKER_PACKAGE_INVENTORY_MISMATCH'
@@ -206,10 +211,9 @@ if ($Command -eq 'Stop') {
     return
 }
 if ($Command -eq 'Install') {
-    if (-not $BrokerPublishDirectory -or -not $SamplePublishDirectory) { throw 'LOCAL_BROKER_PUBLISH_DIRECTORY_REQUIRED' }
+    Assert-ExpectedPackage
     if (-not (Test-Path -LiteralPath (Join-Path $BrokerPublishDirectory 'SecureIntegration.Broker.Service.exe')) -or
         -not (Test-Path -LiteralPath (Join-Path $SamplePublishDirectory 'SecureIntegration.Samples.LocalBroker.exe'))) { throw 'LOCAL_BROKER_PUBLISHED_APPHOST_REQUIRED' }
-    Assert-ExpectedPackage
     if (Test-Path -LiteralPath $marker) {
         $record = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
         if ($owned -and (Test-Path -LiteralPath $settingsPath) -and (Test-Path -LiteralPath $sample) -and (Test-Path -LiteralPath $executable)) {

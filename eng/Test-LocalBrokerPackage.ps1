@@ -16,7 +16,7 @@ $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 if ($manifest.schemaVersion -ne 1 -or $manifest.sourceCommit -cne $ExpectedSourceCommit -or
     $manifest.product -cne 'SecureIntegration.LocalBroker' -or $manifest.runtimeIdentifier -cne 'win-x64' -or
     -not $manifest.selfContained) { throw 'BROKER_PACKAGE_MANIFEST_INVALID' }
-$actual = @(Get-ChildItem -LiteralPath $package -Recurse -File | ForEach-Object { $_.FullName.Substring($package.Length + 1).Replace('\', '/') })
+$actual = @(Get-ChildItem -LiteralPath $package -Recurse -File -Force | ForEach-Object { $_.FullName.Substring($package.Length + 1).Replace('\', '/') })
 $expected = @($manifest.files.path) + @('package-manifest.json')
 if (@(Compare-Object $actual $expected).Count -ne 0 -or @($expected | Select-Object -Unique).Count -ne $expected.Count) {
     throw 'BROKER_PACKAGE_INVENTORY_MISMATCH'

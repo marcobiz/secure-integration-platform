@@ -21,7 +21,7 @@ $fixture = Join-Path ([IO.Path]::GetTempPath()) ('broker-lifecycle-test-' + [gui
 $root = Join-Path $fixture 'install'; $data = Join-Path $fixture 'data'; $marker = Join-Path $root 'installation.json'
 $name = 'SecureIntegrationBroker.Local.fixture'
 $binaryPath = '"' + (Join-Path $root 'broker.exe') + '"'
-$script:service = $null; $script:stops = 0
+$script:service = $null; $script:stops = 0; $script:copies = 0
 function Get-CimInstance { param($ClassName, $Filter) return $script:service }
 function Invoke-ServiceAction { param($Action) if ($Action -cne 'Stop') { throw 'UNEXPECTED_SCM_MUTATION' }; $script:stops++; $script:service.State = 'Stopped' }
 function Get-Service { param($Name) return [pscustomobject]@{} | Add-Member -MemberType ScriptMethod -Name WaitForStatus -Value { param($State, $Timeout) if ($State -ne 'Stopped') { throw 'UNEXPECTED_WAIT' } } -PassThru }
@@ -145,6 +145,7 @@ try {
     Assert ($null -ne $updateBranch)
     function Copy-Published {
         param($Source, $Destination)
+        $script:copies++
         $persisted = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
         Assert (-not $persisted.Broker.InitializeDataKeys)
         throw 'LOCAL_BROKER_COPY_FIXTURE_FAILURE'
@@ -174,6 +175,37 @@ try {
     $ExpectedSourceCommit = 'b' * 40
     Assert-ExpectedPackage
     Write-Output 'PACKAGE_EXPECTED_VALUES_MISSING_OR_WRONG_SOURCE_DENIED=PASS'
+    $installBranch = $ast.Find({ param($node) $node -is [Management.Automation.Language.IfStatementAst] -and $node.Clauses[0].Item1.Extent.Text -eq '$Command -eq ''Install''' }, $false)
+    Assert ($installBranch.Clauses[0].Item2.Statements[0].Extent.Text -ceq 'Assert-ExpectedPackage')
+    Assert ($updateBranch.Clauses[0].Item2.Statements[0].Extent.Text -ceq 'Assert-ExpectedPackage')
+    # Reuse the shipped update body, replacing only its subprocess Stop with the existing SCM stub.
+    $updatePreflight = [ScriptBlock]::Create(($updateBranch.Clauses[0].Item2.Statements | ForEach-Object {
+        if ($_.Extent.Text -ceq '& $PSCommandPath -Command Stop -Instance $Instance') { 'Invoke-ServiceAction ''Stop''' }
+        else { $_.Extent.Text }
+    }) -join "`n")
+    function Assert-UpdatePreflightDenied([string] $Code) {
+        $settingsBefore = (Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash
+        $stateBefore = (Get-FileHash -LiteralPath (Join-Path $data 'preserve.bin') -Algorithm SHA256).Hash
+        $stopsBefore = $script:stops; $copiesBefore = $script:copies
+        $denied = $false
+        try { & $updatePreflight | Out-Null }
+        catch { $denied = $_.Exception.Message -ceq $Code }
+        Assert $denied
+        Assert ($script:stops -eq $stopsBefore -and $script:copies -eq $copiesBefore)
+        Assert ((Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash -ceq $settingsBefore)
+        Assert ((Get-FileHash -LiteralPath (Join-Path $data 'preserve.bin') -Algorithm SHA256).Hash -ceq $stateBefore)
+    }
+    $validBrokerSource = $BrokerPublishDirectory; $validSampleSource = $SamplePublishDirectory
+    foreach ($invalidSource in @('', (Join-Path $fixture 'absent-source'), (Join-Path $data 'preserve.bin'))) {
+        $BrokerPublishDirectory = $invalidSource
+        Assert-UpdatePreflightDenied 'LOCAL_BROKER_PUBLISH_DIRECTORY_REQUIRED'
+        $BrokerPublishDirectory = $validBrokerSource
+        $SamplePublishDirectory = $invalidSource
+        Assert-UpdatePreflightDenied 'LOCAL_BROKER_PUBLISH_DIRECTORY_REQUIRED'
+        $SamplePublishDirectory = $validSampleSource
+    }
+    Assert-ExpectedPackage
+    Write-Output 'PACKAGE_MISSING_OR_NON_DIRECTORY_SOURCES_DENIED_BEFORE_STOP_COPY=PASS'
     # Package preflight and Stop were exercised above; skip only the subprocess
     # invocation of Stop. Every subsequent settings/copy statement is shipped code.
     $updateAfterStop = ($updateBranch.Clauses[0].Item2.Statements | Select-Object -Skip 2 | ForEach-Object { $_.Extent.Text }) -join "`n"
@@ -204,6 +236,30 @@ try {
     $validator = Join-Path $PSScriptRoot '..\..\..\eng\Test-LocalBrokerPackage.ps1'
     $packageManifestHash = (Get-FileHash -LiteralPath (Join-Path $packageFixture 'package-manifest.json') -Algorithm SHA256).Hash
     & $validator -PackageDirectory $packageFixture -ExpectedSourceCommit ('a' * 40) -ExpectedManifestSha256 $packageManifestHash | Out-Null
+    $BrokerPublishDirectory = Join-Path $packageFixture 'broker'
+    $SamplePublishDirectory = Join-Path $packageFixture 'sample'
+    $ExpectedSourceCommit = 'a' * 40; $ExpectedManifestSha256 = $packageManifestHash
+    Assert-ExpectedPackage
+    $unlistedFile = Join-Path $BrokerPublishDirectory 'unlisted.dll'
+    foreach ($attribute in @([IO.FileAttributes]::Hidden, [IO.FileAttributes]::System)) {
+        [IO.File]::WriteAllText($unlistedFile, 'synthetic-unlisted-file')
+        try {
+            [IO.File]::SetAttributes($unlistedFile, $attribute)
+            Assert (([IO.File]::GetAttributes($unlistedFile) -band $attribute) -eq $attribute)
+            Assert-UpdatePreflightDenied 'LOCAL_BROKER_PACKAGE_INVENTORY_MISMATCH'
+            $denied = $false
+            try { & $validator -PackageDirectory $packageFixture -ExpectedSourceCommit $ExpectedSourceCommit -ExpectedManifestSha256 $ExpectedManifestSha256 | Out-Null }
+            catch { $denied = $_.Exception.Message -ceq 'BROKER_PACKAGE_INVENTORY_MISMATCH' }
+            Assert $denied
+        }
+        finally {
+            [IO.File]::SetAttributes($unlistedFile, [IO.FileAttributes]::Normal)
+            Remove-Item -LiteralPath $unlistedFile
+        }
+    }
+    Assert-ExpectedPackage
+    & $validator -PackageDirectory $packageFixture -ExpectedSourceCommit $ExpectedSourceCommit -ExpectedManifestSha256 $ExpectedManifestSha256 | Out-Null
+    Write-Output 'PACKAGE_HIDDEN_SYSTEM_EXTRA_FILES_DENIED_BEFORE_STOP_COPY=PASS'
     $denied = $false
     try { & $validator -PackageDirectory $packageFixture -ExpectedSourceCommit ('a' * 40) -ExpectedManifestSha256 ('0' * 64) | Out-Null }
     catch { $denied = $_.Exception.Message -ceq 'BROKER_PACKAGE_MANIFEST_HASH_MISMATCH' }
