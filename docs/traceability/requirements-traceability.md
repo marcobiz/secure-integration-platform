@@ -76,6 +76,7 @@ part of this evidence.
 | Requirement | Focused evidence | Scope |
 |---|---|---|
 | Self-contained product-only package | `Build-LocalBrokerPackage.ps1`, `Test-LocalBrokerPackage.ps1` | Closed file/hash inventory, source commit, included runtime and managed dependency manifests. No source/fixture/private settings in the archive; checksums do not authenticate the publisher. |
+| Local Broker install/update package preflight | `Invoke-LocalBroker.ps1`, `Test-LocalBrokerPackage.ps1`, `LocalBrokerLifecycle.Tests.ps1` | Candidate software path requires operator-confirmed expected source commit and manifest SHA-256 before install/update. Manifest/hash mismatch is denied before update stops the service or copies files. This remains `UNSIGNED_ARTIFACTS`: hash inventory is not publisher authenticity. |
 | Setup identity separate from application user | `LocalBrokerLifecycle.Tests.ps1` — `EXPLICIT_APPLICATION_ACCOUNT_SID` | Explicit existing account SID; missing/group SID denied. Start is SCM readiness, not an invocation under the setup administrator. |
 | Failed update preserves state | `LocalBrokerLifecycle.Tests.ps1` — `FAILED_UPDATE_DISALLOWS_INITIALIZATION_PRESERVES_STATE` | Real settings write precedes simulated failing copy; key initialization remains disabled and identity/policy/data remain intact. Existing Stop/ownership tests retained. |
 | Process authentication without application elevation | `Broker_process_verification_preparation_executes_the_native_current_process_boundary`, `Broker_process_verification_ACL_adds_only_configured_account_query_and_synchronize_and_preserves_denials`, `Broker_process_verification_never_adds_broad_group_grants` | Native current-process boundary and minimal ACL/idempotence/denial tests pass. Real candidate service passed ordinary-token SDK authentication; baseline OpenProcess access denial remains recorded, not bypassed. |
@@ -103,6 +104,7 @@ part of this evidence.
 | PostgreSQL 18, roles and FORCE RLS | `IT_DAT_PostgreSQL18_migration_and_RLS_isolate_tenants_when_configured`, `M5_IT_DAT_Tenant_mutations_are_FORCE_RLS_correct_atomic_and_concurrent_when_configured`, `M5_IT_DAT_PostgreSQL18_runtime_locator_is_exactly_granted_and_not_enumerable_when_configured` | `AUTOMATED` — PASS with PostgreSQL 18 gate executed |
 | Audit metadata-only/runtime INSERT-only | `UT_SEC_Audit_is_metadata_only_and_excludes_payload_and_credentials`, `IT_DAT_Migration_forces_RLS_and_contains_no_secret_value_columns`, `M5_IT_DAT_Fault_injection_rolls_back_admin_state_and_audit_when_configured` | `AUTOMATED` — PASS |
 | DB events append-only against application roles | Migration `0017_event_tables_append_only.sql`; `SEC_DAT_PostgreSQL18_event_table_privilege_matrix_is_minimal_and_append_only_when_configured`, `SEC_DAT_PostgreSQL18_gateway_admin_can_append_and_read_audit_but_cannot_mutate_event_rows_when_configured`, `SEC_DAT_PostgreSQL18_gateway_runtime_can_append_but_cannot_read_or_mutate_event_rows_when_configured`, `SEC_DAT_PostgreSQL18_gateway_readonly_cannot_read_or_mutate_event_rows_when_configured`, `SEC_DAT_PostgreSQL18_event_RLS_preserves_tenant_isolation_and_global_audit_semantics_when_configured` | `AUTOMATED` — PASS PostgreSQL 18; owner/migration, host and DBA remain in the TCB; no signing/notarization |
+| Tenant audit evidence export | `ADMIN_AUDIT_EXPORT_uses_interval_keyset_cursor_and_excludes_later_appends`, `ADMIN_AUDIT_EXPORT_rejects_invalid_bounds_limits_and_cursor`, `ADMIN_AUDIT_EXPORT_redacts_diagnostics_for_non_security_roles` | Candidate software path: authenticated Admin API, tenant-scoped, fixed UTC interval, keyset continuation, no direct SQL/store access, metadata-only export. Local execution pending pinned .NET SDK `10.0.302` on this host. |
 | Quickstart no-cloud | `Invoke-M4Quickstart.ps1`, `Invoke-M5Quickstart.ps1`, `Invoke-AlphaGoldenPath.ps1`, `FULLSTACK-01`, `FULLSTACK-02`, container/secret/SBOM gate | `AUTOMATED` synthetic live lab — PASS; guided onboarding proves five actions/three roles, resume and one invocation with cleanup to zero; not cloud/production |
 | Azure M3B/cloud production | `m3-azure-smoke.yml`, `deploy/azure-bicep/m3-dev.bicep` | `EXTERNAL`/`UNVERIFIED` — no live PASS attested |
 | Local PKCS#12 import/custody | `Test-Fse2LocalPkcs12Material.ps1` uses per-run fixtures; importer defaults to read-only | `AUTOMATED` synthetic lab; official import `MANUAL`/`UNVERIFIED` |
@@ -170,7 +172,7 @@ in `docs/README.md`.
 | NFR-005 | M1 deadline/cancel/idempotent delete; M2 `UT_EGR_Transient_retry_occurs_only_for_idempotent_operation`; circuit breaker remains M7 |
 | NFR-006 | M2 signed/audited correlation ID and mandatory `traceparent`; Gateway→vendor propagation PASS M3A container and Broker→Gateway PASS-LIVE run `m3a-live-20260805-094131` |
 | NFR-007 | `M4_CT_Sample_conforms_to_Draft_2020_12_and_is_canonical`, `M4_CT_Checksum_mismatch_is_rejected`, migration trigger + PG tamper test |
-| NFR-008 | `AUTOMATED`: clean build, base-image pin gate and SPDX SBOM; `DEFERRED`: artifact signing/published provenance |
+| NFR-008 | `AUTOMATED`: clean build, base-image pin gate and SPDX SBOM; candidate Local Broker install/update manifest preflight; `DEFERRED`: artifact signing/published provenance |
 | NFR-009 | `DEFERRED`: Windows/native/COM adapter compatibility matrix; the current client is .NET |
 | NFR-010 | M2 schema contains only redacted metadata and no response bodies/secret values; test `IT_DAT_Migration_forces_RLS_and_contains_no_secret_value_columns` |
 
@@ -205,7 +207,7 @@ in `docs/README.md`.
 | AC-025 | runbook exercise and diagnostics evidence |
 | AC-026 | threat-model review checklist |
 | AC-027 | `eng/generate-sbom.ps1` — SPDX generated and validated; every base-image rotation reruns container SBOM after pull |
-| AC-028 | signature/tamper verification suite |
+| AC-028 | Candidate manifest/hash mismatch denial for Local Broker package preflight; `DEFERRED`: artifact signing/publisher authenticity |
 | AC-029 | pilot rotation/revocation evidence |
 | AC-030 | pilot code/package/network bypass evidence |
 

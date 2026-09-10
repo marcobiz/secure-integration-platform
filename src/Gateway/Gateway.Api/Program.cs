@@ -4,6 +4,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Globalization;
 using System.Runtime.Loader;
 using System.Net;
 using System.Threading.RateLimiting;
@@ -825,6 +826,36 @@ adminApi.MapGet("/audit", async (Guid tenantId, int? offset, int? limit, HttpCon
         page.Total));
 });
 
+adminApi.MapGet("/audit:export", async (Guid tenantId, DateTimeOffset? fromUtc, DateTimeOffset? toUtc, int? limit, string? cursor, HttpContext context, AdminAccessService access, IAdminDirectoryStore directory, CancellationToken cancellationToken) =>
+{
+    AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
+    AdminAccessService.Require(admin, tenantId, AdminRole.Viewer, AdminRole.Operator, AdminRole.SecurityAdministrator);
+    DateTimeOffset from = RequireUtcIntervalBoundary(fromUtc);
+    DateTimeOffset to = RequireUtcIntervalBoundary(toUtc);
+    int pageLimit = limit ?? 100;
+    if (from >= to || pageLimit is < 1 or > 1000) throw new GatewayException("BGW-ADMIN-AUDIT-EXPORT", 400);
+    AuditExportCursor? parsedCursor = DecodeAuditExportCursor(cursor);
+    if (parsedCursor is not null && (parsedCursor.FromUtcTicks != from.UtcDateTime.Ticks || parsedCursor.ToUtcTicks != to.UtcDateTime.Ticks))
+        throw new GatewayException("BGW-ADMIN-AUDIT-EXPORT-CURSOR", 400);
+
+    DateTimeOffset? beforeOccurredAt = parsedCursor is null ? null : new DateTimeOffset(parsedCursor.BeforeUtcTicks, TimeSpan.Zero);
+    Guid? beforeId = parsedCursor?.BeforeId;
+    IReadOnlyList<GatewayAuditEvent> rows = await directory.ExportAuditAsync(tenantId, from, to, beforeOccurredAt, beforeId, pageLimit + 1, cancellationToken).ConfigureAwait(false);
+    GatewayAuditEvent[] pageRows = rows.Take(pageLimit).ToArray();
+    bool partial = rows.Count > pageLimit;
+    bool includeFailureDiagnostics = AdminAccessService.HasRole(admin, tenantId, AdminRole.SecurityAdministrator);
+    string? continuation = partial && pageRows.Length > 0
+        ? EncodeAuditExportCursor(new(from.UtcDateTime.Ticks, to.UtcDateTime.Ticks, pageRows[^1].OccurredAt.UtcDateTime.Ticks, pageRows[^1].Id))
+        : null;
+    return Results.Ok(new AdminAuditExportPage<AdminAuditExportEventResource>(
+        pageRows.Select(value => AuditExportResource(value, includeFailureDiagnostics)).ToArray(),
+        pageLimit,
+        from,
+        to,
+        continuation,
+        partial));
+});
+
 adminApi.MapPost("/bootstrap", async (HttpContext context, AdminAccessService access, IAdminSecurityStore securityStore, CancellationToken cancellationToken) =>
 {
     AdminAccessContext admin = await access.ResolveAsync(context.User, cancellationToken).ConfigureAwait(false);
@@ -1163,6 +1194,20 @@ static AdminAuditEventResource AuditResource(GatewayAuditEvent value, bool inclu
         value.CorrelationId, value.Outcome, value.ReasonCode, diagnostics);
 }
 
+static AdminAuditExportEventResource AuditExportResource(GatewayAuditEvent value, bool includeFailureDiagnostics)
+{
+    SafeFailureDiagnosticsResource? diagnostics = includeFailureDiagnostics && value.FailureDiagnostics is not null
+        ? new(
+            value.FailureDiagnostics.FailurePhase,
+            value.FailureDiagnostics.UpstreamStatus,
+            value.FailureDiagnostics.StatusCategory,
+            value.FailureDiagnostics.SafeUpstreamCode,
+            value.FailureDiagnostics.LocalSafeCode)
+        : null;
+    return new(value.Id, value.OccurredAt, value.ActorType, value.ActorId, value.Action, value.TargetType, value.TargetId,
+        value.CorrelationId, value.Outcome, value.ReasonCode, diagnostics);
+}
+
 static ConnectorApprovalResource ApprovalResource(ConnectorApprovalRecord value) =>
     new(value.Id, value.ConnectorVersionId, value.ChecksumSha256, value.BindingDigestSha256, value.RequestedBy, value.ApprovedBy, value.RejectedBy, value.Status.ToString(), value.RequestedAt);
 
@@ -1271,6 +1316,45 @@ static (int Offset, int Limit) PageArgs(int? offset, int? limit, string? filter)
     return (resolvedOffset, resolvedLimit);
 }
 
+static DateTimeOffset RequireUtcIntervalBoundary(DateTimeOffset? value)
+{
+    if (value is null || value.Value.Offset != TimeSpan.Zero) throw new GatewayException("BGW-ADMIN-AUDIT-EXPORT", 400);
+    return value.Value;
+}
+
+static string EncodeAuditExportCursor(AuditExportCursor cursor)
+{
+    string value = FormattableString.Invariant($"{cursor.FromUtcTicks}|{cursor.ToUtcTicks}|{cursor.BeforeUtcTicks}|{cursor.BeforeId:D}");
+    return Convert.ToBase64String(Encoding.ASCII.GetBytes(value)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+}
+
+static AuditExportCursor? DecodeAuditExportCursor(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value)) return null;
+    if (value.Length > 256) throw new GatewayException("BGW-ADMIN-AUDIT-EXPORT-CURSOR", 400);
+    try
+    {
+        string padded = value.Replace('-', '+').Replace('_', '/');
+        padded = padded.PadRight(padded.Length + (4 - padded.Length % 4) % 4, '=');
+        string decoded = Encoding.ASCII.GetString(Convert.FromBase64String(padded));
+        string[] parts = decoded.Split('|');
+        if (parts.Length != 4 ||
+            !long.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out long fromTicks) ||
+            !long.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out long toTicks) ||
+            !long.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out long beforeTicks) ||
+            !Guid.TryParseExact(parts[3], "D", out Guid beforeId))
+            throw new FormatException();
+        _ = new DateTimeOffset(fromTicks, TimeSpan.Zero);
+        _ = new DateTimeOffset(toTicks, TimeSpan.Zero);
+        _ = new DateTimeOffset(beforeTicks, TimeSpan.Zero);
+        return new(fromTicks, toTicks, beforeTicks, beforeId);
+    }
+    catch (Exception exception) when (exception is FormatException or ArgumentOutOfRangeException)
+    {
+        throw new GatewayException("BGW-ADMIN-AUDIT-EXPORT-CURSOR", 400);
+    }
+}
+
 static async Task<byte[]> ReadBodyAsync(HttpRequest request, CancellationToken cancellationToken)
     => await ReadBoundedBodyAsync(request, 16 * 1024 * 1024, cancellationToken).ConfigureAwait(false);
 
@@ -1287,3 +1371,5 @@ static T DeserializeRequired<T>(byte[] body) => JsonSerializer.Deserialize<T>(bo
 
 /// <summary>Gateway API entry point exposed for in-process integration tests.</summary>
 public partial class Program;
+
+internal sealed record AuditExportCursor(long FromUtcTicks, long ToUtcTicks, long BeforeUtcTicks, Guid BeforeId);

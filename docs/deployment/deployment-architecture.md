@@ -130,6 +130,11 @@ produces SDK packages, image archive, Admin archive, Core source archive, SBOM, 
 checksums without pushing. There is no pipeline for NuGet/container push,
 Authenticode, CMS, Cosign or SemVer publication.
 
+Release evidence binds only the artifact set intentionally produced for review or release.
+The manifest, checksums and SBOM identify content and dependency inventory; they do not
+authenticate the publisher and do not replace a signature. DCO sign-off records commit
+contribution certification, not downloaded-artifact origin.
+
 ## TARGET — Core `0.1.0-alpha.1`
 
 In the full repository, artifacts and gates are defined in `0.1.0-alpha-scope.md`, a
@@ -167,3 +172,6 @@ Production claims require at least:
 
 These controls require a real target and exact-head/environment gates. They are not inferred
 from synthetic laboratories or ADRs.
+Production or enterprise distribution also needs an approved support decision for each
+supported line: deployment modes, security update availability, end-of-support, signing
+status, SBOM availability, vulnerability handling and customer operational responsibilities.

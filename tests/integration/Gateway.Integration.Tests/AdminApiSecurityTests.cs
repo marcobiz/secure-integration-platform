@@ -168,6 +168,91 @@ public sealed class AdminApiSecurityTests
         Assert.DoesNotContain("syntax", body, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ADMIN_AUDIT_EXPORT_uses_interval_keyset_cursor_and_excludes_later_appends()
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        _ = await LoginAsync(client, "security-admin", TestContext.Current.CancellationToken);
+        Guid tenantId = await SeedExportAuditAsync(factory, TestContext.Current.CancellationToken);
+        DateTimeOffset from = new(2026, 9, 10, 12, 0, 0, TimeSpan.Zero);
+        DateTimeOffset to = new(2026, 9, 10, 12, 10, 0, TimeSpan.Zero);
+
+        using HttpResponseMessage first = await client.GetAsync($"/admin/api/v1/audit:export?tenantId={tenantId:D}&fromUtc={Uri.EscapeDataString(from.ToString("O"))}&toUtc={Uri.EscapeDataString(to.ToString("O"))}&limit=2", TestContext.Current.CancellationToken);
+        string firstBody = await first.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        first.EnsureSuccessStatusCode();
+        using JsonDocument firstDocument = JsonDocument.Parse(firstBody);
+        JsonElement[] firstItems = firstDocument.RootElement.GetProperty("items").EnumerateArray().ToArray();
+        Assert.Equal(2, firstItems.Length);
+        Assert.Equal("operation.invoke", firstItems[0].GetProperty("action").GetString());
+        Assert.Equal("admin", firstItems[0].GetProperty("actorType").GetString());
+        Assert.Equal("actor-newer", firstItems[0].GetProperty("actorId").GetString());
+        Assert.True(firstDocument.RootElement.GetProperty("partial").GetBoolean());
+        string continuation = firstDocument.RootElement.GetProperty("continuation").GetString()!;
+        Assert.DoesNotContain("metadata", firstBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("raw-secret-canary", firstBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("other-tenant", firstBody, StringComparison.Ordinal);
+
+        IAdminGatewayRegistry registry = factory.Services.GetRequiredService<IAdminGatewayRegistry>();
+        await registry.AppendAuditAsync(new(Guid.NewGuid(), to.AddSeconds(1), tenantId, "admin", "actor-after-watermark", "tenant.update", "tenant", tenantId.ToString("D"), Guid.NewGuid(), "success", "BGW-AFTER-WATERMARK", new Dictionary<string, string>()), TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage second = await client.GetAsync($"/admin/api/v1/audit:export?tenantId={tenantId:D}&fromUtc={Uri.EscapeDataString(from.ToString("O"))}&toUtc={Uri.EscapeDataString(to.ToString("O"))}&limit=2&cursor={Uri.EscapeDataString(continuation)}", TestContext.Current.CancellationToken);
+        second.EnsureSuccessStatusCode();
+        string secondBody = await second.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        using JsonDocument secondDocument = JsonDocument.Parse(secondBody);
+        JsonElement[] secondItems = secondDocument.RootElement.GetProperty("items").EnumerateArray().ToArray();
+        Assert.Equal(1, secondItems.Length);
+        Assert.Equal("tenant.create", secondItems[0].GetProperty("action").GetString());
+        Assert.False(secondDocument.RootElement.GetProperty("partial").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, secondDocument.RootElement.GetProperty("continuation").ValueKind);
+        Assert.DoesNotContain("actor-after-watermark", secondBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("other-tenant", secondBody, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("limit=0")]
+    [InlineData("limit=1001")]
+    [InlineData("fromUtc=2026-09-10T12%3A10%3A00Z&toUtc=2026-09-10T12%3A00%3A00Z&limit=2")]
+    [InlineData("fromUtc=2026-09-10T12%3A00%3A00%2B02%3A00&toUtc=2026-09-10T12%3A10%3A00Z&limit=2")]
+    [InlineData("cursor=not-a-cursor")]
+    public async Task ADMIN_AUDIT_EXPORT_rejects_invalid_bounds_limits_and_cursor(string query)
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        _ = await LoginAsync(client, "security-admin", TestContext.Current.CancellationToken);
+        Guid tenantId = await SeedExportAuditAsync(factory, TestContext.Current.CancellationToken);
+        string interval = query.Contains("fromUtc=", StringComparison.Ordinal)
+            ? query
+            : "fromUtc=2026-09-10T12%3A00%3A00.0000000Z&toUtc=2026-09-10T12%3A10%3A00.0000000Z&" + query;
+
+        using HttpResponseMessage response = await client.GetAsync($"/admin/api/v1/audit:export?tenantId={tenantId:D}&{interval}", TestContext.Current.CancellationToken);
+        JsonElement problem = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        string code = problem.GetProperty("code").GetString() ?? string.Empty;
+        Assert.Contains(code, new[] { "BGW-ADMIN-AUDIT-EXPORT", "BGW-ADMIN-AUDIT-EXPORT-CURSOR" });
+    }
+
+    [Theory]
+    [InlineData("viewer")]
+    [InlineData("operator")]
+    public async Task ADMIN_AUDIT_EXPORT_redacts_diagnostics_for_non_security_roles(string user)
+    {
+        await using AdminDevelopmentFactory factory = new();
+        using HttpClient administrator = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        _ = await LoginAsync(administrator, "security-admin", TestContext.Current.CancellationToken);
+        Guid tenantId = await SeedFailureAuditAsync(factory, TestContext.Current.CancellationToken);
+        using HttpClient client = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
+        _ = await LoginAsync(client, user, TestContext.Current.CancellationToken);
+
+        using HttpResponseMessage response = await client.GetAsync($"/admin/api/v1/audit:export?tenantId={tenantId:D}&fromUtc=2000-01-01T00%3A00%3A00.0000000Z&toUtc=2100-01-01T00%3A00%3A00.0000000Z", TestContext.Current.CancellationToken);
+        string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.DoesNotContain("failureDiagnostics", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("syntax", body, StringComparison.Ordinal);
+    }
+
     private static async Task<Guid> SeedFailureAuditAsync(AdminDevelopmentFactory factory, CancellationToken cancellationToken)
     {
         Guid tenantId = Guid.NewGuid();
@@ -187,6 +272,24 @@ public sealed class AdminApiSecurityTests
                 GatewayAuditStatusCategory.ClientError,
                 "syntax",
                 null)), cancellationToken);
+        return tenantId;
+    }
+
+    private static async Task<Guid> SeedExportAuditAsync(AdminDevelopmentFactory factory, CancellationToken cancellationToken)
+    {
+        Guid tenantId = Guid.NewGuid();
+        IAdminGatewayRegistry registry = factory.Services.GetRequiredService<IAdminGatewayRegistry>();
+        await registry.AddTenantAsync(new(tenantId, "export-" + tenantId.ToString("N"), "Export tenant", TenantStatus.Active, new DateTimeOffset(2026, 9, 10, 11, 59, 0, TimeSpan.Zero)), cancellationToken);
+        IReadOnlyList<(DateTimeOffset OccurredAt, string Actor, string Action, string Reason)> events =
+        [
+            (new DateTimeOffset(2026, 9, 10, 12, 5, 0, TimeSpan.Zero), "actor-newer", "operation.invoke", "BGW-OPERATION-OK"),
+            (new DateTimeOffset(2026, 9, 10, 12, 3, 0, TimeSpan.Zero), "actor-middle", "grant.create", "BGW-ADMIN-ACTION"),
+            (new DateTimeOffset(2026, 9, 10, 12, 1, 0, TimeSpan.Zero), "actor-older", "tenant.create", "BGW-ADMIN-ACTION"),
+            (new DateTimeOffset(2026, 9, 10, 11, 59, 0, TimeSpan.Zero), "actor-before", "tenant.disable", "BGW-BEFORE-INTERVAL")
+        ];
+        foreach ((DateTimeOffset occurredAt, string actor, string action, string reason) in events)
+            await registry.AppendAuditAsync(new(Guid.NewGuid(), occurredAt, tenantId, "admin", actor, action, "tenant", tenantId.ToString("D"), Guid.NewGuid(), "success", reason, new Dictionary<string, string> { ["canary"] = "raw-secret-canary" }), cancellationToken);
+        await registry.AppendAuditAsync(new(Guid.NewGuid(), new DateTimeOffset(2026, 9, 10, 12, 4, 0, TimeSpan.Zero), Guid.NewGuid(), "admin", "other-tenant", "tenant.create", "tenant", "other", Guid.NewGuid(), "success", "BGW-OTHER-TENANT", new Dictionary<string, string>()), cancellationToken);
         return tenantId;
     }
 

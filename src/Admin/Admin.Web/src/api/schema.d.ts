@@ -614,6 +614,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/api/v1/audit:export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Exports redacted audit events for one tenant in descending occurredAt/id order inside the fixed UTC interval [fromUtc,toUtc). Continuation is a keyset cursor bound to the same interval; events appended after the chosen toUtc watermark are outside this export. */
+        get: operations["exportAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/api/v1/connectors": {
         parameters: {
             query?: never;
@@ -1349,6 +1366,33 @@ export interface components {
         };
         AuditPage: components["schemas"]["Page"] & {
             items?: components["schemas"]["AuditEvent"][];
+        };
+        AuditExportEvent: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            occurredAt: string;
+            actorType: string;
+            actorId: string;
+            action: string;
+            targetType: string;
+            targetId: string;
+            /** Format: uuid */
+            correlationId: string;
+            outcome: string;
+            reasonCode: string;
+            /** @description Present only for an authenticated SecurityAdministrator with access to the audit tenant. */
+            failureDiagnostics?: components["schemas"]["SafeFailureDiagnostics"];
+        };
+        AuditExportPage: {
+            items: components["schemas"]["AuditExportEvent"][];
+            limit: number;
+            /** Format: date-time */
+            fromUtc: string;
+            /** Format: date-time */
+            toUtc: string;
+            continuation: string | null;
+            partial: boolean;
         };
         ConnectorSummary: {
             connectorId: string;
@@ -2949,6 +2993,36 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditPage"];
+                };
+            };
+            default: components["responses"]["Problem"];
+        };
+    };
+    exportAudit: {
+        parameters: {
+            query: {
+                tenantId: components["parameters"]["TenantId"];
+                /** @description Inclusive UTC lower bound. */
+                fromUtc: string;
+                /** @description Exclusive UTC upper watermark. */
+                toUtc: string;
+                limit?: number;
+                /** @description Opaque continuation returned by the previous response for the same interval. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Redacted audit export page. The response is partial when continuation is non-null. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditExportPage"];
                 };
             };
             default: components["responses"]["Problem"];

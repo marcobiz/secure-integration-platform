@@ -1,12 +1,18 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string] $PackageDirectory,
-    [Parameter(Mandatory = $true)][string] $ExpectedSourceCommit
+    [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string] $ExpectedSourceCommit,
+    [ValidatePattern('^[A-Fa-f0-9]{64}$')][string] $ExpectedManifestSha256
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $package = (Resolve-Path -LiteralPath $PackageDirectory).Path.TrimEnd('\')
-$manifest = Get-Content -LiteralPath (Join-Path $package 'package-manifest.json') -Raw | ConvertFrom-Json
+$manifestPath = Join-Path $package 'package-manifest.json'
+if (-not [string]::IsNullOrWhiteSpace($ExpectedManifestSha256) -and
+    (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -cne $ExpectedManifestSha256.ToUpperInvariant()) {
+    throw 'BROKER_PACKAGE_MANIFEST_HASH_MISMATCH'
+}
+$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 if ($manifest.schemaVersion -ne 1 -or $manifest.sourceCommit -cne $ExpectedSourceCommit -or
     $manifest.product -cne 'SecureIntegration.LocalBroker' -or $manifest.runtimeIdentifier -cne 'win-x64' -or
     -not $manifest.selfContained) { throw 'BROKER_PACKAGE_MANIFEST_INVALID' }

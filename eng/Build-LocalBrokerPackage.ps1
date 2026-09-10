@@ -74,9 +74,10 @@ $manifest = [ordered]@{
     files = $files
 }
 [IO.File]::WriteAllText((Join-Path $stage 'package-manifest.json'), ($manifest | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
-& (Join-Path $PSScriptRoot 'Test-LocalBrokerPackage.ps1') -PackageDirectory $stage -ExpectedSourceCommit $head
+$manifestHash = (Get-FileHash -LiteralPath (Join-Path $stage 'package-manifest.json') -Algorithm SHA256).Hash
+& (Join-Path $PSScriptRoot 'Test-LocalBrokerPackage.ps1') -PackageDirectory $stage -ExpectedSourceCommit $head -ExpectedManifestSha256 $manifestHash
 $archive = Join-Path $output ($packageName + '.zip')
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $archive -CompressionLevel Optimal
 $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
 [IO.File]::WriteAllText(($archive + '.sha256'), ($hash + '  ' + [IO.Path]::GetFileName($archive) + "`n"), [Text.UTF8Encoding]::new($false))
-Write-Output ('BROKER_PACKAGE=PASS SOURCE=' + $head + ' ARCHIVE=' + $archive)
+Write-Output ('BROKER_PACKAGE=PASS SOURCE=' + $head + ' MANIFEST_SHA256=' + $manifestHash + ' ARCHIVE=' + $archive)

@@ -10,7 +10,7 @@ foreach ($scriptFile in @('Build-LocalBrokerPackage.ps1', 'Test-LocalBrokerPacka
     [void][Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
     if ($errors.Count -ne 0) { throw 'DELIVERY_SCRIPT_PARSE_FAILED' }
 }
-foreach ($functionName in @('Assert-NoReparse', 'Get-OwnedService', 'Get-ApplicationUserSid', 'Write-Settings')) {
+foreach ($functionName in @('Assert-NoReparse', 'Get-OwnedService', 'Get-ApplicationUserSid', 'Assert-ExpectedPackage', 'Write-Settings')) {
     $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName }, $true)
     . ([ScriptBlock]::Create($definition.Extent.Text))
 }
@@ -25,7 +25,7 @@ $script:service = $null; $script:stops = 0
 function Get-CimInstance { param($ClassName, $Filter) return $script:service }
 function Invoke-ServiceAction { param($Action) if ($Action -cne 'Stop') { throw 'UNEXPECTED_SCM_MUTATION' }; $script:stops++; $script:service.State = 'Stopped' }
 function Get-Service { param($Name) return [pscustomobject]@{} | Add-Member -MemberType ScriptMethod -Name WaitForStatus -Value { param($State, $Timeout) if ($State -ne 'Stopped') { throw 'UNEXPECTED_WAIT' } } -PassThru }
-function Assert([bool] $Condition) { if (-not $Condition) { throw 'LIFECYCLE_ASSERTION_FAILED' } }
+function Assert([bool] $Condition) { if (-not $Condition) { throw ('LIFECYCLE_ASSERTION_FAILED: ' + (Get-PSCallStack)[1].ScriptLineNumber) } }
 function ExpectDenied { param([scriptblock] $Action) try { & $Action | Out-Null } catch { Assert ($_.Exception.Message -like 'LOCAL_BROKER_*'); return }; throw 'OWNERSHIP_WAS_NOT_DENIED' }
 try {
     New-Item -ItemType Directory -Path $root, $data -Force | Out-Null
@@ -121,18 +121,21 @@ try {
         $node.Member.Extent.Text -cin @('Environment', 'EnvironmentVariables') }, $true))
     Assert ($environmentAccess.Count -eq 0)
     $environmentField = [Diagnostics.ProcessStartInfo].GetField('environmentVariables', [Reflection.BindingFlags]'Instance,NonPublic')
-    Assert ($null -ne $environmentField)
-    $profileProbe = [Diagnostics.ProcessStartInfo]::new()
-    $profileProbe.UserName = $AccountName
-    $profileProbe.LoadUserProfile = $true
-    $profileProbe.UseShellExecute = $false
-    $profileProbe.RedirectStandardOutput = $true
-    $profileProbe.RedirectStandardError = $true
-    Assert ($null -eq $environmentField.GetValue($profileProbe))
-    $profileProbe.EnvironmentVariables.Remove('PSModulePath')
-    $copiedEnvironment = $environmentField.GetValue($profileProbe)
-    Assert ($null -ne $copiedEnvironment -and $copiedEnvironment['USERPROFILE'] -ceq $env:USERPROFILE)
-    Write-Output 'CREDENTIAL_FRAMEWORK_LAZY_PARENT_ENVIRONMENT_REGRESSION=PASS (no process or logon)'
+    if ($null -ne $environmentField) {
+        $profileProbe = [Diagnostics.ProcessStartInfo]::new()
+        $profileProbe.UserName = $AccountName
+        $profileProbe.LoadUserProfile = $true
+        $profileProbe.UseShellExecute = $false
+        $profileProbe.RedirectStandardOutput = $true
+        $profileProbe.RedirectStandardError = $true
+        Assert ($null -eq $environmentField.GetValue($profileProbe))
+        $profileProbe.EnvironmentVariables.Remove('PSModulePath')
+        $copiedEnvironment = $environmentField.GetValue($profileProbe)
+        Assert ($null -ne $copiedEnvironment -and $copiedEnvironment['USERPROFILE'] -ceq $env:USERPROFILE)
+        Write-Output 'CREDENTIAL_FRAMEWORK_LAZY_PARENT_ENVIRONMENT_REGRESSION=PASS (no process or logon)'
+    } else {
+        Write-Output 'CREDENTIAL_FRAMEWORK_LAZY_PARENT_ENVIRONMENT_REGRESSION=SKIP (private field unavailable; script environment access remains denied)'
+    }
 
     # Execute the shipped update branch with simulated process/SCM/copy failure.
     # The real settings write must disable initialization before the first copy.
@@ -146,16 +149,34 @@ try {
         Assert (-not $persisted.Broker.InitializeDataKeys)
         throw 'LOCAL_BROKER_COPY_FIXTURE_FAILURE'
     }
-    $BrokerPublishDirectory = $root; $brokerDirectory = $root
-    # Stop was exercised above; skip only the subprocess invocation of that same
-    # branch. Every subsequent settings/copy statement is the shipped code.
-    $updateAfterStop = ($updateBranch.Clauses[0].Item2.Statements | Select-Object -Skip 1 | ForEach-Object { $_.Extent.Text }) -join "`n"
+    $updatePackage = Join-Path $fixture 'update-package'
+    $BrokerPublishDirectory = Join-Path $updatePackage 'broker'
+    $SamplePublishDirectory = Join-Path $updatePackage 'sample'
+    New-Item -ItemType Directory -Path $BrokerPublishDirectory, $SamplePublishDirectory -Force | Out-Null
+    [IO.File]::WriteAllText((Join-Path $BrokerPublishDirectory 'SecureIntegration.Broker.Service.exe'), 'synthetic-broker')
+    [IO.File]::WriteAllText((Join-Path $SamplePublishDirectory 'SecureIntegration.Samples.LocalBroker.exe'), 'synthetic-sample')
+    $updatePackageFiles = @(Get-ChildItem -LiteralPath $updatePackage -Recurse -File | ForEach-Object {
+        @{ path = $_.FullName.Substring($updatePackage.Length + 1).Replace('\', '/'); bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
+    })
+    $ExpectedSourceCommit = 'b' * 40
+    [IO.File]::WriteAllText((Join-Path $updatePackage 'package-manifest.json'), (@{ schemaVersion = 1; product = 'SecureIntegration.LocalBroker'; sourceCommit = $ExpectedSourceCommit; runtimeIdentifier = 'win-x64'; selfContained = $true; integrity = 'SHA-256 inventory, not a signature or publisher authentication'; files = $updatePackageFiles } | ConvertTo-Json -Depth 5))
+    $ExpectedManifestSha256 = (Get-FileHash -LiteralPath (Join-Path $updatePackage 'package-manifest.json') -Algorithm SHA256).Hash
+    $brokerDirectory = $root
+    Assert-ExpectedPackage
+    # Package preflight and Stop were exercised above; skip only the subprocess
+    # invocation of Stop. Every subsequent settings/copy statement is shipped code.
+    $updateAfterStop = ($updateBranch.Clauses[0].Item2.Statements | Select-Object -Skip 2 | ForEach-Object { $_.Extent.Text }) -join "`n"
     ExpectDenied { & ([ScriptBlock]::Create($updateAfterStop)) }
     $persisted = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
     Assert (-not $persisted.Broker.InitializeDataKeys -and $persisted.Broker.InstallationId -ceq 'preserve-id')
     Assert ($persisted.Broker.Applications[0].AllowedUserSids[0] -ceq $ApplicationUserSid)
     Assert (Test-Path -LiteralPath (Join-Path $data 'preserve.bin'))
     Write-Output 'FAILED_UPDATE_DISALLOWS_INITIALIZATION_PRESERVES_STATE=PASS'
+
+    $ExpectedManifestSha256 = '0' * 64
+    ExpectDenied { Assert-ExpectedPackage }
+    Assert ((Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json).Broker.InstallationId -ceq 'preserve-id')
+    Write-Output 'UPDATE_PACKAGE_EXPECTED_MANIFEST_REQUIRED_AND_MISMATCH_DENIED=PASS'
 
     $packageFixture = Join-Path $fixture 'package'
     foreach ($component in @('broker', 'sample')) {
@@ -167,14 +188,19 @@ try {
     $packageFiles = @(Get-ChildItem -LiteralPath $packageFixture -Recurse -File | ForEach-Object {
         @{ path = $_.FullName.Substring($packageFixture.Length + 1).Replace('\', '/'); bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }
     })
-    $packageManifest = @{ schemaVersion = 1; product = 'SecureIntegration.LocalBroker'; sourceCommit = ('a' * 40); runtimeIdentifier = 'win-x64'; selfContained = $true; files = $packageFiles }
+    $packageManifest = @{ schemaVersion = 1; product = 'SecureIntegration.LocalBroker'; sourceCommit = ('a' * 40); runtimeIdentifier = 'win-x64'; selfContained = $true; integrity = 'SHA-256 inventory, not a signature or publisher authentication'; files = $packageFiles }
     [IO.File]::WriteAllText((Join-Path $packageFixture 'package-manifest.json'), ($packageManifest | ConvertTo-Json -Depth 5))
     $validator = Join-Path $PSScriptRoot '..\..\..\eng\Test-LocalBrokerPackage.ps1'
-    & $validator -PackageDirectory $packageFixture -ExpectedSourceCommit ('a' * 40) | Out-Null
+    $packageManifestHash = (Get-FileHash -LiteralPath (Join-Path $packageFixture 'package-manifest.json') -Algorithm SHA256).Hash
+    & $validator -PackageDirectory $packageFixture -ExpectedSourceCommit ('a' * 40) -ExpectedManifestSha256 $packageManifestHash | Out-Null
+    $denied = $false
+    try { & $validator -PackageDirectory $packageFixture -ExpectedSourceCommit ('a' * 40) -ExpectedManifestSha256 ('0' * 64) | Out-Null }
+    catch { $denied = $_.Exception.Message -ceq 'BROKER_PACKAGE_MANIFEST_HASH_MISMATCH' }
+    Assert $denied
     $tamper = Join-Path $packageFixture 'broker\coreclr.dll'
     [IO.File]::AppendAllText($tamper, '-tampered')
     $denied = $false
-    try { & $validator -PackageDirectory $packageFixture -ExpectedSourceCommit ('a' * 40) | Out-Null }
+    try { & $validator -PackageDirectory $packageFixture -ExpectedSourceCommit ('a' * 40) -ExpectedManifestSha256 $packageManifestHash | Out-Null }
     catch { $denied = $_.Exception.Message -ceq 'BROKER_PACKAGE_HASH_MISMATCH' }
     Assert $denied
     [IO.File]::WriteAllText($tamper, 'synthetic-not-a-runtime')

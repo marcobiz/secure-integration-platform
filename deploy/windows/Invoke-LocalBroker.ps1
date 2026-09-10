@@ -5,6 +5,8 @@ param(
     [ValidatePattern('^[a-zA-Z0-9-]{1,40}$')] [string] $Instance = 'sample',
     [string] $BrokerPublishDirectory = (Join-Path $PSScriptRoot 'broker'),
     [string] $SamplePublishDirectory = (Join-Path $PSScriptRoot 'sample'),
+    [ValidatePattern('^[0-9a-f]{40}$')] [string] $ExpectedSourceCommit,
+    [ValidatePattern('^[A-Fa-f0-9]{64}$')] [string] $ExpectedManifestSha256,
     [string] $ApplicationUserSid
 )
 $ErrorActionPreference = 'Stop'
@@ -96,6 +98,39 @@ function Copy-Published([string] $Source, [string] $Destination) {
         elseif ($file.Name -notlike 'appsettings*.json') { Copy-Item -LiteralPath $file.FullName -Destination $target -Force }
     }
 }
+function Assert-ExpectedPackage {
+    if ([string]::IsNullOrWhiteSpace($ExpectedSourceCommit) -or [string]::IsNullOrWhiteSpace($ExpectedManifestSha256)) {
+        throw 'LOCAL_BROKER_EXPECTED_PACKAGE_REQUIRED: confirm ExpectedSourceCommit and ExpectedManifestSha256 through the operator trusted channel.'
+    }
+    $brokerSource = (Resolve-Path -LiteralPath $BrokerPublishDirectory).Path.TrimEnd('\')
+    $sampleSource = (Resolve-Path -LiteralPath $SamplePublishDirectory).Path.TrimEnd('\')
+    $package = Split-Path -Parent $brokerSource
+    if ((Split-Path -Parent $sampleSource) -cne $package) { throw 'LOCAL_BROKER_PACKAGE_LAYOUT_INVALID' }
+    $manifestPath = Join-Path $package 'package-manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'LOCAL_BROKER_PACKAGE_MANIFEST_REQUIRED' }
+    if ((Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -cne $ExpectedManifestSha256.ToUpperInvariant()) {
+        throw 'LOCAL_BROKER_PACKAGE_MANIFEST_HASH_MISMATCH'
+    }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if ($manifest.schemaVersion -ne 1 -or $manifest.sourceCommit -cne $ExpectedSourceCommit -or
+        $manifest.product -cne 'SecureIntegration.LocalBroker' -or $manifest.runtimeIdentifier -cne 'win-x64' -or
+        -not $manifest.selfContained -or [string]$manifest.integrity -cne 'SHA-256 inventory, not a signature or publisher authentication') {
+        throw 'LOCAL_BROKER_PACKAGE_MANIFEST_INVALID'
+    }
+    $actual = @(Get-ChildItem -LiteralPath $package -Recurse -File | ForEach-Object { $_.FullName.Substring($package.Length + 1).Replace('\', '/') })
+    $expected = @($manifest.files.path) + @('package-manifest.json')
+    if (@(Compare-Object $actual $expected).Count -ne 0 -or @($expected | Select-Object -Unique).Count -ne $expected.Count) {
+        throw 'LOCAL_BROKER_PACKAGE_INVENTORY_MISMATCH'
+    }
+    foreach ($entry in $manifest.files) {
+        if ($entry.path -cnotmatch '^(broker|sample)/[a-zA-Z0-9_./-]+\.(dll|exe|deps\.json|runtimeconfig\.json|txt)$' -and
+            $entry.path -cnotin @('Invoke-LocalBroker.ps1', 'README.md', 'LICENSE', 'LICENSE-APACHE-2.0', 'NOTICE')) { throw 'LOCAL_BROKER_PACKAGE_FILE_DENIED' }
+        $path = [IO.Path]::GetFullPath((Join-Path $package $entry.path))
+        if (-not $path.StartsWith($package + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'LOCAL_BROKER_PACKAGE_PATH_DENIED' }
+        if ((Get-Item -LiteralPath $path).Length -ne $entry.bytes -or
+            (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -cne $entry.sha256) { throw 'LOCAL_BROKER_PACKAGE_HASH_MISMATCH' }
+    }
+}
 function Write-Settings($Value) {
     Assert-NoReparse $settingsPath
     [IO.File]::WriteAllText($settingsPath, ($Value | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
@@ -126,7 +161,9 @@ if ($Command -eq 'Verify') {
     $envelope = Join-Path $env:TEMP ($name + '.envelope')
     if (Test-Path -LiteralPath $envelope) { throw 'LOCAL_BROKER_VERIFY_ENVELOPE_COLLISION' }
     try {
-        & $PSCommandPath -Command Install -Instance $Instance -BrokerPublishDirectory $BrokerPublishDirectory -SamplePublishDirectory $SamplePublishDirectory -ApplicationUserSid $identity.User.Value
+        $manifestHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'package-manifest.json') -Algorithm SHA256).Hash
+        $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'package-manifest.json') -Raw | ConvertFrom-Json
+        & $PSCommandPath -Command Install -Instance $Instance -BrokerPublishDirectory $BrokerPublishDirectory -SamplePublishDirectory $SamplePublishDirectory -ExpectedSourceCommit $manifest.sourceCommit -ExpectedManifestSha256 $manifestHash -ApplicationUserSid $identity.User.Value
         & $PSCommandPath -Command Start -Instance $Instance
         Invoke-Sample 'protect' $envelope
         Write-Output ('FIRST_PROTECT_MS=' + $started.ElapsedMilliseconds)
@@ -141,7 +178,7 @@ if ($Command -eq 'Verify') {
         # The same registration from the unstaged executable must fail process/path authorization.
         & (Join-Path $SamplePublishDirectory 'SecureIntegration.Samples.LocalBroker.exe') 'denied' $name $name 'local-sample' '-'
         if ($LASTEXITCODE -ne 0) { throw 'LOCAL_BROKER_UNAUTHORIZED_PROCESS_TEST_FAILED' }
-        & $PSCommandPath -Command Update -Instance $Instance -BrokerPublishDirectory $BrokerPublishDirectory -SamplePublishDirectory $SamplePublishDirectory
+        & $PSCommandPath -Command Update -Instance $Instance -BrokerPublishDirectory $BrokerPublishDirectory -SamplePublishDirectory $SamplePublishDirectory -ExpectedSourceCommit $manifest.sourceCommit -ExpectedManifestSha256 $manifestHash
         Invoke-Sample 'verify' $envelope
         $after = @(Get-ChildItem -LiteralPath (Join-Path $data 'keys') -File | Sort-Object Name | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
         if (($stateHashes -join ',') -cne ($after -join ',') -or $acl -cne (Get-Acl -LiteralPath $data).Sddl -or
@@ -174,6 +211,7 @@ if ($Command -eq 'Install') {
     if (-not $BrokerPublishDirectory -or -not $SamplePublishDirectory) { throw 'LOCAL_BROKER_PUBLISH_DIRECTORY_REQUIRED' }
     if (-not (Test-Path -LiteralPath (Join-Path $BrokerPublishDirectory 'SecureIntegration.Broker.Service.exe')) -or
         -not (Test-Path -LiteralPath (Join-Path $SamplePublishDirectory 'SecureIntegration.Samples.LocalBroker.exe'))) { throw 'LOCAL_BROKER_PUBLISHED_APPHOST_REQUIRED' }
+    Assert-ExpectedPackage
     if (Test-Path -LiteralPath $marker) {
         $record = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
         if ($owned -and (Test-Path -LiteralPath $settingsPath) -and (Test-Path -LiteralPath $sample) -and (Test-Path -LiteralPath $executable)) {
@@ -211,6 +249,7 @@ if ($Command -eq 'Install') {
 }
 if (-not $owned) { throw 'LOCAL_BROKER_SERVICE_ABSENT: install a fresh instance or restore the existing installation; do not reinitialize data.' }
 if ($Command -eq 'Update') {
+    Assert-ExpectedPackage
     & $PSCommandPath -Command Stop -Instance $Instance
     # A failed copy must never leave first-install initialization enabled.
     $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json

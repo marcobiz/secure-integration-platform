@@ -82,6 +82,21 @@ including when two requests arrive concurrently.
 - `/health/live` checks the process; `/health/ready` includes required dependencies.
 - Audit retains bounded metadata, not payloads, credentials, cookies, headers or raw responses.
 - Locally, the **Audit** page is `/admin/audit`.
+- Export audit evidence with the authenticated Admin API, not SQL or direct store access:
+
+```bash
+curl --fail-with-body --cookie admin.cookies \
+  "https://gateway.example/admin/api/v1/audit:export?tenantId=<tenant-id>&fromUtc=2026-09-10T00%3A00%3A00Z&toUtc=2026-09-11T00%3A00%3A00Z&limit=1000"
+```
+
+The export interval is `[fromUtc,toUtc)`, both boundaries must be UTC, and results
+are ordered by `occurredAt DESC, id DESC`. When `partial` is `true`, call the same
+URL again with the returned `continuation`; the continuation is bound to the same
+interval and is rejected with different bounds. Choose `toUtc` as the export
+watermark before starting. Events appended after that watermark are outside the
+export and belong to a later run. The export contains event ID, UTC timestamp,
+minimized actor type/ID, action, outcome/reason codes, target, correlation ID and
+only the bounded diagnostics already authorized for a Security Administrator.
 - On 429 or an expired session, read server-side state and repeat only the action
   declared retry-safe. Do not wait in a loop or restart the whole onboarding process.
 - Provider/binding drift makes Published authority stale before signing/network use;

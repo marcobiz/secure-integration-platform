@@ -455,6 +455,23 @@ paths:
       security: [{ AdminSession: [] }]
       parameters: [{ $ref: '#/components/parameters/TenantId' }, { $ref: '#/components/parameters/Offset' }, { $ref: '#/components/parameters/Limit' }]
       responses: { '200': { description: Redacted audit page, content: { application/json: { schema: { $ref: '#/components/schemas/AuditPage' } } } }, default: { $ref: '#/components/responses/Problem' } }
+  /admin/api/v1/audit:export:
+    get:
+      tags: [Administration]
+      operationId: exportAudit
+      description: Exports redacted audit events for one tenant in descending occurredAt/id order inside the fixed UTC interval [fromUtc,toUtc). Continuation is a keyset cursor bound to the same interval; events appended after the chosen toUtc watermark are outside this export.
+      security: [{ AdminSession: [] }]
+      parameters:
+        - $ref: '#/components/parameters/TenantId'
+        - { name: fromUtc, in: query, required: true, schema: { type: string, format: date-time }, description: Inclusive UTC lower bound. }
+        - { name: toUtc, in: query, required: true, schema: { type: string, format: date-time }, description: Exclusive UTC upper watermark. }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 1000, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string, minLength: 1, maxLength: 256 }, description: Opaque continuation returned by the previous response for the same interval. }
+      responses:
+        '200':
+          description: Redacted audit export page. The response is partial when continuation is non-null.
+          content: { application/json: { schema: { $ref: '#/components/schemas/AuditExportPage' } } }
+        default: { $ref: '#/components/responses/Problem' }
   /admin/api/v1/connectors:
     get:
       tags: [ConnectorsAdmin]
@@ -912,6 +929,35 @@ components:
           enum: [null, FSE2_RESPONSE_INVALID]
     AuditPage:
       allOf: [{ $ref: '#/components/schemas/Page' }, { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } } } }]
+    AuditExportEvent:
+      type: object
+      additionalProperties: false
+      required: [id, occurredAt, actorType, actorId, action, targetType, targetId, correlationId, outcome, reasonCode]
+      properties:
+        id: { type: string, format: uuid }
+        occurredAt: { type: string, format: date-time }
+        actorType: { type: string }
+        actorId: { type: string }
+        action: { type: string }
+        targetType: { type: string }
+        targetId: { type: string }
+        correlationId: { type: string, format: uuid }
+        outcome: { type: string }
+        reasonCode: { type: string }
+        failureDiagnostics:
+          description: Present only for an authenticated SecurityAdministrator with access to the audit tenant.
+          $ref: '#/components/schemas/SafeFailureDiagnostics'
+    AuditExportPage:
+      type: object
+      additionalProperties: false
+      required: [items, limit, fromUtc, toUtc, continuation, partial]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AuditExportEvent' } }
+        limit: { type: integer, minimum: 1, maximum: 1000 }
+        fromUtc: { type: string, format: date-time }
+        toUtc: { type: string, format: date-time }
+        continuation: { type: [string, 'null'] }
+        partial: { type: boolean }
     ConnectorSummary:
       type: object
       required: [connectorId, displayName, versions, publicationRevision]

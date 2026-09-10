@@ -114,6 +114,9 @@ Audit and invocation events are metadata-only: no bodies, Authorization/Cookie, 
 passwords, private keys or raw responses. Code and `gateway_runtime` emit INSERT only.
 Additive migration 0017 corrects the broad grant in 0001: it revokes UPDATE/DELETE/
 TRUNCATE on `audit_event` and all unnecessary Admin privileges on `invocation_event`.
+The Admin audit export is an authenticated, tenant-scoped API read path over the same
+metadata-only records. It uses a fixed UTC interval, descending keyset pagination and
+a continuation bound to the same interval; it does not expose direct SQL/store access.
 Consequently:
 
 - metadata-only audit is **CURRENT** and tested;
@@ -150,6 +153,10 @@ tokens, passwords/PINs/OTPs, private keys/PFX, activation codes and unnecessary 
 secret/dependency/container checks, SPDX SBOM, Core export and architecture boundary tests.
 The module loader checks the exact local path, assembly identity/type/module ID and MVID
 on the same bytes; ACLs/provenance remain deployment responsibilities.
+The Windows Local Broker delivery package contains a SHA-256 file inventory and requires
+operator-provided expected source commit and manifest SHA-256 before install or update.
+This detects mismatch against the operator's trusted channel, but it is not publisher
+authentication.
 
 **TARGET:** Authenticode/CMS/Cosign, module publisher allowlist/hash manifests, release
 publishing, signed provenance and CycloneDX. These are not baseline guarantees.
@@ -171,6 +178,11 @@ or signed provenance; see [CoreExportInventory.psm1](../../eng/CoreExportInvento
   completeness from the observed CDA/workflow live qualification and remaining limits.
   The [current pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
   owns the procedure and live evidence; neither implies overall live qualification.
+- Hashes, manifests, SBOMs, DCO sign-off and Git commit IDs do not mean artifact
+  signature or publisher authenticity.
+- Self-managed deployment evidence does not operate the customer's IdP, SOC, CSIRT,
+  backup, restore, notification or access-review process, and does not decide the
+  customer's CRA, NIS2, sector or procurement obligations.
 
 ## Declared risks
 

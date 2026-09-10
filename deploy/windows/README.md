@@ -3,7 +3,9 @@
 Extract the complete archive into a new directory. `package-manifest.json` records
 the source commit, version and SHA-256 inventory; the adjacent `.zip.sha256` checks
 download integrity. These checksums are **not signatures or publisher authentication**.
-Obtain the archive and expected checksum through a trusted channel.
+Obtain the archive, expected source commit, archive checksum and manifest checksum
+through a trusted operator-controlled channel. Do not trust values found only inside
+the archive as release authenticity.
 
 The package includes .NET 10: no Git, .NET SDK/runtime installation, Node, Docker,
 Gateway, database or cloud account is required for local protection. Use Windows
@@ -26,6 +28,18 @@ Windows PowerShell, set `$applicationSid` to that observed SID, then run:
 .\Invoke-LocalBroker.ps1 -Command Install -Instance sample -ApplicationUserSid $applicationSid
 .\Invoke-LocalBroker.ps1 -Command Start -Instance sample
 ```
+
+`Install` and `Update` require the expected source commit and manifest SHA-256.
+For example:
+
+```powershell
+$expectedSource = '0123456789abcdef0123456789abcdef01234567'
+$expectedManifest = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+.\Invoke-LocalBroker.ps1 -Command Install -Instance sample -ApplicationUserSid $applicationSid -ExpectedSourceCommit $expectedSource -ExpectedManifestSha256 $expectedManifest
+```
+
+Those expected values must come from the trusted channel you use to approve the
+update, not from the package being installed.
 
 Do not substitute the setup administrator's SID unless that is actually the
 application account. Setup grants only that exact account and the installed sample
@@ -172,16 +186,19 @@ To update, obtain a new build, verify its inventory and extract into a **new** d
 Run this from that new package, elevated:
 
 ```powershell
-.\Invoke-LocalBroker.ps1 -Command Update -Instance sample
+.\Invoke-LocalBroker.ps1 -Command Update -Instance sample -ExpectedSourceCommit $expectedSource -ExpectedManifestSha256 $expectedManifest
 ```
 
 Then run `verify` as the ordinary application user against the original envelope.
 Update preserves policy/identity/keys and updates the authorized sample hash; key
-initialization is disabled before copying. A failed update reports failure and
+initialization is disabled before copying. Manifest, source-commit or inventory
+mismatches are rejected before the service is stopped or files are copied. A failed update reports failure and
 preserves state: fix the cause and explicitly repeat Update, never Install or key
 initialization as recovery. This is not transactional rollback or a general guarantee
 of compatibility across releases; compare the declared source commits, not just
-the shared alpha version.
+the shared alpha version. The current package remains UNSIGNED_ARTIFACTS:
+PUBLISHER_AUTHENTICITY_NOT_QUALIFIED is an explicit limit until a later authorized
+signing design exists.
 
 Back up installation metadata, policy, the complete protected data directory and
 ciphertext while stopped, retaining ACLs and the Windows/service profile required

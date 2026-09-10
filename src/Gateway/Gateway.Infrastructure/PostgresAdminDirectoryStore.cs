@@ -1,6 +1,7 @@
 using System.Data;
 using System.Text.Json;
 using Npgsql;
+using NpgsqlTypes;
 using SecureIntegration.Gateway.Application;
 using SecureIntegration.Gateway.Domain;
 
@@ -59,6 +60,30 @@ public sealed class PostgresAdminDirectoryStore(AdminPostgresDataSource adminDat
     public Task<AdminPage<GatewayAuditEvent>> ListAuditAsync(Guid tenantId, int offset, int limit, CancellationToken cancellationToken) => QueryTenantAsync<GatewayAuditEvent>(tenantId,
         "SELECT id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted::text,failure_phase,upstream_status,status_category,safe_upstream_code,local_safe_code FROM gateway.audit_event WHERE tenant_id=$1 ORDER BY occurred_at DESC,id DESC OFFSET $2 LIMIT $3", "SELECT count(*) FROM gateway.audit_event WHERE tenant_id=$1",
         reader => new(reader.GetGuid(0), reader.GetFieldValue<DateTimeOffset>(1), reader.GetGuid(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7), reader.GetGuid(8), reader.GetString(9), reader.GetString(10), JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(11)) ?? new(), GatewayAuditFailureDiagnosticsStorage.Read(reader, 12)), offset, limit, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<GatewayAuditEvent>> ExportAuditAsync(Guid tenantId, DateTimeOffset fromUtc, DateTimeOffset toUtc, DateTimeOffset? beforeOccurredAtUtc, Guid? beforeId, int limit, CancellationToken cancellationToken)
+    {
+        ValidateExport(fromUtc, toUtc, beforeOccurredAtUtc, beforeId, limit);
+        List<GatewayAuditEvent> values = [];
+        await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await SetTenantAsync(connection, transaction, tenantId, cancellationToken).ConfigureAwait(false);
+        await using NpgsqlCommand command = new(
+            "SELECT id,occurred_at,tenant_id,actor_type,actor_id,action,target_type,target_id,correlation_id,outcome,reason_code,metadata_redacted::text,failure_phase,upstream_status,status_category,safe_upstream_code,local_safe_code FROM gateway.audit_event WHERE tenant_id=$1 AND occurred_at >= $2 AND occurred_at < $3 AND ($4::timestamptz IS NULL OR (occurred_at,id) < ($4,$5)) ORDER BY occurred_at DESC,id DESC LIMIT $6",
+            connection,
+            transaction);
+        command.Parameters.AddWithValue(tenantId);
+        command.Parameters.AddWithValue(fromUtc);
+        command.Parameters.AddWithValue(toUtc);
+        command.Parameters.Add(new() { Value = beforeOccurredAtUtc is null ? DBNull.Value : beforeOccurredAtUtc, NpgsqlDbType = NpgsqlDbType.TimestampTz });
+        command.Parameters.Add(new() { Value = beforeId is null ? DBNull.Value : beforeId, NpgsqlDbType = NpgsqlDbType.Uuid });
+        command.Parameters.AddWithValue(limit);
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            values.Add(new(reader.GetGuid(0), reader.GetFieldValue<DateTimeOffset>(1), reader.GetGuid(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetString(7), reader.GetGuid(8), reader.GetString(9), reader.GetString(10), JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(11)) ?? new(), GatewayAuditFailureDiagnosticsStorage.Read(reader, 12)));
+        return values;
+    }
 
     private async Task<AdminPage<T>> QueryAsync<T>(string sql, string countSql, Func<NpgsqlDataReader, T> read, int offset, int limit, CancellationToken cancellationToken)
     {
@@ -125,4 +150,10 @@ public sealed class PostgresAdminDirectoryStore(AdminPostgresDataSource adminDat
     private static TenantRecord ReadTenant(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Enum.Parse<TenantStatus>(reader.GetString(3), true), reader.GetFieldValue<DateTimeOffset>(4), reader.GetInt64(5));
     private static ApplicationRecord ReadApplication(NpgsqlDataReader reader) => new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), Enum.Parse<ApplicationStatus>(reader.GetString(3), true), reader.GetString(4), reader.IsDBNull(5) ? null : reader.GetString(5), reader.GetFieldValue<DateTimeOffset>(6), reader.GetInt64(7));
     private static void ValidatePage(int offset, int limit) { if (offset < 0 || limit is < 1 or > 100) throw new GatewayException("BGW-ADMIN-PAGINATION", 400); }
+    private static void ValidateExport(DateTimeOffset fromUtc, DateTimeOffset toUtc, DateTimeOffset? beforeOccurredAtUtc, Guid? beforeId, int limit)
+    {
+        if (fromUtc.Offset != TimeSpan.Zero || toUtc.Offset != TimeSpan.Zero || fromUtc >= toUtc || limit is < 1 or > 1001 ||
+            (beforeOccurredAtUtc is null) != (beforeId is null) || beforeOccurredAtUtc?.Offset != TimeSpan.Zero)
+            throw new GatewayException("BGW-ADMIN-AUDIT-EXPORT", 400);
+    }
 }

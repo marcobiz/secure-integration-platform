@@ -59,6 +59,9 @@ public interface IAdminSessionStore
 /// <summary>Bounded administrative result page.</summary>
 public sealed record AdminPage<T>(IReadOnlyList<T> Items, int Offset, int Limit, int Total);
 
+/// <summary>Bounded keyset audit export page inside one fixed UTC interval.</summary>
+public sealed record AdminAuditExportPage<T>(IReadOnlyList<T> Items, int Limit, DateTimeOffset FromUtc, DateTimeOffset ToUtc, string? Continuation, bool Partial);
+
 /// <summary>Provider-neutral, read-only administrative catalogue. Secret values are absent by design.</summary>
 public interface IAdminDirectoryStore
 {
@@ -80,6 +83,8 @@ public interface IAdminDirectoryStore
     Task<AdminPage<InstallationGrantRecord>> ListGrantsAsync(Guid tenantId, int offset, int limit, CancellationToken cancellationToken);
     /// <summary>Lists metadata-only audit events inside one authorized tenant.</summary>
     Task<AdminPage<GatewayAuditEvent>> ListAuditAsync(Guid tenantId, int offset, int limit, CancellationToken cancellationToken);
+    /// <summary>Exports metadata-only audit events inside one authorized tenant using a descending keyset cursor.</summary>
+    Task<IReadOnlyList<GatewayAuditEvent>> ExportAuditAsync(Guid tenantId, DateTimeOffset fromUtc, DateTimeOffset toUtc, DateTimeOffset? beforeOccurredAtUtc, Guid? beforeId, int limit, CancellationToken cancellationToken);
 }
 
 /// <summary>Resolved principal and immutable assignments for one request.</summary>

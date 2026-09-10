@@ -45,6 +45,20 @@ public sealed record AdminAuditEventResource(
     string ReasonCode,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] SafeFailureDiagnosticsResource? FailureDiagnostics);
 
+/// <summary>Audit export projection with minimized actor identity included for operator evidence.</summary>
+public sealed record AdminAuditExportEventResource(
+    Guid Id,
+    DateTimeOffset OccurredAt,
+    string ActorType,
+    string ActorId,
+    string Action,
+    string TargetType,
+    string TargetId,
+    Guid CorrelationId,
+    string Outcome,
+    string ReasonCode,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] SafeFailureDiagnosticsResource? FailureDiagnostics);
+
 /// <summary>Redacted approval resource with canonical hexadecimal digests.</summary>
 public sealed record ConnectorApprovalResource(Guid Id, Guid ConnectorVersionId, string ChecksumSha256, string BindingDigestSha256, Guid RequestedBy, Guid? ApprovedBy, Guid? RejectedBy, string Status, DateTimeOffset RequestedAt);
 

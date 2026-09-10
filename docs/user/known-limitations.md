@@ -13,6 +13,12 @@
   and a new run.
 - Live cloud use, MSI, C ABI/COM adapters, HA/DR, restore/load/soak, penetration testing
   and artifact signing are not qualified.
+- Open-source licensing and self-managed deployment do not by themselves establish legal
+  exclusion from CRA, NIS2, sector rules, procurement duties or customer supply-chain
+  review. Users must assess their own role, jurisdiction, sector and operating model.
+- Checksums, Git commits, DCO sign-off, SBOMs and manifests help identify reviewed
+  content, but current artifacts are not signed and no cryptographic publisher-origin
+  guarantee is claimed.
 
 ## FSE2
 
@@ -48,6 +54,10 @@ proves the boundary using a real Windows Service on historical baselines, not an
 installer or a current adopter-facing demo. The Direct Core pilot does not exercise
 that path. C ABI/COM adapters are not qualified; Administrator and SYSTEM remain
 privileged residual threats, not subjects fully isolated from the Broker.
+Local Broker recovery is bounded by Windows identity and DPAPI behavior. A useful backup
+must preserve the complete protected data directory, installation metadata, policy,
+ciphertext, ACLs and the Windows/service identity state needed by DPAPI; copied blobs
+alone are not a portable recovery package.
 
 ## Adoption rule
 
