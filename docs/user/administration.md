@@ -91,10 +91,15 @@ curl --fail-with-body --cookie admin.cookies \
 
 The export interval is `[fromUtc,toUtc)`, both boundaries must be UTC, and results
 are ordered by `occurredAt DESC, id DESC`. When `partial` is `true`, call the same
-URL again with the returned `continuation`; the continuation is bound to the same
+URL again with `cursor` set to the returned `continuation`; it is bound to the same
 interval and is rejected with different bounds. Choose `toUtc` as the export
-watermark before starting. Events appended after that watermark are outside the
-export and belong to a later run. The export contains event ID, UTC timestamp,
+upper event-time boundary before starting. Events with `occurredAt >= toUtc` are
+outside the export. This is not a database snapshot: a late insert inside the
+interval is visible on a later page only if its `(occurredAt,id)` sorts below the
+last returned cursor. An insert above that cursor is missed by the ongoing run;
+repeat an overlapping interval and deduplicate by event ID when collecting late
+events. `partial=false` ends the currently visible page sequence, not future writes.
+The export contains event ID, UTC timestamp,
 minimized actor type/ID, action, outcome/reason codes, target, correlation ID and
 only the bounded diagnostics already authorized for a Security Administrator.
 - On 429 or an expired session, read server-side state and repeat only the action

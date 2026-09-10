@@ -117,6 +117,8 @@ public static class BackendRuntimeWireCodes
         new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-FOUR-EYES"),
         new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-IDENTITY"),
         new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-PAGINATION"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-AUDIT-EXPORT"),
+        new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-AUDIT-EXPORT-CURSOR"),
         new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-PRINCIPAL-DISABLED"),
         new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-PRINCIPAL-NOT-FOUND"),
         new(RuntimeWireCodeKind.Reason, "BGW-ADMIN-ROLE-ASSIGNED"),

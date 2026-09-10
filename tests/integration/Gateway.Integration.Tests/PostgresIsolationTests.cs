@@ -18,6 +18,74 @@ namespace SecureIntegration.Gateway.Integration.Tests;
 [Collection(PostgreSqlSharedDatabaseGroup.Name)]
 public sealed class PostgresIsolationTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ADMIN_AUDIT_EXPORT_store_pages_ties_isolates_tenants_and_observes_late_inserts_without_snapshot(bool postgres)
+    {
+        string? adminConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_ADMIN_CONNECTION");
+        string? migrationConnection = Environment.GetEnvironmentVariable("GATEWAY_POSTGRES_MIGRATION_CONNECTION");
+        if (postgres && (string.IsNullOrWhiteSpace(adminConnection) || string.IsNullOrWhiteSpace(migrationConnection)))
+            Assert.Skip("The dedicated PostgreSQL 18 gate must provide admin and migration connections.");
+        if (postgres) await ApplyMigrationAsync();
+        await using AdminPostgresDataSource? pool = postgres ? new(adminConnection!) : null;
+        InMemoryGatewayRegistry memory = new();
+        IAdminGatewayRegistry registry = postgres ? new PostgresGatewayRegistry(pool!.Value) : memory;
+        IAdminDirectoryStore store = postgres ? new PostgresAdminDirectoryStore(pool!) : new InMemoryAdminDirectoryStore(memory);
+        CancellationToken token = TestContext.Current.CancellationToken;
+        Guid tenant = Guid.NewGuid(), other = Guid.NewGuid();
+        DateTimeOffset from = new(2026, 9, 10, 12, 0, 0, TimeSpan.Zero), to = from.AddMinutes(10);
+        GatewayAuditEvent Event(DateTimeOffset at, Guid tenantId) => new(Guid.NewGuid(), at, tenantId,
+            "admin", "export-fixture", "tenant.update", "tenant", tenantId.ToString("D"), Guid.NewGuid(),
+            "success", "BGW-ADMIN-ACTION", new Dictionary<string, string>());
+        try
+        {
+            foreach (Guid id in new[] { tenant, other })
+                await registry.AddTenantAsync(new(id, "export-" + id.ToString("N"), "Export fixture", TenantStatus.Active, from), token);
+            GatewayAuditEvent[] initial = [Event(from.AddMinutes(5), tenant), Event(from.AddMinutes(3), tenant),
+                Event(from.AddMinutes(3), tenant), Event(from, tenant)];
+            foreach (GatewayAuditEvent value in initial.Append(Event(from.AddMinutes(4), other)).Append(Event(from.AddTicks(-10), tenant)))
+                await registry.AppendAuditAsync(value, token);
+            GatewayAuditEvent[] ordered = initial.OrderByDescending(value => value.OccurredAt).ThenByDescending(value => value.Id).ToArray();
+            IReadOnlyList<GatewayAuditEvent> first = await store.ExportAuditAsync(tenant, from, to, null, null, 2, token);
+            Assert.Equal(ordered.Take(2).Select(value => value.Id), first.Select(value => value.Id));
+            GatewayAuditEvent behind = Event(from.AddMinutes(2), tenant);
+            GatewayAuditEvent ahead = Event(from.AddMinutes(4), tenant);
+            // Commits between page requests: only rows below the cursor remain reachable.
+            await Task.WhenAll(new[] { behind, ahead, Event(to, tenant) }.Select(value => registry.AppendAuditAsync(value, token)));
+            IReadOnlyList<GatewayAuditEvent> second = await store.ExportAuditAsync(tenant, from, to, first[^1].OccurredAt, first[^1].Id, 2, token);
+            Assert.Equal(new[] { ordered[2].Id, behind.Id }, second.Select(value => value.Id));
+            IReadOnlyList<GatewayAuditEvent> last = await store.ExportAuditAsync(tenant, from, to, second[^1].OccurredAt, second[^1].Id, 2, token);
+            Assert.Equal(ordered[3].Id, Assert.Single(last).Id);
+            Assert.Empty(await store.ExportAuditAsync(tenant, from, to, last[^1].OccurredAt, last[^1].Id, 2, token));
+            Assert.Contains(await store.ExportAuditAsync(tenant, from, to, null, null, 1001, token), value => value.Id == ahead.Id);
+            Assert.Single(await store.ExportAuditAsync(other, from, to, null, null, 2, token));
+            Assert.Empty(await store.ExportAuditAsync(Guid.NewGuid(), from, to, null, null, 2, token));
+            foreach ((DateTimeOffset start, DateTimeOffset end, DateTimeOffset? cursor, Guid? id, int limit) in new (DateTimeOffset, DateTimeOffset, DateTimeOffset?, Guid?, int)[]
+            {
+                (from, to, null, Guid.NewGuid(), 2), (from, to, from, null, 2),
+                (from, to, from.ToOffset(TimeSpan.FromHours(1)), Guid.NewGuid(), 2),
+                (from.ToOffset(TimeSpan.FromHours(1)), to, null, null, 2),
+                (from, to.ToOffset(TimeSpan.FromHours(1)), null, null, 2),
+                (to, from, null, null, 2), (from, from, null, null, 2),
+                (from, to, null, null, 0), (from, to, null, null, 1002)
+            })
+            {
+                GatewayException failure = await Assert.ThrowsAsync<GatewayException>(() => store.ExportAuditAsync(tenant, start, end, cursor, id, limit, token));
+                Assert.Equal("BGW-ADMIN-AUDIT-EXPORT", failure.Code);
+                Assert.Equal(400, failure.StatusCode);
+            }
+        }
+        finally
+        {
+            if (postgres)
+            {
+                await ExecuteNonQueryAsync(migrationConnection!, "DELETE FROM gateway.audit_event WHERE tenant_id IN ($1,$2)", CancellationToken.None, tenant, other);
+                await ExecuteNonQueryAsync(migrationConnection!, "DELETE FROM gateway.tenant WHERE id IN ($1,$2)", CancellationToken.None, tenant, other);
+            }
+        }
+    }
+
     [Fact]
     public async Task P2_01_IT_PostgreSQL18_pre_authority_denials_persist_only_a_fixed_bounded_target()
     {

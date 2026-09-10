@@ -117,6 +117,8 @@ TRUNCATE on `audit_event` and all unnecessary Admin privileges on `invocation_ev
 The Admin audit export is an authenticated, tenant-scoped API read path over the same
 metadata-only records. It uses a fixed UTC interval, descending keyset pagination and
 a continuation bound to the same interval; it does not expose direct SQL/store access.
+The interval filters event time, not commit time. Pages do not form a snapshot:
+late inserts above the cursor require an overlapping export and event-ID deduplication.
 Consequently:
 
 - metadata-only audit is **CURRENT** and tested;

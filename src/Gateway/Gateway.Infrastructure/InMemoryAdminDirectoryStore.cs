@@ -76,7 +76,7 @@ public sealed class InMemoryAdminDirectoryStore(InMemoryGatewayRegistry registry
     private static void ValidateExport(DateTimeOffset fromUtc, DateTimeOffset toUtc, DateTimeOffset? beforeOccurredAtUtc, Guid? beforeId, int limit)
     {
         if (fromUtc.Offset != TimeSpan.Zero || toUtc.Offset != TimeSpan.Zero || fromUtc >= toUtc || limit is < 1 or > 1001 ||
-            (beforeOccurredAtUtc is null) != (beforeId is null) || beforeOccurredAtUtc?.Offset != TimeSpan.Zero)
+            (beforeOccurredAtUtc is null) != (beforeId is null) || (beforeOccurredAtUtc is not null && beforeOccurredAtUtc.Value.Offset != TimeSpan.Zero))
             throw new GatewayException("BGW-ADMIN-AUDIT-EXPORT", 400);
     }
 }

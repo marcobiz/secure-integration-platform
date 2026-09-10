@@ -2,9 +2,12 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string] $PackageDirectory,
+    [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string] $ExpectedSourceCommit,
+    [Parameter(Mandatory = $true)][ValidatePattern('^[A-Fa-f0-9]{64}$')][string] $ExpectedManifestSha256,
     [Parameter(Mandatory = $true)][string] $BaselineBrokerDirectory,
     [Parameter(Mandatory = $true)][string] $BaselineSampleDirectory,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-f]{40}$')][string] $BaselineCommit,
+    [ValidatePattern('^[A-Fa-f0-9]{64}$')][string] $BaselineManifestSha256,
     [Parameter(Mandatory = $true)][string] $ApplicationUserSid,
     [Parameter(Mandatory = $true)][string] $EvidenceDirectory,
     [ValidatePattern('^delivery-[a-z0-9-]{1,25}$')][string] $Instance = 'delivery-20260905',
@@ -18,8 +21,9 @@ if ($BaselineEnvelopeForUpgrade -and -not $ResumeBaseline) { throw 'DELIVERY_BAS
 if (-not ([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'DELIVERY_ELEVATED_SETUP_REQUIRED' }
 $package = (Resolve-Path -LiteralPath $PackageDirectory).Path
+& (Join-Path $PSScriptRoot 'Test-LocalBrokerPackage.ps1') -PackageDirectory $package -ExpectedSourceCommit $ExpectedSourceCommit -ExpectedManifestSha256 $ExpectedManifestSha256
 $manifest = Get-Content -LiteralPath (Join-Path $package 'package-manifest.json') -Raw | ConvertFrom-Json
-& (Join-Path $PSScriptRoot 'Test-LocalBrokerPackage.ps1') -PackageDirectory $package -ExpectedSourceCommit $manifest.sourceCommit
+if (-not $ResumeBaseline -and -not $BaselineManifestSha256) { throw 'DELIVERY_EXPECTED_BASELINE_MANIFEST_REQUIRED' }
 if ($manifest.sourceCommit -ceq $BaselineCommit) { throw 'DELIVERY_TWO_DISTINCT_BUILDS_REQUIRED' }
 $lifecycle = Join-Path $package 'Invoke-LocalBroker.ps1'
 $name = 'SecureIntegrationBroker.Local.' + $Instance
@@ -149,7 +153,7 @@ try {
         Write-Output 'BASELINE_STOP=VERIFIED'
     }
     if ($ResumeBaseline) { $retainedState = StateDigest }
-    else { & $lifecycle -Command Install -Instance $Instance -ApplicationUserSid $ApplicationUserSid -BrokerPublishDirectory $BaselineBrokerDirectory -SamplePublishDirectory $BaselineSampleDirectory }
+    else { & $lifecycle -Command Install -Instance $Instance -ApplicationUserSid $ApplicationUserSid -BrokerPublishDirectory $BaselineBrokerDirectory -SamplePublishDirectory $BaselineSampleDirectory -ExpectedSourceCommit $BaselineCommit -ExpectedManifestSha256 $BaselineManifestSha256 }
     $claimed = $true
     & $lifecycle -Command Start -Instance $Instance
     $initialState = StateDigest
@@ -163,7 +167,7 @@ try {
         & (Join-Path $root 'sample\SecureIntegration.Samples.LocalBroker.exe') protect $name $name local-sample $baselineEnvelope
         if ($LASTEXITCODE -ne 0) { throw 'DELIVERY_BASELINE_ENVELOPE_PREPARATION_FAILED' }
         Write-Output 'BASELINE_ENVELOPE=PREPARED_ELEVATED BASELINE_ORDINARY_TOKEN=FAIL'
-        & $lifecycle -Command Update -Instance $Instance
+        & $lifecycle -Command Update -Instance $Instance -ExpectedSourceCommit $ExpectedSourceCommit -ExpectedManifestSha256 $ExpectedManifestSha256
         if ((StateDigest) -cne $initialState -or (Get-Acl -LiteralPath $data).Sddl -cne $initialAcl) { throw 'DELIVERY_UPDATE_STATE_CHANGED' }
         Checkpoint 'CANDIDATE_READY'
     } else { Checkpoint 'BASELINE_READY' }
@@ -172,11 +176,11 @@ try {
     & $lifecycle -Command Start -Instance $Instance
     if ((StateDigest) -cne $initialState) { throw 'DELIVERY_RESTART_STATE_CHANGED' }
     Checkpoint 'RESTART_READY'
-    if (-not $BaselineEnvelopeForUpgrade) { & $lifecycle -Command Update -Instance $Instance }
+    if (-not $BaselineEnvelopeForUpgrade) { & $lifecycle -Command Update -Instance $Instance -ExpectedSourceCommit $ExpectedSourceCommit -ExpectedManifestSha256 $ExpectedManifestSha256 }
     # Failure before the first copy: no upstream invocation and no key reinitialization.
     $missing = Join-Path $package 'intentionally-absent-update-source'
     if (Test-Path -LiteralPath $missing) { throw 'DELIVERY_NEGATIVE_SOURCE_COLLISION' }
-    try { & $lifecycle -Command Update -Instance $Instance -BrokerPublishDirectory $missing; throw 'DELIVERY_FAILED_UPDATE_ACCEPTED' }
+    try { & $lifecycle -Command Update -Instance $Instance -BrokerPublishDirectory $missing -ExpectedSourceCommit $ExpectedSourceCommit -ExpectedManifestSha256 $ExpectedManifestSha256; throw 'DELIVERY_FAILED_UPDATE_ACCEPTED' }
     catch { if ($_.Exception.Message -notlike 'LOCAL_BROKER_PUBLISH_DIRECTORY_REQUIRED*') { throw } }
     $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
     if ($settings.Broker.InitializeDataKeys) { throw 'DELIVERY_UPDATE_REINITIALIZATION_ENABLED' }

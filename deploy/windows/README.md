@@ -25,18 +25,14 @@ Give that SID to the administrator. From the extracted package in an **elevated*
 Windows PowerShell, set `$applicationSid` to that observed SID, then run:
 
 ```powershell
-.\Invoke-LocalBroker.ps1 -Command Install -Instance sample -ApplicationUserSid $applicationSid
+$expectedSource = Read-Host 'Expected source commit from your approved build record'
+$expectedManifest = Read-Host 'Expected manifest SHA-256 from your trusted channel'
+.\Invoke-LocalBroker.ps1 -Command Install -Instance sample -ApplicationUserSid $applicationSid -ExpectedSourceCommit $expectedSource -ExpectedManifestSha256 $expectedManifest
 .\Invoke-LocalBroker.ps1 -Command Start -Instance sample
 ```
 
-`Install` and `Update` require the expected source commit and manifest SHA-256.
-For example:
-
-```powershell
-$expectedSource = '0123456789abcdef0123456789abcdef01234567'
-$expectedManifest = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-.\Invoke-LocalBroker.ps1 -Command Install -Instance sample -ApplicationUserSid $applicationSid -ExpectedSourceCommit $expectedSource -ExpectedManifestSha256 $expectedManifest
-```
+`Install`, `Update` and the service qualification command `Verify` require the
+expected source commit and manifest SHA-256.
 
 Those expected values must come from the trusted channel you use to approve the
 update, not from the package being installed.

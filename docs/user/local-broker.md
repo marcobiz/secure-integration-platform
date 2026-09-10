@@ -19,6 +19,16 @@ code injected into an authorized application.
 
 ## Prepare once
 
+Install, Update and Verify require externally approved source and manifest hashes.
+Before Update, replace both expected values with those approved for the new package.
+The qualification consumers `Test-LocalBrokerWindowsDelivery.ps1` and
+`Test-LocalBrokerCredentialAdoption.ps1` also require `ExpectedSourceCommit` and
+`ExpectedManifestSha256`. A fresh two-build delivery run additionally requires
+`BaselineManifestSha256` for the complete baseline package; `BaselineCommit`
+identifies that baseline. These values come from approved build records, not from
+the package under test. Historical retained-baseline qualifications keep their
+exact-build scope and are not rerun by following this installation guide.
+
 The Windows delivery candidate adds a self-contained archive built by
 `eng/Build-LocalBrokerPackage.ps1`, with a closed file/hash inventory, runtime dependency
 manifests and the [short package guide](../../deploy/windows/README.md). Extract outside
@@ -32,25 +42,32 @@ The current project target is `net10.0-windows10.0.17763.0`; this is not a teste
 compatibility matrix. Use Windows PowerShell 5.1 for service lifecycle commands.
 Unsigned development artifacts are for evaluation, not a signed MSI release.
 
-From a source checkout, publish these two artifacts (or obtain these directories
-from your authorized build). No database or operating credentials are involved:
+From a clean source checkout, build the complete package with the pinned SDK.
+Choose a new output directory outside the repository. No database or operating
+credentials are involved:
 
 ```powershell
-dotnet publish src/Broker/Broker.Service/Broker.Service.csproj -c Release -r win-x64 --self-contained true -p:NuGetLockFilePath=obj/standalone-win-x64.lock.json -o .artifacts/local-broker/broker
-dotnet publish samples/LocalBroker/LocalBroker.csproj -c Release -r win-x64 --self-contained true -p:NuGetLockFilePath=obj/standalone-win-x64.lock.json -o .artifacts/local-broker/sample
+$approvedCommit = Read-Host 'Approved source commit'
+$packageOutput = Read-Host 'New external build output directory'
+.\eng\Build-LocalBrokerPackage.ps1 -ExpectedSourceCommit $approvedCommit -OutputDirectory $packageOutput
 ```
 
-The runtime-specific lock is generated outside tracked lock files; existing package
-versions are centrally pinned. Keep the published directories and the shipped
-[`Invoke-LocalBroker.ps1`](../../deploy/windows/Invoke-LocalBroker.ps1) together when
-copying them to the runtime host. No repository/test knowledge is required there.
+The builder records a manifest and its SHA-256 in the build result. Transfer the
+complete archive and approved source/manifest hashes through your trusted channel.
+Standalone publish directories without that manifest are not installable. Extract
+the complete package on the runtime host and use its
+[`Invoke-LocalBroker.ps1`](../../deploy/windows/Invoke-LocalBroker.ps1).
+Do not derive the expected hash from the received package itself. The package
+remains unsigned; the hash does not authenticate its publisher.
 
 Obtain the application user's SID in that user's ordinary console with
 `[Security.Principal.WindowsIdentity]::GetCurrent().User.Value`. Pass that observed
 value as `$applicationSid` in the administrator's elevated Windows PowerShell:
 
 ```powershell
-.\Invoke-LocalBroker.ps1 -Command Install -Instance sample -BrokerPublishDirectory .\broker -SamplePublishDirectory .\sample -ApplicationUserSid $applicationSid
+$expectedSource = Read-Host 'Expected source commit from your approved build record'
+$expectedManifest = Read-Host 'Expected manifest SHA-256 from your trusted channel'
+.\Invoke-LocalBroker.ps1 -Command Install -Instance sample -BrokerPublishDirectory .\broker -SamplePublishDirectory .\sample -ApplicationUserSid $applicationSid -ExpectedSourceCommit $expectedSource -ExpectedManifestSha256 $expectedManifest
 .\Invoke-LocalBroker.ps1 -Command Start -Instance sample
 ```
 
@@ -122,7 +139,7 @@ uncertain ownership and reparse paths are denied without touching the resource.
 ```powershell
 .\Invoke-LocalBroker.ps1 -Command Stop -Instance sample
 .\Invoke-LocalBroker.ps1 -Command Start -Instance sample
-.\Invoke-LocalBroker.ps1 -Command Update -Instance sample -BrokerPublishDirectory .\broker -SamplePublishDirectory .\sample
+.\Invoke-LocalBroker.ps1 -Command Update -Instance sample -BrokerPublishDirectory .\broker -SamplePublishDirectory .\sample -ExpectedSourceCommit $expectedSource -ExpectedManifestSha256 $expectedManifest
 ```
 
 Update stops the owned service, copies authorized published binaries, preserves the
@@ -167,10 +184,12 @@ Stop is deliberately not a destructive uninstall or key-retirement command.
 
 ## One real-service verification entrypoint
 
-The following elevated entrypoint was executed once on the exact candidate:
+The elevated Verify workflow was executed once on the historical candidate above,
+before expected package hashes were required. Its current invocation is shown below;
+this updated command has not been qualified on a real Windows Service:
 
 ```powershell
-.\Invoke-LocalBroker.ps1 -Command Verify -Instance qualification-20260904 -BrokerPublishDirectory .\broker -SamplePublishDirectory .\sample
+.\Invoke-LocalBroker.ps1 -Command Verify -Instance qualification-20260904 -BrokerPublishDirectory .\broker -SamplePublishDirectory .\sample -ExpectedSourceCommit $expectedSource -ExpectedManifestSha256 $expectedManifest
 ```
 
 Choose a fresh instance name. This uses the same installer, actual SCM service and

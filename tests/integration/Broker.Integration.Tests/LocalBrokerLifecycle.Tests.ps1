@@ -163,6 +163,17 @@ try {
     $ExpectedManifestSha256 = (Get-FileHash -LiteralPath (Join-Path $updatePackage 'package-manifest.json') -Algorithm SHA256).Hash
     $brokerDirectory = $root
     Assert-ExpectedPackage
+    $approvedManifestHash = $ExpectedManifestSha256
+    $ExpectedManifestSha256 = ''
+    ExpectDenied { Assert-ExpectedPackage }
+    $ExpectedManifestSha256 = $approvedManifestHash
+    $ExpectedSourceCommit = ''
+    ExpectDenied { Assert-ExpectedPackage }
+    $ExpectedSourceCommit = 'c' * 40
+    ExpectDenied { Assert-ExpectedPackage }
+    $ExpectedSourceCommit = 'b' * 40
+    Assert-ExpectedPackage
+    Write-Output 'PACKAGE_EXPECTED_VALUES_MISSING_OR_WRONG_SOURCE_DENIED=PASS'
     # Package preflight and Stop were exercised above; skip only the subprocess
     # invocation of Stop. Every subsequent settings/copy statement is shipped code.
     $updateAfterStop = ($updateBranch.Clauses[0].Item2.Statements | Select-Object -Skip 2 | ForEach-Object { $_.Extent.Text }) -join "`n"

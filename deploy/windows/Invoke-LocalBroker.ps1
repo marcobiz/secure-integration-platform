@@ -161,9 +161,7 @@ if ($Command -eq 'Verify') {
     $envelope = Join-Path $env:TEMP ($name + '.envelope')
     if (Test-Path -LiteralPath $envelope) { throw 'LOCAL_BROKER_VERIFY_ENVELOPE_COLLISION' }
     try {
-        $manifestHash = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'package-manifest.json') -Algorithm SHA256).Hash
-        $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'package-manifest.json') -Raw | ConvertFrom-Json
-        & $PSCommandPath -Command Install -Instance $Instance -BrokerPublishDirectory $BrokerPublishDirectory -SamplePublishDirectory $SamplePublishDirectory -ExpectedSourceCommit $manifest.sourceCommit -ExpectedManifestSha256 $manifestHash -ApplicationUserSid $identity.User.Value
+        & $PSCommandPath -Command Install -Instance $Instance -BrokerPublishDirectory $BrokerPublishDirectory -SamplePublishDirectory $SamplePublishDirectory -ExpectedSourceCommit $ExpectedSourceCommit -ExpectedManifestSha256 $ExpectedManifestSha256 -ApplicationUserSid $identity.User.Value
         & $PSCommandPath -Command Start -Instance $Instance
         Invoke-Sample 'protect' $envelope
         Write-Output ('FIRST_PROTECT_MS=' + $started.ElapsedMilliseconds)
@@ -178,7 +176,7 @@ if ($Command -eq 'Verify') {
         # The same registration from the unstaged executable must fail process/path authorization.
         & (Join-Path $SamplePublishDirectory 'SecureIntegration.Samples.LocalBroker.exe') 'denied' $name $name 'local-sample' '-'
         if ($LASTEXITCODE -ne 0) { throw 'LOCAL_BROKER_UNAUTHORIZED_PROCESS_TEST_FAILED' }
-        & $PSCommandPath -Command Update -Instance $Instance -BrokerPublishDirectory $BrokerPublishDirectory -SamplePublishDirectory $SamplePublishDirectory -ExpectedSourceCommit $manifest.sourceCommit -ExpectedManifestSha256 $manifestHash
+        & $PSCommandPath -Command Update -Instance $Instance -BrokerPublishDirectory $BrokerPublishDirectory -SamplePublishDirectory $SamplePublishDirectory -ExpectedSourceCommit $ExpectedSourceCommit -ExpectedManifestSha256 $ExpectedManifestSha256
         Invoke-Sample 'verify' $envelope
         $after = @(Get-ChildItem -LiteralPath (Join-Path $data 'keys') -File | Sort-Object Name | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
         if (($stateHashes -join ',') -cne ($after -join ',') -or $acl -cne (Get-Acl -LiteralPath $data).Sddl -or

@@ -621,7 +621,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Exports redacted audit events for one tenant in descending occurredAt/id order inside the fixed UTC interval [fromUtc,toUtc). Continuation is a keyset cursor bound to the same interval; events appended after the chosen toUtc watermark are outside this export. */
+        /** @description Exports redacted audit events for one tenant in descending occurredAt/id order inside the fixed UTC interval [fromUtc,toUtc). Continuation is a keyset cursor bound to the same interval, not a snapshot. Events with occurredAt >= toUtc are excluded. Late inserts below the cursor can appear on subsequent pages; inserts above it require a new overlapping export, deduplicated by event ID. */
         get: operations["exportAudit"];
         put?: never;
         post?: never;

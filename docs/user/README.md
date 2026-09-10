@@ -22,6 +22,7 @@
   three roles, one-time handoff, safe resume and first invocation.
 - [Troubleshooting](troubleshooting.md): code → likely cause → authorized action.
 - [Known limitations](known-limitations.md): what the private preview does not promise.
+- [CRA and NIS 2 adoption guidance](../security/cra-nis2-adoption.md): available controls and customer responsibilities.
 
 Capability status is summarized only in
 [IMPLEMENTATION_STATUS.md](../../IMPLEMENTATION_STATUS.md#product-status). The

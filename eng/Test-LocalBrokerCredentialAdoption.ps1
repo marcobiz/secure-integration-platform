@@ -4,6 +4,7 @@ param(
     [string] $PackageDirectory,
     [string] $EvidenceDirectory,
     [ValidatePattern('^[0-9a-f]{40}$')][string] $ExpectedSourceCommit,
+    [ValidatePattern('^[A-Fa-f0-9]{64}$')][string] $ExpectedManifestSha256,
     [ValidatePattern('^credential-[a-z0-9-]{1,25}$')][string] $Instance = 'credential-20260905',
     [ValidatePattern('^BrokerCred[0-9]{4,8}$')][string] $AccountName = 'BrokerCred0905',
     [string] $StandardUserSid,
@@ -141,9 +142,9 @@ if ($StandardUserSid) {
 }
 
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'CREDENTIAL_GATE_ADMIN_SETUP_REQUIRED' }
-if (-not $PackageDirectory -or -not $EvidenceDirectory -or -not $ExpectedSourceCommit) { throw 'CREDENTIAL_GATE_ARGUMENTS_REQUIRED' }
+if (-not $PackageDirectory -or -not $EvidenceDirectory -or -not $ExpectedSourceCommit -or -not $ExpectedManifestSha256) { throw 'CREDENTIAL_GATE_ARGUMENTS_REQUIRED' }
 $package = (Resolve-Path -LiteralPath $PackageDirectory).Path
-& (Join-Path $PSScriptRoot 'Test-LocalBrokerPackage.ps1') -PackageDirectory $package -ExpectedSourceCommit $ExpectedSourceCommit
+& (Join-Path $PSScriptRoot 'Test-LocalBrokerPackage.ps1') -PackageDirectory $package -ExpectedSourceCommit $ExpectedSourceCommit -ExpectedManifestSha256 $ExpectedManifestSha256
 $evidence = [IO.Path]::GetFullPath($EvidenceDirectory)
 $data = Join-Path $env:ProgramData ('SecureIntegration\LocalBroker\' + $Instance)
 if (Test-Path -LiteralPath $evidence) { throw 'CREDENTIAL_GATE_EXISTING_EVIDENCE_PRESERVED' }
@@ -232,7 +233,7 @@ try {
     $installed = $true
     if (-not $ContinueAccountSid) {
         $phase = 'service-install'
-        & $lifecycle -Command Install -Instance $Instance -ApplicationUserSid $user.SID.Value
+        & $lifecycle -Command Install -Instance $Instance -ApplicationUserSid $user.SID.Value -ExpectedSourceCommit $ExpectedSourceCommit -ExpectedManifestSha256 $ExpectedManifestSha256
     }
     $phase = 'service-start'
     & $lifecycle -Command Start -Instance $Instance

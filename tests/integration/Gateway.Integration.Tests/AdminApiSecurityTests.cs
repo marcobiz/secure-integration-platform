@@ -189,6 +189,10 @@ public sealed class AdminApiSecurityTests
         Assert.Equal("actor-newer", firstItems[0].GetProperty("actorId").GetString());
         Assert.True(firstDocument.RootElement.GetProperty("partial").GetBoolean());
         string continuation = firstDocument.RootElement.GetProperty("continuation").GetString()!;
+        using HttpResponseMessage changedBounds = await client.GetAsync($"/admin/api/v1/audit:export?tenantId={tenantId:D}&fromUtc={Uri.EscapeDataString(from.AddMinutes(-1).ToString("O"))}&toUtc={Uri.EscapeDataString(to.ToString("O"))}&cursor={Uri.EscapeDataString(continuation)}", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, changedBounds.StatusCode);
+        JsonElement changedBoundsProblem = await changedBounds.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("BGW-ADMIN-AUDIT-EXPORT-CURSOR", changedBoundsProblem.GetProperty("code").GetString());
         Assert.DoesNotContain("metadata", firstBody, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("raw-secret-canary", firstBody, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("other-tenant", firstBody, StringComparison.Ordinal);
@@ -201,7 +205,7 @@ public sealed class AdminApiSecurityTests
         string secondBody = await second.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         using JsonDocument secondDocument = JsonDocument.Parse(secondBody);
         JsonElement[] secondItems = secondDocument.RootElement.GetProperty("items").EnumerateArray().ToArray();
-        Assert.Equal(1, secondItems.Length);
+        Assert.Single(secondItems);
         Assert.Equal("tenant.create", secondItems[0].GetProperty("action").GetString());
         Assert.False(secondDocument.RootElement.GetProperty("partial").GetBoolean());
         Assert.Equal(JsonValueKind.Null, secondDocument.RootElement.GetProperty("continuation").ValueKind);
@@ -230,13 +234,14 @@ public sealed class AdminApiSecurityTests
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         string code = problem.GetProperty("code").GetString() ?? string.Empty;
-        Assert.Contains(code, new[] { "BGW-ADMIN-AUDIT-EXPORT", "BGW-ADMIN-AUDIT-EXPORT-CURSOR" });
+        Assert.True(code is "BGW-ADMIN-AUDIT-EXPORT" or "BGW-ADMIN-AUDIT-EXPORT-CURSOR");
     }
 
     [Theory]
-    [InlineData("viewer")]
-    [InlineData("operator")]
-    public async Task ADMIN_AUDIT_EXPORT_redacts_diagnostics_for_non_security_roles(string user)
+    [InlineData("viewer", false)]
+    [InlineData("operator", false)]
+    [InlineData("security-admin", true)]
+    public async Task ADMIN_AUDIT_EXPORT_limits_diagnostics_to_security_role(string user, bool diagnostics)
     {
         await using AdminDevelopmentFactory factory = new();
         using HttpClient administrator = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost") });
@@ -249,8 +254,10 @@ public sealed class AdminApiSecurityTests
         string body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.DoesNotContain("failureDiagnostics", body, StringComparison.Ordinal);
-        Assert.DoesNotContain("syntax", body, StringComparison.Ordinal);
+        using JsonDocument document = JsonDocument.Parse(body);
+        JsonElement item = Assert.Single(document.RootElement.GetProperty("items").EnumerateArray());
+        Assert.Equal(diagnostics, item.TryGetProperty("failureDiagnostics", out _));
+        Assert.Equal(diagnostics, body.Contains("syntax", StringComparison.Ordinal));
     }
 
     private static async Task<Guid> SeedFailureAuditAsync(AdminDevelopmentFactory factory, CancellationToken cancellationToken)
@@ -579,7 +586,7 @@ public sealed class AdminApiSecurityTests
     }
 
     [Fact]
-    public async Task Installation_point_lookup_is_authenticated_role_scoped_non_enumerating_and_metadata_only()
+    public async Task Installation_lookup_and_audit_export_are_authenticated_and_tenant_role_scoped()
     {
         await using AdminDevelopmentFactory factory = new();
         using HttpClient anonymous = factory.CreateClient(new() { BaseAddress = new Uri("https://localhost"), AllowAutoRedirect = false });
@@ -596,6 +603,10 @@ public sealed class AdminApiSecurityTests
         string route = $"/admin/api/v1/installations/{installationId:D}?tenantId={tenantId:D}";
         using HttpResponseMessage unauthenticated = await anonymous.GetAsync(route, TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.Unauthorized, unauthenticated.StatusCode);
+
+        const string exportInterval = "fromUtc=2026-09-10T00%3A00%3A00Z&toUtc=2026-09-11T00%3A00%3A00Z";
+        using HttpResponseMessage anonymousExport = await anonymous.GetAsync($"/admin/api/v1/audit:export?tenantId={tenantId:D}&{exportInterval}", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousExport.StatusCode);
 
         IAdminSecurityStore security = factory.Services.GetRequiredService<IAdminSecurityStore>();
         IAdminSessionStore sessions = factory.Services.GetRequiredService<IAdminSessionStore>();
@@ -614,6 +625,10 @@ public sealed class AdminApiSecurityTests
             using HttpResponseMessage found = await scoped.GetAsync(route, TestContext.Current.CancellationToken);
             bool allowed = role is AdminRole.Viewer or AdminRole.Operator or AdminRole.SecurityAdministrator;
             Assert.Equal(allowed ? HttpStatusCode.OK : HttpStatusCode.Forbidden, found.StatusCode);
+            using HttpResponseMessage export = await scoped.GetAsync($"/admin/api/v1/audit:export?tenantId={tenantId:D}&{exportInterval}", TestContext.Current.CancellationToken);
+            Assert.Equal(allowed ? HttpStatusCode.OK : HttpStatusCode.Forbidden, export.StatusCode);
+            using HttpResponseMessage foreignExport = await scoped.GetAsync($"/admin/api/v1/audit:export?tenantId={otherTenant:D}&{exportInterval}", TestContext.Current.CancellationToken);
+            Assert.Equal(HttpStatusCode.Forbidden, foreignExport.StatusCode);
             if (!allowed) continue;
             string body = await found.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
             using JsonDocument metadata = JsonDocument.Parse(body);

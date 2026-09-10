@@ -26,6 +26,8 @@ the [code map](#finding-your-way-around-the-code).
 
 ## Running the Core locally
 
+For legacy software vendors, see [CRA and NIS 2 adoption guidance](docs/security/cra-nis2-adoption.md).
+
 The local path uses a Direct client and a synthetic HTTPS/mTLS upstream. It needs
 no access to external services, cloud resources or healthcare packs.
 
