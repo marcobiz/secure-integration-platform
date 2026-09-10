@@ -83,13 +83,10 @@ public sealed class AzureSecretAndCertificateProvider :
         (string name, string? version) = Parse(readinessSecretReference);
         try
         {
-            await foreach (SecretProperties properties in client.GetPropertiesOfSecretVersionsAsync(name, cancellationToken).ConfigureAwait(false))
-            {
-                if (version is not null && !string.Equals(properties.Version, version, StringComparison.Ordinal))
-                    continue;
-                return properties.Enabled != false;
-            }
-            return false;
+            // GET proves read access and lets Key Vault resolve the exact or current version.
+            // The SDK response includes the value transiently; do not access or retain it.
+            _ = await client.GetSecretAsync(name, version, cancellationToken).ConfigureAwait(false);
+            return true;
         }
         catch (RequestFailedException) { return false; }
     }

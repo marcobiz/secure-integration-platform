@@ -73,9 +73,13 @@ Configure through a protected provider, never in `appsettings.json`:
 - `Gateway__Provider__Endpoint`: provider HTTPS endpoint;
 - `Gateway__Provider__ClientIdentity`: optional identity interpreted exclusively by the pack;
 - `Gateway__Provider__Settings__ReadinessSecretReference`: for the Azure pack, one
-  explicitly configured Key Vault reference used by `/health/ready` through secret
-  version metadata lookup only, not vault-wide enumeration or value download; scope any
-  required metadata/list permission to that configured secret;
+  explicitly configured Key Vault reference, reusing the existing activation HMAC
+  reference, never a PFX/certificate/signing resource. `/health/ready` requires a
+  successful secret GET of that exact or current version through the SDK, without
+  version or vault enumeration. This proves read access, not key suitability or expiry
+  validation. The SDK response temporarily includes the value in memory; the probe
+  does not access, retain, cache, log or use it, and cannot guarantee managed-string
+  erasure. Missing configuration or failed GET returns not ready;
 - `Gateway__ActivationHmacSecretReference`:
   `keyvault://<vault>.vault.azure.net/<secret>[/<version>]`;
 - `Gateway__Operations__<n>__*`: allowlisted catalog; HTTPS endpoints, auth and Vault
