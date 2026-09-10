@@ -260,6 +260,7 @@ resource gateway 'Microsoft.Web/sites@2025-03-01' = {
         { name: 'Gateway__Provider__AssemblyPath', value: '/app/packs/azure/SecureIntegration.Providers.Azure.dll' }
         { name: 'Gateway__Provider__FactoryType', value: 'SecureIntegration.Providers.Azure.AzureProviderPackFactory' }
         { name: 'Gateway__ActivationHmacSecretReference', value: 'keyvault://${replace(replace(vault.properties.vaultUri, 'https://', ''), '/', '')}/activation-hmac' }
+        { name: 'Gateway__Provider__Settings__ReadinessSecretReference', value: 'keyvault://${replace(replace(vault.properties.vaultUri, 'https://', ''), '/', '')}/activation-hmac' }
         { name: 'Gateway__TrustPlatformClientCertificateForwarding', value: 'true' }
         { name: 'GATEWAY_TRUSTED_CERTIFICATE_FORWARDING_BOUNDARY', value: 'true' }
         { name: 'Gateway__Operations__0__ConnectorId', value: 'm3-vendor' }

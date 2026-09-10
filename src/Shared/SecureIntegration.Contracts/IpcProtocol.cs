@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 
 #pragma warning disable CA1835 // Keep the netstandard2.0-compatible Stream overloads in the shared codec.
 #pragma warning disable CA1510 // ThrowIfNull is unavailable on the netstandard2.0 target.
+#pragma warning disable CA1512 // ThrowIfLessThanOrEqual is unavailable on the netstandard2.0 target.
 #pragma warning disable CA1846 // Span parsing is unavailable on the netstandard2.0 target.
 #pragma warning disable CA2263 // Generic Enum.IsDefined is unavailable on the netstandard2.0 target.
 
@@ -137,6 +138,23 @@ public static class IpcFrameCodec
 
     /// <summary>Reads one complete frame or returns null on a clean EOF before a header.</summary>
     public static async Task<IpcFrame?> ReadAsync(Stream stream, CancellationToken cancellationToken)
+        => await ReadAsync(stream, null, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Reads one complete frame, allowing idle before the first byte while bounding a
+    /// frame that has already started.
+    /// </summary>
+    public static async Task<IpcFrame?> ReadAsync(Stream stream, TimeSpan partialFrameTimeout, CancellationToken cancellationToken)
+    {
+        if (partialFrameTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(partialFrameTimeout));
+        }
+
+        return await ReadAsync(stream, (TimeSpan?)partialFrameTimeout, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<IpcFrame?> ReadAsync(Stream stream, TimeSpan? partialFrameTimeout, CancellationToken cancellationToken)
     {
         if (stream is null)
         {
@@ -149,7 +167,24 @@ public static class IpcFrameCodec
             return null;
         }
 
-        await ReadExactlyAsync(stream, header, 1, header.Length - 1, cancellationToken).ConfigureAwait(false);
+        using CancellationTokenSource? partialFrameDeadline = partialFrameTimeout is null
+            ? null
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (partialFrameDeadline is not null)
+        {
+            partialFrameDeadline.CancelAfter(partialFrameTimeout.GetValueOrDefault());
+        }
+
+        CancellationToken remainingFrameToken = partialFrameDeadline?.Token ?? cancellationToken;
+        try
+        {
+            await ReadExactlyAsync(stream, header, 1, header.Length - 1, remainingFrameToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (partialFrameDeadline?.IsCancellationRequested == true && !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException("Timed out while reading a partial IPC frame.");
+        }
+
         for (int index = 0; index < IpcProtocol.Magic.Length; index++)
         {
             if (header[index] != IpcProtocol.Magic[index])
@@ -179,7 +214,15 @@ public static class IpcFrameCodec
         Guid correlationId = NetworkBytesToGuid(header, 12);
         ulong sequence = ReadUInt64(header, 28);
         byte[] body = new byte[length];
-        await ReadExactlyAsync(stream, body, 0, length, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await ReadExactlyAsync(stream, body, 0, length, remainingFrameToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (partialFrameDeadline?.IsCancellationRequested == true && !cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException("Timed out while reading a partial IPC frame.");
+        }
+
         return new IpcFrame(type, correlationId, sequence, body);
     }
 

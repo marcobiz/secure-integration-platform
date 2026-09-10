@@ -439,6 +439,91 @@ public sealed class WindowsBrokerIntegrationTests
     }
 
     [Fact]
+    public async Task Incomplete_handshake_releases_connection_and_allows_later_request()
+    {
+        CapturingAudit audit = new();
+        await WithBrokerAndPipeAsync(async (client, name) =>
+        {
+            await using NamedPipeClientStream stalled = await ConnectRawPipeAsync(name, TestContext.Current.CancellationToken);
+            await stalled.WriteAsync("B"u8.ToArray(), TestContext.Current.CancellationToken).ConfigureAwait(false);
+            await stalled.FlushAsync(TestContext.Current.CancellationToken).ConfigureAwait(false);
+            await AssertPipeClosedAsync(stalled);
+
+            Assert.Equal("healthy", (await client.GetStatusAsync(TestContext.Current.CancellationToken).ConfigureAwait(false)).Status);
+        }, stalledTransferTimeout: TimeSpan.FromMilliseconds(150), audit: audit);
+
+        Assert.Contains(audit.Outcomes, item => item.Operation == "Connection" && item.ErrorCode is "ipc_transfer_timeout" or "connection_rejected");
+    }
+
+    [Fact]
+    public async Task Partial_frame_after_handshake_releases_connection_and_allows_later_request()
+    {
+        CapturingAudit audit = new();
+        await WithBrokerAndPipeAsync(async (client, name) =>
+        {
+            await using NamedPipeClientStream stalled = await ConnectRawPipeAsync(name, TestContext.Current.CancellationToken);
+            _ = await PerformHandshakeAsync(stalled, TestContext.Current.CancellationToken).ConfigureAwait(false);
+            await stalled.WriteAsync("B"u8.ToArray(), TestContext.Current.CancellationToken).ConfigureAwait(false);
+            await stalled.FlushAsync(TestContext.Current.CancellationToken).ConfigureAwait(false);
+            await AssertPipeClosedAsync(stalled);
+
+            Assert.Equal("healthy", (await client.GetStatusAsync(TestContext.Current.CancellationToken).ConfigureAwait(false)).Status);
+        }, stalledTransferTimeout: TimeSpan.FromMilliseconds(150), audit: audit);
+
+        Assert.Contains(audit.Outcomes, item => item.Operation == "Connection" && item.ErrorCode == "connection_rejected");
+    }
+
+    [Fact]
+    public async Task Response_write_timeout_releases_connection_and_allows_later_request()
+    {
+        CapturingAudit audit = new();
+        await WithBrokerAndPipeAsync(async (client, name) =>
+        {
+            await using NamedPipeClientStream stalled = await ConnectRawPipeAsync(name, TestContext.Current.CancellationToken);
+            HandshakeResponse handshake = await PerformHandshakeAsync(stalled, TestContext.Current.CancellationToken).ConfigureAwait(false);
+            for (ulong sequence = 1; sequence <= 8; sequence++)
+            {
+                Guid id = Guid.NewGuid();
+                InvokeGatewayRequest invoke = new() { ConnectorId = "secure-layer-demo", OperationId = "submit", PayloadBase64 = "e30=" };
+                await WriteBrokerRequestAsync(stalled, handshake, sequence, id, BrokerOperations.InvokeGateway, invoke, TestContext.Current.CancellationToken).ConfigureAwait(false);
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(600), TestContext.Current.CancellationToken).ConfigureAwait(false);
+            int receivedFrames = await ReadUntilClosedAsync(stalled).ConfigureAwait(false);
+            Assert.InRange(receivedFrames, 0, 7);
+            Assert.True((await client.GetStatusAsync(TestContext.Current.CancellationToken).ConfigureAwait(false)).GatewayConfigured);
+        }, stalledTransferTimeout: TimeSpan.FromMilliseconds(150), gateway: new LargeGateway(), audit: audit);
+
+        Assert.Contains(audit.Outcomes, item => item.Operation == BrokerOperations.InvokeGateway && item.Succeeded);
+    }
+
+    [Fact]
+    public async Task Pipe_capacity_saturation_preserves_listener_and_authenticated_idle_connections()
+    {
+        await WithBrokerAndPipeAsync(async (client, name) =>
+        {
+            await using NamedPipeClientStream first = await ConnectRawPipeAsync(name, TestContext.Current.CancellationToken);
+            await using NamedPipeClientStream second = await ConnectRawPipeAsync(name, TestContext.Current.CancellationToken);
+            HandshakeResponse firstHandshake = await PerformHandshakeAsync(first, TestContext.Current.CancellationToken).ConfigureAwait(false);
+            _ = await PerformHandshakeAsync(second, TestContext.Current.CancellationToken).ConfigureAwait(false);
+            await Task.Delay(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken).ConfigureAwait(false);
+
+            Guid id = Guid.NewGuid();
+            await WriteBrokerRequestAsync(first, firstHandshake, 1, id, BrokerOperations.GetBrokerStatus, new { }, TestContext.Current.CancellationToken).ConfigureAwait(false);
+            BrokerResponse response = await ReadBrokerResponseAsync(first, TestContext.Current.CancellationToken).ConfigureAwait(false);
+            Assert.True(response.Success);
+
+            await using NamedPipeClientStream third = new(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
+            using CancellationTokenSource connectTimeout = new(TimeSpan.FromMilliseconds(150));
+            await Assert.ThrowsAsync<OperationCanceledException>(() => third.ConnectAsync(connectTimeout.Token));
+
+            await second.DisposeAsync().ConfigureAwait(false);
+            await Task.Delay(TimeSpan.FromMilliseconds(150), TestContext.Current.CancellationToken).ConfigureAwait(false);
+            Assert.Equal("healthy", (await client.GetStatusAsync(TestContext.Current.CancellationToken).ConfigureAwait(false)).Status);
+        }, stalledTransferTimeout: TimeSpan.FromMilliseconds(100), maximumPipeInstances: 2);
+    }
+
+    [Fact]
     public async Task Same_connection_multiplexes_requests_and_honors_cancel_frame()
     {
         CapturingAudit audit = new();
@@ -742,7 +827,15 @@ public sealed class WindowsBrokerIntegrationTests
     private static async Task WithBrokerAsync(Func<BrokerClient, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null, IBrokerAuditSink? audit = null)
         => await WithBrokerAndPipeAsync((client, _) => test(client), invalidHash, invalidPublisher, operationTimeout, gateway, audit);
 
-    private static async Task WithBrokerAndPipeAsync(Func<BrokerClient, string, Task> test, bool invalidHash = false, bool invalidPublisher = false, TimeSpan? operationTimeout = null, IGatewayInvoker? gateway = null, IBrokerAuditSink? audit = null)
+    private static async Task WithBrokerAndPipeAsync(
+        Func<BrokerClient, string, Task> test,
+        bool invalidHash = false,
+        bool invalidPublisher = false,
+        TimeSpan? operationTimeout = null,
+        IGatewayInvoker? gateway = null,
+        IBrokerAuditSink? audit = null,
+        TimeSpan? stalledTransferTimeout = null,
+        int? maximumPipeInstances = null)
     {
         using TestDirectory temporary = new();
         string pipeName = "SecureIntegration.Broker.Tests." + Guid.NewGuid().ToString("N");
@@ -769,7 +862,10 @@ public sealed class WindowsBrokerIntegrationTests
         IBrokerAuditSink selectedAudit = audit ?? new NullAudit();
         await keys.InitializeAsync(TestContext.Current.CancellationToken);
         BrokerApplicationService application = new(secrets, protection, new AeadDataProtector(keys, options.InstallationId), options.InstallationId, gateway);
-        await using NamedPipeBrokerServer server = new(options, new ApplicationAuthorizer(options.Applications), new BrokerRequestDispatcher(application), selectedAudit);
+        await using NamedPipeBrokerServer server = stalledTransferTimeout is null && maximumPipeInstances is null
+            ? new(options, new ApplicationAuthorizer(options.Applications), new BrokerRequestDispatcher(application), selectedAudit)
+            : new(options, new ApplicationAuthorizer(options.Applications), new BrokerRequestDispatcher(application), selectedAudit,
+                stalledTransferTimeout ?? TimeSpan.FromSeconds(5), maximumPipeInstances ?? 32);
         using CancellationTokenSource stopped = new();
         Task running = server.RunAsync(stopped.Token);
         BrokerClientOptions clientOptions = new() { PipeName = pipeName, ApplicationRegistrationId = policy.RegistrationId };
@@ -787,6 +883,77 @@ public sealed class WindowsBrokerIntegrationTests
         }
     }
 
+    private static async Task<NamedPipeClientStream> ConnectRawPipeAsync(string name, CancellationToken cancellationToken)
+    {
+        NamedPipeClientStream pipe = new(".", name, PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.WriteThrough);
+        try
+        {
+            await pipe.ConnectAsync(cancellationToken).ConfigureAwait(false);
+            return pipe;
+        }
+        catch
+        {
+            await pipe.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private static async Task<HandshakeResponse> PerformHandshakeAsync(NamedPipeClientStream pipe, CancellationToken cancellationToken)
+    {
+        Guid handshakeId = Guid.NewGuid();
+        await IpcFrameCodec.WriteAsync(pipe, IpcFrameCodec.JsonFrame(handshakeId, 0, new HandshakeRequest
+        {
+            ApplicationRegistrationId = "test-app",
+            ClientNonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
+        }), cancellationToken).ConfigureAwait(false);
+        IpcFrame frame = await IpcFrameCodec.ReadAsync(pipe, cancellationToken).ConfigureAwait(false) ?? throw new EndOfStreamException();
+        Assert.Equal(handshakeId, frame.CorrelationId);
+        Assert.Equal(0uL, frame.Sequence);
+        return IpcFrameCodec.Deserialize<HandshakeResponse>(frame);
+    }
+
+    private static async Task WriteBrokerRequestAsync<TBody>(
+        NamedPipeClientStream pipe,
+        HandshakeResponse handshake,
+        ulong sequence,
+        Guid correlationId,
+        string operation,
+        TBody body,
+        CancellationToken cancellationToken)
+    {
+        BrokerRequest request = new()
+        {
+            Operation = operation,
+            CorrelationId = correlationId,
+            ConnectionChallenge = handshake.ServerChallenge,
+            RequestNonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(24)),
+            DeadlineUtc = DateTimeOffset.UtcNow.AddSeconds(5),
+            Body = JsonSerializer.SerializeToElement(body, IpcProtocol.JsonOptions),
+        };
+        await IpcFrameCodec.WriteAsync(pipe, IpcFrameCodec.JsonFrame(correlationId, sequence, request), cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<BrokerResponse> ReadBrokerResponseAsync(NamedPipeClientStream pipe, CancellationToken cancellationToken)
+    {
+        IpcFrame frame = await IpcFrameCodec.ReadAsync(pipe, cancellationToken).ConfigureAwait(false) ?? throw new EndOfStreamException();
+        return IpcFrameCodec.Deserialize<BrokerResponse>(frame);
+    }
+
+    private static async Task AssertPipeClosedAsync(NamedPipeClientStream pipe)
+    {
+        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(3));
+        Assert.Null(await IpcFrameCodec.ReadAsync(pipe, timeout.Token).ConfigureAwait(false));
+    }
+
+    private static async Task<int> ReadUntilClosedAsync(NamedPipeClientStream pipe)
+    {
+        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(5));
+        int frames = 0;
+        while (await IpcFrameCodec.ReadAsync(pipe, timeout.Token).ConfigureAwait(false) is not null)
+            frames++;
+        return frames;
+    }
+
     private sealed class SlowGateway : IGatewayInvoker
     {
         public async Task<GatewayInvocationResult> InvokeAsync(string applicationId, string connectorId, string operationId, string contentType, byte[] payload, Guid correlationId, CancellationToken cancellationToken)
@@ -794,6 +961,14 @@ public sealed class WindowsBrokerIntegrationTests
             await Task.Delay(TimeSpan.FromMinutes(1), cancellationToken);
             return new GatewayInvocationResult("application/json", [], "1");
         }
+    }
+
+    private sealed class LargeGateway : IGatewayInvoker
+    {
+        private static readonly byte[] ResponsePayload = Enumerable.Repeat((byte)'x', 600_000).ToArray();
+
+        public Task<GatewayInvocationResult> InvokeAsync(string applicationId, string connectorId, string operationId, string contentType, byte[] payload, Guid correlationId, CancellationToken cancellationToken) =>
+            Task.FromResult(new GatewayInvocationResult("application/octet-stream", ResponsePayload, "1"));
     }
 
     [Fact]

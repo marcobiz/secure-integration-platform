@@ -11,24 +11,46 @@ namespace SecureIntegration.Providers.Azure;
 /// <summary>Azure deployment pack factory. This assembly is never referenced by the Core graph.</summary>
 public sealed class AzureProviderPackFactory : IProviderPackFactory
 {
+    private const string ReadinessSecretReferenceSetting = "ReadinessSecretReference";
+
     /// <inheritdoc />
     public ProviderServices Create(ProviderPackContext context)
     {
         if (context.Endpoint.Scheme != Uri.UriSchemeHttps || !string.IsNullOrEmpty(context.Endpoint.UserInfo) || !string.IsNullOrEmpty(context.Endpoint.Query) || !string.IsNullOrEmpty(context.Endpoint.Fragment))
             throw new ProviderAccessException("BGW-PROVIDER-CONFIGURATION-INVALID");
+        if (context.Settings.Keys.Any(key => key != ReadinessSecretReferenceSetting))
+            throw new ProviderAccessException("BGW-PROVIDER-CONFIGURATION-INVALID");
         TokenCredential credential = string.IsNullOrWhiteSpace(context.ClientIdentity)
             ? new ManagedIdentityCredential(ManagedIdentityId.SystemAssigned)
             : new ManagedIdentityCredential(ManagedIdentityId.FromUserAssignedClientId(context.ClientIdentity));
-        AzureSecretAndCertificateProvider provider = new(context.Endpoint, credential);
+        context.Settings.TryGetValue(ReadinessSecretReferenceSetting, out string? readinessSecretReference);
+        AzureSecretAndCertificateProvider provider = new(context.Endpoint, new SecretClient(context.Endpoint, credential), readinessSecretReference);
         return new ProviderServices(provider, provider, provider, provider);
     }
 }
 
 /// <summary>Azure Key Vault adapter scoped to one configured vault origin.</summary>
-public sealed class AzureSecretAndCertificateProvider(Uri vaultUri, TokenCredential credential) :
+public sealed class AzureSecretAndCertificateProvider :
     ISecretValueProvider, IClientCertificateProvider, IProviderHealthCheck, IProviderCapabilitySource
 {
-    private readonly SecretClient client = new(vaultUri, credential);
+    private readonly Uri vaultUri;
+    private readonly SecretClient client;
+    private readonly string? readinessSecretReference;
+
+    /// <summary>Creates an adapter for one configured vault origin.</summary>
+    public AzureSecretAndCertificateProvider(Uri vaultUri, TokenCredential credential)
+        : this(vaultUri, new SecretClient(vaultUri, credential))
+    {
+    }
+
+    internal AzureSecretAndCertificateProvider(Uri vaultUri, SecretClient client, string? readinessSecretReference = null)
+    {
+        this.vaultUri = vaultUri;
+        this.client = client;
+        if (readinessSecretReference is not null)
+            _ = Parse(readinessSecretReference);
+        this.readinessSecretReference = readinessSecretReference;
+    }
 
     /// <inheritdoc />
     public ProviderCapabilities Capabilities { get; } = new(true, true, false, false);
@@ -56,10 +78,18 @@ public sealed class AzureSecretAndCertificateProvider(Uri vaultUri, TokenCredent
     /// <inheritdoc />
     public async Task<bool> IsReadyAsync(CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(readinessSecretReference))
+            return false;
+        (string name, string? version) = Parse(readinessSecretReference);
         try
         {
-            await foreach (SecretProperties _ in client.GetPropertiesOfSecretsAsync(cancellationToken).ConfigureAwait(false)) break;
-            return true;
+            await foreach (SecretProperties properties in client.GetPropertiesOfSecretVersionsAsync(name, cancellationToken).ConfigureAwait(false))
+            {
+                if (version is not null && !string.Equals(properties.Version, version, StringComparison.Ordinal))
+                    continue;
+                return properties.Enabled != false;
+            }
+            return false;
         }
         catch (RequestFailedException) { return false; }
     }

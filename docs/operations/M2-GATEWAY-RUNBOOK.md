@@ -72,6 +72,10 @@ Configure through a protected provider, never in `appsettings.json`:
 - `Gateway__Provider__Kind`: `ExternalPack`;
 - `Gateway__Provider__Endpoint`: provider HTTPS endpoint;
 - `Gateway__Provider__ClientIdentity`: optional identity interpreted exclusively by the pack;
+- `Gateway__Provider__Settings__ReadinessSecretReference`: for the Azure pack, one
+  explicitly configured Key Vault reference used by `/health/ready` through secret
+  version metadata lookup only, not vault-wide enumeration or value download; scope any
+  required metadata/list permission to that configured secret;
 - `Gateway__ActivationHmacSecretReference`:
   `keyvault://<vault>.vault.azure.net/<secret>[/<version>]`;
 - `Gateway__Operations__<n>__*`: allowlisted catalog; HTTPS endpoints, auth and Vault

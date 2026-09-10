@@ -11,46 +11,85 @@ namespace SecureIntegration.Broker.Infrastructure.Windows;
 /// <summary>Versioned, authenticated Named Pipe host for the Local Broker.</summary>
 public sealed class NamedPipeBrokerServer : IAsyncDisposable
 {
+    private const int DefaultMaximumPipeInstances = 32;
+    private static readonly TimeSpan DefaultStalledTransferTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan AcceptFailureBackoff = TimeSpan.FromMilliseconds(100);
+
     private readonly BrokerOptions options;
     private readonly ApplicationAuthorizer authorizer;
     private readonly BrokerRequestDispatcher dispatcher;
     private readonly IBrokerAuditSink audit;
+    private readonly TimeSpan stalledTransferTimeout;
+    private readonly int maximumPipeInstances;
+    private readonly SemaphoreSlim connectionSlots;
+    private readonly CancellationTokenSource disposeCancellation = new();
     private readonly ConcurrentDictionary<int, Task> clients = new();
     private int clientNumber;
     private bool disposed;
 
     /// <summary>Creates the server.</summary>
     public NamedPipeBrokerServer(BrokerOptions options, ApplicationAuthorizer authorizer, BrokerRequestDispatcher dispatcher, IBrokerAuditSink audit)
+        : this(options, authorizer, dispatcher, audit, DefaultStalledTransferTimeout, DefaultMaximumPipeInstances)
+    {
+    }
+
+    internal NamedPipeBrokerServer(BrokerOptions options, ApplicationAuthorizer authorizer, BrokerRequestDispatcher dispatcher, IBrokerAuditSink audit, TimeSpan stalledTransferTimeout, int maximumPipeInstances)
     {
         this.options = options;
         this.authorizer = authorizer;
         this.dispatcher = dispatcher;
         this.audit = audit ?? throw new ArgumentNullException(nameof(audit));
+        if (stalledTransferTimeout <= TimeSpan.Zero || stalledTransferTimeout > TimeSpan.FromMinutes(1))
+            throw new ArgumentOutOfRangeException(nameof(stalledTransferTimeout));
+        if (maximumPipeInstances is < 1 or > 254)
+            throw new ArgumentOutOfRangeException(nameof(maximumPipeInstances));
+        this.stalledTransferTimeout = stalledTransferTimeout;
+        this.maximumPipeInstances = maximumPipeInstances;
+        connectionSlots = new SemaphoreSlim(maximumPipeInstances, maximumPipeInstances);
     }
 
     /// <summary>Accepts connections until cancellation.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        while (!cancellationToken.IsCancellationRequested)
+        using CancellationTokenSource serverCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, disposeCancellation.Token);
+        CancellationToken token = serverCancellation.Token;
+        while (!token.IsCancellationRequested)
         {
-            NamedPipeServerStream? pipe = CreatePipe();
+            NamedPipeServerStream? pipe = null;
+            bool slotAcquired = false;
             try
             {
-                await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+                await connectionSlots.WaitAsync(token).ConfigureAwait(false);
+                slotAcquired = true;
+                pipe = CreatePipe();
+                await pipe.WaitForConnectionAsync(token).ConfigureAwait(false);
                 int number = Interlocked.Increment(ref clientNumber);
-                Task task = HandleClientAsync(pipe, cancellationToken);
+                Task task = HandleClientAsync(pipe, token);
                 clients[number] = task;
                 _ = task.ContinueWith(
-                    completed => clients.TryRemove(number, out _),
+                    completed =>
+                    {
+                        clients.TryRemove(number, out _);
+                        _ = connectionSlots.Release();
+                    },
                     CancellationToken.None,
                     TaskContinuationOptions.ExecuteSynchronously,
                     TaskScheduler.Default);
                 pipe = null;
+                slotAcquired = false;
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
                 pipe?.Dispose();
+                if (slotAcquired) _ = connectionSlots.Release();
                 break;
+            }
+            catch (IOException)
+            {
+                pipe?.Dispose();
+                if (slotAcquired) _ = connectionSlots.Release();
+                try { await Task.Delay(AcceptFailureBackoff, token).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
             }
             finally
             {
@@ -64,7 +103,13 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
     {
         if (disposed) return;
         disposed = true;
-        await Task.WhenAll(clients.Values).ConfigureAwait(false);
+        await disposeCancellation.CancelAsync().ConfigureAwait(false);
+        try { await Task.WhenAll(clients.Values).ConfigureAwait(false); }
+        finally
+        {
+            disposeCancellation.Dispose();
+            connectionSlots.Dispose();
+        }
     }
 
     private async Task HandleClientAsync(NamedPipeServerStream pipe, CancellationToken serverCancellation)
@@ -75,7 +120,7 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
             Guid auditCorrelationId = Guid.Empty;
             try
             {
-                IpcFrame handshakeFrame = await IpcFrameCodec.ReadAsync(pipe, serverCancellation).ConfigureAwait(false) ?? throw new EndOfStreamException();
+                IpcFrame handshakeFrame = await WithStalledTransferDeadlineAsync(pipe, token => IpcFrameCodec.ReadAsync(pipe, token), serverCancellation).ConfigureAwait(false) ?? throw new EndOfStreamException();
                 HandshakeRequest handshake = IpcFrameCodec.Deserialize<HandshakeRequest>(handshakeFrame);
                 auditApplicationId = SafeAuditIdentifier(handshake.ApplicationRegistrationId);
                 auditCorrelationId = handshakeFrame.CorrelationId;
@@ -88,50 +133,58 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
                 ApplicationPolicy policy = authorizer.AuthorizeApplication(handshake.ApplicationRegistrationId, caller);
                 string challenge = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
                 HandshakeResponse response = new() { ConnectionId = Guid.NewGuid(), ServerChallenge = challenge };
-                await IpcFrameCodec.WriteAsync(pipe, IpcFrameCodec.JsonFrame(handshakeFrame.CorrelationId, 0, response), serverCancellation).ConfigureAwait(false);
+                await WriteFrameAsync(pipe, IpcFrameCodec.JsonFrame(handshakeFrame.CorrelationId, 0, response), serverCancellation).ConfigureAwait(false);
                 HashSet<string> nonces = new(StringComparer.Ordinal);
                 ConcurrentDictionary<Guid, RequestCancellation> activeCancellations = new();
                 List<Task> activeTasks = [];
                 using SemaphoreSlim writeLock = new(1, 1);
-                ulong expectedSequence = 1;
-                while (!serverCancellation.IsCancellationRequested && pipe.IsConnected)
+                try
                 {
-                    IpcFrame? frame = await IpcFrameCodec.ReadAsync(pipe, serverCancellation).ConfigureAwait(false);
-                    if (frame is null) break;
-                    if (frame.Sequence != expectedSequence++) throw new BrokerException("invalid_sequence", "protocol");
-                    if (frame.Type == IpcFrameType.Cancel)
+                    ulong expectedSequence = 1;
+                    while (!serverCancellation.IsCancellationRequested && pipe.IsConnected)
                     {
-                        if (activeCancellations.TryGetValue(frame.CorrelationId, out RequestCancellation? target)) target.CancelByClient();
-                        continue;
-                    }
+                        IpcFrame? frame = await IpcFrameCodec.ReadAsync(pipe, stalledTransferTimeout, serverCancellation).ConfigureAwait(false);
+                        if (frame is null) break;
+                        if (frame.Sequence != expectedSequence++) throw new BrokerException("invalid_sequence", "protocol");
+                        if (frame.Type == IpcFrameType.Cancel)
+                        {
+                            if (activeCancellations.TryGetValue(frame.CorrelationId, out RequestCancellation? target)) target.CancelByClient();
+                            continue;
+                        }
 
-                    BrokerRequest request = IpcFrameCodec.Deserialize<BrokerRequest>(frame);
-                    if (request.CorrelationId == Guid.Empty || request.CorrelationId != frame.CorrelationId || request.ProtocolVersion != "1.0" || request.ConnectionChallenge != challenge || request.DeadlineUtc <= DateTimeOffset.UtcNow || request.DeadlineUtc > DateTimeOffset.UtcNow.AddMinutes(1) || !ValidNonce(request.RequestNonce, 16, 64) || nonces.Count >= 1024 || !nonces.Add(request.RequestNonce))
-                    {
-                        throw new BrokerException("invalid_request_context", "protocol");
-                    }
+                        BrokerRequest request = IpcFrameCodec.Deserialize<BrokerRequest>(frame);
+                        if (request.CorrelationId == Guid.Empty || request.CorrelationId != frame.CorrelationId || request.ProtocolVersion != "1.0" || request.ConnectionChallenge != challenge || request.DeadlineUtc <= DateTimeOffset.UtcNow || request.DeadlineUtc > DateTimeOffset.UtcNow.AddMinutes(1) || !ValidNonce(request.RequestNonce, 16, 64) || nonces.Count >= 1024 || !nonces.Add(request.RequestNonce))
+                        {
+                            throw new BrokerException("invalid_request_context", "protocol");
+                        }
 
-                    if (activeCancellations.Count >= 16)
-                    {
-                        activeTasks.Add(WriteResponseAsync(pipe, frame, Failure(request.CorrelationId, new BrokerException("concurrency_limit_exceeded", "capacity", true)), writeLock, serverCancellation));
-                        continue;
-                    }
+                        if (activeCancellations.Count >= 16)
+                        {
+                            activeTasks.Add(WriteResponseAsync(pipe, frame, Failure(request.CorrelationId, new BrokerException("concurrency_limit_exceeded", "capacity", true)), writeLock, serverCancellation));
+                            continue;
+                        }
 
-                    RequestCancellation requestCancellation = new(request.DeadlineUtc - DateTimeOffset.UtcNow, serverCancellation);
-                    if (!activeCancellations.TryAdd(request.CorrelationId, requestCancellation))
-                    {
-                        requestCancellation.Dispose();
-                        throw new BrokerException("duplicate_correlation_id", "protocol");
-                    }
+                        RequestCancellation requestCancellation = new(request.DeadlineUtc - DateTimeOffset.UtcNow, serverCancellation);
+                        if (!activeCancellations.TryAdd(request.CorrelationId, requestCancellation))
+                        {
+                            requestCancellation.Dispose();
+                            throw new BrokerException("duplicate_correlation_id", "protocol");
+                        }
 
-                    activeTasks.Add(ExecuteRequestAsync(pipe, frame, request, handshake.ApplicationRegistrationId, policy, requestCancellation, activeCancellations, writeLock, serverCancellation));
-                    activeTasks.RemoveAll(static task => task.IsCompletedSuccessfully);
+                        activeTasks.Add(ExecuteRequestAsync(pipe, frame, request, handshake.ApplicationRegistrationId, policy, requestCancellation, activeCancellations, writeLock, serverCancellation));
+                        activeTasks.RemoveAll(static task => task.IsCompletedSuccessfully);
+                    }
                 }
-
-                foreach (RequestCancellation active in activeCancellations.Values) active.CancelForShutdown();
-                await Task.WhenAll(activeTasks).ConfigureAwait(false);
+                finally
+                {
+                    foreach (RequestCancellation active in activeCancellations.Values) active.CancelForShutdown();
+                    await Task.WhenAll(activeTasks).ConfigureAwait(false);
+                }
             }
-            catch (Exception exception) when (exception is IOException or EndOfStreamException or BrokerException or UnauthorizedAccessException)
+            catch (OperationCanceledException) when (serverCancellation.IsCancellationRequested)
+            {
+            }
+            catch (Exception exception) when (exception is IOException or EndOfStreamException or InvalidDataException or TimeoutException or BrokerException or ObjectDisposedException or UnauthorizedAccessException)
             {
                 // Connection-level failures deliberately close the pipe without echoing sensitive context.
                 string errorCode = exception is BrokerException brokerException ? brokerException.Code : "connection_rejected";
@@ -185,29 +238,65 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
             bool deadlineExpired = !requestCancellation.CancelledByClient && !connectionCancellation.IsCancellationRequested;
             response = Failure(request.CorrelationId, new BrokerException(deadlineExpired ? "deadline_exceeded" : "cancelled", deadlineExpired ? "timeout" : "cancelled", deadlineExpired));
         }
+
+        await audit.WriteAsync(SafeAuditIdentifier(request.Operation), SafeAuditIdentifier(applicationId), request.CorrelationId, response.Success, response.Error?.Code, CancellationToken.None).ConfigureAwait(false);
+
+        try
+        {
+            await WriteResponseAsync(pipe, frame, response, writeLock, connectionCancellation).ConfigureAwait(false);
+        }
         finally
         {
             _ = activeCancellations.TryRemove(request.CorrelationId, out _);
             requestCancellation.Dispose();
         }
-
-        await audit.WriteAsync(SafeAuditIdentifier(request.Operation), SafeAuditIdentifier(applicationId), request.CorrelationId, response.Success, response.Error?.Code, CancellationToken.None).ConfigureAwait(false);
-
-        await WriteResponseAsync(pipe, frame, response, writeLock, connectionCancellation).ConfigureAwait(false);
     }
 
-    private static async Task WriteResponseAsync(NamedPipeServerStream pipe, IpcFrame requestFrame, BrokerResponse response, SemaphoreSlim writeLock, CancellationToken cancellationToken)
+    private async Task WriteResponseAsync(NamedPipeServerStream pipe, IpcFrame requestFrame, BrokerResponse response, SemaphoreSlim writeLock, CancellationToken cancellationToken)
     {
         await writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await IpcFrameCodec.WriteAsync(pipe, IpcFrameCodec.JsonFrame(requestFrame.CorrelationId, requestFrame.Sequence, response), cancellationToken).ConfigureAwait(false);
+            await WriteFrameAsync(pipe, IpcFrameCodec.JsonFrame(requestFrame.CorrelationId, requestFrame.Sequence, response), cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             writeLock.Release();
         }
     }
+
+    private async Task WriteFrameAsync(NamedPipeServerStream pipe, IpcFrame frame, CancellationToken cancellationToken) =>
+        await WithStalledTransferDeadlineAsync(pipe, token => IpcFrameCodec.WriteAsync(pipe, frame, token), cancellationToken).ConfigureAwait(false);
+
+    private async Task<T> WithStalledTransferDeadlineAsync<T>(NamedPipeServerStream pipe, Func<CancellationToken, Task<T>> operation, CancellationToken cancellationToken)
+    {
+        using CancellationTokenSource transferCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        transferCancellation.CancelAfter(stalledTransferTimeout);
+        using CancellationTokenRegistration registration = transferCancellation.Token.Register(static state => ((PipeStream)state!).Dispose(), pipe);
+        try
+        {
+            return await operation(transferCancellation.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (transferCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new BrokerException("ipc_transfer_timeout", "timeout", true);
+        }
+        catch (ObjectDisposedException) when (transferCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new BrokerException("ipc_transfer_timeout", "timeout", true);
+        }
+        catch (IOException) when (transferCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            throw new BrokerException("ipc_transfer_timeout", "timeout", true);
+        }
+    }
+
+    private async Task WithStalledTransferDeadlineAsync(NamedPipeServerStream pipe, Func<CancellationToken, Task> operation, CancellationToken cancellationToken) =>
+        await WithStalledTransferDeadlineAsync<object?>(pipe, async token =>
+        {
+            await operation(token).ConfigureAwait(false);
+            return null;
+        }, cancellationToken).ConfigureAwait(false);
 
     private sealed class RequestCancellation : IDisposable
     {
@@ -252,7 +341,7 @@ public sealed class NamedPipeBrokerServer : IAsyncDisposable
         return NamedPipeServerStreamAcl.Create(
             options.PipeName,
             PipeDirection.InOut,
-            32,
+            maximumPipeInstances,
             PipeTransmissionMode.Byte,
             PipeOptions.Asynchronous | PipeOptions.WriteThrough,
             0,
