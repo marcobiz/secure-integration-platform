@@ -55,7 +55,7 @@ public sealed class AlphaReleaseArtifactTests
     {
         XDocument props = XDocument.Load(Path.Combine(Root, "Directory.Build.props"));
         Assert.Equal("MPL-2.0", props.Descendants("PackageLicenseExpression").Single().Value);
-        Assert.Equal("https://github.com/marcobiz/secure-integration-platform", props.Descendants("RepositoryUrl").Single().Value);
+        Assert.Equal("https://github.com/msala9/secure-integration-platform", props.Descendants("RepositoryUrl").Single().Value);
         Assert.Equal("ApoCert S.r.l.", props.Descendants("Company").Single().Value);
 
         XDocument sdk = XDocument.Load(Path.Combine(Root, "sdk", "dotnet", "Broker.Sdk", "Broker.Sdk.csproj"));

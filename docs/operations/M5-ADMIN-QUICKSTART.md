@@ -3,7 +3,7 @@
 Prerequisites: Docker Desktop/Linux Engine with Compose, .NET SDK from `global.json`, Node 22 and PowerShell 7 or Windows PowerShell 5.1.
 
 ```powershell
-git clone https://github.com/marcobiz/secure-integration-platform.git
+git clone https://github.com/msala9/secure-integration-platform.git
 cd secure-integration-platform
 ./tools/m5/Invoke-M5Quickstart.ps1 -Phase Validate
 ./tools/m5/Invoke-M5Quickstart.ps1 -Phase Workflow

@@ -168,7 +168,7 @@ function Get-AlphaReleaseContainerTarIdentity {
         }
         if ([string]$runtimeConfig.Labels.'org.opencontainers.image.version' -cne $ProductVersion -or
             [string]$runtimeConfig.Labels.'org.opencontainers.image.revision' -cne $SourceCommit -or
-            [string]$runtimeConfig.Labels.'org.opencontainers.image.source' -cne 'https://github.com/marcobiz/secure-integration-platform' -or
+            [string]$runtimeConfig.Labels.'org.opencontainers.image.source' -cne 'https://github.com/msala9/secure-integration-platform' -or
             [string]$runtimeConfig.Labels.'org.opencontainers.image.vendor' -cne 'ApoCert S.r.l.' -or
             [string]$runtimeConfig.Labels.'org.opencontainers.image.licenses' -cne 'MPL-2.0' -or
             [string]$runtimeConfig.Labels.'org.opencontainers.image.title' -cne $(if ($Role -ceq 'gateway') { 'Secure Integration Platform Gateway' } else { 'Secure Integration Platform Migrations' }) -or

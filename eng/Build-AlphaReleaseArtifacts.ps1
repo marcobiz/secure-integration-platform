@@ -167,7 +167,7 @@ try {
     foreach ($inspect in @($gatewayInspect, $migrationsInspect)) {
         if ([string]$inspect.Config.Labels.'org.opencontainers.image.version' -cne $productVersion -or
             [string]$inspect.Config.Labels.'org.opencontainers.image.revision' -cne $sourceCommit -or
-            [string]$inspect.Config.Labels.'org.opencontainers.image.source' -cne 'https://github.com/marcobiz/secure-integration-platform' -or
+            [string]$inspect.Config.Labels.'org.opencontainers.image.source' -cne 'https://github.com/msala9/secure-integration-platform' -or
             [string]$inspect.Config.Labels.'org.opencontainers.image.vendor' -cne 'ApoCert S.r.l.' -or
             [string]$inspect.Config.Labels.'org.opencontainers.image.licenses' -cne 'MPL-2.0') {
             throw 'ALPHA_RELEASE_OCI_LABEL_MISMATCH'
@@ -212,8 +212,8 @@ try {
     $gatewayArtifactFile = 'artifacts/' + [IO.Path]::GetFileName($gatewayImageArchive)
     $migrationsArtifactFile = 'artifacts/' + [IO.Path]::GetFileName($migrationsImageArchive)
     $imageEntries = @(
-        [ordered]@{ role = 'gateway'; reference = $gatewayImage; imageId = [string]$gatewayInspect.Id; versionLabel = $productVersion; revisionLabel = $sourceCommit; sourceLabel = 'https://github.com/marcobiz/secure-integration-platform'; vendorLabel = 'ApoCert S.r.l.'; titleLabel = 'Secure Integration Platform Gateway'; licenseLabel = 'MPL-2.0' },
-        [ordered]@{ role = 'migrations'; reference = $migrationsImage; imageId = [string]$migrationsInspect.Id; versionLabel = $productVersion; revisionLabel = $sourceCommit; sourceLabel = 'https://github.com/marcobiz/secure-integration-platform'; vendorLabel = 'ApoCert S.r.l.'; titleLabel = 'Secure Integration Platform Migrations'; licenseLabel = 'MPL-2.0' })
+        [ordered]@{ role = 'gateway'; reference = $gatewayImage; imageId = [string]$gatewayInspect.Id; versionLabel = $productVersion; revisionLabel = $sourceCommit; sourceLabel = 'https://github.com/msala9/secure-integration-platform'; vendorLabel = 'ApoCert S.r.l.'; titleLabel = 'Secure Integration Platform Gateway'; licenseLabel = 'MPL-2.0' },
+        [ordered]@{ role = 'migrations'; reference = $migrationsImage; imageId = [string]$migrationsInspect.Id; versionLabel = $productVersion; revisionLabel = $sourceCommit; sourceLabel = 'https://github.com/msala9/secure-integration-platform'; vendorLabel = 'ApoCert S.r.l.'; titleLabel = 'Secure Integration Platform Migrations'; licenseLabel = 'MPL-2.0' })
     $sbomSubjectEntries = @(
         [ordered]@{ role = 'gateway'; sbomFile = 'sbom/gateway-container.spdx.json'; artifactFile = $gatewayArtifactFile; imageReference = $gatewayImage; imageId = [string]$gatewayInspect.Id; licenseExpression = 'MPL-2.0' },
         [ordered]@{ role = 'migrations'; sbomFile = 'sbom/migrations-container.spdx.json'; artifactFile = $migrationsArtifactFile; imageReference = $migrationsImage; imageId = [string]$migrationsInspect.Id; licenseExpression = 'MPL-2.0' })

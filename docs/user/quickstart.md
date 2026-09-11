@@ -23,13 +23,13 @@ If interrupted, run `./tools/alpha/Invoke-AlphaGoldenPath.ps1 -Phase Stop`.
 ## Windows / Local Broker path
 
 The Direct pilot does not go through the Local Broker.
-[Existing Windows tests](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/history/README.md#windows--local-broker-evidence)
+[Existing Windows tests](https://github.com/msala9/secure-integration-platform/blob/main/docs/history/README.md#windows--local-broker-evidence)
 are historical laboratories using a real Windows Service, with dedicated prerequisites;
 they are not a second quickstart, an MSI or a new qualification of the current baseline.
 
 ## Optional FSE2 OfficialTest pilot
 
-Use the [current validation/status pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md).
+Use the [current validation/status pilot](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md).
 This optional pack requires a host .NET SDK, previously authorized A1/S1 material
 and OfficialTest access: the Core's container-only application-tooling prerequisites
 do not apply here. The runner handles local bootstrap, enrollment and roles;

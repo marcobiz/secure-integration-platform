@@ -11,7 +11,7 @@ COPY --from=build /app .
 COPY LICENSE NOTICE /licenses/
 LABEL org.opencontainers.image.version=$PRODUCT_VERSION \
       org.opencontainers.image.revision=$SOURCE_REVISION \
-      org.opencontainers.image.source="https://github.com/marcobiz/secure-integration-platform" \
+      org.opencontainers.image.source="https://github.com/msala9/secure-integration-platform" \
       org.opencontainers.image.vendor="ApoCert S.r.l." \
       org.opencontainers.image.title="Secure Integration Platform Migrations" \
       org.opencontainers.image.licenses="MPL-2.0"

@@ -25,7 +25,7 @@
 The [authoritative capability summary](../../IMPLEMENTATION_STATUS.md#product-status)
 separates the 14 routes complete offline within the frozen specification from the
 only live-qualified cases: CDA `VERIFICA` and workflow `FOUND` after restart.
-The [current pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
+The [current pilot](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
 is optional and not a Core prerequisite.
 
 - FHIR `VERIFICA` is not live-qualified: upstream 500 / Gateway 502 `generic-error`,
@@ -43,13 +43,13 @@ is optional and not a Core prerequisite.
   previously provisioned A1/S1 material and external organization configuration.
   It is not the Core's container-only tooling path; it neither imports material
   nor creates external accounts.
-- The [old validate-only profile](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-officialtest.md)
+- The [old validate-only profile](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-officialtest.md)
   retains its own qualifications and immutable Published versions; it does not
   automatically transfer qualification to `fse2-organization-current-spec@1.0.0`.
 
 ## Windows / Local Broker
 
-[M0/M1 and M3A evidence](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/history/README.md#windows--local-broker-evidence)
+[M0/M1 and M3A evidence](https://github.com/msala9/secure-integration-platform/blob/main/docs/history/README.md#windows--local-broker-evidence)
 proves the boundary using a real Windows Service on historical baselines, not an
 installer or a current adopter-facing demo. The Direct Core pilot does not exercise
 that path. C ABI/COM adapters are not qualified; Administrator and SYSTEM remain

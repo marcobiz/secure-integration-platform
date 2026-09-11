@@ -22,7 +22,7 @@ COPY --from=admin-web /src/src/Admin/Admin.Web/dist ./wwwroot/admin
 COPY LICENSE NOTICE /licenses/
 LABEL org.opencontainers.image.version=$PRODUCT_VERSION \
       org.opencontainers.image.revision=$SOURCE_REVISION \
-      org.opencontainers.image.source="https://github.com/marcobiz/secure-integration-platform" \
+      org.opencontainers.image.source="https://github.com/msala9/secure-integration-platform" \
       org.opencontainers.image.vendor="ApoCert S.r.l." \
       org.opencontainers.image.title="Secure Integration Platform Gateway" \
       org.opencontainers.image.licenses="MPL-2.0"

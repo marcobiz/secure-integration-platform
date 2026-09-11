@@ -31,7 +31,7 @@ distinct levels. The integrated baseline does not replace the exact commit of a 
 | Application credential adoption | **Integrated through PR #70 — focused tests and real standard-account gate PASS** | Software `8909ab9...`, gate `9ab03c1...`: runtime input, private ciphertext-only storage, new-process use, replacement and failed-save preservation passed under a non-Administrators account. [Observed scope](docs/user/local-broker.md#application-credential-adoption-observed-on-september-6-2026). Application-owned per-Installation credential, not vendor secret retrieval, external authentication, a secretless client or actual management-app/CVD closure. |
 | Admin UI/API | **Integrated — guided Connector onboarding** | Five actions across three roles for Installation/enrollment, definition, binding/grant, four-eyes and first invocation. `FULLSTACK-02` proves reload/resume and first invocation on PostgreSQL 18. The pilot uses synthetic identities, not production authentication. |
 | Authentication foundation | **Integrated** | Provider-neutral SOAP/session, JWT/X.509, signing and mTLS primitives; they do not automatically qualify an external service. |
-| C. FSE2 Organization current-spec | **PRODUCT_PATH_OFFLINE_COMPLETE — 14 routes** | Opt-in profile `fse2-organization-current-spec@1.0.0`: contracts, provisioning and bounded responses complete within the [frozen specification](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/connectors/healthcare/fse2/current-spec.md). This does not mean 14 live-qualified routes. |
+| C. FSE2 Organization current-spec | **PRODUCT_PATH_OFFLINE_COMPLETE — 14 routes** | Opt-in profile `fse2-organization-current-spec@1.0.0`: contracts, provisioning and bounded responses complete within the [frozen specification](https://github.com/msala9/secure-integration-platform/blob/main/docs/connectors/healthcare/fse2/current-spec.md). This does not mean 14 live-qualified routes. |
 | FSE2 CDA `VERIFICA` | **LIVE_QUALIFIED — OfficialTest** | On the current-spec profile: upstream/Gateway 200, `VALIDATED`, workflow and trace, A1 mTLS and dual S1 JWT; does not enable or prove document publication. |
 | FSE2 `get-status-by-workflow` | **LIVE_QUALIFIED — OfficialTest, observed CDA case** | After a real Gateway restart: upstream/Gateway 200, `FOUND`, one bounded event for the workflow returned by CDA. Proves lookup and durable PostgreSQL correlation, not clinical completion or publication. |
 | FSE2 FHIR `VERIFICA` | **NOT LIVE-QUALIFIED** | Two intentional requests with corrected configuration: upstream 500 / Gateway 502, `generic-error`. Cause undetermined; this code cannot establish a format, accreditation or authorization cause. |
@@ -98,23 +98,23 @@ candidate work is not integration, publication or production qualification.
 ## CURRENT paths and provenance
 
 - Core: [quickstart](docs/user/quickstart.md) → [local pilot](docs/user/local-pilot.md).
-- FSE2: [OfficialTest validation and lookup](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md).
+- FSE2: [OfficialTest validation and lookup](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md).
   This is the current operational entry point: shipped runner, local bootstrap,
   Direct enrollment, in-memory role sessions and a resumable Admin provisioner,
   without direct SQL/store access or copied cookies. Requires a host .NET SDK,
   previously provisioned and authorized A1/S1 material, OfficialTest access and
   external organization configuration. It does not create external accounts or
   certificates and does not provide production custody.
-- The [qualification observed on September 4](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md#qualification-observed-on-september-4-2026)
+- The [qualification observed on September 4](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md#qualification-observed-on-september-4-2026)
   identifies executed code, outcomes and limits of the live tests. Offline gates
   are in the current-spec reference; older profiles' qualifications do not transfer.
-- The [previous validate-only path](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-officialtest.md)
+- The [previous validate-only path](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-officialtest.md)
   is HISTORICAL for first adoption. It preserves the provenance of
   `fse2-officialtest-validate-cda@1.0.1` and the shared provisioner reference;
   `1.0.0` remains immutable Published compatibility.
 - [Administration](docs/user/administration.md),
   [Connector development](docs/connector-development/README.md) and
-  [internal rules](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/internal/README.md).
+  [internal rules](https://github.com/msala9/secure-integration-platform/blob/main/docs/internal/README.md).
 
 The FSE2 path is now documented and executable with its external prerequisites:
 the former “runner/sessions/local bootstrap not shipped” blocker is no longer CURRENT.

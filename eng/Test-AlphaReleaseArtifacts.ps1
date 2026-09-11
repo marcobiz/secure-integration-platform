@@ -263,7 +263,7 @@ function Assert-AlphaReleaseSetBijection {
         if ($reference -cne [string]$expectedSubject.imageReference -or $imageId -cnotmatch '^sha256:[0-9a-f]{64}$') { throw "ALPHA_ARTIFACT_IMAGE_MANIFEST_MISMATCH: $role" }
         if ([string]$image.versionLabel -cne '0.1.0-alpha.1' -or [string]$image.revisionLabel -cne [string]$Manifest.sourceRevision) { throw "ALPHA_ARTIFACT_IMAGE_MANIFEST_MISMATCH: $role" }
         $expectedTitle = if ($role -ceq 'gateway') { 'Secure Integration Platform Gateway' } else { 'Secure Integration Platform Migrations' }
-        if ([string]$image.sourceLabel -cne 'https://github.com/marcobiz/secure-integration-platform' -or
+        if ([string]$image.sourceLabel -cne 'https://github.com/msala9/secure-integration-platform' -or
             [string]$image.vendorLabel -cne 'ApoCert S.r.l.' -or [string]$image.titleLabel -cne $expectedTitle -or
             [string]$image.licenseLabel -cne 'MPL-2.0') { throw "ALPHA_ARTIFACT_IMAGE_LICENSE_MISMATCH: $role" }
         $imagesByRole.Add($role, $image)
@@ -582,7 +582,7 @@ try {
         $imageUser = [string]$inspect.Config.User
         if ($LASTEXITCODE -ne 0 -or [string]$inspect.Config.Labels.'org.opencontainers.image.version' -cne $productVersion -or
             [string]$inspect.Config.Labels.'org.opencontainers.image.revision' -cne $sourceCommit -or
-            [string]$inspect.Config.Labels.'org.opencontainers.image.source' -cne 'https://github.com/marcobiz/secure-integration-platform' -or
+            [string]$inspect.Config.Labels.'org.opencontainers.image.source' -cne 'https://github.com/msala9/secure-integration-platform' -or
             [string]$inspect.Config.Labels.'org.opencontainers.image.vendor' -cne 'ApoCert S.r.l.' -or
             [string]$inspect.Config.Labels.'org.opencontainers.image.licenses' -cne 'MPL-2.0' -or
             [string]$inspect.Id -cne [string]$image.imageId -or [string]::IsNullOrWhiteSpace($imageUser) -or

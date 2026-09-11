@@ -111,4 +111,4 @@ To explore the UI after the [local pilot](local-pilot.md), start the Admin labor
 with `./tools/m5/Invoke-M5Quickstart.ps1 -Phase Start` and stop it with `-Phase Stop`.
 This is a synthetic inspection environment, not a second canonical pilot or a production
 configuration. For FSE2-specific actions, use the
-[current validation/status guide](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md).
+[current validation/status guide](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md).

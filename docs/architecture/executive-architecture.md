@@ -92,7 +92,7 @@ public packaging, cloud, HA/DR, real providers or external services.
 One level does not automatically promote to the next. Received and correlated certificates
 do not mean operational import. The [capability summary](../../IMPLEMENTATION_STATUS.md)
 owns the current FSE2 offline/live distinction and residual limits; the
-[current optional pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
+[current optional pilot](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
 records the observed CDA and workflow results. Neither is overall live qualification.
 
 ## TARGET — active tracks

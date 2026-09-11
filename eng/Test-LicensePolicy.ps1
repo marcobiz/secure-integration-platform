@@ -105,7 +105,7 @@ foreach ($required in @('MPL-2.0 OR Apache-2.0', 'MPL-2.0 AND Apache-2.0', 'Movi
 if ($licensing.Contains('MPL / Apache')) { throw 'LICENSE_POLICY_AMBIGUOUS_DOCUMENT_EXPRESSION' }
 if (Test-Path -LiteralPath (Join-Path $root 'packs/customer')) { throw 'LICENSE_POLICY_PRIVATE_CUSTOMER_REPOSITORY_INCLUDED' }
 
-Assert-TextContains 'Directory.Build.props' '<RepositoryUrl>https://github.com/marcobiz/secure-integration-platform</RepositoryUrl>' 'LICENSE_POLICY_DOTNET_REPOSITORY_URL_INVALID'
+Assert-TextContains 'Directory.Build.props' '<RepositoryUrl>https://github.com/msala9/secure-integration-platform</RepositoryUrl>' 'LICENSE_POLICY_DOTNET_REPOSITORY_URL_INVALID'
 Assert-TextContains 'Directory.Build.props' '<PackageLicenseExpression>MPL-2.0</PackageLicenseExpression>' 'LICENSE_POLICY_DOTNET_DEFAULT_INVALID'
 Assert-TextContains 'Directory.Build.props' '<Company>ApoCert S.r.l.</Company>' 'LICENSE_POLICY_DOTNET_COMPANY_INVALID'
 Assert-TextContains 'Directory.Build.props' '<Copyright>Copyright © 2026 ApoCert S.r.l.</Copyright>' 'LICENSE_POLICY_DOTNET_COPYRIGHT_INVALID'
@@ -122,7 +122,7 @@ if ([string]$adminPackage.license -cne 'MPL-2.0' -or
 Assert-TextContains 'docs/api/gateway-openapi.yaml' 'identifier: Apache-2.0' 'LICENSE_POLICY_OPENAPI_METADATA_INVALID'
 Assert-TextContains 'docs/connectors/examples/LICENSE.md' 'SPDX-License-Identifier: MPL-2.0 OR Apache-2.0' 'LICENSE_POLICY_GENERIC_REFERENCE_METADATA_INVALID'
 foreach ($dockerfile in @('src/Gateway/Gateway.Api/Dockerfile', 'src/Gateway/Gateway.Migrations/Dockerfile')) {
-    foreach ($needle in @('org.opencontainers.image.source="https://github.com/marcobiz/secure-integration-platform"', 'org.opencontainers.image.vendor="ApoCert S.r.l."', 'org.opencontainers.image.licenses="MPL-2.0"', 'COPY LICENSE NOTICE /licenses/')) {
+    foreach ($needle in @('org.opencontainers.image.source="https://github.com/msala9/secure-integration-platform"', 'org.opencontainers.image.vendor="ApoCert S.r.l."', 'org.opencontainers.image.licenses="MPL-2.0"', 'COPY LICENSE NOTICE /licenses/')) {
         Assert-TextContains $dockerfile $needle 'LICENSE_POLICY_OCI_METADATA_INVALID'
     }
 }

@@ -70,7 +70,7 @@ function New-DotNetSbom {
     }
     $document = [ordered]@{
         spdxVersion='SPDX-2.3'; dataLicense='CC0-1.0'; SPDXID='SPDXRef-DOCUMENT'; name="$Name $Version"
-        documentNamespace="https://github.com/marcobiz/secure-integration-platform/sbom/$Id/$Version"
+        documentNamespace="https://github.com/msala9/secure-integration-platform/sbom/$Id/$Version"
         creationInfo=[ordered]@{ created=[DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'); creators=@('Tool: eng/generate-sbom.ps1') }
         packages=$packages; relationships=$relationships
     }

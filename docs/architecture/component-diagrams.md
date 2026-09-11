@@ -171,7 +171,7 @@ production-qualified providers are targets, not baseline claims.
 - Core alpha: publication and adoption gates; existing licensing and security-reporting
   policies are in [LICENSING.md](../../LICENSING.md) and [SECURITY.md](../../SECURITY.md);
 - legacy: MSI, additional adapters and compatibility matrix;
-- FSE2 OfficialTest: the [current optional pilot](https://github.com/marcobiz/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
+- FSE2 OfficialTest: the [current optional pilot](https://github.com/msala9/secure-integration-platform/blob/main/docs/user/fse2-validation-status.md)
   covers validation and lookup; remaining qualification targets are in the
   [capability summary](../../IMPLEMENTATION_STATUS.md);
 - enterprise: qualified providers/cloud, provenance, backup/restore, HA/DR, load/soak
